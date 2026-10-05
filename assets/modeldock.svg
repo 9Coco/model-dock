@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="ModelDock">
+  <rect x="4" y="4" width="248" height="248" rx="58" fill="#353a44"/>
+  <rect x="6" y="6" width="244" height="244" rx="56" fill="#191c23"/>
+  <path d="M64 176V80L128 142L192 80V176" fill="none" stroke="#eef2f7" stroke-width="22" stroke-linejoin="round" stroke-linecap="round"/>
+  <path d="M64 80L128 142L192 80" fill="none" stroke="#60a5fa" stroke-width="20" stroke-linejoin="round" stroke-linecap="round"/>
+  <path d="M88 193H168" fill="none" stroke="#60a5fa" stroke-width="10" stroke-linecap="round"/>
+</svg>

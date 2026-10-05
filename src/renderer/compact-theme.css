@@ -1,0 +1,118 @@
+/* Shared compact density and a neutral charcoal theme. Loaded after legacy CSS. */
+:root {
+  --accent: #287fbe; --accent-soft: #eaf2fa;
+  --teal: #287fbe; --teal-dark: #226a9e;
+  --success: #287fbe; --success-soft: #eaf2fa;
+  --surface-soft: #f3f4f6; --surface-hover: #edf0f4; --surface-selected: #eaf2fa;
+  --line: #dfe2e7; --canvas: #f8f9fb;
+  accent-color: var(--accent);
+}
+.topbar { height: 48px; min-height: 48px; padding: 0 18px; }
+.main-content { padding: 16px 18px 20px; }
+.brand { gap: 9px; padding-top: 15px; padding-bottom: 17px; }
+.brand-mark { background: transparent; width: 32px; height: 32px; border-radius: 8px; }
+.brand-mark img { width: 100%; height: 100%; display: block; }
+.sidebar .nav-item { min-height: 32px; padding-top: 5px; padding-bottom: 5px; }
+.sidebar-group-label { padding-top: 8px; padding-bottom: 6px; }
+/* Share the available navigation height without squeezing either list's rows. */
+.sidebar { --sidebar-background: #193039; }
+.sidebar-navigation { display: flex; flex: 1 1 0; flex-direction: column; min-height: 0; overflow: hidden; gap: 8px; }
+.sidebar-navigation > .sidebar-group { display: grid; align-content: start; grid-auto-rows: max-content; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior-y: contain; scrollbar-gutter: stable; scroll-padding-block: 36px 6px; padding: 0 1px 6px; }
+.sidebar-navigation > .sidebar-tools { flex: 0 1 auto; max-height: 45%; }
+.sidebar-navigation > .sidebar-providers { flex: 1 1 0; margin-top: 0; padding-top: 5px; }
+.sidebar-navigation .sidebar-group-label { position: sticky; top: 0; z-index: 1; background: var(--sidebar-background); }
+/* 修改点：新增供应商按钮与分组标题一起固定，保留两列完整文字和独立滚动。 */
+.sidebar-navigation > .sidebar-providers { scroll-padding-top: 72px; }
+.sidebar-provider-heading { flex-direction: column; align-items: stretch; gap: 6px; padding-left: 6px; padding-right: 6px; }
+.sidebar-provider-heading .add-provider-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; width: 100%; }
+.sidebar-provider-heading .button.small { min-width: 0; min-height: 29px; padding: 6px 4px; gap: 4px; font-size: 11px; }
+.sidebar-provider-heading .button svg { flex-shrink: 0; }
+.sidebar-provider-heading .button.primary { color: #fff; background: var(--accent); border-color: var(--accent); box-shadow: none; }
+.sidebar-provider-heading .button.primary:hover:not(:disabled) { background: var(--teal-dark); border-color: var(--teal-dark); }
+.sidebar-provider-heading .button.secondary { color: #d9e2e3; background: transparent; border-color: #48616b; }
+.sidebar-provider-heading .button.secondary:hover:not(:disabled) { background: #ffffff0d; border-color: #6b8189; }
+:root[data-theme="dark"] .sidebar-provider-heading .button.primary { background: #2785b9; border-color: #399aca; }
+:root[data-theme="dark"] .sidebar-provider-heading .button.primary:hover:not(:disabled) { background: #329bce; border-color: #60b7df; }
+:root[data-theme="dark"] .sidebar-provider-heading .button.secondary { color: var(--ink); background: var(--surface); border-color: var(--line); }
+:root[data-theme="dark"] .sidebar-provider-heading .button.secondary:hover:not(:disabled) { background: var(--surface-hover); }
+.sidebar-navigation > .sidebar-group::-webkit-scrollbar { width: 6px; }
+.sidebar-navigation > .sidebar-group::-webkit-scrollbar-thumb { background: #66727b; border: 0; }
+.sidebar-navigation > .sidebar-group::-webkit-scrollbar-track { background: transparent; }
+:root[data-theme="dark"] .sidebar { --sidebar-background: #151518; }
+:root[data-theme="dark"] .sidebar-navigation > .sidebar-group::-webkit-scrollbar-thumb { background: #55555f; }
+.feature-toolbar { margin-bottom: 10px; }
+.panel, .provider-details { border-radius: 8px; }
+.provider-row { padding-top: 12px; padding-bottom: 12px; }
+.usage-dashboard .usage-tool-selector { margin-bottom: 10px; gap: 5px; }
+.usage-dashboard .usage-metrics > div { padding: 12px 13px; }
+.usage-dashboard .usage-metrics strong { margin: 7px 0 5px; font-size: 22px; }
+.usage-dashboard .usage-chart { padding: 12px 14px; margin: 10px 0 12px; }
+.usage-trend-plot { height: 152px; }
+.usage-attribution-note { padding-top: 6px; padding-bottom: 6px; margin-bottom: 8px; }
+.tool-inline-summary { padding: 14px 16px; }
+:root[data-theme="dark"] {
+  color: #ebebf0; background: #19191c;
+  --ink: #ebebf0; --muted: #aaaab5;
+  --canvas: #19191c; --surface: #27272c; --surface-soft: #2e2e34;
+  --surface-hover: #36363e; --surface-selected: #303a46;
+  --line: #404048; --field: #25252a;
+  --accent: #48b9f0; --accent-soft: #293b49;
+  --teal: #329fd7; --teal-dark: #2787bc;
+  --success: #72bfe9; --success-soft: #293b49;
+  --warning: #e6bb78; --warning-soft: #3c342a;
+  --danger: #f19799; --danger-soft: #402c30;
+  color-scheme: dark;
+}
+:root[data-theme="dark"] :is(body, .app-shell, .main-shell, .main-content) { background: var(--canvas); color: var(--ink); }
+:root[data-theme="dark"] .sidebar { background: #151518; color: #dddde5; }
+:root[data-theme="dark"] .sidebar-bottom { background: #1b1b20; border-color: var(--line); }
+:root[data-theme="dark"] .topbar { background: #1e1e23; }
+:root[data-theme="dark"] .brand-mark { background: transparent; color: var(--ink); }
+:root[data-theme="dark"] .sidebar .nav-item:hover { background: #29292f; color: var(--ink); }
+:root[data-theme="dark"] .sidebar .nav-item.active { background: #2d3743; color: var(--ink); }
+:root[data-theme="dark"] .nav-item.active > svg { color: var(--accent); }
+:root[data-theme="dark"] :is(.nav-count, .nav-monogram) { background: #36363e; color: #dddde5; }
+:root[data-theme="dark"] :is(.sidebar-icon, .sidebar-bottom small, .sidebar-group-label) { color: var(--muted); }
+:root[data-theme="dark"] .sidebar-bottom-actions .sidebar-icon:hover { background: var(--surface-hover); color: var(--ink); }
+:root[data-theme="dark"] .sidebar-bottom-actions .sidebar-settings.active { background: var(--accent-soft); color: var(--accent); }
+:root[data-theme="dark"] :is(.status-dot.green, .account-auth-status.ready > i) { background: var(--success); }
+:root[data-theme="dark"] .bridge-status.connected .status-dot { background: var(--success); }
+:root[data-theme="dark"] :is(.panel, .gateway-panel, .tool-detail-summary, .provider-row, .provider-details, .account-group, .service-metrics, .feature-target, .settings-card, .usage-source-card) { background: var(--surface); border-color: var(--line); }
+:root[data-theme="dark"] :is(.provider-row.selected, .provider-kind-picker > button.selected, .binding-mode-picker > button.selected, .binding-model-option.selected) { background: var(--surface-selected); border-color: var(--accent); }
+:root[data-theme="dark"] :is(.main-shell, .modal) :is(.provider-details strong, .service-metrics strong, .usage-metrics strong, .aggregate-strip strong, .form-info strong, .binding-catalog-note strong, .config-instructions strong) { color: var(--ink); }
+:root[data-theme="dark"] .aggregate-strip code { color: var(--muted); }
+:root[data-theme="dark"] :is(.main-shell, .modal) :is(.button.secondary, .feature-page button.secondary, .modal-actions button.secondary) { color: var(--ink); background: var(--surface); border-color: var(--line); }
+:root[data-theme="dark"] :is(.main-shell, .modal) :is(.button.secondary, .feature-page button.secondary, .modal-actions button.secondary):hover:not(:disabled) { background: var(--surface-hover); border-color: #62626e; }
+:root[data-theme="dark"] :is(.main-shell, .modal) :is(.button.primary, .feature-page button.primary, .modal-actions button.primary) { color: #fff; background: #2785b9; border-color: #399aca; }
+:root[data-theme="dark"] :is(.main-shell, .modal) :is(.button.primary, .feature-page button.primary, .modal-actions button.primary):hover:not(:disabled) { background: #329bce; border-color: #60b7df; }
+:root[data-theme="dark"] .icon-button { color: var(--muted); }
+:root[data-theme="dark"] .icon-button:hover:not(:disabled) { color: var(--ink); background: var(--surface-hover); }
+:root[data-theme="dark"] .text-button:hover:not(:disabled) { color: #b8e4fb; }
+:root[data-theme="dark"] .toggle { background: #50505b; }
+:root[data-theme="dark"] .toggle.is-on { background: #329fd7; }
+:root[data-theme="dark"] .toggle > span { background: #f6f6fa; }
+:root[data-theme="dark"] :is(.count-tag, .source-category-tabs > button > span, .capability-tags > span:not(.text-capability)) { background: #37373f; color: #d8d8e3; }
+:root[data-theme="dark"] :is(.badge.positive, .test-result.passed, .provider-avatar, .tool-logo) { color: #d9e9f8; background: #34363e; border-color: var(--line); }
+:root[data-theme="dark"] :is(.badge.neutral, .preset-option.selected, .theme-picker > button.selected) { background: var(--accent-soft); border-color: #4a657b; color: var(--accent); }
+:root[data-theme="dark"] :is(.provider-avatar.codex, .provider-avatar.grok, .provider-avatar.copilot, .tool-logo.codex, .tool-logo.opencode) { background: #34343c; color: #ececf4; }
+:root[data-theme="dark"] :is(.model-icon, .empty-icon, .metric-icon) { background: #34343c; color: var(--muted); border-color: var(--line); }
+:root[data-theme="dark"] .quota-window progress, :root[data-theme="dark"] .quota-window progress::-webkit-progress-bar { background: #484851; }
+:root[data-theme="dark"] .quota-window progress::-webkit-progress-value { background: var(--accent); }
+:root[data-theme="dark"] :is(.daily-bar > span, .daily-bar > i) { background: var(--accent); }
+:root[data-theme="dark"] .usage-daily-bars .usage-day-partial > span { background: repeating-linear-gradient(135deg, var(--accent) 0 4px, #426177 4px 8px); }
+:root[data-theme="dark"] :is(input, select, textarea) { color: var(--ink); background: var(--field); border-color: var(--line); }
+:root[data-theme="dark"] :is(input, textarea)::placeholder { color: #85858f; }
+:root[data-theme="dark"] :is(.search-box, .form-field > input, .endpoint-field, .auth-code, .config-filename) { background: var(--field); color: var(--ink); border-color: var(--line); }
+:root[data-theme="dark"] .modal-backdrop { background: #08080ab5; }
+:root[data-theme="dark"] .modal { background: var(--surface); border-color: var(--line); box-shadow: 0 24px 80px #0009; }
+:root .auth-body .auth-symbol, :root .auth-body .auth-symbol.complete { color: var(--accent); background: var(--surface-soft); border-color: var(--line); }
+:root[data-theme="dark"] :is(.config-code, .config-preview) { background: #18181d; color: #ddddE5; }
+:root[data-theme="dark"] :is(.config-code, .config-preview)::-webkit-scrollbar-thumb { background: #53535e; border-color: #18181d; }
+:root[data-theme="dark"] .toast { background: #2d2d34; color: var(--ink); border-color: var(--line); border-left-color: var(--accent); }
+:root[data-theme="dark"] .toast.error { background: #382a2d; color: var(--danger); border-color: #654247; border-left-color: var(--danger); }
+:root[data-theme="dark"] .toast.info { background: #292d36; color: var(--ink); border-color: var(--line); border-left-color: var(--accent); }
+:root[data-theme="dark"] ::-webkit-scrollbar-thumb { background-color: #55555f; }
+:root[data-theme="dark"] ::-webkit-scrollbar-track { background-color: transparent; }
+
+/* 修改点：三种订阅服务在同一行展示，名称和选择标记保持完整。 */
+.preset-picker.subscription-presets { grid-template-columns: repeat(3, minmax(0, 1fr)); }

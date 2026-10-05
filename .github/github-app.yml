@@ -1,0 +1,9 @@
+scripts:
+  - name: dev
+    command: npm run dev
+  - name: start
+    command: npm run start
+  - name: dev:ui
+    command: npm run dev:ui
+  - name: pack:win
+    command: npm run pack:win

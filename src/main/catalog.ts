@@ -1,0 +1,271 @@
+import { isCopilotUpstream } from './copilot-provider';
+import type { Model, ModelInput, Provider, WireApi } from '../shared/types';
+import type { AddModelsResult, DiscoveredModel, DiscoveryErrorCategory, DiscoveryResult, ModelSelection } from '../shared/catalog-types';
+import { presetById } from '../shared/presets';
+import { modelLocalAlias, suggestModelAlias } from '../shared/model-names';
+import type { PreparedUpstream } from './oauth';
+import { modelCatalogEndpoint } from './oauth';
+
+export interface CatalogStore {
+  getProvider(id: string): Provider | undefined;
+  listModels(): Model[];
+  /** The entire batch must be committed or rolled back together. */
+  saveModels(inputs: ModelInput[]): Model[];
+}
+export interface CatalogOAuth {
+  prepareRequest(provider: Provider, path: string, body: Record<string, unknown>): Promise<PreparedUpstream>;
+}
+type RecordValue = Record<string, unknown>;
+interface CachedDiscovery { fingerprint: string; expiresAt: number; models: Map<string, DiscoveredModel> }
+const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
+const MAX_TOTAL_BYTES = 5 * 1024 * 1024;
+const MAX_PAGES = 5;
+const MAX_MODELS = 2000;
+const CACHE_LIFETIME_MS = 10 * 60 * 1000;
+const REQUEST_TIMEOUT_MS = 20_000;
+const queryKeys = new Set(['page', 'cursor', 'after', 'before', 'limit', 'offset']);
+
+class CatalogFailure extends Error {
+  constructor(readonly category: DiscoveryErrorCategory, message: string, readonly statusCode?: number) { super(message); }
+}
+function object(value: unknown): RecordValue {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as RecordValue : {};
+}
+function safeText(value: unknown, max = 200): string {
+  return typeof value === 'string' && value.trim().length <= max && !/[\x00-\x1f\x7f]/.test(value) ? value.trim() : '';
+}
+function fingerprint(provider: Provider): string { return JSON.stringify([provider.id, provider.kind, provider.baseUrl, provider.presetId, provider.hasSecret, provider.copilotAccountId]); }
+function context(value: unknown): number { return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0; }
+function discoveryAlias(base: string, providerId: string, models: Pick<Model, 'id' | 'providerId' | 'alias'>[]): string {
+  const normal = base.replace(/[^a-zA-Z0-9._:/-]/g, '-').replace(/^[^a-zA-Z0-9]+/, '').slice(0, 180) || 'model';
+  const localNames = new Set(models.filter(model => model.providerId === providerId).map(modelLocalAlias));
+  for (let suffix = 1; ; suffix++) {
+    const candidate = suffix === 1 ? normal : `${normal}-${suffix}`;
+    if (localNames.has(modelLocalAlias({ providerId, alias: candidate }))) continue;
+    try { return suggestModelAlias(providerId, candidate, models); }
+    catch { /* Distinct upstream IDs can sanitize to the same local name. Suggest a free local name. */ }
+  }
+}
+function parseModel(entry: unknown, provider: Provider): Omit<DiscoveredModel, 'alias'> | undefined {
+  const data = object(entry);
+  const idFields = provider.kind === 'codex' ? [data.slug, data.id, data.model, data.model_id, data.name] : [data.id, data.slug, data.model_id, data.name];
+  const upstreamId = typeof entry === 'string' ? safeText(entry) : idFields.map(value => safeText(value)).find(Boolean) ?? '';
+  if (!upstreamId) return undefined;
+  const capabilities = object(data.capabilities);
+  const modalityValues = Array.isArray(data.input_modalities) ? data.input_modalities : Array.isArray(capabilities.input_modalities) ? capabilities.input_modalities : [];
+  const modalities = modalityValues.filter(value => typeof value === 'string' && ['text', 'image', 'audio', 'video'].includes(value));
+  const limits = object(capabilities.limits), supports = object(capabilities.supports);
+  const contextWindow = context(data.context_window ?? data.contextWindow ?? data.context_length ?? data.max_context_length ?? limits.max_context_window_tokens);
+  // A negative parallel-calls flag does not mean that ordinary tools are
+  // unsupported. Only the affirmative native flag supplies this capability.
+  const declaredTools = data.tools ?? data.supports_tools ?? data.supports_tool_calls ?? capabilities.tools ?? capabilities.tool_calling
+    ?? (provider.kind === 'copilot' ? supports.tool_calls : undefined)
+    ?? (provider.kind === 'codex' && data.supports_parallel_tool_calls === true ? true : undefined);
+  const declaredVision = data.vision ?? data.supports_vision ?? capabilities.vision ?? (provider.kind === 'copilot' ? supports.vision : undefined);
+  const metadataDefaults: NonNullable<DiscoveredModel['metadataDefaults']> = [];
+  if (contextWindow === 0) metadataDefaults.push('contextWindow');
+  if (typeof declaredTools !== 'boolean') metadataDefaults.push('tools');
+  if (typeof declaredVision !== 'boolean' && modalities.length === 0) metadataDefaults.push('vision');
+  const metadataSource = metadataDefaults.length < 3 ? 'upstream' : 'defaults';
+  // A model ID/name alone does not prove modality, tool support or endpoint compatibility.
+  // 修改点：Copilot 按目录声明的模型接口选择协议，不把全部订阅强制当成 Responses。
+  const endpoints = data.supported_endpoints ?? capabilities.supported_endpoints;
+  if (provider.kind === 'copilot' && Array.isArray(endpoints) && !endpoints.some(endpoint => endpoint === 'responses' || endpoint === '/responses' || endpoint === 'chat_completions' || endpoint === 'chat-completions' || endpoint === '/chat/completions')) return undefined;
+  const wireApi: WireApi = provider.kind === 'copilot' ? Array.isArray(endpoints) && (endpoints.includes('responses') || endpoints.includes('/responses')) ? 'responses' : 'chat-completions'
+    : provider.kind === 'openai-compatible' ? presetById(provider.presetId)?.defaultWireApi ?? 'chat-completions' : 'responses';
+  return { upstreamId, displayName: safeText(data.display_name ?? data.displayName ?? data.name) || upstreamId,
+    wireApi, contextWindow, tools: declaredTools === true, vision: typeof declaredVision === 'boolean' ? declaredVision : modalities.includes('image'), metadataSource, metadataDefaults };
+}
+function httpFailure(status: number): CatalogFailure {
+  if (status === 401) return new CatalogFailure('authentication', '模型目录返回 HTTP 401：上游拒绝了当前凭据。请确认 API Key 属于此供应商和套餐，并重新保存密钥。', status);
+  if (status === 402) return new CatalogFailure('upstream', '模型目录返回 HTTP 402：余额不足或支付状态受限，请检查余额与套餐。', status);
+  if (status === 403) return new CatalogFailure('permission', '模型目录返回 HTTP 403：当前账号或套餐没有读取此目录的权限。此结果不能单独判断模型能否调用。', status);
+  if (status === 404 || status === 405) return new CatalogFailure('unsupported', `此地址没有可读取的模型目录（HTTP ${status}）。请核对套餐专属地址；不提供目录的供应商仍可手动添加模型。`, status);
+  if (status === 429) return new CatalogFailure('rate-limit', '模型目录请求过于频繁或额度受限（HTTP 429），请稍后重试。', status);
+  if (status >= 300 && status < 400) return new CatalogFailure('invalid-response', '模型目录返回重定向，已拒绝向其他地址发送凭据。', status);
+  return new CatalogFailure('upstream', `模型目录请求失败（HTTP ${status}），请稍后重试。`, status);
+}
+async function boundedJson(response: Response, signal: AbortSignal): Promise<{ data: unknown; bytes: number }> {
+  const declared = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) { await response.body?.cancel(); throw new CatalogFailure('invalid-response', '模型目录响应过大，已停止读取。'); }
+  const contentType = response.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase();
+  if (contentType && contentType !== 'application/json' && !contentType.endsWith('+json')) {
+    await response.body?.cancel(); throw new CatalogFailure('invalid-response', '模型目录未返回 JSON，请核对 API 基础地址。');
+  }
+  const reader = response.body?.getReader();
+  if (!reader) throw new CatalogFailure('invalid-response', '模型目录响应为空。');
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  const abort = () => { void reader.cancel().catch(() => undefined); };
+  signal.addEventListener('abort', abort, { once: true });
+  try {
+    while (true) {
+      if (signal.aborted) throw new CatalogFailure('timeout', '读取模型目录超时，请检查网络后重试。');
+      const part = await reader.read();
+      if (signal.aborted) throw new CatalogFailure('timeout', '读取模型目录超时，请检查网络后重试。');
+      if (part.done) break;
+      bytes += part.value.byteLength;
+      if (bytes > MAX_RESPONSE_BYTES) { await reader.cancel(); throw new CatalogFailure('invalid-response', '模型目录响应过大，已停止读取。'); }
+      chunks.push(part.value);
+    }
+    try { return { data: JSON.parse(Buffer.concat(chunks).toString('utf8')), bytes }; }
+    catch { throw new CatalogFailure('invalid-response', '模型目录返回了无效 JSON，请核对 API 地址。'); }
+  } finally { signal.removeEventListener('abort', abort); reader.releaseLock(); }
+}
+function hiddenModel(entry: unknown, provider: Provider): boolean {
+  if (provider.kind !== 'codex') return false;
+  const data = object(entry);
+  return data.hidden === true || data.is_hidden === true || data.visibility === 'hide' || data.visibility === 'hidden' || data.visibility === 'none';
+}
+function modelEntries(payload: unknown, provider: Provider): unknown[] {
+  if (Array.isArray(payload)) return payload;
+  const data = object(payload);
+  const array = Array.isArray(data.data) ? data.data : Array.isArray(data.models) ? data.models : provider.kind === 'codex' && Array.isArray(data.items) ? data.items : undefined;
+  // Native Codex catalogs may use a map whose keys are model slugs. This is
+  // deliberately separate from arbitrary objects returned by compatible APIs.
+  if (provider.kind === 'codex' && data.models !== null && typeof data.models === 'object' && !Array.isArray(data.models)) {
+    const mapped = Object.entries(object(data.models)).flatMap<unknown>(([key, entry]) => {
+      if (typeof entry === 'string') return [entry];
+      if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) return [];
+      const model = object(entry);
+      return [{ ...model, id: safeText(model.id) || key }];
+    });
+    return [...(array ?? []), ...mapped];
+  }
+  if (array) return array;
+  throw new CatalogFailure('invalid-response', '上游返回的内容不包含模型列表，请核对 API 地址。');
+}
+function nextPage(payload: unknown, current: string, initial: string, provider: Provider): string | undefined {
+  const data = object(payload);
+  const links = object(data.links);
+  const next = data.next ?? data.next_page ?? data.nextPage ?? links.next;
+  let target: URL | undefined;
+  if (typeof next === 'string' && next.trim()) {
+    if (next.length > 2000) throw new CatalogFailure('invalid-response', '模型目录分页地址无效。');
+    try { target = new URL(next, current); } catch { throw new CatalogFailure('invalid-response', '模型目录分页地址无效。'); }
+  } else if (typeof next === 'number' && Number.isSafeInteger(next) && next > 0) {
+    target = new URL(current); target.searchParams.set('page', String(next));
+  } else if (data.has_more === true) {
+    const cursor = safeText(data.next_cursor ?? data.last_id, 1000);
+    if (!cursor) throw new CatalogFailure('invalid-response', '模型目录声明仍有下一页，但没有提供分页信息。');
+    target = new URL(current); target.searchParams.set(data.next_cursor ? 'cursor' : 'after', cursor);
+  }
+  if (!target) return undefined;
+  const base = new URL(initial);
+  const isCodex = provider.kind === 'codex';
+  const allowedKeys = isCodex ? new Set([...queryKeys, 'client_version']) : queryKeys;
+  const initialVersions = base.searchParams.getAll('client_version');
+  const nextVersions = target.searchParams.getAll('client_version');
+  const invalidVersion = isCodex && (initialVersions.length !== 1 || nextVersions.length !== 1 || nextVersions[0] !== initialVersions[0]);
+  if (target.origin !== base.origin || target.pathname !== base.pathname || target.username || target.password || target.hash || invalidVersion || [...target.searchParams.keys()].some(key => !allowedKeys.has(key))) {
+    throw new CatalogFailure('invalid-response', '模型目录分页离开了当前模型接口，已停止请求。');
+  }
+  return target.toString();
+}
+
+/** Discover actual upstream models without static fallback catalogs or raw error-body forwarding. */
+export class ModelCatalog {
+  private readonly fetcher: typeof fetch;
+  private readonly cache = new Map<string, CachedDiscovery>();
+  private readonly revisions = new Map<string, number>();
+  constructor(private readonly store: CatalogStore, private readonly oauth: CatalogOAuth, options: { fetch?: typeof fetch } = {}) { this.fetcher = options.fetch ?? fetch; }
+  invalidate(providerId: string): void {
+    this.cache.delete(providerId);
+    this.revisions.set(providerId, (this.revisions.get(providerId) ?? 0) + 1);
+  }
+  async discover(providerId: string): Promise<DiscoveryResult> {
+    this.invalidate(providerId);
+    const revision = this.revisions.get(providerId)!;
+    const provider = this.store.getProvider(providerId);
+    let statusCode: number | undefined;
+    try {
+      if (!provider) throw new CatalogFailure('invalid-provider', '供应商不存在。');
+      if (!provider.hasSecret) throw new CatalogFailure('missing-credentials', provider.kind === 'openai-compatible' ? '请先保存 API Key，再获取模型列表。' : '请先完成订阅授权，再获取模型列表。');
+      // Preparing the request also refreshes native subscription credentials.
+      const expected = modelCatalogEndpoint(provider);
+      let request: PreparedUpstream;
+      try { request = await this.oauth.prepareRequest(provider, '/models', {}); }
+      catch { throw new CatalogFailure('authentication', provider.kind === 'openai-compatible' ? '无法准备 API 凭据，请重新保存 API Key。' : '无法准备订阅授权，请在授权中心检查账号或重新登录。'); }
+      if (provider.kind === 'copilot' ? !isCopilotUpstream(request.url, '/models') : request.url !== expected) throw new CatalogFailure('invalid-provider', '模型目录请求地址与当前供应商不一致。');
+      const signal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+      let next: string | undefined = request.url;
+      let totalBytes = 0;
+      const visited = new Set<string>();
+      const models = new Map<string, Omit<DiscoveredModel, 'alias'>>();
+      for (let page = 0; next; page++) {
+        if (page >= MAX_PAGES || visited.has(next)) throw new CatalogFailure('invalid-response', '模型目录分页过多或重复，已停止请求；没有保存不完整的目录。');
+        visited.add(next);
+        const response = await this.fetcher(next, { method: 'GET', headers: request.headers, redirect: 'error', signal });
+        statusCode = response.status;
+        if (!response.ok) { await response.body?.cancel(); throw httpFailure(response.status); }
+        const result = await boundedJson(response, signal);
+        totalBytes += result.bytes;
+        if (totalBytes > MAX_TOTAL_BYTES) throw new CatalogFailure('invalid-response', '模型目录累计响应过大，已停止读取。');
+        const rawEntries = modelEntries(result.data, provider);
+        if (rawEntries.length > MAX_MODELS) throw new CatalogFailure('invalid-response', '模型目录条目过多，已停止读取。');
+        const entries = rawEntries.filter(entry => !hiddenModel(entry, provider));
+        for (const entry of entries) {
+          const model = parseModel(entry, provider);
+          if (model && !models.has(model.upstreamId)) models.set(model.upstreamId, model);
+          if (models.size > MAX_MODELS) throw new CatalogFailure('invalid-response', '模型目录条目过多，已停止读取。');
+        }
+        if (entries.length > 0 && models.size === 0) throw new CatalogFailure('invalid-response', '模型目录没有有效的模型 ID。');
+        next = nextPage(result.data, next, request.url, provider);
+      }
+      const currentProvider = this.store.getProvider(providerId);
+      if (!currentProvider || this.revisions.get(providerId) !== revision || fingerprint(currentProvider) !== fingerprint(provider)) {
+        throw new CatalogFailure('invalid-provider', '供应商配置已变化，请重新获取模型列表。');
+      }
+      const existingModels = this.store.listModels();
+      const plannedModels: Pick<Model, 'id' | 'providerId' | 'alias'>[] = [...existingModels];
+      const discovered: DiscoveredModel[] = [...models.values()].map(model => {
+        const existing = existingModels.find(item => item.providerId === providerId && item.upstreamId === model.upstreamId);
+        const alias = existing?.alias ?? discoveryAlias(model.upstreamId, providerId, plannedModels);
+        if (!existing) plannedModels.push({ id: `discovered-${plannedModels.length}`, providerId, alias });
+        return { ...model, alias, ...(existing ? { existingModelId: existing.id } : {}) };
+      });
+      this.cache.set(providerId, { fingerprint: fingerprint(provider), expiresAt: Date.now() + CACHE_LIFETIME_MS, models: new Map(discovered.map(model => [model.upstreamId, structuredClone(model)])) });
+      return { ok: true, providerId, statusCode, message: `已读取模型目录，发现 ${discovered.length} 个模型。目录可见性不代表模型调用已验证。`, models: discovered };
+    } catch (error) {
+      // Upstream bodies and arbitrary exception text can contain credentials.
+      const failure = error instanceof CatalogFailure ? error : error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')
+        ? new CatalogFailure('timeout', '获取模型目录超时，请检查网络后重试。')
+        : new CatalogFailure('network', '无法读取模型目录，请检查网络、API 地址或订阅授权状态后重试。');
+      return { ok: false, providerId, statusCode: failure.statusCode ?? statusCode, errorCategory: failure.category, message: failure.message, models: [] };
+    }
+  }
+  addSelected(providerId: string, selections: ModelSelection[]): AddModelsResult {
+    const provider = this.store.getProvider(providerId);
+    const cached = this.cache.get(providerId);
+    if (!provider || !cached || cached.expiresAt <= Date.now() || cached.fingerprint !== fingerprint(provider)) throw new Error('模型目录已过期或供应商配置已变化，请重新获取模型列表。');
+    if (!Array.isArray(selections) || selections.length === 0 || selections.length > MAX_MODELS) throw new Error('请选择有效的模型。');
+    const existing = this.store.listModels();
+    const plannedModels: Pick<Model, 'id' | 'providerId' | 'alias'>[] = [...existing];
+    const selectedIds = new Set<string>();
+    const inputs: ModelInput[] = [];
+    const skipped: string[] = [];
+    for (const selection of selections) {
+      if (!selection || typeof selection !== 'object' || !cached.models.has(selection.upstreamId)) throw new Error('所选模型不属于最近读取的模型目录，请重新获取。');
+      if (selectedIds.has(selection.upstreamId)) continue;
+      selectedIds.add(selection.upstreamId);
+      if (existing.some(model => model.providerId === providerId && model.upstreamId === selection.upstreamId)) { skipped.push(selection.upstreamId); continue; }
+      const found = cached.models.get(selection.upstreamId)!;
+      const requestedAlias = selection.alias === undefined ? undefined : safeText(selection.alias, 400);
+      if (requestedAlias !== undefined && (!requestedAlias || !/^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$/.test(requestedAlias))) throw new Error('模型别名只能包含字母、数字和 . _ : / -。');
+      const alias = suggestModelAlias(providerId, requestedAlias || found.alias, plannedModels);
+      if (alias.length > 400) throw new Error('模型别名过长。');
+      plannedModels.push({ id: `selected-${plannedModels.length}`, providerId, alias });
+      const displayName = selection.displayName === undefined ? found.displayName : safeText(selection.displayName);
+      if (!displayName) throw new Error('模型显示名称无效。');
+      const wireApi = selection.wireApi ?? found.wireApi;
+      if (!['chat-completions', 'responses'].includes(wireApi) || (provider.kind === 'codex' || provider.kind === 'grok') && wireApi !== 'responses') throw new Error('模型协议无效；Codex 和 Grok 订阅仅支持原生 Responses。');
+      const contextWindow = selection.contextWindow ?? found.contextWindow;
+      const tools = selection.tools ?? found.tools;
+      const vision = selection.vision ?? found.vision;
+      if (!Number.isSafeInteger(contextWindow) || contextWindow < 0 || typeof tools !== 'boolean' || typeof vision !== 'boolean') throw new Error('模型能力参数无效。');
+      inputs.push({ providerId, upstreamId: found.upstreamId, alias, displayName, wireApi, contextWindow, tools, vision, enabled: true });
+    }
+    const added = inputs.length ? this.store.saveModels(inputs) : [];
+    return { added, skipped };
+  }
+}

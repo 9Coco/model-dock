@@ -1,0 +1,27 @@
+version = 1
+name = "ModelDock"
+
+[setup]
+script = "npm ci"
+
+[[actions]]
+name = "快速打包 Windows"
+icon = "tool"
+command = "npm run pack:win"
+platform = "win32"
+
+[[actions]]
+name = "打包便携 EXE"
+icon = "tool"
+command = "npm run dist:win"
+platform = "win32"
+
+[[actions]]
+name = "启动开发版"
+icon = "run"
+command = "npm run dev"
+
+[[actions]]
+name = "安装依赖"
+icon = "tool"
+command = "npm ci"

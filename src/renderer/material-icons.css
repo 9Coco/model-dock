@@ -1,0 +1,6 @@
+/* Local Material Symbols keep the existing controls' sizes and inherited color. */
+.material-icon { display: inline-block; flex-shrink: 0; vertical-align: middle; overflow: visible; fill: currentColor; }
+.button > .material-icon, .icon-button > .material-icon, .text-button > .material-icon { align-self: center; }
+.nav-item > .material-icon, .sidebar-icon > .material-icon { --material-fill: 0; }
+.nav-item.active > .material-icon, .sidebar-icon.active > .material-icon { --material-fill: 1; }
+.material-icon.spin { transform-origin: center; transform-box: view-box; }

@@ -1,0 +1,117 @@
+{
+  "schemaVersion": 1,
+  "verifiedAt": "2026-10-07",
+  "originalRetrievalDate": "2026-10-06",
+  "verification": "Existing local SVG and license UTF-8 contents were compared exactly against official sources at the fixed revisions below; SHA-256 values matched. These are verified matching revisions, not a claim about the original download revision.",
+  "renderingChanges": "Source geometry is unchanged. ModelDock uses CSS masks and theme colors for display.",
+  "icons": [
+    {
+      "file": "codex.svg",
+      "label": "Codex / OpenAI identification mark",
+      "repository": "https://github.com/microsoft/vscode-codicons",
+      "commit": "6b53088f5c55bce7107fb579765364f59cd4ad5d",
+      "sourcePath": "src/icons/openai.svg",
+      "source": "https://raw.githubusercontent.com/microsoft/vscode-codicons/6b53088f5c55bce7107fb579765364f59cd4ad5d/src/icons/openai.svg",
+      "sha256": "98043daac1e7d228784223f1aa2db371a6e1cb77347dc98c58c7eda917d81ff2",
+      "upstreamUtf8Sha256": "98043daac1e7d228784223f1aa2db371a6e1cb77347dc98c58c7eda917d81ff2",
+      "exactTextMatch": true,
+      "viewBox": "0 0 16 16",
+      "license": "CC-BY-4.0",
+      "licenseRecord": "codicons"
+    },
+    {
+      "file": "vscode.svg",
+      "label": "VS Code identification mark",
+      "repository": "https://github.com/microsoft/vscode-codicons",
+      "commit": "6b53088f5c55bce7107fb579765364f59cd4ad5d",
+      "sourcePath": "src/icons/vscode.svg",
+      "source": "https://raw.githubusercontent.com/microsoft/vscode-codicons/6b53088f5c55bce7107fb579765364f59cd4ad5d/src/icons/vscode.svg",
+      "sha256": "f9130337f239b034092a047fd4b2c771843f0b58362447b4b94e0ed9d6bb9886",
+      "upstreamUtf8Sha256": "f9130337f239b034092a047fd4b2c771843f0b58362447b4b94e0ed9d6bb9886",
+      "exactTextMatch": true,
+      "viewBox": "0 0 16 16",
+      "license": "CC-BY-4.0",
+      "licenseRecord": "codicons"
+    },
+    {
+      "file": "opencode.svg",
+      "label": "OpenCode identification mark",
+      "repository": "https://github.com/anomalyco/opencode",
+      "commit": "ecc4916b5a9608c30e6dd58a67f2137b594407ca",
+      "sourcePath": "packages/ui/src/assets/icons/provider/opencode.svg",
+      "source": "https://raw.githubusercontent.com/anomalyco/opencode/ecc4916b5a9608c30e6dd58a67f2137b594407ca/packages/ui/src/assets/icons/provider/opencode.svg",
+      "sha256": "018a85654f13635373dc283ecc27928fa4e001c06cde47f7efa1cbcab567b51c",
+      "upstreamUtf8Sha256": "018a85654f13635373dc283ecc27928fa4e001c06cde47f7efa1cbcab567b51c",
+      "exactTextMatch": true,
+      "viewBox": "0 0 24 24",
+      "license": "MIT",
+      "licenseRecord": "opencode"
+    },
+    {
+      "file": "dsh.svg",
+      "label": "DSH / DeepSeek identification mark",
+      "repository": "https://github.com/deepseek-ai/deepseek-harness",
+      "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+      "sourcePath": "apps/web/public/favicon.svg",
+      "source": "https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/5badb15009ae1756c3afe0ae0cef1faafc290ccc/apps/web/public/favicon.svg",
+      "sha256": "9e983b4f649c25c6ca0623a50be1a6e705fd8f49f756638b980fa13b40575ab6",
+      "upstreamUtf8Sha256": "9e983b4f649c25c6ca0623a50be1a6e705fd8f49f756638b980fa13b40575ab6",
+      "exactTextMatch": true,
+      "viewBox": "0 0 50 50",
+      "license": "MIT",
+      "licenseRecord": "dsh"
+    },
+    {
+      "file": "copilot.svg",
+      "label": "GitHub Copilot identification mark",
+      "repository": "https://github.com/github/octicons",
+      "commit": "e7e03d50b03b5d303c550a1152f43b063c8bd798",
+      "sourcePath": "icons/copilot-16.svg",
+      "source": "https://raw.githubusercontent.com/github/octicons/e7e03d50b03b5d303c550a1152f43b063c8bd798/icons/copilot-16.svg",
+      "sha256": "b5bfc7d50d1ec20a03e696f27fae38faa5376dcce0d6f2c49f25b3462d2a8e9b",
+      "upstreamUtf8Sha256": "b5bfc7d50d1ec20a03e696f27fae38faa5376dcce0d6f2c49f25b3462d2a8e9b",
+      "exactTextMatch": true,
+      "viewBox": "0 0 16 16",
+      "license": "MIT",
+      "licenseRecord": "octicons"
+    }
+  ],
+  "licenses": [
+    {
+      "id": "codicons",
+      "file": "LICENSE-codicons.txt",
+      "spdx": "CC-BY-4.0",
+      "source": "https://raw.githubusercontent.com/microsoft/vscode-codicons/6b53088f5c55bce7107fb579765364f59cd4ad5d/LICENSE",
+      "sha256": "af5e030844efddbc7ab00dcfea8b019703753d4d9f5172d727c533a492aec665",
+      "upstreamUtf8Sha256": "af5e030844efddbc7ab00dcfea8b019703753d4d9f5172d727c533a492aec665",
+      "exactTextMatch": true
+    },
+    {
+      "id": "opencode",
+      "file": "LICENSE-opencode.txt",
+      "spdx": "MIT",
+      "source": "https://raw.githubusercontent.com/anomalyco/opencode/ecc4916b5a9608c30e6dd58a67f2137b594407ca/LICENSE",
+      "sha256": "625f0f619133f89bbbb2abe37369613dfa1885eba1e50d02170deb62bb42cb6b",
+      "upstreamUtf8Sha256": "625f0f619133f89bbbb2abe37369613dfa1885eba1e50d02170deb62bb42cb6b",
+      "exactTextMatch": true
+    },
+    {
+      "id": "dsh",
+      "file": "LICENSE-deepseek-harness.txt",
+      "spdx": "MIT",
+      "source": "https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/5badb15009ae1756c3afe0ae0cef1faafc290ccc/LICENSE",
+      "sha256": "ebb4f09972aee8608be255debaf78451a68e95c290f55c240dec2ecfa16ea6be",
+      "upstreamUtf8Sha256": "ebb4f09972aee8608be255debaf78451a68e95c290f55c240dec2ecfa16ea6be",
+      "exactTextMatch": true
+    },
+    {
+      "id": "octicons",
+      "file": "LICENSE-octicons.txt",
+      "spdx": "MIT",
+      "source": "https://raw.githubusercontent.com/github/octicons/e7e03d50b03b5d303c550a1152f43b063c8bd798/LICENSE",
+      "sha256": "da259c8bd0de62713ccdcf88910aebca810644f98c2c912bad814fc79ea778df",
+      "upstreamUtf8Sha256": "da259c8bd0de62713ccdcf88910aebca810644f98c2c912bad814fc79ea778df",
+      "exactTextMatch": true
+    }
+  ]
+}

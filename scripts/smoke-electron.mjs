@@ -1,0 +1,131 @@
+import { execFileSync, spawn } from 'node:child_process';
+import { mkdirSync, readFileSync, writeFileSync, existsSync, unlinkSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import electron from 'electron';
+import { createServer } from 'node:http';
+import { createSmokeProfile } from './smoke-profile.mjs';
+import { verifyQaExecutable } from './smoke-package.mjs';
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const args = process.argv.slice(2), noBuild = args.includes('--no-build'), ciNoSandbox = args.includes('--ci-no-sandbox'), values = args.filter(value => !['--no-build', '--ci-no-sandbox'].includes(value));
+if (values.length > 2 || values.some(value => value.startsWith('--'))) throw new Error('Usage: node scripts/smoke-electron.mjs [output] [dedicated-QA-ModelDock.exe] [--no-build] [--ci-no-sandbox]');
+if (ciNoSandbox && (process.platform !== 'linux' || process.env.CI !== 'true')) throw new Error('--ci-no-sandbox is restricted to an explicit Linux CI smoke run.');
+if (values.some(value => value.split(/[\\/]/).includes('..'))) throw new Error('Smoke paths must not contain traversal.');
+const output = resolve(values[0] || 'work/electron-smoke');
+let executable = electron, applicationArgs = [join(root, 'work/smoke-runtime')];
+if (values[1]) { executable = verifyQaExecutable(resolve(values[1])); applicationArgs = []; }
+else {
+  if (!noBuild) {
+    const npmCli = resolve(dirname(process.execPath), 'node_modules/npm/bin/npm-cli.js');
+    if (existsSync(npmCli)) execFileSync(process.execPath, [npmCli, 'run', 'build'], { cwd: root, stdio: 'inherit', windowsHide: true });
+    else execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build'], { cwd: root, stdio: 'inherit', windowsHide: true, shell: process.platform === 'win32' });
+  }
+  execFileSync(process.execPath, [join(root, 'scripts/build-main.mjs'), '--smoke'], { cwd: root, stdio: 'inherit', windowsHide: true });
+}
+const profile = await createSmokeProfile(output);
+if (ciNoSandbox) {
+  applicationArgs.unshift('--no-sandbox');
+}
+const errorFile=resolve(output,'electron-smoke-error.txt');
+if(existsSync(errorFile)) unlinkSync(errorFile);
+const env = { ...process.env, MODELDOCK_SMOKE: profile.outputDir, MODELDOCK_DATA_DIR: profile.dataDir, MODELDOCK_SMOKE_NONCE: profile.nonce };
+env.MODELDOCK_SMOKE_AUTH_MOCK = '1';
+delete env.MODELDOCK_DEV_URL;
+let noCatalogModelRequests = 0, connectionTestPosts = 0, codexModelRequests = 0;
+const upstream = createServer((req,res) => {
+  if (req.url?.startsWith('/codex-native/models')) {
+    codexModelRequests++;
+    const target = new URL(req.url, 'http://127.0.0.1');
+    res.setHeader('content-type', 'application/json');
+    if (req.method !== 'GET' || target.searchParams.getAll('client_version').length !== 1 || target.searchParams.get('client_version') !== '0.159.0' || req.headers.version !== '0.159.0' || req.headers.originator !== 'codex_cli_rs' || req.headers['chatgpt-account-id'] !== 'mock-auth-workspace' || req.headers.authorization !== 'Bearer MOCK_ACCESS_AUTH_NETWORK') {
+      res.statusCode = 400; res.end(JSON.stringify({ error: { code: 'invalid_client_version' } })); return;
+    }
+    res.end(JSON.stringify({ models: [
+      { slug: 'mock-codex', display_name: 'Native Codex', visibility: 'list', context_window: 272000, input_modalities: ['text', 'image'], supports_parallel_tool_calls: true },
+      { slug: 'mock-codex-hidden', visibility: 'hide' }, { slug: 'mock-codex-none', visibility: 'none' },
+    ] })); return;
+  }
+  if (req.url?.startsWith('/no-catalog/')) {
+    if (req.method === 'GET' && req.url.endsWith('/models')) {
+      noCatalogModelRequests++;
+      res.writeHead(404, { 'content-type': 'application/json' }); res.end(JSON.stringify({error:{message:'This synthetic plan has no model catalog'}})); return;
+    }
+    if (req.method !== 'POST' || !['/no-catalog/v1/chat/completions','/no-catalog/v1/responses'].includes(req.url)) { res.writeHead(405); res.end(); return; }
+    connectionTestPosts++;
+    const parts=[]; req.on('data',part=>parts.push(part));
+    req.on('end',()=>{
+      res.setHeader('content-type','application/json');
+      if(req.headers.authorization!=='Bearer synthetic-only') { res.statusCode=401; res.end(JSON.stringify({error:{message:'Synthetic key rejected'}})); return; }
+      let body; try{body=JSON.parse(Buffer.concat(parts).toString('utf8'));}catch{res.statusCode=400;res.end('{}');return;}
+      if(body.model!=='no-list-model') { res.statusCode=404;res.end(JSON.stringify({error:{message:'Synthetic model not found'}}));return; }
+      if(req.url.endsWith('/responses')) res.end(JSON.stringify({id:'mock-probe-response',object:'response',status:'completed',model:'no-list-model',output:[{id:'msg_1',type:'message',role:'assistant',content:[{type:'output_text',text:'OK'}]}]}));
+      else res.end(JSON.stringify({id:'mock-probe-response',object:'chat.completion',model:'no-list-model',choices:[{index:0,message:{role:'assistant',content:'OK'},finish_reason:'stop'}]}));
+    });
+    return;
+  }
+  if (req.method === 'GET' && req.url?.endsWith('/models')) {
+    if (req.headers.authorization !== 'Bearer synthetic-only') { res.writeHead(401,{'content-type':'application/json'}); res.end(JSON.stringify({error:{message:'synthetic authentication failure'}})); return; }
+    res.writeHead(200,{'content-type':'application/json'});
+    res.end(JSON.stringify({data:[{id:'mock-model',name:'已配置模型',context_window:64000,supports_tools:true},{id:'mock-fast',name:'快速模型',context_window:128000,supports_tools:true},{id:'mock-reasoner',name:'推理模型'}]}));
+    return;
+  }
+  req.resume(); req.on('end',()=>{
+    res.writeHead(200,{'content-type':'application/json'});
+    res.end(JSON.stringify({id:'mock-response',object:'chat.completion',model:'mock-model',usage:{prompt_tokens:7,completion_tokens:3,prompt_tokens_details:{cached_tokens:2}},choices:[{index:0,message:{role:'assistant',content:'OK'},finish_reason:'stop'}]}));
+  });
+});
+await new Promise(resolve=>upstream.listen(0,'127.0.0.1',resolve));
+env.MODELDOCK_SMOKE_UPSTREAM=`http://127.0.0.1:${upstream.address().port}/v1`;
+env.MODELDOCK_SMOKE_NO_CATALOG=`http://127.0.0.1:${upstream.address().port}/no-catalog/v1`;
+delete env.ELECTRON_RUN_AS_NODE;
+const child = spawn(executable, applicationArgs, { cwd: root, env, windowsHide: true, stdio: 'pipe' });
+let errorOutput = '';
+child.stderr.on('data', chunk => { errorOutput += chunk; });
+const deadline = setTimeout(() => { child.kill(); process.stderr.write(errorOutput); process.exit(1); }, 180000);
+child.on('exit', code => {
+  clearTimeout(deadline);
+  upstream.close();
+  try {
+    if(existsSync(errorFile)) throw new Error(readFileSync(errorFile,'utf8'));
+    const value = JSON.parse(readFileSync(resolve(output, 'electron-smoke.json'), 'utf8'));
+    if (!value.bridge || !value.text.includes('ModelDock')) throw new Error('Renderer/preload bridge unavailable');
+    if (env.MODELDOCK_SMOKE_SIDEBAR_ONLY === '1') {
+      const result = JSON.parse(readFileSync(resolve(output, 'sidebar-scroll-validation.json'), 'utf8'));
+      if (!result.ok || !result.independentScroll || !result.configurationUnchanged) throw new Error('Independent sidebar scrolling validation failed');
+      console.log(JSON.stringify({ exitCode: code, bridge: value.bridge, sidebarScroll: true, output }));
+      process.exit(code || 0);
+    }
+    if (env.MODELDOCK_SMOKE_COMPACT_ONLY === '1') {
+      const result = JSON.parse(readFileSync(resolve(output, 'compact-ui-validation.json'), 'utf8'));
+      console.log(JSON.stringify({ exitCode: code, bridge: value.bridge, compactUi: true, output }));
+      process.exit(code || 0);
+    }
+    if (env.MODELDOCK_SMOKE_USAGE_ONLY === '1') {
+      const result = JSON.parse(readFileSync(resolve(output, 'usage-analytics-validation.json'), 'utf8'));
+      if (!result.ok || !result.readonlyClientFiles || !result.rawMessagesNotStored) throw new Error('Usage analytics integration failed');
+      console.log(JSON.stringify({ exitCode: code, bridge: value.bridge, usageRecords: result.clientEvents, output }));
+      process.exit(code || 0);
+    }
+    if (env.MODELDOCK_SMOKE_AUTH_QUOTAS_ONLY === '1') {
+      const result = JSON.parse(readFileSync(resolve(output, 'auth-quota-validation.json'), 'utf8'));
+      if (!result.ok || !result.autoQueryAfterLogin || !result.sourceTokensNotInRenderer) throw new Error('Account quota integration failed');
+      console.log(JSON.stringify({ exitCode: code, bridge: value.bridge, quotaAccounts: result.accountKinds, output }));
+      process.exit(code || 0);
+    }
+    const integration = JSON.parse(readFileSync(resolve(output, 'electron-integration.json'), 'utf8'));
+    if (integration.reply !== 'OK') throw new Error('Main-process gateway integration unavailable');
+    if (env.MODELDOCK_SMOKE_TOOLS_ONLY === '1') {
+      const tools = JSON.parse(readFileSync(resolve(output, 'tool-restore-connection-validation.json'), 'utf8'));
+      if (!tools.aggregateExactModelSelection || !tools.originalFilesBackedUp || !tools.mcpPreserved || tools.restoredFileTools.length !== 3) throw new Error('Tool connection/restoration integration unavailable');
+      console.log(JSON.stringify({ exitCode: code, bridge: value.bridge, toolsOnly: true, localMockRequest: integration.replyStatus, toolRestoration: true, output }));
+      process.exit(code || 0);
+    }
+    const connectionValidation = JSON.parse(readFileSync(resolve(output,'connection-test-validation.json'),'utf8'));
+    if (noCatalogModelRequests !== 0 || connectionTestPosts !== connectionValidation.expectedConnectionPostCalls) throw new Error('Connection test default selection or duplicate request prevention failed');
+    writeFileSync(resolve(output,'connection-network-validation.json'),JSON.stringify({noCatalogModelRequests,connectionTestPosts},null,2));
+    if (codexModelRequests !== 2) throw new Error('Native Codex catalog must be fetched exactly twice');
+    writeFileSync(resolve(output,'codex-catalog-network-validation.json'),JSON.stringify({codexModelRequests},null,2));
+    console.log(JSON.stringify({ exitCode: code, bridge: value.bridge, title: value.title, localMockRequest: integration.replyStatus, screenshot: resolve(output, 'electron-smoke.png') }));
+    process.exit(code || 0);
+  } catch (error) { console.error(String(error), errorOutput); process.exit(1); }
+});
