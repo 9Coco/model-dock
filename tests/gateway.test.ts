@@ -29,6 +29,61 @@ async function requestBody(req: IncomingMessage) { const chunks: Buffer[] = []; 
 function event(value: unknown) { return `data: ${JSON.stringify(value)}\n\n`; }
 
 describe('loopback gateway', () => {
+  it('configures a stopped gateway without listening and starts on its configured port', async () => {
+    const mock = await upstream((_req, res) => { res.end('{}'); });
+    const f = await fixture(mock.url); await f.gateway.stop();
+    const reserved = await upstream((_req, res) => { res.end('{}'); });
+    const port = Number(new URL(reserved.url).port);
+    const gateway = new Gateway(f.store, { port });
+    cleanups.push(async () => { await gateway.stop(); });
+    expect(gateway.status()).toMatchObject({ running: false, host: '127.0.0.1', port, baseUrl: reserved.url });
+    expect(() => f.store.saveProvider({ name: 'Configured loop', kind: 'openai-compatible', baseUrl: reserved.url, enabled: true, apiKey: 'synthetic-key' })).toThrow('循环');
+    await new Promise<void>(resolve => reserved.server.close(() => resolve()));
+    gateway.configurePort(port);
+    const idleProbe = createServer();
+    cleanups.push(async () => { await new Promise<void>(resolve => idleProbe.close(() => resolve())); });
+    idleProbe.listen(port, '127.0.0.1'); await once(idleProbe, 'listening');
+    await new Promise<void>(resolve => idleProbe.close(() => resolve()));
+    await expect(gateway.start()).resolves.toMatchObject({ running: true, port, baseUrl: reserved.url, lastError: '' });
+    const catalog = await (await fetch(`${gateway.status().baseUrl}/models`, { headers: f.headers })).json();
+    expect(catalog.data).toMatchObject([{ id: f.model.alias }]);
+    gateway.configurePort(port);
+    expect(() => gateway.configurePort(port === 65535 ? 65534 : port + 1)).toThrow('先停止');
+    expect(gateway.status()).toMatchObject({ running: true, port, baseUrl: reserved.url });
+    expect((await fetch(`${gateway.status().baseUrl}/models`, { headers: f.headers })).status).toBe(200);
+    await gateway.stop();
+    gateway.configurePort(0);
+    expect(gateway.status()).toMatchObject({ running: false, port: 0, baseUrl: 'http://127.0.0.1:0/v1' });
+    await expect(gateway.start()).resolves.toMatchObject({ running: true });
+    expect(gateway.status().port).toBeGreaterThan(0);
+  });
+  it('retains a configured occupied port and safely retries after that listener closes', async () => {
+    const mock = await upstream((_req, res) => { res.end('{}'); });
+    const f = await fixture(mock.url); await f.gateway.stop();
+    const occupied = await upstream((_req, res) => { res.end('{}'); });
+    const port = Number(new URL(occupied.url).port);
+    const gateway = new Gateway(f.store, { port });
+    cleanups.push(async () => { await gateway.stop(); });
+    await expect(gateway.start()).rejects.toThrow('端口');
+    expect(gateway.status()).toMatchObject({ running: false, port, baseUrl: occupied.url, lastError: expect.stringContaining('端口') });
+    expect(gateway.status().lastError).not.toContain('upstream-private-key');
+    await new Promise<void>(resolve => occupied.server.close(() => resolve()));
+    await expect(gateway.start()).resolves.toMatchObject({ running: true, port, lastError: '' });
+    expect((await fetch(`${gateway.status().baseUrl}/models`, { headers: f.headers })).status).toBe(200);
+  });
+  it('records safe provider configuration failures while retaining the requested retry port', async () => {
+    const mock = await upstream((_req, res) => { res.end('{}'); });
+    const f = await fixture(mock.url); await f.gateway.stop();
+    const port = Number(new URL(mock.url).port);
+    const gateway = new Gateway(f.store, { port });
+    cleanups.push(async () => { await gateway.stop(); });
+    await expect(gateway.start()).rejects.toThrow('循环');
+    expect(gateway.status()).toMatchObject({ running: false, port, baseUrl: mock.url, lastError: expect.stringContaining('循环') });
+    expect(gateway.status().lastError).not.toContain('upstream-private-key');
+    f.store.saveProvider({ ...f.provider, enabled: false, baseUrl: '' });
+    await new Promise<void>(resolve => mock.server.close(() => resolve()));
+    await expect(gateway.start()).resolves.toMatchObject({ running: true, port, lastError: '' });
+  });
   it('meters JSON, streamed Chat and collected Responses usage once without storing conversation text', async () => {
     const mock = await upstream(async (req, res) => {
       const body = await requestBody(req);

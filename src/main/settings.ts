@@ -40,6 +40,9 @@ function validatePatch(value: unknown, platform: 'win32' | 'linux' | 'other', fr
   for (const [key, item] of Object.entries(value)) {
     if (key === 'theme') { if (!['system', 'light', 'dark'].includes(item as string)) throw new Error('主题选项无效。'); }
     else if (key === 'proxyUrl') { validateProxyUrl(item); }
+    else if (key === 'gatewayPort') {
+      if (typeof item !== 'number' || !Number.isInteger(item) || item < 1024 || item > 65535) throw new Error('本地服务端口必须是 1024 至 65535 之间的整数。');
+    }
     else if (key === 'terminal') {
       if (typeof item !== 'string' || !Object.values(terminals).flat().some(option => option.id === item)) throw new Error('终端选项无效。');
       if (!fromDisk && item !== 'system' && !terminals[platform].some(option => option.id === item)) throw new Error('当前系统不支持这个终端选项。');

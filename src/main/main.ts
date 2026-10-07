@@ -21,6 +21,7 @@ import { verifyUsageDashboard } from './usage-dashboard-smoke';
 import { verifyUsageAnalytics } from './usage-analytics-smoke';
 import { verifyCompactUi } from './compact-ui-smoke';
 import { verifyConnectionTest } from './connection-test-smoke';
+import { createGatewayStartupSmokeVault, verifyGatewayStartup } from './gateway-startup-smoke';
 import { verifyAuthNetwork, verifyPendingAuth } from './auth-network-smoke';
 import { verifyAuthQuotas } from './auth-quota-smoke';
 import { verifyCodexCatalog } from './codex-catalog-smoke';
@@ -162,6 +163,8 @@ async function createWindow(forceShow = false) {
           await verifyUsageAnalytics(window!, store, outputDir, captureUi);
         } else if (process.env.MODELDOCK_SMOKE_CONNECTION_ONLY === '1') {
           await verifyConnectionTest(window!, outputDir, captureUi);
+        } else if (process.env.MODELDOCK_SMOKE_GATEWAY_STARTUP === '1') {
+          await verifyGatewayStartup(window!, store, outputDir, captureUi);
         } else if (process.env.MODELDOCK_SMOKE_AUTH_QUOTAS_ONLY === '1') {
           await verifyAuthQuotas(window!, store, outputDir, captureUi);
         } else if (process.env.MODELDOCK_SMOKE_UPSTREAM) {
@@ -518,11 +521,16 @@ function registerIpc() {
       : createSystemNetworkFetch((input, init) => session.defaultSession.fetch(input instanceof URL ? input.href : input, init))));
   handle('saveSettings', async (patch: Partial<AppSettings>) => {
     const previous = preferences.get().settings;
+    if (Object.hasOwn(patch, 'gatewayPort') && gateway.status().running && patch.gatewayPort !== gateway.status().port) throw new Error('请先停止本地服务，再修改服务端口。');
     const result = preferences.save(patch);
     if (Object.hasOwn(patch, 'proxyUrl')) {
       try { await applyNetworkProxy(session.defaultSession, result.settings.proxyUrl); }
-      catch (error) { preferences.save({ proxyUrl: previous.proxyUrl }); await applyNetworkProxy(session.defaultSession, previous.proxyUrl); throw error; }
+      catch (error) {
+        const rollback = Object.fromEntries(Object.keys(patch).map(key => [key, previous[key as keyof AppSettings]])) as Partial<AppSettings>;
+        preferences.save(rollback); await applyNetworkProxy(session.defaultSession, previous.proxyUrl); throw error;
+      }
     }
+    if (Object.hasOwn(patch, 'gatewayPort')) gateway.configurePort(result.settings.gatewayPort);
     nativeTheme.themeSource = result.settings.theme;
     window?.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#19191c' : '#f8f9fb');
     return result;
@@ -566,7 +574,11 @@ function registerIpc() {
   handle('saveModel', (input: ModelInput) => { assertEditable(); return store.saveModel(input); });
   handle('deleteModel', (id: string) => { assertEditable(); return store.deleteModel(id); });
   handle('saveBinding', (binding: ToolBinding) => { assertEditable(); return store.saveBinding({ ...binding, id: toolId(binding.id) }); });
-  handle('startGateway', (port?: number) => gateway.start(port));
+  handle('startGateway', async (port?: number) => {
+    const status = await gateway.start(port ?? preferences.get().settings.gatewayPort);
+    if (status.running) preferences.save({ gatewayPort: status.port });
+    return status;
+  });
   handle('stopGateway', async () => { await gateway.stop(); return gateway.status(); });
   handle('copyText', (value: unknown) => writeClipboardText(value, text => clipboard.writeText(text)));
   handle('copyGatewayKey', () => writeClipboardText(store.gatewayKey(), text => clipboard.writeText(text)));
@@ -671,7 +683,8 @@ else {
   app.whenReady().then(async () => {
     if (process.platform === 'win32') app.setAppUserModelId('local.modeldock.desktop');
     dataDir = runtimeConfig.dataDir ?? app.getPath('userData');
-    store = await Store.create(dataDir, createVault(dataDir));
+    store = await Store.create(dataDir, __MODELDOCK_SMOKE_BUILD__ && process.env.MODELDOCK_SMOKE_GATEWAY_STARTUP === '1'
+      ? createGatewayStartupSmokeVault(dataDir) : createVault(dataDir));
     const systemFetch = createSystemNetworkFetch((input, init) => net.fetch(input instanceof URL ? input.href : input, init));
     const runtimeFetch: typeof fetch = __MODELDOCK_SMOKE_BUILD__ ? async (input, init) => {
       const target = new URL(input instanceof Request ? input.url : String(input));
@@ -765,7 +778,12 @@ else {
       ? copilotProviders.prepareRequest(provider, path, body) : oauth.prepareRequest(provider, path, body) };
     catalog = new ModelCatalog(store, upstream, { fetch: runtimeFetch });
     connectionTester = new ConnectionTester(store, upstream, { fetch: runtimeFetch });
-    gateway = new Gateway(store, { prepareRequest: (provider, _secret, path, body) => upstream.prepareRequest(provider, path, body), fetch: runtimeFetch });
+    const serviceSettings = preferences.get().settings;
+    gateway = new Gateway(store, { port: serviceSettings.gatewayPort, prepareRequest: (provider, _secret, path, body) => upstream.prepareRequest(provider, path, body), fetch: runtimeFetch });
+    if (serviceSettings.autoStartGateway) {
+      try { await gateway.start(); }
+      catch { /* Keep the application available; the service page displays the gateway failure. */ }
+    }
     session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
     registerIpc();
     Menu.setApplicationMenu(null);
@@ -780,7 +798,11 @@ else {
       tray.on('click', revealWindow);
     }
     await createWindow();
-  }).catch(error => { dialog.showErrorBox('ModelDock 启动失败', String(error)); quitting = true; app.quit(); });
+  }).catch(error => {
+    if (__MODELDOCK_SMOKE_BUILD__) writeFileSync(join(runtimeConfig.smoke!.outputDir, 'electron-smoke-error.txt'), String(error));
+    else dialog.showErrorBox('ModelDock 启动失败', String(error));
+    quitting = true; app.quit();
+  });
   app.on('before-quit', event => {
     if (!quitting) { event.preventDefault(); quitting = true; }
     if (gateway) { event.preventDefault(); const current = gateway; gateway = undefined as unknown as Gateway;

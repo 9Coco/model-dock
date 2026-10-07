@@ -50,6 +50,41 @@ describe('application settings', () => {
     expect(linux().get().settings).toMatchObject({ proxyUrl: '', theme: 'dark' });
     expect(store.writes).toBe(0);
   });
+  it('keeps legacy startup behavior while merging gateway defaults without writing or changing OS startup', () => {
+    const { autoStartGateway: _autoStartGateway, gatewayPort: _gatewayPort, ...older } = DEFAULT_SETTINGS;
+    const legacy = { version: 1, settings: { ...older, theme: 'dark', launchAtLogin: true } };
+    store.values.set('app.settings', legacy);
+    const login = loginFixture();
+    expect(windows(login).get().settings).toMatchObject({ theme: 'dark', launchAtLogin: true, autoStartGateway: false, gatewayPort: 18181 });
+    expect(store.values.get('app.settings')).toEqual(legacy);
+    expect(store.writes).toBe(0);
+    expect(login.setLoginItemSettings).not.toHaveBeenCalled();
+    expect(existsSync(autostart())).toBe(false);
+  });
+  it('persists gateway preferences independently of Windows and Linux login startup', () => {
+    const login = loginFixture(), manager = windows(login);
+    const saved = manager.save({ autoStartGateway: true, gatewayPort: 25000 });
+    expect(windows(login).get().settings).toEqual(saved.settings);
+    expect(saved.settings).toMatchObject({ autoStartGateway: true, gatewayPort: 25000, launchAtLogin: false });
+    expect(login.setLoginItemSettings).not.toHaveBeenCalled();
+    mkdirSync(join(autostart(), '..'), { recursive: true });
+    writeFileSync(autostart(), 'foreign startup');
+    expect(linux().save({ autoStartGateway: false, gatewayPort: 25001 }).settings).toMatchObject({ autoStartGateway: false, gatewayPort: 25001 });
+    expect(readFileSync(autostart(), 'utf8')).toBe('foreign startup');
+  });
+  it('rejects invalid gateway ports and switches before persistence or OS startup changes', () => {
+    const login = loginFixture(), manager = windows(login);
+    for (const gatewayPort of [0, 1023, 65536, 18181.5, NaN, Infinity, '18181', null, undefined]) {
+      expect(() => manager.save({ gatewayPort } as never)).toThrow('端口');
+    }
+    expect(() => manager.save({ autoStartGateway: 'true' } as never)).toThrow('布尔值');
+    expect(store.writes).toBe(0);
+    expect(login.setLoginItemSettings).not.toHaveBeenCalled();
+    expect(manager.save({ gatewayPort: 1024 }).settings.gatewayPort).toBe(1024);
+    expect(manager.save({ gatewayPort: 65535 }).settings.gatewayPort).toBe(65535);
+    store.values.set('app.settings', { version: 1, settings: { ...DEFAULT_SETTINGS, gatewayPort: 1023 } });
+    expect(() => windows(login)).toThrow('端口');
+  });
   it('reads defaults without registering startup or creating OS files', () => {
     const login = loginFixture(), manager = windows(login);
     expect(manager.get().settings).toEqual(DEFAULT_SETTINGS);
@@ -219,11 +254,12 @@ describe('application settings', () => {
     const codec = { encrypt: (value: string) => Buffer.from(value).toString('base64'), decrypt: (value: string) => Buffer.from(value, 'base64').toString() };
     const database = await Store.create(directory, codec);
     const options = { platform: 'linux' as const, homeDir: fixture, execPath: '/opt/ModelDock', isPackaged: true };
-    new SettingsManager(database, options).save({ theme: 'dark', startHidden: true });
+    new SettingsManager(database, options).save({ theme: 'dark', startHidden: true, autoStartGateway: true, gatewayPort: 25000 });
     database.close();
     expect(readFileSync(join(directory, 'modeldock.sqlite')).includes(Buffer.from('"theme":"dark"'))).toBe(false);
     const reopened = await Store.create(directory, codec);
-    expect(new SettingsManager(reopened, options).get().settings).toMatchObject({ theme: 'dark', startHidden: true });
+    expect(new SettingsManager(reopened, options).get().settings).toMatchObject({ theme: 'dark', startHidden: true, autoStartGateway: true, gatewayPort: 25000 });
+    expect(existsSync(join(fixture, '.config', 'autostart', 'modeldock.desktop'))).toBe(false);
     reopened.close();
   });
 });
