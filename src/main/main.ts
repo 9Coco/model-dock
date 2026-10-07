@@ -160,6 +160,8 @@ async function createWindow(forceShow = false) {
           await verifyCompactUi(window!, store, outputDir, captureUi);
         } else if (process.env.MODELDOCK_SMOKE_USAGE_ONLY === '1') {
           await verifyUsageAnalytics(window!, store, outputDir, captureUi);
+        } else if (process.env.MODELDOCK_SMOKE_CONNECTION_ONLY === '1') {
+          await verifyConnectionTest(window!, outputDir, captureUi);
         } else if (process.env.MODELDOCK_SMOKE_AUTH_QUOTAS_ONLY === '1') {
           await verifyAuthQuotas(window!, store, outputDir, captureUi);
         } else if (process.env.MODELDOCK_SMOKE_UPSTREAM) {

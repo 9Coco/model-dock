@@ -10,7 +10,8 @@ const server = await createServer(); await server.listen();
 const env = { ...process.env, MODELDOCK_DEV_URL: 'http://127.0.0.1:5178' };
 for (const key of Object.keys(env)) if (key.startsWith('MODELDOCK_SMOKE')) delete env[key];
 delete env.ELECTRON_RUN_AS_NODE;
-const child = spawn(electron, [join(root, 'work/dev-runtime')], { stdio: 'inherit', env, windowsHide: true });
+// Windows GUI apps must not inherit a hidden startup state for their first ShowWindow call.
+const child = spawn(electron, [join(root, 'work/dev-runtime')], { stdio: 'inherit', env });
 let closing = false;
 async function close() { if (closing) return; closing = true; child.kill(); await server.close(); }
 child.on('exit', async code => { await close(); process.exit(code ?? 0); });
