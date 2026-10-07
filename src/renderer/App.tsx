@@ -72,6 +72,14 @@ const errorText = (error: unknown) => error instanceof Error ? error.message : S
 const number = (value: number) => new Intl.NumberFormat('zh-CN').format(value);
 const contextLabel = (value: number) => value === 0 ? '未设置' : value >= 1000000 ? `${(value / 1000000).toFixed(value % 1000000 ? 1 : 0)}M` : `${Math.round(value / 1000)}K`;
 const protocolLabel = (model: Model) => model.wireApi === 'responses' ? 'Responses' : 'Chat Completions';
+const testModelStorageKey = 'modeldock.connection-test-models';
+function savedTestModelIds(): Record<string, string> {
+  try {
+    const value: unknown = JSON.parse(window.localStorage.getItem(testModelStorageKey) ?? '{}');
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+    return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
+  } catch { return {}; }
+}
 const authStageLabels: Record<NonNullable<AuthProgress['stage']>, string> = { 'device-code': '申请设备验证码', 'device-poll': '等待设备授权', 'token-exchange': '兑换登录凭据', 'account-info': '读取 GitHub 账号信息', refresh: '续期授权', discovery: '获取授权服务信息' };
 
 export default function App({ initialSettings }: { initialSettings?: SettingsSnapshot }) {
@@ -114,6 +122,12 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
   const activeAuth = useRef<AuthProgress | null>(null);
   const updateAuth = (progress: AuthProgress | null) => { activeAuth.current = progress; setAuth(progress); };
   const [tests, setTests] = useState<Record<string, ConnectionResult>>({});
+  const [testModelIds, setTestModelIds] = useState(savedTestModelIds);
+  const [runningTestModels, setRunningTestModels] = useState<Record<string, Model>>({});
+  useEffect(() => {
+    try { window.localStorage.setItem(testModelStorageKey, JSON.stringify(testModelIds)); }
+    catch { /* The current selection remains usable when browser storage is unavailable. */ }
+  }, [testModelIds]);
   const [confirm, setConfirm] = useState<{ title: string; description: string; action: () => Promise<void>; actionKey?: string; actionLabel?: string } | null>(null);
   const [port, setPort] = useState('18181');
   const [todayUsage, setTodayUsage] = useState<{ day: string; cost: number | null; partial: boolean } | null>(null);
@@ -246,15 +260,26 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
     });
   };
   const toggleModel = async (model: Model, enabled: boolean) => run(`model-${model.id}`, async () => { await bridge!.saveModel({ ...model, enabled }); await refresh(); });
+  const connectionTestModel = (providerId: string) => data.models.find(model => model.providerId === providerId && model.id === testModelIds[providerId]) ?? firstConnectionModel(providerId, data.models);
+  const selectTestModel = (providerId: string, modelId: string) => {
+    if (pendingActions.current.has(`test-${providerId}`) || !data.models.some(model => model.providerId === providerId && model.id === modelId)) return;
+    setTestModelIds(previous => ({ ...previous, [providerId]: modelId }));
+    setTests(previous => { const next = { ...previous }; delete next[providerId]; return next; });
+  };
   const testProvider = async (provider: Provider) => {
-    const model = firstConnectionModel(provider.id, data.models);
+    const model = connectionTestModel(provider.id);
     if (!model) { notify('此供应商还没有模型，请先添加模型后再测试连接。', 'info'); return; }
     await run(`test-${provider.id}`, async () => {
       const revision = (testRevisions.current[provider.id] ?? 0) + 1;
       testRevisions.current[provider.id] = revision;
+      setRunningTestModels(previous => ({ ...previous, [provider.id]: model }));
       setTests(previous => { const next = { ...previous }; delete next[provider.id]; return next; });
-      const result = await bridge!.testProvider(provider.id, { modelId: model.id });
-      if (testRevisions.current[provider.id] === revision) setTests(previous => ({ ...previous, [provider.id]: result }));
+      try {
+        const result = await bridge!.testProvider(provider.id, { modelId: model.id });
+        if (testRevisions.current[provider.id] === revision) setTests(previous => ({ ...previous, [provider.id]: result }));
+      } finally {
+        setRunningTestModels(previous => { const next = { ...previous }; delete next[provider.id]; return next; });
+      }
     });
   };
   const login = async (provider: Provider) => run(`login-${provider.id}`, async () => {
@@ -489,7 +514,8 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
   const providerStatus = (provider: Provider) => !provider.enabled ? '已停用' : provider.kind === 'openai-compatible' && !provider.baseUrl ? '待填地址' : provider.authStatus === 'ready' ? '凭据已保存' : provider.authStatus === 'signing-in' ? '正在登录' : provider.authStatus === 'error' ? '需要检查' : '待授权';
   const providerRow = (provider: Provider, forTool = false) => {
     const selected = forTool && currentSourceIds.includes(provider.id);
-    const defaultTestModel = firstConnectionModel(provider.id, data.models);
+    const providerModels = data.models.filter(model => model.providerId === provider.id);
+    const defaultTestModel = connectionTestModel(provider.id);
     const testResult = tests[provider.id];
     const testing = !!busy[`test-${provider.id}`];
     const unavailableReason = providerUnavailableReason(provider, selectedTool);
@@ -500,7 +526,7 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
         <div className="provider-row-title"><h3>{provider.name}</h3><span className={`badge ${!provider.enabled || (provider.kind === 'openai-compatible' && !provider.baseUrl) ? 'neutral' : provider.authStatus === 'ready' ? 'positive' : provider.authStatus === 'error' ? 'negative' : 'warning'}`}><span className="status-dot" />{providerStatus(provider)}</span></div>
         <div className="provider-row-meta"><span className="provider-address" title={provider.baseUrl}>{provider.baseUrl || (provider.kind === 'openai-compatible' ? '服务地址待填写' : providerKinds[provider.kind].title)}</span><span>{data.models.filter(model => model.providerId === provider.id).length} 个模型</span></div>
         {forTool && provider.kind !== 'openai-compatible' && !unavailableReason && <div className="provider-selection-hint">订阅来源由本机入口管理授权</div>}{forTool && !!unavailableReason && <div className="provider-selection-hint">{unavailableReason}{selected ? '，已保存的选择可取消' : ''}</div>}
-        {testing ? <div className="test-result testing" role="status"><span>正在测试：{defaultTestModel?.upstreamId}…</span></div> : testResult && <div data-connection-result data-success={testResult.ok} data-outcome={testResult.outcome} data-status-code={testResult.statusCode} data-tested-model={testResult.testedModel} data-wire-api={testResult.wireApi} data-duration-ms={testResult.durationMs} className={`test-result ${testResult.ok ? 'ok' : 'failed'}`} role={testResult.ok ? 'status' : 'alert'}><span>上次测试：{testResult.testedModel ? `${testResult.testedModel} · ` : ''}{testResult.message}</span><small>{testResult.statusCode !== undefined && `HTTP ${testResult.statusCode}`}{testResult.statusCode !== undefined && testResult.durationMs !== undefined && ' · '}{testResult.durationMs !== undefined && `${Math.round(testResult.durationMs)} ms`}</small></div>}
+        {testing ? <div className="test-result testing" role="status"><span>正在测试：{runningTestModels[provider.id]?.upstreamId}…</span></div> : testResult && <div data-connection-result data-success={testResult.ok} data-outcome={testResult.outcome} data-status-code={testResult.statusCode} data-tested-model={testResult.testedModel} data-wire-api={testResult.wireApi} data-duration-ms={testResult.durationMs} className={`test-result ${testResult.ok ? 'ok' : 'failed'}`} role={testResult.ok ? 'status' : 'alert'}><span>上次测试：{testResult.testedModel ? `${testResult.testedModel} · ` : ''}{testResult.message}</span><small>{testResult.statusCode !== undefined && `HTTP ${testResult.statusCode}`}{testResult.statusCode !== undefined && testResult.durationMs !== undefined && ' · '}{testResult.durationMs !== undefined && `${Math.round(testResult.durationMs)} ms`}</small></div>}
       </div>
       <div className="provider-row-side">
       <div className="provider-row-actions">
@@ -509,7 +535,13 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
         <button className="icon-button" aria-label={`编辑 ${provider.name}`} title="编辑供应商" onClick={() => editProvider(provider)}><Pencil size={16} /></button>
         <button className="icon-button danger-icon" data-action="delete-provider" disabled={!bridge || !!busy.delete || anyToolOperationPending()} title="删除全局供应商及关联模型" aria-label={`删除 ${provider.name}`} onClick={() => deleteProvider(provider)}><Trash2 size={15} /></button>
       </div>
-      <div className="provider-test-default" data-default-test-model data-model-id={defaultTestModel?.id} title={defaultTestModel ? `连通性测试默认模型：${defaultTestModel.upstreamId}；按模型列表顺序取第一个` : '此供应商尚未添加模型'}><span>默认测试模型</span><code>{defaultTestModel?.upstreamId || '尚未添加模型'}</code></div>
+      <label className={`provider-test-default ${testing || !defaultTestModel ? 'disabled' : ''}`} data-default-test-model data-model-id={defaultTestModel?.id} title={defaultTestModel ? `点击切换测试模型：${defaultTestModel.upstreamId}` : '此供应商尚未添加模型'}>
+        <span>默认测试模型</span><code>{defaultTestModel?.upstreamId || '尚未添加模型'}</code><ChevronDown size={12} />
+        <select data-action="select-test-model" aria-label={`选择 ${provider.name} 的测试模型`} value={defaultTestModel?.id ?? ''} disabled={testing || !defaultTestModel} onChange={event => selectTestModel(provider.id, event.target.value)}>
+          {!providerModels.length && <option value="">尚未添加模型</option>}
+          {providerModels.map(model => <option key={model.id} value={model.id}>{model.upstreamId} · {protocolLabel(model)}{!model.enabled ? '（已停用）' : ''}</option>)}
+        </select>
+      </label>
       </div>
     </article>;
   };

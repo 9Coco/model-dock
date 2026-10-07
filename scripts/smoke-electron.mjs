@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import electron from 'electron';
 import { createServer } from 'node:http';
+import { isDeepStrictEqual } from 'node:util';
 import { createSmokeProfile } from './smoke-profile.mjs';
 import { verifyQaExecutable } from './smoke-package.mjs';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -32,6 +33,7 @@ const env = { ...process.env, MODELDOCK_SMOKE: profile.outputDir, MODELDOCK_DATA
 env.MODELDOCK_SMOKE_AUTH_MOCK = '1';
 delete env.MODELDOCK_DEV_URL;
 let noCatalogModelRequests = 0, connectionTestPosts = 0, codexModelRequests = 0;
+const connectionRequests = [];
 const upstream = createServer((req,res) => {
   if (req.url?.startsWith('/codex-native/models')) {
     codexModelRequests++;
@@ -55,11 +57,18 @@ const upstream = createServer((req,res) => {
     const parts=[]; req.on('data',part=>parts.push(part));
     req.on('end',()=>{
       res.setHeader('content-type','application/json');
-      if(req.headers.authorization!=='Bearer synthetic-only') { res.statusCode=401; res.end(JSON.stringify({error:{message:'Synthetic key rejected'}})); return; }
       let body; try{body=JSON.parse(Buffer.concat(parts).toString('utf8'));}catch{res.statusCode=400;res.end('{}');return;}
-      if(body.model!=='no-list-model') { res.statusCode=404;res.end(JSON.stringify({error:{message:'Synthetic model not found'}}));return; }
-      if(req.url.endsWith('/responses')) res.end(JSON.stringify({id:'mock-probe-response',object:'response',status:'completed',model:'no-list-model',output:[{id:'msg_1',type:'message',role:'assistant',content:[{type:'output_text',text:'OK'}]}]}));
-      else res.end(JSON.stringify({id:'mock-probe-response',object:'chat.completion',model:'no-list-model',choices:[{index:0,message:{role:'assistant',content:'OK'},finish_reason:'stop'}]}));
+      const wireApi=req.url.endsWith('/responses')?'responses':'chat-completions';
+      const respond=(statusCode,payload)=>{
+        connectionRequests.push({model:body.model,wireApi,statusCode});
+        // Give the renderer a deterministic busy frame for the model-selector checks.
+        setTimeout(()=>{res.statusCode=statusCode;res.end(JSON.stringify(payload));},75);
+      };
+      if(req.headers.authorization!=='Bearer synthetic-only') { respond(401,{error:{message:'Synthetic key rejected'}}); return; }
+      if(!['no-list-model','no-list-second-model'].includes(body.model)) { respond(404,{error:{message:'Synthetic model not found'}});return; }
+      if((body.model==='no-list-second-model'&&wireApi!=='responses')||!Array.isArray(wireApi==='responses'?body.input:body.messages)) { respond(400,{error:{message:'Synthetic protocol mismatch'}});return; }
+      if(wireApi==='responses') respond(200,{id:'mock-probe-response',object:'response',status:'completed',model:body.model,output:[{id:'msg_1',type:'message',role:'assistant',content:[{type:'output_text',text:'OK'}]}]});
+      else respond(200,{id:'mock-probe-response',object:'chat.completion',model:body.model,choices:[{index:0,message:{role:'assistant',content:'OK'},finish_reason:'stop'}]});
     });
     return;
   }
@@ -78,6 +87,12 @@ await new Promise(resolve=>upstream.listen(0,'127.0.0.1',resolve));
 env.MODELDOCK_SMOKE_UPSTREAM=`http://127.0.0.1:${upstream.address().port}/v1`;
 env.MODELDOCK_SMOKE_NO_CATALOG=`http://127.0.0.1:${upstream.address().port}/no-catalog/v1`;
 delete env.ELECTRON_RUN_AS_NODE;
+function verifyConnectionNetwork() {
+  const validation = JSON.parse(readFileSync(resolve(output,'connection-test-validation.json'),'utf8'));
+  if (noCatalogModelRequests !== 0 || connectionTestPosts !== validation.expectedConnectionPostCalls || !isDeepStrictEqual(connectionRequests,validation.expectedConnectionRequests)) throw new Error('Connection test selected model, protocol, or duplicate request prevention failed');
+  writeFileSync(resolve(output,'connection-network-validation.json'),JSON.stringify({noCatalogModelRequests,connectionTestPosts,connectionRequests},null,2));
+  return validation;
+}
 const child = spawn(executable, applicationArgs, { cwd: root, env, windowsHide: true, stdio: 'pipe' });
 let errorOutput = '';
 child.stderr.on('data', chunk => { errorOutput += chunk; });
@@ -112,6 +127,12 @@ child.on('exit', code => {
       console.log(JSON.stringify({ exitCode: code, bridge: value.bridge, quotaAccounts: result.accountKinds, output }));
       process.exit(code || 0);
     }
+    if (env.MODELDOCK_SMOKE_CONNECTION_ONLY === '1') {
+      const result = verifyConnectionNetwork();
+      if (!result.noDialog || !result.selectedSecond.ok || result.busyChecks.length !== result.expectedConnectionPostCalls) throw new Error('Inline connection model selection validation failed');
+      console.log(JSON.stringify({ exitCode: code, bridge: value.bridge, connectionOnly: true, connectionTestRequests: connectionTestPosts, output }));
+      process.exit(code || 0);
+    }
     const integration = JSON.parse(readFileSync(resolve(output, 'electron-integration.json'), 'utf8'));
     if (integration.reply !== 'OK') throw new Error('Main-process gateway integration unavailable');
     if (env.MODELDOCK_SMOKE_TOOLS_ONLY === '1') {
@@ -120,9 +141,7 @@ child.on('exit', code => {
       console.log(JSON.stringify({ exitCode: code, bridge: value.bridge, toolsOnly: true, localMockRequest: integration.replyStatus, toolRestoration: true, output }));
       process.exit(code || 0);
     }
-    const connectionValidation = JSON.parse(readFileSync(resolve(output,'connection-test-validation.json'),'utf8'));
-    if (noCatalogModelRequests !== 0 || connectionTestPosts !== connectionValidation.expectedConnectionPostCalls) throw new Error('Connection test default selection or duplicate request prevention failed');
-    writeFileSync(resolve(output,'connection-network-validation.json'),JSON.stringify({noCatalogModelRequests,connectionTestPosts},null,2));
+    verifyConnectionNetwork();
     if (codexModelRequests !== 2) throw new Error('Native Codex catalog must be fetched exactly twice');
     writeFileSync(resolve(output,'codex-catalog-network-validation.json'),JSON.stringify({codexModelRequests},null,2));
     console.log(JSON.stringify({ exitCode: code, bridge: value.bridge, title: value.title, localMockRequest: integration.replyStatus, screenshot: resolve(output, 'electron-smoke.png') }));
