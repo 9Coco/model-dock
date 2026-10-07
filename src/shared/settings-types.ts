@@ -6,6 +6,8 @@ export interface AppSettings {
   launchAtLogin: boolean;
   startHidden: boolean;
   closeToTray: boolean;
+  autoStartGateway: boolean;
+  gatewayPort: number;
   terminal: TerminalPreference;
   /** Empty uses system proxy rules; otherwise an explicitly selected local proxy. */
   proxyUrl: string;
@@ -22,5 +24,5 @@ export interface SettingsSnapshot {
 }
 
 export const DEFAULT_SETTINGS: Readonly<AppSettings> = Object.freeze({
-  theme: 'light', launchAtLogin: false, startHidden: false, closeToTray: true, terminal: 'system', proxyUrl: '',
+  theme: 'light', launchAtLogin: false, startHidden: false, closeToTray: true, autoStartGateway: false, gatewayPort: 18181, terminal: 'system', proxyUrl: '',
 });

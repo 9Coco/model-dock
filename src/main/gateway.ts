@@ -8,10 +8,12 @@ import { modelDisplayLabel } from '../shared/model-names';
 import type { Provider, ProviderSecret, Model, ToolId, GatewayStatus } from '../shared/types';
 import { reportedUsage } from './usage';
 import type { TokenUsage } from '../shared/usage-types';
+import { DEFAULT_SETTINGS } from '../shared/settings-types';
 
 type Json = Record<string, unknown>;
 export interface PreparedRequest { url: string; headers: Record<string, string>; body: Json }
 export interface GatewayOptions {
+  port?: number;
   fetch?: typeof fetch;
   prepareRequest?: (provider: Provider, secret: ProviderSecret, path: string, body: Json) => Promise<PreparedRequest>;
   timeoutMs?: number;
@@ -159,12 +161,27 @@ export class Gateway {
   private sockets = new Set<Socket>();
   private controllers = new Set<AbortController>();
   private state: GatewayStatus = { running: false, host: '127.0.0.1', port: 18181, baseUrl: 'http://127.0.0.1:18181/v1', requests: 0, lastError: '' };
-  constructor(private store: Store, private options: GatewayOptions = {}) {}
+  constructor(private store: Store, private options: GatewayOptions = {}) { this.configurePort(options.port ?? DEFAULT_SETTINGS.gatewayPort); }
   status(): GatewayStatus { return { ...this.state }; }
-  async start(port = 18181): Promise<GatewayStatus> {
-    if (this.server?.listening) return this.status();
+  configurePort(port: number): void {
     if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('网关端口无效。');
-    for (const provider of this.store.listProviders()) if (provider.enabled && provider.baseUrl.trim()) validateUpstreamUrl(provider.baseUrl, port);
+    if (this.server?.listening && port !== this.state.port) throw new Error('请先停止本地服务，再修改端口。');
+    this.store.setGatewayPort(port);
+    this.state = { ...this.state, port, baseUrl: `http://127.0.0.1:${port}/v1` };
+  }
+  async start(port = this.state.port): Promise<GatewayStatus> {
+    if (this.server?.listening) return this.status();
+    try { this.configurePort(port); }
+    catch { this.state.lastError = '网关端口无效。'; throw new Error(this.state.lastError); }
+    for (const provider of this.store.listProviders()) {
+      if (!provider.enabled || !provider.baseUrl.trim()) continue;
+      try { validateUpstreamUrl(provider.baseUrl, port); }
+      catch (error) {
+        // This validator emits fixed messages and never includes the supplied URL or credentials.
+        this.state.lastError = error instanceof Error ? error.message : '供应商配置无效，无法启动本地网关。';
+        throw new Error(this.state.lastError);
+      }
+    }
     const server = createServer((request, response) => { void this.handle(request, response); });
     server.requestTimeout = 30_000; server.headersTimeout = 15_000;
     server.on('connection', socket => { this.sockets.add(socket); socket.once('close', () => this.sockets.delete(socket)); });
