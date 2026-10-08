@@ -7,6 +7,7 @@ import { parse as parseJsonc, modify, applyEdits, type ParseError } from 'jsonc-
 import type { ToolId } from '../shared/types';
 import type { McpServer, McpServerInput, McpTransport, McpImportResult, McpConfigPreview, McpApplyResult } from '../shared/mcp-types';
 import { MCP_SECRET_PLACEHOLDER } from '../shared/mcp-types';
+import { openCodeConfigDirectory } from './opencode-paths';
 
 /** The store encrypts this JSON. No native credential values cross the preload bridge. */
 export interface McpStore {
@@ -27,6 +28,7 @@ export interface McpOptions {
   appDataDir?: string;
   backupDir?: string;
   platform?: NodeJS.Platform;
+  configHome?: string;
 }
 const TOOL_IDS: ToolId[] = ['codex', 'opencode', 'dsh', 'vscode', 'copilot'];
 const STATE_KEY = 'mcp-v1';
@@ -218,6 +220,7 @@ export class McpManager {
   private readonly codexHome: string;
   private readonly appDataDir: string;
   private readonly backupDir: string;
+  private readonly openCodeConfigDir: string;
   constructor(private readonly store: McpStore, options: McpOptions = {}) {
     this.homeDir = options.homeDir ?? homedir();
     this.codexHome = options.codexHome ?? join(this.homeDir, '.codex');
@@ -225,6 +228,7 @@ export class McpManager {
     this.appDataDir = options.appDataDir ?? (platform === 'win32' ? process.env.APPDATA ?? join(this.homeDir, 'AppData', 'Roaming')
       : platform === 'darwin' ? join(this.homeDir, 'Library', 'Application Support') : process.env.XDG_CONFIG_HOME ?? join(this.homeDir, '.config'));
     this.backupDir = options.backupDir ?? join(this.homeDir, '.modeldock', 'backups');
+    this.openCodeConfigDir = openCodeConfigDirectory(options.homeDir, options.configHome);
   }
   private state(): McpState { return clone(this.store.getManagedState(STATE_KEY, DEFAULT_STATE)); }
   private put(state: McpState): void { state.revision++; this.store.setManagedState(STATE_KEY, state); }
@@ -262,7 +266,7 @@ export class McpManager {
     if (tool === 'copilot') return join(this.homeDir, '.copilot', 'mcp-config.json');
     if (tool === 'vscode') return join(this.appDataDir, 'Code', 'User', 'mcp.json');
     if (tool === 'dsh') return 'modeldock-dsh-mcp.json';
-    const configDir = join(this.homeDir, '.config', 'opencode');
+    const configDir = this.openCodeConfigDir;
     return existsSync(join(configDir, 'opencode.jsonc')) ? join(configDir, 'opencode.jsonc') : join(configDir, 'opencode.json');
   }
   private key(tool: ToolId): string { return tool === 'codex' ? 'mcp_servers' : tool === 'vscode' ? 'servers' : tool === 'opencode' ? 'mcp' : 'mcpServers'; }

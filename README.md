@@ -80,6 +80,14 @@ MCP / Skills 的真实客户端加载、真实账号授权及额度查询仍需�
 
 自动检查覆盖设置保存、主题切换、系统颜色响应和窗口渲染。本地服务自动启动另通过四次 Windows Electron 进程启动检查，验证端口持久化、原生监听归属、关闭配置和端口占用时的错误显示；实际 Windows 登录或电脑重启、Linux 原生托盘和交互终端效果尚未实测。验证脚本隔离数据库、浏览器缓存及启动项适配器，不修改本机真实自启设置。
 
+
+### Linux 工具路径与 Copilot 依赖
+
+- OpenCode 配置同步、还原、MCP 和 Skills 统一使用有效的绝对 `XDG_CONFIG_HOME/opencode`；用量导入和显示使用 `XDG_DATA_HOME/opencode`，未设置时遵循默认用户目录。测试资料目录保持隔离，不继承真实桌面 XDG 路径。
+- DSH 配置解析优先核对 PATH 中真实 `dsh` 的 npm 包，支持 `NVM_BIN`、`NVM_DIR` 和桌面 PATH 缺少 nvm 时的有限版本目录搜索；识别安装时不执行 shell 初始化脚本。
+- Linux Copilot “仅保留所选供应商”需要系统 `/usr/bin/python3` 与 `python3-secretstorage`。deb 已声明依赖；AppImage 用户需自行安装该系统依赖。凭据只在主进程通过固定子进程的 stdin/stdout 处理，不进入命令参数、界面或普通日志。
+- Copilot 私有目录 `~/.copilot(0700)` 内的 `run(0775)` 被正确接受；不允许外层可替换目录、链接、其他用户属主或公开的 token 文件。
+
 ## 开发和运行
 
 需要 Node.js 24.13+（本次开发用 Node.js 26）、npm；Windows 和 Linux 均需图形桌面。
@@ -190,7 +198,7 @@ VS Code 工具页的「仅保留所选供应商」默认开启。同步会先备
 
 Copilot 默认开启「仅保留所选供应商」，同步会先备份，再清理未选中的自定义来源，包括此前手工添加的套餐；全部清空会清理所有自定义来源。关闭这个选项则只更新 ModelDock 托管项，保留其他自定义来源。GitHub 内置模型、账号和 MCP 不删除；聊天正文保留，被删除来源与旧会话的关联可能由 Copilot 解除。首选模型是 ModelDock 的配置偏好，不主动切换已打开聊天；同步后请在 Copilot app 的模型选择器中选择。
 
-连接使用当前 Copilot 资料目录（默认 `~/.copilot`，可由 `COPILOT_HOME` 指定）内的运行实例信息，只访问本机原生接口。ModelDock 不直接编辑 `data.db`，也不复制整个数据库或对话记录。Windows 清理旧来源前只按其明确 UUID 备份两个 Copilot 供应商凭据目标的原始字节，不解码、展示或枚举其他应用与账号凭据；备份立即加密保存。Linux 等平台没有已验证的安全凭据备份接口时会拒绝清理，不会冒称已恢复凭据。`modeldock-copilot-desktop.json` 预览 / 导出仅供检查同步计划。
+连接使用当前 Copilot 资料目录（默认 `~/.copilot`，可由 `COPILOT_HOME` 指定）内的运行实例信息，只访问本机原生接口。ModelDock 不直接编辑 `data.db`，也不复制整个数据库或对话记录。Windows 清理旧来源前只按其明确 UUID 备份两个 Copilot 供应商凭据目标的原始字节，不解码、展示或枚举其他应用与账号凭据；备份立即加密保存。Linux 1.1.27 使用 Secret Service 精确备份两个 BYOK 项的原始字节、属性、标签、内容类型和集合，恢复时保留原先不存在的目标；备份由 ModelDock 加密保存。锁定的钥匙串、重复匹配或缺少系统 python3-secretstorage 时拒绝清理；恢复时发现凭据已移到其他集合会在写入前停止并保留恢复记录，错误给出具体原因。其他未适配平台仍拒绝清理。`modeldock-copilot-desktop.json` 预览 / 导出仅供检查同步计划。
 
 每次写入前将原配置、凭据备份和恢复计划加密保存到 ModelDock 的管理记录与私有备份。部分写入失败会尝试恢复；恢复未完成时保留待恢复记录，下次同步先恢复再执行新计划。无法安全备份时先拒绝修改。同步串行发送写入，不盲目重试写请求；读取遇到原生凭据工作队列繁忙时有限退避，减少重复的全供应商凭据查询。Copilot 未运行时选择仍保存，打开应用后可重新同步。
 
@@ -236,7 +244,7 @@ API 来源按名称、类型和规范化地址防重复：添加预设时复用�
 - Codex 的导出与目录只发布 Responses 模型。生成的目录含客户端要求的基本字段，但复杂工具、推理档位、视觉行为仍需逐模型验证。
 - DSH 应用目标是 `DSH_HOME`（未设置时 `~/.dsh`）的 `cordis.patch.yml` 与 `.credentials.yaml`，适配已验证的 CLI 0.1.7-rc.2 / Desktop 0.2.0-rc.2 原生插件格式。默认开启「仅显示所选供应商」：发布所选 pi-ai 路由，停用原生 DeepSeek API / 账号模型适配器及其他已识别模型来源；保留独立平台账号授权服务、凭据和会话。全部取消仍保持模型来源为空；关闭此选项才恢复原模型适配器的启用标记，原配置来源可与 ModelDock 来源共存。不同接口拆分路由，默认模型用于新会话。同步前通过隐藏的只读进程解析实际 profile / 运行时，识别嵌套及改名适配器；解析不完整或缺少标准核心插件时明确拒绝写入。原 profile 文件不改写；两文件先加密备份，失败恢复，外部并发修改冲突时保留恢复记录并拒绝覆盖。配置写入不主动切换已有会话。
 - DSH 旧 DeepSeek 会话仍可能引用 `deepseek-official` / `deepseek-account`。独占模式选择官方 DeepSeek API 来源时，ModelDock 会安装无凭据的受管同模型兼容插件，让这些旧引用调用所选来源中的同一上游模型；聊天日志、模型选择及原请求对象不改写。相似显示名、其他套餐、不同模型或无法确定的重复来源不自动映射。兼容路由没有可配置目录和模型枚举，模型设置页与新会话选择器仍只展示所选来源。插件源、配置及凭据一同纳入加密备份与失败恢复；关闭独占或清空选择会撤销插件，静态无凭据代码文件留在本地作为非活动文件。未包含旧模型时，请在 DSH 切换模型或新建会话。
-- Copilot app 接入使用桌面应用的本机原生供应商接口，按 1.1.26 的协议实现，不把 CLI `providers.json` 或 SDK 会话参数当成桌面配置。预览只是原生同步计划参考，需要应用运行才能同步；版本接口变化会明确报错。Windows 隔离原生实例已核对，Linux 桌面与凭据存储效果仍需实测。OpenCode 使用各模型的 npm SDK 配置选择 Chat/Responses 协议，保存时合并 JSON/JSONC。
+- Copilot app 接入使用桌面应用的本机原生供应商接口，按 1.1.26 的协议实现，不把 CLI `providers.json` 或 SDK 会话参数当成桌面配置。预览只是原生同步计划参考，需要应用运行才能同步；版本接口变化会明确报错。Windows 隔离原生实例已核对。Linux 原生连接支持系统管理员安装的 /usr/bin/github：校验 root 文件和目录、UID、进程启动时间、执行文件身份及回环监听 socket，信任来源是本机系统安装，不是 GitHub 厂商签名；用户可写 AppImage 暂不支持。OpenCode 使用各模型的 npm SDK 配置选择 Chat/Responses 协议，保存时合并 JSON/JSONC。
 - VS Code 接入目标是 Copilot Chat 的 Custom Endpoint，默认写入用户配置 `Code/User/chatLanguageModels.json`。默认范围会替换该文件中的全部 `customendpoint` 分组；关闭「仅保留所选供应商」后只更新 ModelDock 分组。应用不会自动识别其他 profile；使用其他 profile 时请预览 / 导出后手工合并到对应位置。同步只是注册模型来源，实际聊天模型须在 VS Code 选择器中选择；此接入不能据此宣称所有编辑器 AI 功能都被替换。
 - 模型列表、上下文和工具/视觉声明不会授予上游权限；错误会明确返回，日志不记录请求正文与密钥。
 
@@ -247,7 +255,7 @@ API 来源按名称、类型和规范化地址防重复：添加预设时复用�
 | Codex 设备码、额度和目录 | 公开客户端兼容流程；目录 `client_version` 为 `0.159.0`；授权协议、CC Switch v4.0.0 / 固定参考提交见源码 | 模拟授权、续期、取消和目录解析；账号授权与各模型推理分别验收 |
 | Grok / xAI | 公开 OIDC 设备码与已观察到的 Build 额度协议；客户端兼容版本 `1.0.44`；CC Switch v4.0.3 | issuer / scope 校验及额度解析 fixture；缺少明确结构时显示未知 |
 | GitHub Copilot 账号 | GitHub 公开设备码、公共 `/user` 身份查询及已观察到的 Copilot 额度接口 | pending / slow_down、取消、身份校验和额度 fixture；不是 ModelDock 自注册应用 |
-| Copilot app 配置 | 原生本机供应商接口兼容目标 `1.1.26` | Windows 验证产品、GitHub 签名及端口归属；当前 Linux 生产入口因缺少已验证的厂商身份接口而拒绝连接，不发送凭据 |
+| Copilot app 配置 | 原生本机供应商接口：Windows `1.1.26` / Linux `1.1.27` | Windows 保留产品、GitHub 签名及端口验证；Linux 验证 root 管理的 `/usr/bin/github`、当前用户进程和真实回环 socket，使用 Secret Service 精确备份恢复 BYOK 凭据；不把 Linux 系统安装信任称为厂商签名 |
 | DSH 配置 | CLI `0.1.7-rc.2` / Desktop `0.2.0-rc.2` 插件及凭据格式 | 原生 profile 解析、备份及只读/写入回归；未知布局拒绝覆盖 |
 | Codex 会话导入 | `sessions` / `archived_sessions` 的用量元数据，参考 CC Switch 会话实现 | 累计快照、回放、截断和幂等 fixture；仅提取用量字段，不保存聊天正文 |
 | OpenCode 会话导入 | V1 / V2 SQLite 元数据与 SQLite 官方 WAL 格式 | 校验已提交 WAL 的内存快照、字节不变和幂等 fixture；未知 schema 明确报告 |

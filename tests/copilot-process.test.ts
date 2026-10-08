@@ -36,7 +36,8 @@ describe('Copilot native process and listener identity', () => {
   it('fails closed on permissions, unsupported platforms, malformed inspections and nonnumeric targets', async () => {
     const failed = vi.fn(async () => { throw new Error('PRIVATE_OS_ERROR'); });
     expect(await verifyCopilotDesktopProcess(pid, port, { platform: 'win32', inspect: failed })).toBe(false);
-    for (const platform of ['linux', 'darwin'] as const) await expect(verifyCopilotDesktopProcess(pid, port, { platform, inspect: failed })).rejects.toMatchObject({ category: 'unsupported-platform' });
+    await expect(verifyCopilotDesktopProcess(pid, port, { platform: 'darwin', inspect: failed })).rejects.toMatchObject({ category: 'unsupported-platform' });
+    expect(await verifyCopilotDesktopProcess(pid, port, { platform: 'linux', inspect: failed })).toBe(false);
     for (const value of [null, {}, [], { ...evidence(), listeners: [null] }, { ...evidence(), ancestry: [null, {}], listener: { ...evidence().listener, pid: pid + 1 } }]) expect(await verifyCopilotDesktopProcess(pid, port, { platform: 'win32', inspect: async () => value })).toBe(false);
     const unused = vi.fn(); expect(await verifyCopilotDesktopProcess(NaN, port, { inspect: unused })).toBe(false); expect(await verifyCopilotDesktopProcess(pid, 65536, { inspect: unused })).toBe(false); expect(unused).not.toHaveBeenCalled();
   });

@@ -14,12 +14,23 @@ function setup() {
   const states = new Map<string, unknown>();
   const store: McpStore = { getManagedState: <T>(key: string, fallback: T) => (states.get(key) ?? fallback) as T, setManagedState: (key, value) => { states.set(key, JSON.parse(JSON.stringify(value))); } };
   const manager = new McpManager(store, { homeDir: root, appDataDir: root, backupDir: join(root, 'backups') });
-  return { root, manager, states };
+  return { root, manager, states, store };
 }
 function local(manager: McpManager, enabledTools: ('codex' | 'opencode' | 'vscode' | 'copilot' | 'dsh')[] = ['codex']) {
   return manager.save({ name: 'test-server', transport: 'stdio', command: 'npx', args: ['-y', 'example-mcp'], enabledTools });
 }
 describe('MCP management', () => {
+  it('applies OpenCode MCP only to the configured XDG root and preserves the default profile', () => {
+    const f = setup(), configHome = join(f.root, 'custom-config'), target = join(configHome, 'opencode', 'opencode.jsonc');
+    mkdirSync(join(f.root, '.config', 'opencode'), { recursive: true });
+    const defaultFile = join(f.root, '.config', 'opencode', 'opencode.json'); writeFileSync(defaultFile, '{"keep":"default-profile"}');
+    mkdirSync(join(configHome, 'opencode'), { recursive: true }); writeFileSync(target, '{\n// retain custom root comment\n"theme":"keep"\n}');
+    const manager = new McpManager(f.store, { homeDir: f.root, configHome, appDataDir: f.root }); local(manager, ['opencode']);
+    expect(manager.preview('opencode').filename).toBe(target); manager.apply('opencode');
+    expect(parseJsonc(readFileSync(target, 'utf8')).mcp['test-server'].command).toEqual(['npx', '-y', 'example-mcp']);
+    expect(readFileSync(target, 'utf8')).toContain('retain custom root comment');
+    expect(readFileSync(defaultFile, 'utf8')).toBe('{"keep":"default-profile"}');
+  });
   it('saves globally and toggles tool selections without modifying native files', () => {
     const { root, manager } = setup(); const item = local(manager);
     manager.setToolEnabled(item.id, 'vscode', true); expect(manager.list()[0].enabledTools).toEqual(['codex', 'vscode']);

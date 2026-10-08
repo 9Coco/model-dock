@@ -148,6 +148,14 @@ describe('running Copilot app synchronization and encrypted ownership recovery',
     await safeFailure(f.apply(makePlan()), 'backup');
     expect([...f.app.providers]).toEqual(before); expect(f.app.mutations).toEqual([]); expect(f.store.state()).toBeNull(); expect(f.app.opens).toBe(1);
   });
+  it('refuses an empty keyring match when the native provider reports an existing secret', async () => {
+    const f = exclusiveFixture(), before = structuredClone([...f.app.providers]);
+    await safeFailure(applyCopilotDesktop(f.store, makePlan(), home, {
+      openClient: f.app.open, syncScope: 'selected', restoreCredentials: f.restoreCredentials,
+      captureCredentials: async ids => ({ version: 2, platform: 'linux', providers: ids.map(providerId => ({ providerId, entries: [] })) }),
+    }), 'backup');
+    expect([...f.app.providers]).toEqual(before); expect(f.app.mutations).toEqual([]); expect(f.store.backups).toEqual([]); expect(f.store.state()).toBeNull();
+  });
   it('restores foreign native settings/models and original opaque bytes after a partial exclusive clear', async () => {
     const f = exclusiveFixture();
     const before = structuredClone({ provider: f.app.providers.get(FOREIGN), model: f.app.models.get(FOREIGN_MODEL), key: f.app.secrets.get(FOREIGN) });

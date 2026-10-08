@@ -1,4 +1,4 @@
-import { constants } from 'node:fs';
+import { constants, type Stats } from 'node:fs';
 import { lstat, open, realpath } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { CopilotProcessVerificationError, verifyCopilotDesktopProcess } from './copilot-process';
@@ -77,10 +77,22 @@ export interface CopilotDesktopOptions {
 
 async function boundedFile(file: string): Promise<string> {
   const directoryTree = async () => {
+    const directories: Stats[] = [];
     for (let directory = dirname(resolve(file)); ; directory = dirname(directory)) {
       const item = await lstat(directory);
-      if (item.isSymbolicLink() || !item.isDirectory() || process.platform !== 'win32' && item.mode & 0o022 && !(item.mode & 0o1000)) fail('invalid-metadata');
+      if (item.isSymbolicLink() || !item.isDirectory()) fail('invalid-metadata');
+      directories.push(item);
       if (directory === dirname(directory)) break;
+    }
+    // 修改点：Copilot Linux 会在私有 .copilot(0700) 内创建 run(0775)。
+    // 从根向下检查：只有外层私有目录已经阻止其他用户遍历时，才接受内部组可写目录。
+    // 屏障之前的可替换目录、所有软链接及后续文件的 0600/属主校验仍然拒绝。
+    if (process.platform !== 'win32') {
+      let privateAncestor = false;
+      for (const item of directories.reverse()) {
+        if (!privateAncestor && item.mode & 0o022 && !(item.mode & 0o1000)) fail('invalid-metadata');
+        if (typeof process.getuid === 'function' && item.uid === process.getuid() && !(item.mode & 0o077)) privateAncestor = true;
+      }
     }
   };
   await directoryTree();

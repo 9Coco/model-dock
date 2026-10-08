@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { DshProfileError, resolveDshProfile, sanitizeDshBaselineProviders, validateDshProfileMetadata, type DshProfileMetadata } from '../src/main/dsh-profile';
@@ -55,6 +55,34 @@ describe('DSH profile metadata boundary', () => {
 });
 
 describe('read-only native profile resolver', () => {
+  it.skipIf(process.platform === 'win32')('finds the PATH dsh link ahead of other nvm installations without executing it', async () => {
+    const home = temporary(); profile(home);
+    const selected = anchor(join(home, 'selected-runtime', 'lib', 'node_modules'));
+    const bin = join(home, 'path-bin'); mkdirSync(bin);
+    const entry = join(dirname(selected), 'entry.cjs'); writeFileSync(entry, "throw new Error('must never execute fixture binary');");
+    symlinkSync(entry, join(bin, 'dsh'));
+    anchor(join(home, '.nvm', 'versions', 'node', 'v99.0.0', 'lib', 'node_modules'));
+    const calls: string[] = [];
+    await resolveDshProfile(home, { platform: 'linux', homeDir: home, env: { PATH: bin }, runWorker: async request => { calls.push(request.installAnchor); return { ok: true, metadata: metadata() }; } });
+    expect(calls).toEqual([selected]);
+  });
+  it('finds a custom NVM_BIN npm prefix even when the desktop PATH omits node', async () => {
+    const home = temporary(); profile(home);
+    const prefix = join(home, 'custom-nvm', 'versions', 'node', 'v25.9.0');
+    const selected = anchor(join(prefix, 'lib', 'node_modules'));
+    const calls: string[] = [];
+    await resolveDshProfile(home, { platform: 'linux', homeDir: home, env: { PATH: '', NVM_BIN: join(prefix, 'bin') }, runWorker: async request => { calls.push(request.installAnchor); return { ok: true, metadata: metadata() }; } });
+    expect(calls).toEqual([selected]);
+  });
+  it('discovers the newest valid native nvm runtime with an uninitialized desktop PATH', async () => {
+    const home = temporary(); profile(home); const nvm = join(home, 'custom-nvm');
+    anchor(join(nvm, 'versions', 'node', 'v9.0.0', 'lib', 'node_modules'));
+    const selected = anchor(join(nvm, 'versions', 'node', 'v25.9.0', 'lib', 'node_modules'));
+    file(join(nvm, 'versions', 'node', 'v99.0.0', 'lib', 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), { name: 'unrelated-lookalike', version: '99.0.0' });
+    const calls: string[] = [];
+    await resolveDshProfile(home, { platform: 'linux', homeDir: home, env: { PATH: '', NVM_DIR: nvm }, runWorker: async request => { calls.push(request.installAnchor); return { ok: true, metadata: metadata() }; } });
+    expect(calls).toEqual([selected]);
+  });
   it('uses existing desktop ahead of web and passes only locations to the worker', async () => {
     const home = temporary(); profile(home); profile(home, 'web'); const install = anchor(join(home, 'runtime'));
     const calls: unknown[] = [];

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, writeFile, rm, symlink, link } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm, symlink, link, chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { CopilotDesktopClient, CopilotDesktopError, type CopilotDesktopPlan, type CopilotDesktopSocket, type CopilotNativeModel, type CopilotNativeProvider } from '../src/main/copilot-desktop';
@@ -133,6 +133,36 @@ describe('Copilot desktop native configuration bridge', () => {
     const tooLargeHome = await mkdtemp(join(tmpdir(), 'modeldock-copilot-')); dirs.push(tooLargeHome); const tooLargeRun = join(tooLargeHome, 'run'); await mkdir(tooLargeRun, { recursive: true });
     await writeFile(join(tooLargeRun, 'ws.release.port'), 'X'.repeat(4097)); await writeFile(join(tooLargeRun, 'ws.release.token'), `${privateToken}\n37440\n`);
     await expect(CopilotDesktopClient.open(tooLargeHome, { socketFactory: factory })).rejects.toMatchObject({ category: 'invalid-metadata' }); expect(factory).toHaveBeenCalledOnce();
+  });
+
+  it.skipIf(process.platform === 'win32')('accepts Linux run(0775) only inside an owner-private ancestor and still rejects exposed secrets', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'modeldock-copilot-private-')); dirs.push(home);
+    await chmod(home, 0o700);
+    const run = join(home, 'run'); await mkdir(run); await chmod(run, 0o775);
+    await writeFile(join(run, 'ws.release.port'), '63354\n37440\n', { mode: 0o600 });
+    await writeFile(join(run, 'ws.release.token'), `${privateToken}\n37440\n`, { mode: 0o600 });
+    const fixture = new NativeFixture(), factory = vi.fn(() => { queueMicrotask(() => fixture.event('open')); return fixture; });
+    const verify = vi.fn(async () => true);
+    const client = await CopilotDesktopClient.open(home, { socketFactory: factory, verifyProcess: verify }); clients.push(client);
+    expect(await client.listProviders()).toHaveLength(2);
+    await chmod(join(run, 'ws.release.token'), 0o640); verify.mockClear();
+    await expect(CopilotDesktopClient.open(home, { socketFactory: factory, verifyProcess: verify })).rejects.toMatchObject({ category: 'invalid-metadata' });
+    expect(verify).not.toHaveBeenCalled(); expect(factory).toHaveBeenCalledOnce();
+    await chmod(join(run, 'ws.release.token'), 0o600);
+    await chmod(home, 0o755);
+    await expect(CopilotDesktopClient.open(home, { socketFactory: factory, verifyProcess: verify })).rejects.toMatchObject({ category: 'invalid-metadata' });
+    expect(verify).not.toHaveBeenCalled(); expect(factory).toHaveBeenCalledOnce();
+  });
+
+  it.skipIf(process.platform === 'win32')('rejects a replaceable outer directory even when a private child contains metadata', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'modeldock-copilot-outer-')); dirs.push(root); await chmod(root, 0o775);
+    const home = join(root, 'private'); await mkdir(home, { mode: 0o700 });
+    await mkdir(join(home, 'run'), { mode: 0o700 });
+    await writeFile(join(home, 'run', 'ws.release.port'), '63354\n37440\n', { mode: 0o600 });
+    await writeFile(join(home, 'run', 'ws.release.token'), `${privateToken}\n37440\n`, { mode: 0o600 });
+    const verify = vi.fn(async () => true), factory = vi.fn();
+    await expect(CopilotDesktopClient.open(home, { verifyProcess: verify, socketFactory: factory })).rejects.toMatchObject({ category: 'invalid-metadata' });
+    expect(verify).not.toHaveBeenCalled(); expect(factory).not.toHaveBeenCalled();
   });
 
   it.each(['0\n37440\n', '65536\n37440\n', 'https://remote.test\n37440\n', '63354\n999\n', '63354\n37440\nextra'])('rejects invalid or mismatched connection metadata before creating a socket', async invalid => {

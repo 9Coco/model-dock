@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -8,7 +8,7 @@ import { importToolUsage, type ClientUsageStore } from '../src/main/usage-import
 import { sqliteUsageSnapshot } from '../src/main/usage-opencode';
 import type { UsageRecord } from '../src/shared/usage-types';
 const fixtures: { root: string; db: DatabaseSync }[] = [];
-afterEach(() => { for (const f of fixtures.splice(0)) { f.db.close(); if (!resolve(f.root).startsWith(resolve(tmpdir()))) throw new Error('Unsafe cleanup target'); rmSync(f.root, { recursive: true, force: true }); } });
+afterEach(() => { vi.unstubAllEnvs(); for (const f of fixtures.splice(0)) { f.db.close(); if (!resolve(f.root).startsWith(resolve(tmpdir()))) throw new Error('Unsafe cleanup target'); rmSync(f.root, { recursive: true, force: true }); } });
 const at = Date.parse('2026-10-07T03:00:00.000Z');
 function setup(v2 = false) {
   const root = mkdtempSync(join(tmpdir(), 'modeldock-opencode-usage-')), directory = join(root, '.local', 'share', 'opencode'); mkdirSync(directory, { recursive: true });
@@ -26,6 +26,12 @@ function setup(v2 = false) {
 }
 const hashes = (folder: string) => Object.fromEntries(readdirSync(folder).map(name => [name, createHash('sha256').update(readFileSync(join(folder, name))).digest('hex')]));
 describe('OpenCode V1 / V2 read-only metadata synchronization', () => {
+  it('imports the custom XDG data root read-only when no fixture home is supplied', async () => {
+    const f = setup(); f.insert('xdg-message'); const before = hashes(f.directory);
+    vi.stubEnv('XDG_DATA_HOME', join(f.root, '.local', 'share'));
+    expect(await importToolUsage('opencode', f.store)).toMatchObject({ status: 'ready', imported: 1 });
+    expect(hashes(f.directory)).toEqual(before); expect(f.records.size).toBe(1);
+  });
   it('reads committed live WAL metadata and never changes the original DB, WAL, SHM or directory', async () => {
     const f = setup(); f.insert('msg1'); const before = hashes(f.directory);
     const result = await importToolUsage('opencode', f.store, f.options);

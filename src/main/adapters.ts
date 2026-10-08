@@ -9,6 +9,7 @@ import { bindingConnectionPolicy, resolveBindingModels } from '../shared/binding
 import { modelDisplayLabel, modelLocalAlias } from '../shared/model-names';
 import type { CopilotDesktopPlan } from './copilot-desktop';
 import { dshPatchPreview, type DshPlan, type DshProviderProfile } from './dsh-config';
+import { openCodeConfigDirectory } from './opencode-paths';
 
 const PLACEHOLDER = '__MODELDOCK_LOCAL_KEY__';
 // These are client request budgets, not inferred upstream model specifications.
@@ -287,12 +288,13 @@ export function buildConfig(store: AdapterStore, tool: ToolId, port: number, rev
       + (responses.some(model => model.contextWindow === 0) ? '上下文未知的模型省略可选上下文字段；可在模型编辑中填写实际上下文后重新生成配置。' : ''),
   };
 }
-export function applyConfig(store: AdapterStore, tool: ToolId, port: number, appData: string, backups: string, homeDirectory = homedir(), options: { codexHome?: string } = {}): string {
+export function applyConfig(store: AdapterStore, tool: ToolId, port: number, appData: string, backups: string, homeDirectory = homedir(), options: { codexHome?: string; configHome?: string } = {}): string {
   if (tool === 'copilot') throw new Error('Copilot 桌面配置需要通过运行中的原生接口同步。');
   if (tool === 'dsh') throw new Error('DSH 配置需要通过原生插件与凭据同步入口应用。');
   const config = buildConfig(store, tool, port, true);
   if (!config.canApply) throw new Error('此工具暂支持预览和导出，请通过其配置入口合并。');
-  const openCodeDir = join(homeDirectory, '.config', 'opencode');
+  // 修改点：同步、还原、MCP/Skills 使用同一 XDG 配置根，避免写入未被 OpenCode 读取的默认目录。
+  const openCodeDir = openCodeConfigDirectory(homeDirectory, options.configHome);
   const openCodeJsonc = join(openCodeDir, 'opencode.jsonc');
   const target = tool === 'vscode' ? join(appData, 'Code', 'User', 'chatLanguageModels.json')
     : tool === 'opencode' ? (existsSync(openCodeJsonc) ? openCodeJsonc : join(openCodeDir, 'opencode.json')) : join(options.codexHome ?? join(homeDirectory, '.codex'), 'config.toml');

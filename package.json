@@ -1,6 +1,6 @@
 {
   "name": "model-dock",
-  "version": "0.3.34",
+  "version": "0.3.35",
   "description": "ModelDock — 配置一次，让模型连接你的工具。",
   "license": "MIT",
   "author": {
@@ -124,6 +124,21 @@
         "deb"
       ],
       "category": "Development"
+    },
+    "deb": {
+      "depends": [
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+        "libatspi2.0-0",
+        "libuuid1",
+        "libsecret-1-0",
+        "python3",
+        "python3-secretstorage"
+      ]
     }
   }
 }

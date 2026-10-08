@@ -4,6 +4,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { parseDocument } from 'yaml';
 import type { ToolId } from '../shared/types';
 import type { ManagedSkill, SkillDeployment, SkillFilePreview, SkillImportResult, SkillMetadata, SkillRemovePreview, SkillRepositoryInput, SkillSnapshot, SkillSource, SkillTarget } from '../shared/skill-types';
+import { openCodeConfigDirectory } from './opencode-paths';
 
 export interface SkillStore {
   getManagedState<T>(key: string, fallback: T): T;
@@ -19,6 +20,7 @@ export interface SkillManagerOptions {
   dshHome?: string;
   agentsHome?: string;
   openCodeConfigDir?: string;
+  configHome?: string;
   fetch?: typeof globalThis.fetch;
 }
 interface FileEntry { path: string; hash: string; size: number; mode: number; directory?: boolean }
@@ -149,7 +151,7 @@ export class SkillManager {
     const agents = join(resolve(options.agentsHome ?? join(home, '.agents')), 'skills');
     const codex = join(resolve(options.codexHome ?? join(home, '.codex')), 'skills');
     const copilot = join(home, '.copilot', 'skills');
-    const openCode = join(resolve(options.openCodeConfigDir ?? join(home, '.config', 'opencode')), 'skills');
+    const openCode = join(resolve(options.openCodeConfigDir ?? openCodeConfigDirectory(home, options.configHome)), 'skills');
     const dsh = join(resolve(options.dshHome ?? join(home, '.dsh')), 'skills');
     this.libraryDir = resolve(options.libraryDir ?? join(options.appDataDir, 'skill-library'));
     this.backupDir = resolve(options.backupDir ?? join(options.appDataDir, 'backups', 'skills'));

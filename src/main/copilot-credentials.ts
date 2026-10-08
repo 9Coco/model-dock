@@ -1,4 +1,6 @@
 import { execFile } from 'node:child_process';
+import { runLinuxCopilotCredentials, CopilotLinuxTransportError, type CopilotLinuxCredentialBackup } from './copilot-credentials-linux';
+export type { CopilotLinuxCredentialEntry, CopilotLinuxCredentialBackup } from './copilot-credentials-linux';
 
 // Windows Copilot desktop 1.1.26: native-keyring Generic credentials are stored
 // at byok:<provider UUID>:apiKey.github-copilot-app (or bearerToken). Never
@@ -8,14 +10,20 @@ export interface CopilotCredentialEntry {
   userName: string | null; comment: string | null; targetAlias: string | null;
   attributes: Array<{ keyword: string; flags: number; valueBase64: string }>;
 }
-export interface CopilotCredentialBackup { version: 1; providers: Array<{ providerId: string; entries: CopilotCredentialEntry[] }> }
+export interface CopilotWindowsCredentialBackup { version: 1; providers: Array<{ providerId: string; entries: CopilotCredentialEntry[] }> }
+// 修改点：旧 Windows version 1 恢复日记保持兼容；Linux 使用独立格式，禁止跨平台写钥匙串。
+export type CopilotCredentialBackup = CopilotWindowsCredentialBackup | CopilotLinuxCredentialBackup;
 export interface CopilotCredentialOptions {
   platform?: string;
   run?: (operation: 'capture' | 'restore', payload: unknown) => Promise<unknown>;
 }
-type Failure = 'unsupported-platform' | 'configuration' | 'read' | 'write' | 'protocol' | 'timeout';
+type Failure = 'unsupported-platform' | 'backend-unavailable' | 'locked-keyring' | 'ambiguous-credential' | 'collection-changed' | 'configuration' | 'read' | 'write' | 'protocol' | 'timeout';
 const errors: Record<Failure, string> = {
   'unsupported-platform': '当前系统没有可验证的 Copilot 钥匙串备份接口，未清理原供应商。',
+  'backend-unavailable': 'Linux Copilot 凭据备份需要系统 python3-secretstorage，请安装该依赖后重试；未清理原供应商。',
+  'locked-keyring': 'Copilot 凭据所在的系统钥匙串已锁定，请先解锁后重试；未继续清理或恢复供应商。',
+  'ambiguous-credential': '系统钥匙串中存在重复的 Copilot 供应商凭据，无法确认精确备份；未继续清理或恢复供应商。',
+  'collection-changed': 'Copilot 供应商凭据所在的钥匙串集合已改变，无法安全自动恢复；请保留恢复记录，未继续写入。',
   configuration: 'Copilot 凭据备份范围或格式无效，未操作钥匙串。',
   read: '无法完整备份 Copilot 供应商凭据，未继续清理原供应商。',
   write: '无法完整恢复 Copilot 供应商凭据，请保留恢复记录后重试。',
@@ -40,6 +48,7 @@ function blob(value: unknown, max: number): value is string {
   const bytes = Buffer.from(value, 'base64'); return bytes.length <= max && bytes.toString('base64') === value;
 }
 function backup(value: unknown): CopilotCredentialBackup {
+  if (object(value) && value.version === 2) return linuxBackup(value);
   if (!object(value) || !knownKeys(value, ['version', 'providers']) || value.version !== 1 || !Array.isArray(value.providers)) fail('configuration');
   const ids = identifiers(value.providers.map(p => object(p) ? p.providerId : undefined));
   for (const provider of value.providers) {
@@ -57,6 +66,23 @@ function backup(value: unknown): CopilotCredentialBackup {
   // Retain bytes exactly; an opaque backup is not a decrypted API-key DTO.
   const result = structuredClone(value) as unknown as CopilotCredentialBackup;
   if (JSON.stringify(result).length > 2 * 1024 * 1024 || result.providers.length !== ids.length) fail('configuration'); return result;
+}
+function linuxBackup(value: Record<string, unknown>): CopilotLinuxCredentialBackup {
+  if (!knownKeys(value, ['version', 'platform', 'providers']) || value.version !== 2 || value.platform !== 'linux' || !Array.isArray(value.providers)) fail('configuration');
+  identifiers(value.providers.map(p => object(p) ? p.providerId : undefined));
+  for (const provider of value.providers) {
+    if (!object(provider) || !knownKeys(provider, ['providerId', 'entries']) || !Array.isArray(provider.entries) || provider.entries.length > 2) fail('configuration');
+    const kinds = new Set<string>();
+    for (const entry of provider.entries) {
+      if (!object(entry) || !knownKeys(entry, ['kind', 'blobBase64', 'attributes', 'label', 'contentType', 'collection']) || !['api_key', 'bearer_token'].includes(entry.kind as string) || kinds.has(entry.kind as string) || !blob(entry.blobBase64, 16384) || typeof entry.label !== 'string' || !nullableText(entry.label, 2048) || typeof entry.contentType !== 'string' || !entry.contentType.length || !nullableText(entry.contentType, 256) || typeof entry.collection !== 'string' || !/^\/org\/freedesktop\/secrets\/collection\/[A-Za-z0-9_]+$/.test(entry.collection) || !object(entry.attributes)) fail('configuration');
+      kinds.add(entry.kind as string);
+      const attributes = Object.entries(entry.attributes);
+      const expectedUsername = `byok:${provider.providerId}:${entry.kind === 'api_key' ? 'apiKey' : 'bearerToken'}`;
+      if (attributes.length < 2 || attributes.length > 32 || entry.attributes.service !== 'github-copilot-app' || entry.attributes.username !== expectedUsername || attributes.some(([key, v]) => !key.length || !nullableText(key, 256) || typeof v !== 'string' || !nullableText(v, 8192))) fail('configuration');
+    }
+  }
+  if (JSON.stringify(value).length > 2 * 1024 * 1024) fail('configuration');
+  return structuredClone(value) as unknown as CopilotLinuxCredentialBackup;
 }
 /** Pure validation for decrypting a recovery journal; performs no OS access. */
 export function validateCopilotCredentialBackup(value: unknown): CopilotCredentialBackup { return backup(value); }
@@ -134,11 +160,16 @@ function runWindows(operation: 'capture' | 'restore', payload: unknown): Promise
   });
 }
 async function invoke(operation: 'capture' | 'restore', value: unknown, options: CopilotCredentialOptions): Promise<Record<string, unknown>> {
-  if ((options.platform ?? process.platform) !== 'win32') fail('unsupported-platform');
+  const platform = options.platform ?? process.platform;
+  if (platform !== 'win32' && platform !== 'linux') fail('unsupported-platform');
   let result: unknown;
-  try { result = await (options.run ?? runWindows)(operation, value); }
-  catch (error) { if (error instanceof CopilotCredentialError) throw error; fail(operation === 'capture' ? 'read' : 'write'); }
+  try { result = await (options.run ?? (platform === 'linux' ? runLinuxCopilotCredentials : runWindows))(operation, value); }
+  catch (error) { if (error instanceof CopilotCredentialError) throw error; if (error instanceof CopilotLinuxTransportError) fail(error.category); fail(operation === 'capture' ? 'read' : 'write'); }
   if (!object(result) || typeof result.ok !== 'boolean') fail('protocol');
+  if (!result.ok && result.code === 'backend-unavailable') fail('backend-unavailable');
+  if (!result.ok && result.code === 'locked-keyring') fail('locked-keyring');
+  if (!result.ok && result.code === 'ambiguous-credential') fail('ambiguous-credential');
+  if (!result.ok && result.code === 'collection-changed') fail('collection-changed');
   if (!result.ok) fail(operation === 'capture' ? 'read' : 'write'); return result;
 }
 /** Main-process only. The caller must encrypt this object before any deletion. */
@@ -146,9 +177,12 @@ export async function captureCopilotCredentials(providerIds: readonly string[], 
   const ids = identifiers(providerIds);
   const result = await invoke('capture', ids, options);
   let value: CopilotCredentialBackup; try { value = backup(result.backup); } catch { fail('protocol'); }
+  if ((options.platform ?? process.platform) === 'linux' ? value.version !== 2 : value.version !== 1) fail('protocol');
   if (value.providers.length !== ids.length || value.providers.some((p, index) => p.providerId !== ids[index])) fail('protocol'); return value;
 }
 /** Restores the exact two app-owned targets per ID, including prior absence. */
 export async function restoreCopilotCredentials(value: CopilotCredentialBackup, options: CopilotCredentialOptions = {}): Promise<void> {
-  const copy = backup(value); await invoke('restore', copy, options);
+  const copy = backup(value), platform = options.platform ?? process.platform;
+  if (platform === 'linux' && copy.version !== 2 || platform === 'win32' && copy.version !== 1) fail('configuration');
+  await invoke('restore', copy, options);
 }

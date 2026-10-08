@@ -438,7 +438,8 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
       const location = await bridge!.applyConfig(tool);
       setToolDeliveries(previous => ({ ...previous, [tool]: { signature, kind: 'applied', location, providerIds: sourceIdsFor(binding) } }));
     } catch (error) {
-      const message = `选择已保存，${automatic ? '自动同步' : '同步'}未完成：${errorText(error)}${tool === 'copilot' ? ' 请确认 Copilot app 已打开，再点击“重新同步”。' : ''}`;
+      // 修改点：原生接口已给出具体错误，不能把权限、安装或钥匙串失败一律解释成应用未打开。
+      const message = `选择已保存，${automatic ? '自动同步' : '同步'}未完成：${errorText(error)}`;
       setToolSyncErrors(previous => ({ ...previous, [tool]: message }));
       notify(message, 'error');
     }
