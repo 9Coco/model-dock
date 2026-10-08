@@ -4,6 +4,7 @@ import { isReasoningEffort, sanitizeReasoningEfforts } from '../shared/types';
 import type { AddModelsResult, DiscoveredModel, DiscoveryErrorCategory, DiscoveryResult, ModelSelection } from '../shared/catalog-types';
 import { presetById } from '../shared/presets';
 import { modelLocalAlias, suggestModelAlias } from '../shared/model-names';
+import { lookupModelMetadata } from '../shared/model-metadata';
 import type { PreparedUpstream } from './oauth';
 import { modelCatalogEndpoint } from './oauth';
 
@@ -36,7 +37,20 @@ function safeText(value: unknown, max = 200): string {
   return typeof value === 'string' && value.trim().length <= max && !/[\x00-\x1f\x7f]/.test(value) ? value.trim() : '';
 }
 function fingerprint(provider: Provider): string { return JSON.stringify([provider.id, provider.kind, provider.baseUrl, provider.presetId, provider.hasSecret, provider.copilotAccountId]); }
-function context(value: unknown): number { return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0; }
+function positiveContext(...values: unknown[]): number | undefined {
+  return values.find((value): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value > 0);
+}
+function booleanValue(...values: unknown[]): boolean | undefined {
+  return values.find((value): value is boolean => typeof value === 'boolean');
+}
+function inputModalities(...values: unknown[]): string[] {
+  for (const value of values) {
+    if (!Array.isArray(value)) continue;
+    const modalities = value.filter((modality): modality is string => typeof modality === 'string' && ['text', 'image', 'audio', 'video'].includes(modality));
+    if (modalities.length) return modalities;
+  }
+  return [];
+}
 function discoveryAlias(base: string, providerId: string, models: Pick<Model, 'id' | 'providerId' | 'alias'>[]): string {
   const normal = base.replace(/[^a-zA-Z0-9._:/-]/g, '-').replace(/^[^a-zA-Z0-9]+/, '').slice(0, 180) || 'model';
   const localNames = new Set(models.filter(model => model.providerId === providerId).map(modelLocalAlias));
@@ -53,21 +67,31 @@ function parseModel(entry: unknown, provider: Provider): Omit<DiscoveredModel, '
   const upstreamId = typeof entry === 'string' ? safeText(entry) : idFields.map(value => safeText(value)).find(Boolean) ?? '';
   if (!upstreamId) return undefined;
   const capabilities = object(data.capabilities);
-  const modalityValues = Array.isArray(data.input_modalities) ? data.input_modalities : Array.isArray(capabilities.input_modalities) ? capabilities.input_modalities : [];
-  const modalities = modalityValues.filter(value => typeof value === 'string' && ['text', 'image', 'audio', 'video'].includes(value));
+  const modalities = inputModalities(data.input_modalities, capabilities.input_modalities, object(data.architecture).input_modalities);
   const limits = object(capabilities.limits), supports = object(capabilities.supports);
-  const contextWindow = context(data.context_window ?? data.contextWindow ?? data.context_length ?? data.max_context_length ?? limits.max_context_window_tokens);
+  const upstreamContext = positiveContext(data.context_window, data.contextWindow, data.context_length, data.max_context_length, limits.max_context_window_tokens);
   // A negative parallel-calls flag does not mean that ordinary tools are
   // unsupported. Only the affirmative native flag supplies this capability.
   const declaredTools = data.tools ?? data.supports_tools ?? data.supports_tool_calls ?? capabilities.tools ?? capabilities.tool_calling
     ?? (provider.kind === 'copilot' ? supports.tool_calls : undefined)
     ?? (provider.kind === 'codex' && data.supports_parallel_tool_calls === true ? true : undefined);
-  const declaredVision = data.vision ?? data.supports_vision ?? capabilities.vision ?? (provider.kind === 'copilot' ? supports.vision : undefined);
+  const declaredVision = booleanValue(data.vision, data.supports_vision, capabilities.vision, provider.kind === 'copilot' ? supports.vision : undefined);
+  const upstreamVision = declaredVision ?? (modalities.length ? modalities.includes('image') : undefined);
+  const knownMetadata = lookupModelMetadata(upstreamId);
+  const metadataInferred: NonNullable<DiscoveredModel['metadataInferred']> = [];
   const metadataDefaults: NonNullable<DiscoveredModel['metadataDefaults']> = [];
-  if (contextWindow === 0) metadataDefaults.push('contextWindow');
+  const contextWindow = upstreamContext ?? knownMetadata?.contextWindow ?? 0;
+  const vision = upstreamVision ?? knownMetadata?.vision ?? false;
+  if (upstreamContext === undefined) {
+    if (knownMetadata) metadataInferred.push('contextWindow');
+    else metadataDefaults.push('contextWindow');
+  }
   if (typeof declaredTools !== 'boolean') metadataDefaults.push('tools');
-  if (typeof declaredVision !== 'boolean' && modalities.length === 0) metadataDefaults.push('vision');
-  const metadataSource = metadataDefaults.length < 3 ? 'upstream' : 'defaults';
+  if (upstreamVision === undefined) {
+    if (knownMetadata) metadataInferred.push('vision');
+    else metadataDefaults.push('vision');
+  }
+  const metadataSource = upstreamContext !== undefined || typeof declaredTools === 'boolean' || upstreamVision !== undefined ? 'upstream' : 'defaults';
   // Codex catalogs use supported_reasoning_levels (+ default_reasoning_level);
   // Copilot catalogs declare capabilities.supports.reasoning_effort. Entries may
   // be plain level strings or { effort } objects; unknown levels are dropped.
@@ -75,14 +99,15 @@ function parseModel(entry: unknown, provider: Provider): Omit<DiscoveredModel, '
   const reasoningEfforts = sanitizeReasoningEfforts(Array.isArray(declaredLevels) ? declaredLevels.map(level => typeof level === 'string' ? level : object(level).effort) : []);
   const declaredDefaultLevel = data.default_reasoning_level ?? data.default_reasoning_effort;
   const defaultReasoningEffort = isReasoningEffort(declaredDefaultLevel) && reasoningEfforts.includes(declaredDefaultLevel) ? declaredDefaultLevel : undefined;
-  // A model ID/name alone does not prove modality, tool support or endpoint compatibility.
+  // Upstream declarations and known-model metadata do not prove endpoint compatibility.
   // 修改点：Copilot 按目录声明的模型接口选择协议，不把全部订阅强制当成 Responses。
   const endpoints = data.supported_endpoints ?? capabilities.supported_endpoints;
   if (provider.kind === 'copilot' && Array.isArray(endpoints) && !endpoints.some(endpoint => endpoint === 'responses' || endpoint === '/responses' || endpoint === 'chat_completions' || endpoint === 'chat-completions' || endpoint === '/chat/completions')) return undefined;
   const wireApi: WireApi = provider.kind === 'copilot' ? Array.isArray(endpoints) && (endpoints.includes('responses') || endpoints.includes('/responses')) ? 'responses' : 'chat-completions'
     : provider.kind === 'openai-compatible' ? presetById(provider.presetId)?.defaultWireApi ?? 'chat-completions' : 'responses';
   return { upstreamId, displayName: safeText(data.display_name ?? data.displayName ?? data.name) || upstreamId,
-    wireApi, contextWindow, tools: declaredTools === true, vision: typeof declaredVision === 'boolean' ? declaredVision : modalities.includes('image'), metadataSource, metadataDefaults,
+    wireApi, contextWindow, tools: declaredTools === true, vision, metadataSource, metadataDefaults,
+    ...(metadataInferred.length && knownMetadata ? { metadataInferred, metadataReference: { sourceUrl: knownMetadata.sourceUrl, verifiedAt: knownMetadata.verifiedAt } } : {}),
     ...(reasoningEfforts.length ? { reasoningEfforts, ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}) } : {}) };
 }
 function httpFailure(status: number): CatalogFailure {
@@ -172,7 +197,7 @@ function nextPage(payload: unknown, current: string, initial: string, provider: 
   return target.toString();
 }
 
-/** Discover actual upstream models without static fallback catalogs or raw error-body forwarding. */
+/** Discover actual upstream models, enriching missing metadata without fabricating a model list or forwarding raw error bodies. */
 export class ModelCatalog {
   private readonly fetcher: typeof fetch;
   private readonly cache = new Map<string, CachedDiscovery>();
@@ -231,7 +256,15 @@ export class ModelCatalog {
         const existing = existingModels.find(item => item.providerId === providerId && item.upstreamId === model.upstreamId);
         const alias = existing?.alias ?? discoveryAlias(model.upstreamId, providerId, plannedModels);
         if (!existing) plannedModels.push({ id: `discovered-${plannedModels.length}`, providerId, alias });
-        return { ...model, alias, ...(existing ? { existingModelId: existing.id } : {}) };
+        if (!existing) return { ...model, alias };
+        // Rediscovery must display the saved user settings and never attribute
+        // them to newly inferred or upstream metadata.
+        const { metadataInferred: _inferred, metadataReference: _reference, metadataDefaults: _defaults,
+          reasoningEfforts: _levels, defaultReasoningEffort: _defaultLevel, ...discovered } = model;
+        return { ...discovered, alias, existingModelId: existing.id, displayName: existing.displayName, wireApi: existing.wireApi,
+          contextWindow: existing.contextWindow, tools: existing.tools, vision: existing.vision,
+          ...(existing.reasoningEfforts ? { reasoningEfforts: [...existing.reasoningEfforts] } : {}),
+          ...(existing.defaultReasoningEffort ? { defaultReasoningEffort: existing.defaultReasoningEffort } : {}) };
       });
       this.cache.set(providerId, { fingerprint: fingerprint(provider), expiresAt: Date.now() + CACHE_LIFETIME_MS, models: new Map(discovered.map(model => [model.upstreamId, structuredClone(model)])) });
       return { ok: true, providerId, statusCode, message: `已读取模型目录，发现 ${discovered.length} 个模型。目录可见性不代表模型调用已验证。`, models: discovered };
