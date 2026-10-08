@@ -28,6 +28,7 @@ import { SettingsPanel } from './SettingsPanel';
 import { applyTheme } from './theme';
 import { ToolIcon } from './ToolIcon';
 import type { AppSettings, SettingsSnapshot } from '../shared/settings-types';
+import { DiagnosticsPanel } from './DiagnosticsPanel';
 import { ModelDiscovery } from './ModelDiscovery';
 import { ProviderDuplicates } from './ProviderDuplicates';
 import type { DiscoveryResult } from '../shared/catalog-types';
@@ -651,6 +652,7 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
           </section>
           <div className="service-metrics"><div><span>本次服务请求</span><strong>{number(data.gateway.requests)}</strong></div><div><span>已记录请求</span><strong>{number(data.logs.length)}</strong></div><div><span>当前错误记录</span><strong className={data.logs.some(log => log.status >= 400 || !log.status) ? 'orange-text' : ''}>{data.logs.filter(log => log.status >= 400 || !log.status).length}</strong></div><div><span>数据存储</span><strong className="storage-label"><Database size={17} />本机</strong></div></div>
           <section className="panel logs-panel"><div className="section-heading"><h2>请求日志<span className="count-tag">{data.logs.length}</span></h2><div className="log-tabs">{[{ id: 'all', label: '全部' }, { id: 'success', label: '成功' }, { id: 'error', label: '错误' }].map(item => <button key={item.id} className={logFilter === item.id ? 'selected' : ''} onClick={() => setLogFilter(item.id)}>{item.label}</button>)}</div></div>{logs.length ? <div className="table-scroll"><table className="logs-table"><thead><tr><th>时间</th><th>模型</th><th>供应商</th><th>接口</th><th>状态</th><th>耗时</th></tr></thead><tbody>{[...logs].reverse().map(log => <tr key={log.id}><td className="log-time">{new Date(log.time).toLocaleTimeString('zh-CN', { hour12: false })}</td><td><strong>{log.alias}</strong></td><td>{log.providerName}</td><td><code>{log.endpoint}</code></td><td><span className={`log-status ${log.status >= 200 && log.status < 400 ? 'ok' : 'error'}`}><span className="status-dot" />{log.status || '失败'}</span></td><td className="log-duration">{number(log.durationMs)} ms</td></tr>)}</tbody></table></div> : <EmptyState compact icon={<Activity size={25} />} title={logFilter === 'all' ? '还没有请求记录' : '暂无这类请求'} description="通过工具向本地服务发起调用后，这里会显示模型、状态与耗时。" />}<div className="panel-footnote"><ShieldCheck size={13} /><span>仅展示请求元数据，不展示提示词、回答或供应商密钥。</span></div></section>
+          <DiagnosticsPanel api={bridge} notify={notify} />
         </>}
 
       </main>

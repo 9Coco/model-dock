@@ -1,3 +1,8 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { randomUUID } from 'node:crypto';
+import { DiagnosticsLog, describeError, sanitizeDiagnosticEndpoint } from './diagnostic-log';
+import { diagnosticOperationContext, diagnosticOperationResult, ignoresDiagnosticOperation, isQuietDiagnosticOperation } from './diagnostic-operations';
+import type { DiagnosticContext, DiagnosticEvent, DiagnosticLevel, DiagnosticQuery } from '../shared/diagnostic-types';
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeTheme, net, session, shell, Tray } from 'electron';
 import { getAppIcon } from './app-icon';
 import { dirname, join, relative, resolve } from 'node:path';
@@ -79,6 +84,38 @@ let rendererHasLoaded = false;
 let explicitOpenRequested = false;
 let quitting = false;
 let dataDir = '';
+let diagnostics: DiagnosticsLog | undefined;
+const diagnosticScope = new AsyncLocalStorage<DiagnosticContext>();
+const authDiagnosticStates = new Map<string, string>();
+const authDiagnosticTraces = new Map<string, string>();
+const pollingDiagnosticStates = new Map<string, string>();
+let exitDiagnosticRecorded = false;
+let startupStage: DiagnosticContext['stage'] = 'startup';
+function recordDiagnostic(level: DiagnosticLevel, event: DiagnosticEvent, context: DiagnosticContext = {}): void {
+  try { diagnostics?.write(level, event, undefined, { ...diagnosticScope.getStore(), ...context }); }
+  catch { /* 日志故障不得改变原操作或重复生成日志。 */ }
+}
+function recordOperationResult(name: keyof ModelDockApi, args: readonly unknown[], result: unknown, durationMs: number): void {
+  const item = diagnosticOperationResult(name, args, result, durationMs);
+  if (!item) return;
+  if (item.event === 'auth.progress') {
+    const key = item.context.providerId ?? name;
+    const signature = JSON.stringify([item.context.stage, item.context.outcome, item.context.statusCode]);
+    if (name === 'beginLogin' || name === 'beginCopilotLogin') {
+      const traceId = diagnosticScope.getStore()?.traceId;
+      if (traceId) authDiagnosticTraces.set(key, traceId);
+      authDiagnosticStates.delete(key);
+    }
+    if (authDiagnosticStates.get(key) === signature) return;
+    authDiagnosticStates.set(key, signature);
+    const traceId = authDiagnosticTraces.get(key);
+    if (traceId) item.context.traceId = traceId;
+  }
+  recordDiagnostic(item.level, item.event, item.context);
+}
+// 使用 monitor 保留 Node 原有致命异常行为，不把崩溃变成继续运行的隐藏故障。
+process.on('uncaughtExceptionMonitor', (error, origin) => recordDiagnostic('error', origin === 'unhandledRejection' ? 'runtime.unhandled_rejection' : 'runtime.uncaught_exception', describeError(error)));
+
 const runtimeConfig = resolveRuntimeConfig(__MODELDOCK_RUNTIME_MODE__, process.env);
 const devUrl = __MODELDOCK_RUNTIME_MODE__ === 'development' ? runtimeConfig.devUrl : undefined;
 if (runtimeConfig.dataDir) {
@@ -119,6 +156,14 @@ async function createWindow(forceShow = false) {
     } catch { /* malformed links are denied */ }
     return { action: 'deny' };
   });
+  window.webContents.on('did-fail-load', (_event, errorCode, _description, _url, isMainFrame) => {
+    if (isMainFrame && errorCode !== -3) recordDiagnostic('error', 'renderer.load_failed', { stage: 'renderer', exitCode: errorCode });
+  });
+  window.webContents.on('render-process-gone', (_event, details) => recordDiagnostic('error', 'renderer.crashed', {
+    stage: 'renderer', exitCode: details.exitCode, outcome: ['crashed', 'oom', 'killed', 'launch-failed', 'clean-exit'].includes(details.reason) ? details.reason as DiagnosticContext['outcome'] : 'failure',
+  }));
+  window.on('unresponsive', () => recordDiagnostic('warn', 'renderer.unresponsive', { stage: 'renderer' }));
+  window.on('responsive', () => recordDiagnostic('info', 'renderer.recovered', { stage: 'renderer' }));
   window.webContents.on('will-navigate', (event, url) => { if (url !== window?.webContents.getURL()) event.preventDefault(); });
   window.on('close', event => {
     if (quitting || __MODELDOCK_SMOKE_BUILD__) return;
@@ -508,9 +553,48 @@ function registerIpc() {
   function handle(name: keyof ModelDockApi, fn: (...args: any[]) => unknown) {
     ipcMain.handle('modeldock:' + name, async (event, ...args: unknown[]) => {
       if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame) throw new Error('拒绝未知页面调用。');
-      return await fn(...args);
+      if (ignoresDiagnosticOperation(name)) return await fn(...args);
+      const startedAt = Date.now(), context = { ...diagnosticOperationContext(name, args), traceId: randomUUID() };
+      return await diagnosticScope.run(context, async () => {
+        if (!isQuietDiagnosticOperation(name)) recordDiagnostic('info', 'operation.started', context);
+        try {
+          const result = await fn(...args);
+          recordOperationResult(name, args, result, Date.now() - startedAt);
+          return result;
+        } catch (error) {
+          recordDiagnostic('error', 'operation.failed', { ...context, ...describeError(error), durationMs: Date.now() - startedAt, outcome: 'failure' });
+          throw error;
+        }
+      });
     });
   }
+  // 只接收受信页面的固定异常类型，不提供任意写入诊断日志的 renderer API。
+  let lastRendererReport = 0;
+  ipcMain.on('modeldock:renderer-diagnostic', (event, input: unknown) => {
+    if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || Date.now() - lastRendererReport < 1000) return;
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return;
+    const value = input as Record<string, unknown>;
+    if (value.kind !== 'error' && value.kind !== 'unhandled-rejection') return;
+    lastRendererReport = Date.now();
+    recordDiagnostic('error', 'renderer.error', { stage: 'renderer', errorName: typeof value.errorName === 'string' ? value.errorName : undefined, outcome: 'failure' });
+  });
+  handle('queryDiagnostics', (query?: DiagnosticQuery) => diagnostics!.query(query));
+  handle('diagnosticsText', (query?: DiagnosticQuery) => diagnostics!.exportText(query));
+  handle('openDiagnosticsDir', async () => {
+    const snapshot = diagnostics!.query({ limit: 1 });
+    if (!snapshot.available) throw new Error(snapshot.message);
+    const error = await shell.openPath(snapshot.directory); if (error) throw new Error('无法打开诊断日志目录。');
+  });
+  handle('exportDiagnostics', async (query?: DiagnosticQuery) => {
+    const snapshot = diagnostics!.query({ limit: 1 });
+    if (!snapshot.available) throw new Error(snapshot.message);
+    const content = diagnostics!.exportText(query);
+    const result = await dialog.showSaveDialog(window!, { title: '导出诊断日志', defaultPath: `modeldock-diagnostics-${new Date().toISOString().replace(/[:.]/g, '-')}.jsonl`, filters: [{ name: '诊断日志', extensions: ['jsonl'] }] });
+    if (result.canceled || !result.filePath) return null;
+    writeFileSync(result.filePath, content, { mode: 0o600 });
+    recordDiagnostic('info', 'diagnostics.exported', { operation: 'exportDiagnostics' });
+    return result.filePath;
+  });
   handle('snapshot', () => ({ providers: store.listProviders(), models: store.listModels(), bindings: store.listBindings(),
     gateway: gateway.status(), logs: store.logs(100), dataDir, version: app.getVersion() }));
   handle('getSettings', () => preferences.get());
@@ -686,9 +770,41 @@ else {
   app.whenReady().then(async () => {
     if (process.platform === 'win32') app.setAppUserModelId('local.modeldock.desktop');
     dataDir = runtimeConfig.dataDir ?? app.getPath('userData');
+    diagnostics = new DiagnosticsLog(dataDir);
+    recordDiagnostic('info', 'app.start', { version: app.getVersion(), platform: process.platform as DiagnosticContext['platform'], runtimeMode: __MODELDOCK_RUNTIME_MODE__, stage: 'startup' });
+    startupStage = 'store';
     store = await Store.create(dataDir, __MODELDOCK_SMOKE_BUILD__ && process.env.MODELDOCK_SMOKE_GATEWAY_STARTUP === '1'
       ? createGatewayStartupSmokeVault(dataDir) : createVault(dataDir));
-    const systemFetch = createSystemNetworkFetch((input, init) => net.fetch(input instanceof URL ? input.href : input, init));
+    startupStage = 'managers';
+    const systemFetch = createSystemNetworkFetch(async (input, init) => {
+      const startedAt = Date.now(), target = input instanceof Request ? input.url : input instanceof URL ? input.href : String(input);
+      const context: DiagnosticContext = { endpoint: target };
+      try {
+        const response = await net.fetch(input instanceof URL ? input.href : input, init);
+        const type = response.headers.get('content-type')?.toLowerCase();
+        context.statusCode = response.status; context.durationMs = Date.now() - startedAt;
+        context.contentType = type?.includes('json') ? 'json' : type?.includes('event-stream') ? 'sse' : type?.includes('html') ? 'html' : type ? 'other' : 'unknown';
+        // 正常设备授权等待只记最终阶段；不把 pending HTTP 状态当成授权失败。
+        const path = new URL(target).pathname;
+        const tokenRoute = /\/(?:access_token|token)$/.test(path);
+        const deviceGrant = tokenRoute && typeof init?.body === 'string' && init.body.length <= 16384 && new URLSearchParams(init.body).get('grant_type') === 'urn:ietf:params:oauth:grant-type:device_code';
+        const polling = /\/deviceauth\/token$/.test(path) || deviceGrant && /\/(?:access_token|token)$/.test(path);
+        if (polling) {
+          const key = `${diagnosticScope.getStore()?.traceId ?? 'background'}|${sanitizeDiagnosticEndpoint(target) ?? 'unknown'}`;
+          const signature = `${response.status}|${context.contentType}`;
+          if (pollingDiagnosticStates.get(key) !== signature) {
+            if (pollingDiagnosticStates.size > 1000) pollingDiagnosticStates.delete(pollingDiagnosticStates.keys().next().value!);
+            pollingDiagnosticStates.set(key, signature);
+            const expectedPending = context.contentType === 'json' && [200, 400, 403, 404].includes(response.status);
+            recordDiagnostic(expectedPending ? 'info' : 'warn', 'network.response', context);
+          }
+        } else recordDiagnostic(response.ok ? 'info' : 'warn', 'network.response', context);
+        return response;
+      } catch (error) {
+        recordDiagnostic('warn', 'network.failed', { ...context, ...describeError(error), durationMs: Date.now() - startedAt, outcome: 'network' });
+        throw error;
+      }
+    });
     const runtimeFetch: typeof fetch = __MODELDOCK_SMOKE_BUILD__ ? async (input, init) => {
       const target = new URL(input instanceof Request ? input.url : String(input));
       const quotaFixture = await authQuotaFixture(target, init);
@@ -746,6 +862,7 @@ else {
     const featureHome = __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'test-home') : app.getPath('home');
     const featureAppData = __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'test-appdata') : app.getPath('appData');
     let simulatedStartup = false;
+    startupStage = 'preferences';
     preferences = new SettingsManager(store, { platform: process.platform, homeDir: featureHome,
       configHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.config') : process.env.XDG_CONFIG_HOME,
       execPath: __MODELDOCK_SMOKE_BUILD__ ? process.execPath : process.platform === 'linux' && process.env.APPIMAGE ? resolve(process.env.APPIMAGE) : process.platform === 'win32' && process.env.PORTABLE_EXECUTABLE_FILE ? resolve(process.env.PORTABLE_EXECUTABLE_FILE) : process.execPath,
@@ -754,7 +871,9 @@ else {
     });
     nativeTheme.themeSource = preferences.get().settings.theme;
     nativeTheme.on('updated', () => { if (window && !window.isDestroyed()) window.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#19191c' : '#f8f9fb'); });
+    startupStage = 'proxy';
     await applyNetworkProxy(session.defaultSession, preferences.get().settings.proxyUrl);
+    startupStage = 'managers';
     accounts = new AuthCenter(store, oauth, { homeDir: featureHome, codexHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.codex') : process.env.CODEX_HOME, fetch: runtimeFetch });
     copilotAccounts = new CopilotAuthCenter(store, { fetch: runtimeFetch, onAuthorized: (accountId, providerId) => {
       if (providerId) { copilotProviders.linkAccount(providerId, accountId); catalog.invalidate(providerId); }
@@ -783,9 +902,10 @@ else {
     const upstream = { prepareRequest: (provider: Provider, path: string, body: Record<string, unknown>) => provider.kind === 'copilot'
       ? copilotProviders.prepareRequest(provider, path, body) : oauth.prepareRequest(provider, path, body) };
     catalog = new ModelCatalog(store, upstream, { fetch: runtimeFetch });
-    connectionTester = new ConnectionTester(store, upstream, { fetch: runtimeFetch });
+    connectionTester = new ConnectionTester(store, upstream, { fetch: runtimeFetch, diagnostics: recordDiagnostic });
     const serviceSettings = preferences.get().settings;
-    gateway = new Gateway(store, { port: serviceSettings.gatewayPort, prepareRequest: (provider, _secret, path, body) => upstream.prepareRequest(provider, path, body), fetch: runtimeFetch });
+    gateway = new Gateway(store, { diagnostics: recordDiagnostic, runWithDiagnostics: (context, action) => diagnosticScope.run(context, action), port: serviceSettings.gatewayPort, prepareRequest: (provider, _secret, path, body) => upstream.prepareRequest(provider, path, body), fetch: runtimeFetch });
+    startupStage = 'gateway';
     if (serviceSettings.autoStartGateway) {
       try { await gateway.start(); }
       catch { /* Keep the application available; the service page displays the gateway failure. */ }
@@ -803,13 +923,17 @@ else {
       ]));
       tray.on('click', revealWindow);
     }
+    startupStage = 'window';
     await createWindow();
+    recordDiagnostic('info', 'app.ready', { version: app.getVersion(), stage: 'window', port: gateway.status().port, autoStart: serviceSettings.autoStartGateway });
   }).catch(error => {
+    recordDiagnostic('error', 'app.start_failed', { ...describeError(error), stage: startupStage, outcome: 'failure' });
     if (__MODELDOCK_SMOKE_BUILD__) writeFileSync(join(runtimeConfig.smoke!.outputDir, 'electron-smoke-error.txt'), String(error));
     else dialog.showErrorBox('ModelDock 启动失败', String(error));
     quitting = true; app.quit();
   });
   app.on('before-quit', event => {
+    if (!exitDiagnosticRecorded) { exitDiagnosticRecorded = true; recordDiagnostic('info', 'app.exit', { stage: 'shutdown' }); }
     if (!quitting) { event.preventDefault(); quitting = true; }
     if (gateway) { event.preventDefault(); const current = gateway; gateway = undefined as unknown as Gateway;
       accounts?.dispose(); copilotProviders?.dispose(); copilotAccounts?.dispose(); oauth?.dispose(); void current.stop().finally(() => { store?.close(); tray?.destroy(); app.quit(); }); }
