@@ -11,6 +11,19 @@ export type ProviderKind = 'openai-compatible' | 'codex' | 'grok' | 'copilot';
 export type ToolId = 'codex' | 'opencode' | 'dsh' | 'vscode' | 'copilot';
 export type WireApi = 'chat-completions' | 'responses';
 export type ToolMode = 'direct' | 'aggregate' | 'auto';
+/** Thinking levels recognized by client tools (VS Code picker labels these; unknown levels are not written to client configs). */
+export const REASONING_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+export type ReasoningEffort = typeof REASONING_EFFORTS[number];
+export function isReasoningEffort(value: unknown): value is ReasoningEffort {
+  return typeof value === 'string' && (REASONING_EFFORTS as readonly string[]).includes(value);
+}
+/** Keep known levels in first-seen order; non-array or unknown input yields []. */
+export function sanitizeReasoningEfforts(value: unknown): ReasoningEffort[] {
+  if (!Array.isArray(value)) return [];
+  const levels: ReasoningEffort[] = [];
+  for (const entry of value) if (isReasoningEffort(entry) && !levels.includes(entry)) levels.push(entry);
+  return levels;
+}
 export type ProviderPresetId = 'custom' | 'deepseek' | 'volcengine-agent' | 'volcengine-token' | 'qwen-token' | 'codex-subscription' | 'grok-build' | 'copilot-subscription';
 export interface ProviderPreset {
   id: ProviderPresetId;
@@ -71,6 +84,10 @@ export interface Model {
   tools: boolean;
   vision: boolean;
   enabled: boolean;
+  /** Thinking levels the model supports, synced to client configs. Empty = no Thinking Effort picker. */
+  reasoningEfforts?: ReasoningEffort[];
+  /** Level preselected by client tools; must be one of reasoningEfforts. */
+  defaultReasoningEffort?: ReasoningEffort;
 }
 export type ModelInput = Omit<Model, 'id'> & { id?: string };
 export interface ToolBinding {
