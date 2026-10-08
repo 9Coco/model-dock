@@ -46,6 +46,9 @@ describe('tool adapters', () => {
     const vscode = JSON.parse(buildConfig(direct, 'vscode', 19191, true).content);
     expect(vscode.map((row: any) => row.apiKey)).toEqual(['SYNTHETIC_KEY_provider-a', 'SYNTHETIC_KEY_provider-b']);
     expect(vscode.map((row: any) => row.models[0].url)).toEqual(['https://api-a.test/v1/responses', 'https://api-b.test/coding/v3/responses']);
+    expect(vscode.map((row: any) => row.models[0].requestHeaders)).toEqual([
+      { authorization: 'Bearer SYNTHETIC_KEY_provider-a' }, { authorization: 'Bearer SYNTHETIC_KEY_provider-b' },
+    ]);
     const opencode = JSON.parse(buildConfig(direct, 'opencode', 19191, true).content);
     expect(Object.keys(opencode.provider)).toEqual(['modeldock-provider-a', 'modeldock-provider-b']);
     expect(Object.values(dshProviders(buildConfig(direct, 'dsh', 19191).content))).toHaveLength(2);
@@ -270,8 +273,15 @@ describe('tool adapters', () => {
     expect(rows[1].models[0]).toMatchObject({ id: 'shared-upstream', url: 'https://api-b.test/coding/v3/responses', name: 'API 套餐 B - 同名模型' });
     expect(rows[2]).toMatchObject({ apiKey: '__MODELDOCK_LOCAL_KEY__', models: [{ id: 'subscription/shared-upstream', url: 'http://127.0.0.1:19191/tool/vscode/v1/responses' }] });
     expect(native.getSecret).not.toHaveBeenCalled();
+    // VS Code 忽略 chatLanguageModels.json 里的明文 apiKey（按秘密存储引用解析为空），凭据必须经 requestHeaders 携带。
+    expect(rows.map((row: any) => row.models[0].requestHeaders)).toEqual([
+      { authorization: 'Bearer __PROVIDER_API_KEY__' }, { authorization: 'Bearer __PROVIDER_API_KEY__' }, { authorization: 'Bearer __MODELDOCK_LOCAL_KEY__' },
+    ]);
     const revealed = JSON.parse(buildConfig(native, 'vscode', 19191, true).content);
     expect(revealed.map((row: any) => row.apiKey)).toEqual(['SYNTHETIC_KEY_provider-a', 'SYNTHETIC_KEY_provider-b', 'local-test-secret']);
+    expect(revealed.map((row: any) => row.models[0].requestHeaders)).toEqual([
+      { authorization: 'Bearer SYNTHETIC_KEY_provider-a' }, { authorization: 'Bearer SYNTHETIC_KEY_provider-b' }, { authorization: 'Bearer local-test-secret' },
+    ]);
     expect(native.getSecret.mock.calls.map(([id]) => id)).toEqual(['provider-a', 'provider-b']);
     expect(JSON.stringify(revealed)).not.toMatch(/PRIVATE_OAUTH|accessToken|refreshToken/);
     expect(() => connectionKey(native, 'vscode')).toThrow('没有共用的单一连接密钥');
