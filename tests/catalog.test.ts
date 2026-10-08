@@ -216,6 +216,36 @@ describe('real model catalog discovery and batch selection', () => {
     expect(f.catalog.addSelected('api', [{ upstreamId: 'real-model' }]).added[0].displayName).toBe('real-model');
     expect(() => f.catalog.addSelected('api', [{ upstreamId: 'forged' }])).toThrow('最近读取');
   });
+  it('discovers declared thinking levels from upstream metadata and keeps only known levels', async () => {
+    const f = fixture(vi.fn(async () => json({ data: [
+      { id: 'string-levels', supported_reasoning_levels: ['low', 'medium', 'high'], default_reasoning_level: 'medium' },
+      { id: 'object-levels', supported_reasoning_levels: [{ effort: 'low', description: 'Fast' }, { effort: 'xhigh', description: 'Deep' }], default_reasoning_level: 'low' },
+      { id: 'capability-levels', capabilities: { supports: { reasoning_effort: ['minimal', 'max'] } } },
+      { id: 'unknown-levels', supported_reasoning_levels: ['low', 'ultra', 'medium'], default_reasoning_level: 'ultra' },
+      { id: 'no-levels' },
+    ] })) as typeof fetch);
+    const result = await f.catalog.discover('api');
+    expect(result.models[0]).toMatchObject({ reasoningEfforts: ['low', 'medium', 'high'], defaultReasoningEffort: 'medium' });
+    expect(result.models[1]).toMatchObject({ reasoningEfforts: ['low', 'xhigh'], defaultReasoningEffort: 'low' });
+    expect(result.models[2].reasoningEfforts).toEqual(['minimal', 'max']);
+    expect(result.models[3].reasoningEfforts).toEqual(['low', 'medium']);
+    expect(result.models[3]).not.toHaveProperty('defaultReasoningEffort');
+    expect(result.models[4]).not.toHaveProperty('reasoningEfforts');
+  });
+  it('carries discovered thinking levels into saved models and honors selection overrides', async () => {
+    const f = fixture(vi.fn(async () => json({ data: [
+      { id: 'declared', supported_reasoning_levels: ['low', 'high'], default_reasoning_level: 'low' },
+      { id: 'override', supported_reasoning_levels: ['low', 'high'] },
+      { id: 'invalid-default', supported_reasoning_levels: ['low'] },
+    ] })) as typeof fetch);
+    await f.catalog.discover('api');
+    const added = f.catalog.addSelected('api', [{ upstreamId: 'declared' }, { upstreamId: 'override', reasoningEfforts: ['high'], defaultReasoningEffort: 'high' }]);
+    expect(added.added[0]).toMatchObject({ reasoningEfforts: ['low', 'high'], defaultReasoningEffort: 'low' });
+    expect(added.added[1]).toMatchObject({ reasoningEfforts: ['high'], defaultReasoningEffort: 'high' });
+    expect(f.store.batches[0][0]).toMatchObject({ reasoningEfforts: ['low', 'high'], defaultReasoningEffort: 'low' });
+    expect(() => f.catalog.addSelected('api', [{ upstreamId: 'invalid-default', defaultReasoningEffort: 'high' }])).toThrow('默认思考强度');
+    expect(f.store.batches).toHaveLength(1);
+  });
 });
 
 describe('Codex native model directory compatibility and immutable pagination', () => {

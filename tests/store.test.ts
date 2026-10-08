@@ -31,6 +31,52 @@ describe('cache creation usage persistence', () => {
 function model(providerId: string, alias = 'test/model'): ModelInput { return { providerId, alias, upstreamId: 'upstream-id', displayName: 'Test Model', wireApi: 'chat-completions', contextWindow: 64000, tools: true, vision: false, enabled: true }; }
 afterEach(() => { for (const store of stores.splice(0)) store.close(); for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true }); });
 
+describe('model reasoning effort persistence', () => {
+  it('round-trips supported levels and the default level through reopen', async () => {
+    const { store, dir, codec } = await setup();
+    const source = store.listProviders()[0];
+    const saved = store.saveModel({ ...model(source.id, 'reasoning/model'), reasoningEfforts: ['low', 'medium', 'high'], defaultReasoningEffort: 'medium' });
+    expect(saved.reasoningEfforts).toEqual(['low', 'medium', 'high']);
+    expect(saved.defaultReasoningEffort).toBe('medium');
+    store.close();
+    const reopened = await Store.create(dir, codec); stores.push(reopened);
+    const loaded = reopened.listModels().find(item => item.alias === 'reasoning/model')!;
+    expect(loaded.reasoningEfforts).toEqual(['low', 'medium', 'high']);
+    expect(loaded.defaultReasoningEffort).toBe('medium');
+  });
+  it('rejects unknown or duplicate levels and a default outside the supported list', async () => {
+    const { store } = await setup();
+    const source = store.listProviders()[0];
+    expect(() => store.saveModel({ ...model(source.id, 'unknown-level'), reasoningEfforts: ['ultra' as never] })).toThrow('思考强度级别无效');
+    expect(() => store.saveModel({ ...model(source.id, 'duplicate-level'), reasoningEfforts: ['low', 'low'] })).toThrow('思考强度级别无效');
+    expect(() => store.saveModel({ ...model(source.id, 'foreign-default'), reasoningEfforts: ['low'], defaultReasoningEffort: 'high' })).toThrow('默认思考强度');
+    expect(() => store.saveModel({ ...model(source.id, 'empty-default'), reasoningEfforts: [], defaultReasoningEffort: 'low' })).toThrow('默认思考强度');
+    expect(store.listModels()).toEqual([]);
+  });
+  it('normalizes models without reasoning metadata to empty levels and no default', async () => {
+    const { store } = await setup();
+    const source = store.listProviders()[0];
+    const saved = store.saveModel(model(source.id, 'plain/model'));
+    expect(saved.reasoningEfforts).toEqual([]);
+    expect(saved.defaultReasoningEffort).toBeUndefined();
+    expect(store.listModels()[0].reasoningEfforts).toEqual([]);
+  });
+  it('migrates a pre-reasoning models table without losing existing rows', async () => {
+    const { store, dir, codec } = await setup();
+    const source = store.listProviders()[0];
+    store.saveModel(model(source.id, 'legacy/model')); store.close();
+    const SQL = await initSqlJs({ locateFile: file => join(process.cwd(), 'node_modules/sql.js/dist', file) });
+    const legacy = new SQL.Database(readFileSync(join(dir, 'modeldock.sqlite')));
+    legacy.run('ALTER TABLE models DROP COLUMN reasoning_efforts');
+    legacy.run('ALTER TABLE models DROP COLUMN default_reasoning_effort');
+    writeFileSync(join(dir, 'modeldock.sqlite'), legacy.export()); legacy.close();
+    const migrated = await Store.create(dir, codec); stores.push(migrated);
+    const loaded = migrated.listModels().find(item => item.alias === 'legacy/model')!;
+    expect(loaded.reasoningEfforts).toEqual([]);
+    expect(loaded.defaultReasoningEffort).toBeUndefined();
+  });
+});
+
 describe('real SQLite storage', () => {
   it('encrypts private managed backups through the existing codec without copying unrelated SQLite contents', async () => {
     const { store, dir, codec } = await setup();

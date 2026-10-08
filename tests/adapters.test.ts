@@ -111,6 +111,46 @@ describe('tool adapters', () => {
     expect(buildConfig(unknownStore, 'codex', 19191).instructions).toContain('省略可选上下文字段');
     expect(catalog[1].contextWindow).toBe(0);
   });
+  it('emits client thinking levels only for models declaring supported levels', () => {
+    const catalog: Model[] = [
+      { ...models[0], id: 'reasoning', alias: 'reasoning-model', reasoningEfforts: ['low', 'medium', 'high'], defaultReasoningEffort: 'medium' },
+      { ...models[0], id: 'plain', alias: 'plain-model' },
+    ];
+    const reasoningStore = { ...store, listModels: () => catalog,
+      listBindings: () => store.listBindings().map(binding => ({ ...binding, modelIds: catalog.map(model => model.id), defaultModelId: 'reasoning' })),
+    };
+    const vscode = JSON.parse(buildConfig(reasoningStore, 'vscode', 19191).content)[0].models;
+    expect(vscode.find((row: any) => row.id === 'reasoning-model')).toMatchObject({ supportsReasoningEffort: ['low', 'medium', 'high'], defaultReasoningEffort: 'medium' });
+    expect(vscode.find((row: any) => row.id === 'plain-model')).not.toHaveProperty('supportsReasoningEffort');
+    expect(vscode.find((row: any) => row.id === 'plain-model')).not.toHaveProperty('defaultReasoningEffort');
+    const desktop = buildCopilotDesktopPlan(reasoningStore, 19191).providers[0].models;
+    expect(desktop.find(row => row.modelId === 'reasoning-model')?.supportedReasoningEfforts).toEqual(['low', 'medium', 'high']);
+    expect(desktop.find(row => row.modelId === 'plain-model')).not.toHaveProperty('supportedReasoningEfforts');
+    const dsh = dshProviders(buildConfig(reasoningStore, 'dsh', 19191).content).modeldock.models;
+    expect(dsh.find((row: any) => row.id === 'reasoning-model').reasoningEfforts).toEqual(['low', 'medium', 'high']);
+    expect(dsh.find((row: any) => row.id === 'plain-model')).not.toHaveProperty('reasoningEfforts');
+  });
+  it('writes Codex thinking levels as described effort objects with a default level', () => {
+    const root = mkdtempSync(join(tmpdir(), 'modeldock-adapter-')); roots.push(root);
+    const catalog: Model[] = [
+      { ...models[0], reasoningEfforts: ['minimal', 'low', 'medium'], defaultReasoningEffort: 'low' },
+      { ...models[0], id: 'plain', alias: 'plain-model' },
+    ];
+    const reasoningStore = { ...store, listModels: () => catalog,
+      listBindings: () => store.listBindings().map(binding => ({ ...binding, modelIds: catalog.map(model => model.id) })),
+    };
+    mkdirSync(join(root, '.codex'));
+    applyConfig(reasoningStore, 'codex', 19191, root, join(root, 'backups'), root);
+    const exported = JSON.parse(readFileSync(join(root, '.codex', 'modeldock-models.json'), 'utf8')).models;
+    expect(exported[0].supported_reasoning_levels).toEqual([
+      { effort: 'minimal', description: 'Minimal reasoning effort' },
+      { effort: 'low', description: 'Fast responses with lighter reasoning' },
+      { effort: 'medium', description: 'Balances speed and reasoning depth' },
+    ]);
+    expect(exported[0].default_reasoning_level).toBe('low');
+    expect(exported[1].supported_reasoning_levels).toEqual([]);
+    expect(exported[1].default_reasoning_level).toBeNull();
+  });
   it('applies unknown-context client budgets while retaining comments and other provider budgets', () => {
     const root = mkdtempSync(join(tmpdir(), 'modeldock-adapter-')); roots.push(root);
     const unknownStore = { ...store, listModels: () => [{ ...models[0], contextWindow: 0, tools: false }] };
