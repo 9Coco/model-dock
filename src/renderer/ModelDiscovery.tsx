@@ -5,7 +5,8 @@ import type { AddModelsResult, DiscoveredModel, DiscoveryResult, ModelSelection 
 import { modelDisplayLabel, modelLocalAlias } from '../shared/model-names';
 import { BusyIcon, EmptyState, Modal, type Notify } from './components';
 
-type CandidateDraft = DiscoveredModel & { selected: boolean };
+type MetadataField = 'contextWindow' | 'tools' | 'vision';
+type CandidateDraft = DiscoveredModel & { selected: boolean; editedFields?: MetadataField[] };
 interface Props {
   api?: ModelDockApi;
   provider: Provider;
@@ -18,7 +19,11 @@ interface Props {
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 const protocolLabel = (wireApi: WireApi) => wireApi === 'responses' ? 'Responses' : 'Chat Completions';
 const candidateDraft = (model: DiscoveredModel, providerId: string): CandidateDraft => ({ ...model, alias: modelLocalAlias({ providerId, alias: model.alias }), tools: !model.existingModelId && model.metadataDefaults?.includes('tools') ? true : model.tools, selected: !model.existingModelId });
-const missingMetadataLabel = (model: DiscoveredModel) => (model.metadataDefaults ?? []).map(field => ({ contextWindow: '上下文', tools: '工具能力', vision: '图片能力' })[field]).join('、');
+const metadataLabels: Record<MetadataField, string> = { contextWindow: '上下文', tools: '工具调用', vision: '图片输入' };
+const activeMetadataFields = (model: CandidateDraft, fields: readonly MetadataField[] | undefined) => (fields ?? []).filter(field => !model.editedFields?.includes(field));
+const metadataFieldLabels = (fields: readonly MetadataField[]) => fields.map(field => metadataLabels[field]).join('、');
+const metadataOrigin = (model: CandidateDraft, field: MetadataField) => model.existingModelId ? '已保存设置' : model.editedFields?.includes(field) ? '用户设置' : model.metadataInferred?.some(inferred => inferred === field) ? '内置字典' : model.metadataDefaults?.includes(field) ? '本地默认' : '供应商';
+const patchedCandidate = (model: CandidateDraft, patch: Partial<CandidateDraft>): CandidateDraft => ({ ...model, ...patch, editedFields: [...new Set([...(model.editedFields ?? []), ...(['contextWindow', 'tools', 'vision'] as const).filter(field => Object.prototype.hasOwnProperty.call(patch, field))])] });
 
 export function ModelDiscovery({ api, provider, notify, onClose, onAdded, onManualAdd, initialResult }: Props) {
   const [result, setResult] = useState<DiscoveryResult | null>(initialResult ?? null);
@@ -74,7 +79,7 @@ export function ModelDiscovery({ api, provider, notify, onClose, onAdded, onManu
   useEffect(() => { if (selectionBox.current) selectionBox.current.indeterminate = someSelected && !allSelected; }, [someSelected, allSelected]);
 
   const updateModel = (upstreamId: string, patch: Partial<CandidateDraft>) => {
-    setModels(previous => previous.map(model => model.upstreamId === upstreamId && !model.existingModelId ? { ...model, ...patch } : model));
+    setModels(previous => previous.map(model => model.upstreamId === upstreamId && !model.existingModelId ? patchedCandidate(model, patch) : model));
     setError(''); setAdded(null);
   };
   const selectVisible = (checked: boolean) => {
@@ -92,7 +97,7 @@ export function ModelDiscovery({ api, provider, notify, onClose, onAdded, onManu
       ...(bulkTools ? { tools: bulkTools === 'yes' } : {}),
       ...(bulkVision ? { vision: bulkVision === 'yes' } : {}),
     };
-    setModels(previous => previous.map(model => model.selected && !model.existingModelId ? { ...model, ...patch } : model));
+    setModels(previous => previous.map(model => model.selected && !model.existingModelId ? patchedCandidate(model, patch) : model));
     setError(''); setAdded(null);
     notify(`已为 ${selected.length} 个所选模型应用本地设置，添加后生效。`, 'info');
   };
@@ -105,6 +110,7 @@ export function ModelDiscovery({ api, provider, notify, onClose, onAdded, onManu
       if (!/^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$/.test(alias)) { setError(`「${model.upstreamId}」的模型简称需以字母或数字开头，只能包含字母、数字和 . _ : / -。`); return; }
       if (aliases.has(alias)) { setError(`本次选择中的模型简称「${alias}」重复，请修改后再添加。不同供应商可以使用相同简称。`); return; }
       if (!model.displayName.trim()) { setError(`请为「${model.upstreamId}」填写显示名称。`); return; }
+      if (!Number.isSafeInteger(model.contextWindow) || model.contextWindow < 0) { setError(`「${model.upstreamId}」的上下文长度请填写大于或等于 0 的整数。0 表示未设置。`); return; }
       aliases.add(alias);
     }
     const selections: ModelSelection[] = selected.map(({ upstreamId, alias, displayName, wireApi, contextWindow, tools, vision, reasoningEfforts, defaultReasoningEffort }) => ({ upstreamId, alias: alias.trim(), displayName: displayName.trim(), wireApi, contextWindow, tools, vision, reasoningEfforts, defaultReasoningEffort }));
@@ -134,7 +140,7 @@ export function ModelDiscovery({ api, provider, notify, onClose, onAdded, onManu
         {result?.ok && <>
           <div className="discovery-toolbar"><label className="search-box"><Search size={15} /><input aria-label="搜索模型" placeholder="搜索模型 ID 或名称" value={search} disabled={adding} onChange={event => setSearch(event.target.value)} /></label><span>{models.length} 个模型{models.some(model => model.existingModelId) ? ` · ${models.filter(model => model.existingModelId).length} 个已添加` : ''}</span><button className={`button secondary small ${advanced ? 'selected' : ''}`} aria-expanded={advanced} disabled={adding} onClick={() => setAdvanced(value => !value)}><Settings2 size={14} />高级设置<ChevronDown size={13} className={advanced ? 'discovery-chevron-open' : ''} /></button></div>
           {advanced && <div className="discovery-advanced">
-            <div className="discovery-advanced-copy"><strong>批量配置所选模型</strong><small>未声明工具能力时默认允许客户端尝试调用；上下文未设置时，工具使用 32K 上下文 / 4K 输出的保守预算。这些是本地设置，请按供应商文档调整。</small></div>
+            <div className="discovery-advanced-copy"><strong>批量配置所选模型</strong><small>优先使用供应商返回的参数；缺少上下文或图片能力时，按内置字典补全。可逐个展开「参数设置」或在这里批量修正，手动设置会覆盖补全值。未声明工具能力时默认允许客户端尝试调用。</small></div>
             <div className="discovery-advanced-grid">
               <label>调用接口<select value={bulkWireApi} disabled={adding} onChange={event => setBulkWireApi(event.target.value as WireApi | '')}><option value="">保留列表设置</option>{(provider.kind === 'openai-compatible' || provider.kind === 'copilot') && <option value="chat-completions">Chat Completions</option>}<option value="responses">Responses</option></select></label>
               <label>上下文长度<input type="number" min="0" step="1" value={bulkContext} disabled={adding} placeholder="留空保留，0 为未设置" onChange={event => setBulkContext(event.target.value)} /></label>
@@ -145,12 +151,36 @@ export function ModelDiscovery({ api, provider, notify, onClose, onAdded, onManu
           </div>}
           {visible.length ? <div className="discovery-list">
             <div className="discovery-list-header"><label><input ref={selectionBox} type="checkbox" aria-label={search.trim() ? '全选筛选结果' : '全选可添加模型'} checked={allSelected} disabled={adding || !available.length} onChange={event => selectVisible(event.target.checked)} />{search.trim() ? '全选筛选结果' : '全选可添加模型'}</label><span>显示名称 / 模型简称</span></div>
-            {visible.map(model => <div className={`discovery-model ${model.selected ? 'selected' : ''} ${model.existingModelId ? 'existing' : ''}`} key={model.upstreamId}>
-              <label className="discovery-model-select"><input type="checkbox" checked={model.selected} disabled={adding || !!model.existingModelId} aria-label={`选择模型 ${model.upstreamId}`} onChange={event => updateModel(model.upstreamId, { selected: event.target.checked })} /><span><strong title={model.upstreamId}>{model.upstreamId}</strong><small title={modelDisplayLabel(model, provider)}>展示：{modelDisplayLabel(model, provider)}</small><small>{protocolLabel(model.wireApi)} · {model.contextWindow ? `${model.contextWindow.toLocaleString('zh-CN')} 上下文` : '上下文未设置'}{model.tools ? model.metadataDefaults?.includes('tools') ? ' · 可尝试工具调用' : ' · 工具调用' : ''}{model.vision ? ' · 图片输入' : ''}{model.reasoningEfforts?.length ? ' · 思考强度' : ''}</small>{model.existingModelId ? <span className="badge positive"><Check size={11} />已添加</span> : <><small className="discovery-defaults">{model.metadataSource === 'upstream' ? '部分参数来自供应商' : '接口使用本地默认设置'}</small>{!!model.metadataDefaults?.length && <small className="discovery-defaults">上游未声明：{missingMetadataLabel(model)}</small>}</>}</span></label>
-              <div className="discovery-model-fields"><label><span className="sr-only">{model.upstreamId} 显示名称</span><input aria-label={`${model.upstreamId} 显示名称`} placeholder="显示名称" value={model.displayName} disabled={adding || !!model.existingModelId} onChange={event => updateModel(model.upstreamId, { displayName: event.target.value })} /></label><label><span className="sr-only">{model.upstreamId} 模型简称</span><input aria-label={`${model.upstreamId} 模型简称`} placeholder="模型简称" value={model.alias} disabled={adding || !!model.existingModelId} onChange={event => updateModel(model.upstreamId, { alias: event.target.value })} /></label></div>
-            </div>)}
+            {visible.map(model => {
+              const inferredFields = activeMetadataFields(model, model.metadataInferred);
+              const defaultFields = activeMetadataFields(model, model.metadataDefaults);
+              const locked = adding || !!model.existingModelId;
+              return <div className={`discovery-model ${model.selected ? 'selected' : ''} ${model.existingModelId ? 'existing' : ''}`} key={model.upstreamId}>
+                <label className="discovery-model-select"><input type="checkbox" checked={model.selected} disabled={locked} aria-label={`选择模型 ${model.upstreamId}`} onChange={event => updateModel(model.upstreamId, { selected: event.target.checked })} /><span>
+                  <strong title={model.upstreamId}>{model.upstreamId}</strong>
+                  <small title={modelDisplayLabel(model, provider)}>展示：{modelDisplayLabel(model, provider)}</small>
+                  <small>{protocolLabel(model.wireApi)} · {model.contextWindow ? `${model.contextWindow.toLocaleString('zh-CN')} 上下文` : '上下文未设置'}{model.tools ? defaultFields.includes('tools') ? ' · 可尝试工具调用' : ' · 工具调用' : ' · 工具调用关闭'}{model.vision ? ' · 图片输入' : ' · 图片输入关闭'}{model.reasoningEfforts?.length ? ' · 思考强度' : ''}</small>
+                  {model.existingModelId ? <span className="badge positive"><Check size={11} />已添加 · 保留已保存参数</span> : <>
+                    {!!inferredFields.length && <small className="discovery-defaults">字典补全：{metadataFieldLabels(inferredFields)}</small>}
+                    {!!defaultFields.length && <small className="discovery-defaults">缺少规格，使用本地默认：{metadataFieldLabels(defaultFields)}</small>}
+                    {!!model.editedFields?.length && <small className="discovery-defaults">用户设置：{metadataFieldLabels(model.editedFields)}</small>}
+                  </>}
+                </span></label>
+                <div className="discovery-model-fields"><label><span className="sr-only">{model.upstreamId} 显示名称</span><input aria-label={`${model.upstreamId} 显示名称`} placeholder="显示名称" value={model.displayName} disabled={locked} onChange={event => updateModel(model.upstreamId, { displayName: event.target.value })} /></label><label><span className="sr-only">{model.upstreamId} 模型简称</span><input aria-label={`${model.upstreamId} 模型简称`} placeholder="模型简称" value={model.alias} disabled={locked} onChange={event => updateModel(model.upstreamId, { alias: event.target.value })} /></label></div>
+                <details className="discovery-model-settings">
+                  <summary aria-label={`${model.upstreamId} 参数设置`}>参数设置{model.existingModelId ? ' · 已保存' : ''}</summary>
+                  <div className="discovery-advanced-grid">
+                    <label>调用接口<select aria-label={`${model.upstreamId} 调用接口`} value={model.wireApi} disabled={locked} onChange={event => updateModel(model.upstreamId, { wireApi: event.target.value as WireApi })}>{(provider.kind === 'openai-compatible' || provider.kind === 'copilot') && <option value="chat-completions">Chat Completions</option>}<option value="responses">Responses</option></select></label>
+                    <label><span>上下文长度 <small>{metadataOrigin(model, 'contextWindow')}</small></span><input aria-label={`${model.upstreamId} 上下文长度`} type="number" min="0" step="1" value={model.contextWindow} disabled={locked} onChange={event => updateModel(model.upstreamId, { contextWindow: event.target.value === '' ? 0 : Number(event.target.value) })} /></label>
+                    <label><span>工具调用 <small>{metadataOrigin(model, 'tools')}</small></span><select aria-label={`${model.upstreamId} 工具调用`} value={model.tools ? 'yes' : 'no'} disabled={locked} onChange={event => updateModel(model.upstreamId, { tools: event.target.value === 'yes' })}><option value="yes">启用</option><option value="no">关闭</option></select></label>
+                    <label><span>图片输入 <small>{metadataOrigin(model, 'vision')}</small></span><select aria-label={`${model.upstreamId} 图片输入`} value={model.vision ? 'yes' : 'no'} disabled={locked} onChange={event => updateModel(model.upstreamId, { vision: event.target.value === 'yes' })}><option value="yes">启用</option><option value="no">关闭</option></select></label>
+                  </div>
+                  <p className="discovery-settings-note">{model.existingModelId ? '这些参数已保存，可在模型目录中修改。' : '0 表示上下文未设置；手动修改会覆盖供应商或字典值，添加后保存。'}{!!inferredFields.length && model.metadataReference && <> <a href={model.metadataReference.sourceUrl} target="_blank" rel="noopener noreferrer">字典参考文档</a> · 核对日期 {model.metadataReference.verifiedAt}</>}</p>
+                </details>
+              </div>;
+            })}
           </div> : <EmptyState compact icon={<Layers3 size={24} />} title={search.trim() ? '没有匹配的模型' : '供应商返回了空列表'} description={search.trim() ? '修改搜索内容后继续选择。' : '该地址暂未返回模型，请检查供应商地址与账号权限，也可以手动添加。'} />}
-          <div className="discovery-note"><Info size={14} /><span>不同供应商可以添加同名模型；目录和工具中按「套餐名 - 模型名」展示，聚合接口会自动区分来源。模型列表获取成功只表示模型可见，实际调用权限和能力仍需通过推理验证。允许客户端尝试工具调用不代表上游已声明支持；未提供上下文时，工具配置使用 32K 上下文 / 4K 输出的保守预算，可在高级设置中调整，以上预算并非上游规格。</span></div>
+          <div className="discovery-note"><Info size={14} /><span>上下文和图片能力优先采用供应商参数，缺少时按内置字典补全，可展开「参数设置」手动修正。不同供应商可以添加同名模型；目录和工具中按「套餐名 - 模型名」展示。模型可见和字典规格不代表实际调用权限，仍需推理验证。未声明工具能力时允许客户端尝试；上下文未设置时，工具配置使用 32K 上下文 / 4K 输出的保守预算，以上预算并非上游规格。</span></div>
         </>}
         {!result && !error && <EmptyState compact icon={<Layers3 size={24} />} title="尚未获取模型" description="点击重新获取，从供应商读取真实模型列表。" />}
         {added && <div className="discovery-success" role="status"><Check size={15} /><span>已添加 {added.added.length} 个模型{added.skipped.length ? `，跳过 ${added.skipped.length} 个已存在模型` : ''}，可在模型目录和工具配置中使用。</span></div>}

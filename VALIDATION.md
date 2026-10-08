@@ -1,5 +1,18 @@
 # ModelDock 0.3.36 验证记录
 
+## 2026-10-08 本地增量：模型能力字典
+
+日期：2026-10-08（Asia/Hong_Kong）。
+
+- 内置字典收录 116 个明确的模型 ID、官方别名与快照，覆盖 OpenAI、Claude、Gemini、DeepSeek、Qwen、GLM、Kimi、Grok；每项保存上下文、图片输入、官方来源与核对日期。仅精确匹配型号及指定厂商命名空间。Gemini 按官方输入长度填写；Kimi 文档使用概数时采用保守的十进制默认值。
+- 模型列表仍来自上游。上下文和图片能力逐字段按有效上游声明、内置字典、本地未知默认值依次处理；明确的 false 与仅 text 输入不会被字典覆盖。无效首选字段不会遮住其他有效元数据字段，兼容 OpenRouter 的 architecture.input_modalities。
+- 模型列表增加逐项「参数设置」，显示字典补全及手动修改的来源，保留批量设置。上下文 0 与图片关闭能保存；重新获取时已添加项显示原保存值，导入跳过既有模型。没有数据库迁移或修改既有模型、授权及工具配置。
+- 相关回归 2 个测试文件、91 项测试全部通过；类型检查、生产构建、生产入口隔离检查和 Windows 包的 ASAR／资源／图标检查通过。新增原生验证实现仅编入独立 smoke 入口，生产包不含该测试代码。
+- Windows 原生 Electron 和最终包的独立 QA 副本均使用全新资料目录与本地合成上游，验证字典补全、上游优先、未知型号、逐项 0／false 覆盖、批量添加和重新获取保留。1320×880、980×680 实际截图及布局检查通过，底部按钮可见且无横向溢出；实际查看了渲染截图。
+- 完整 npm test 在 Windows 未全部通过：Linux 进程 UID 检查与 POSIX 权限／链接诊断共 16 项失败，在未改动的 HEAD 6c42f770 隔离快照中重现相同失败名称；相关测试及源文件 SHA256 与工作目录一致。另外网关用例出现间歇性 SQLite rename EPERM，独立复跑失败位置改变，基线网关 21 项全部通过，未把该现象报告为已解决。
+- 本轮没有调用真实计费模型，原生验证使用合成凭据。字典规格核对与模型列表／窗口验证不代表图片推理或实际套餐能力已经验收；Linux 原生窗口未在本轮验证。
+- 证据：work/model-metadata-targeted-final.log、model-metadata-all-tests.log、model-metadata-baseline-tests.log、model-metadata-native/、model-metadata-packaged/、model-metadata-pack.log。运行中的旧程序保留；本轮独立 Windows 包位于 release/windows-0.3.36-2026-10-08T11-41-56-747Z-6648/win-unpacked，未替换标准 release/win-unpacked。
+
 
 
 ## 0.3.36 持久化诊断日志

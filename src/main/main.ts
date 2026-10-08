@@ -26,6 +26,7 @@ import { verifyUsageDashboard } from './usage-dashboard-smoke';
 import { verifyUsageAnalytics } from './usage-analytics-smoke';
 import { verifyCompactUi } from './compact-ui-smoke';
 import { verifyConnectionTest } from './connection-test-smoke';
+import { verifyModelMetadata } from './model-metadata-smoke';
 import { createGatewayStartupSmokeVault, verifyGatewayStartup } from './gateway-startup-smoke';
 import { verifyAuthNetwork, verifyPendingAuth } from './auth-network-smoke';
 import { verifyAuthQuotas } from './auth-quota-smoke';
@@ -150,7 +151,7 @@ async function createWindow(forceShow = false) {
   window.webContents.setWindowOpenHandler(({ url }) => {
     try {
       const target = new URL(url);
-      const docs = ['api-docs.deepseek.com', 'docs.volcengine.com', 'help.aliyun.com', 'developers.openai.com', 'x.ai', 'opencode.ai', 'github.com', 'docs.github.com', 'code.visualstudio.com'];
+      const docs = ['api-docs.deepseek.com', 'docs.volcengine.com', 'help.aliyun.com', 'developers.openai.com', 'platform.claude.com', 'ai.google.dev', 'docs.z.ai', 'platform.kimi.ai', 'docs.x.ai', 'x.ai', 'opencode.ai', 'github.com', 'docs.github.com', 'code.visualstudio.com'];
       const authPage = target.hostname === 'auth.openai.com' || target.hostname === 'auth.x.ai' || target.hostname.endsWith('.x.ai') || target.hostname === 'grok.com' || target.hostname.endsWith('.grok.com');
       if (target.protocol === 'https:' && (docs.includes(target.hostname) || authPage && (!target.port || target.port === '443')) && !target.username && !target.password) void shell.openExternal(url);
     } catch { /* malformed links are denied */ }
@@ -201,7 +202,9 @@ async function createWindow(forceShow = false) {
         writeFileSync(join(outputDir, 'electron-smoke.json'), JSON.stringify({ ...result, dataDir, windowSize: window!.getSize(), contentSize: window!.getContentSize() }, null, 2));
         writeFileSync(join(outputDir, 'electron-smoke.png'), await captureUi());
         await verifyToolIcons(window!, outputDir, captureUi);
-        if (process.env.MODELDOCK_SMOKE_SIDEBAR_ONLY === '1') {
+        if (process.env.MODELDOCK_SMOKE_METADATA_ONLY === '1') {
+          await verifyModelMetadata(window!, outputDir, captureUi);
+        } else if (process.env.MODELDOCK_SMOKE_SIDEBAR_ONLY === '1') {
           await verifySidebarScroll(window!, store, outputDir, captureUi);
         } else if (process.env.MODELDOCK_SMOKE_COMPACT_ONLY === '1') {
           await verifyCompactUi(window!, store, outputDir, captureUi);

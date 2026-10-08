@@ -35,6 +35,11 @@ delete env.MODELDOCK_DEV_URL;
 let noCatalogModelRequests = 0, connectionTestPosts = 0, codexModelRequests = 0;
 const connectionRequests = [];
 const upstream = createServer((req,res) => {
+  if (req.url === '/metadata/v1/models') {
+    if (req.method !== 'GET' || req.headers.authorization !== 'Bearer synthetic-only') { res.writeHead(401); res.end(); return; }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ data: [{ id: 'gpt-4o' }, { id: 'gpt-4o-mini', context_window: 4096, vision: false }, { id: 'gpt-4.1' }, { id: 'unknown-fixture-model' }] })); return;
+  }
   if (req.url?.startsWith('/codex-native/models')) {
     codexModelRequests++;
     const target = new URL(req.url, 'http://127.0.0.1');
@@ -86,6 +91,7 @@ const upstream = createServer((req,res) => {
 await new Promise(resolve=>upstream.listen(0,'127.0.0.1',resolve));
 env.MODELDOCK_SMOKE_UPSTREAM=`http://127.0.0.1:${upstream.address().port}/v1`;
 env.MODELDOCK_SMOKE_NO_CATALOG=`http://127.0.0.1:${upstream.address().port}/no-catalog/v1`;
+env.MODELDOCK_SMOKE_METADATA_UPSTREAM=`http://127.0.0.1:${upstream.address().port}/metadata/v1`;
 delete env.ELECTRON_RUN_AS_NODE;
 function verifyConnectionNetwork() {
   const validation = JSON.parse(readFileSync(resolve(output,'connection-test-validation.json'),'utf8'));
@@ -104,6 +110,12 @@ child.on('exit', code => {
     if(existsSync(errorFile)) throw new Error(readFileSync(errorFile,'utf8'));
     const value = JSON.parse(readFileSync(resolve(output, 'electron-smoke.json'), 'utf8'));
     if (!value.bridge || !value.text.includes('ModelDock')) throw new Error('Renderer/preload bridge unavailable');
+    if (env.MODELDOCK_SMOKE_METADATA_ONLY === '1') {
+      const result = JSON.parse(readFileSync(resolve(output, 'model-metadata-validation.json'), 'utf8'));
+      if (!result.ok || !result.manualZeroAndFalseSaved || !result.rediscoveryPreserved) throw new Error('Model metadata verification failed');
+      console.log(JSON.stringify({ exitCode: code, bridge: value.bridge, metadata: result, output }));
+      process.exit(code || 0);
+    }
     if (env.MODELDOCK_SMOKE_SIDEBAR_ONLY === '1') {
       const result = JSON.parse(readFileSync(resolve(output, 'sidebar-scroll-validation.json'), 'utf8'));
       if (!result.ok || !result.independentScroll || !result.configurationUnchanged) throw new Error('Independent sidebar scrolling validation failed');

@@ -3,6 +3,7 @@ import { createServer, type Server } from 'node:http';
 import type { Model, ModelInput, Provider } from '../src/shared/types';
 import { ModelCatalog, type CatalogStore } from '../src/main/catalog';
 import { modelCatalogEndpoint, prepareUpstream } from '../src/main/oauth';
+import { lookupModelMetadata } from '../src/shared/model-metadata';
 import { version as appVersion } from '../package.json';
 
 const provider: Provider = { id: 'api', name: 'Example', kind: 'openai-compatible', presetId: 'custom', baseUrl: 'https://api.example.test/v1', enabled: true, hasSecret: true, authStatus: 'ready', note: '' };
@@ -69,6 +70,82 @@ describe('real model catalog discovery and batch selection', () => {
     expect(result.models[3]).toMatchObject({ contextWindow: 0, tools: false, vision: true, metadataDefaults: ['contextWindow'] });
     expect(result.models[4]).toMatchObject({ vision: false, metadataDefaults: ['contextWindow', 'tools'] });
     expect(result.models[5]).toMatchObject({ vision: false, metadataDefaults: ['contextWindow', 'tools', 'vision'] });
+  });
+  it('fills only absent metadata from a known model while keeping tool and protocol defaults', async () => {
+    const known = lookupModelMetadata('gpt-4o')!;
+    expect(known).toMatchObject({ vision: true });
+    const f = fixture(vi.fn(async () => json({ data: [{ id: 'gpt-4o' }] })) as typeof fetch);
+    const result = await f.catalog.discover('api');
+    expect(result.models[0]).toMatchObject({ contextWindow: known.contextWindow, vision: true, tools: false, wireApi: 'chat-completions',
+      metadataSource: 'defaults', metadataDefaults: ['tools'], metadataInferred: ['contextWindow', 'vision'],
+      metadataReference: { sourceUrl: known.sourceUrl, verifiedAt: known.verifiedAt } });
+    expect(f.catalog.addSelected('api', [{ upstreamId: 'gpt-4o' }]).added[0]).toMatchObject({ contextWindow: known.contextWindow, vision: true, tools: false, wireApi: 'chat-completions' });
+  });
+  it.each([
+    [{ context_window: 32000 }, { contextWindow: 32000, vision: true }, ['vision']],
+    [{ vision: false }, { vision: false }, ['contextWindow']],
+    [{ input_modalities: ['text'] }, { vision: false }, ['contextWindow']],
+    [{ vision: false, input_modalities: ['text', 'image'] }, { vision: false }, ['contextWindow']],
+  ])('respects usable upstream declarations and infers each missing field separately (%j)', async (upstream, expected, inferred) => {
+    const known = lookupModelMetadata('gpt-4o')!;
+    const f = fixture(vi.fn(async () => json({ data: [{ id: 'gpt-4o', ...upstream }] })) as typeof fetch);
+    const model = (await f.catalog.discover('api')).models[0];
+    expect(model).toMatchObject({ contextWindow: known.contextWindow, metadataSource: 'upstream', metadataDefaults: ['tools'], metadataInferred: inferred, ...expected });
+    expect(model.metadataReference).toEqual({ sourceUrl: known.sourceUrl, verifiedAt: known.verifiedAt });
+  });
+  it('keeps fully declared upstream metadata authoritative and omits dictionary attribution', async () => {
+    const f = fixture(vi.fn(async () => json({ data: [{ id: 'gpt-4o', context_window: 16000, tools: false, vision: false }] })) as typeof fetch);
+    const model = (await f.catalog.discover('api')).models[0];
+    expect(model).toMatchObject({ contextWindow: 16000, tools: false, vision: false, metadataSource: 'upstream', metadataDefaults: [] });
+    expect(model).not.toHaveProperty('metadataInferred');
+    expect(model).not.toHaveProperty('metadataReference');
+  });
+  it('does not let malformed metadata mask valid alternatives, including OpenRouter input modalities', async () => {
+    const f = fixture(vi.fn(async () => json({ data: [
+      { id: 'gpt-4o', context_window: 'invalid', contextWindow: -1, context_length: 64000, vision: 'false', supports_vision: false },
+      { id: 'router-model', context_window: 0, context_length: 200000, input_modalities: [null, false, 'invalid'], architecture: { input_modalities: ['text', 'image'] } },
+      { id: 'capability-model', context_window: -1, capabilities: { limits: { max_context_window_tokens: 128000 }, input_modalities: ['text'] } },
+    ] })) as typeof fetch);
+    const result = await f.catalog.discover('api');
+    expect(result.models[0]).toMatchObject({ contextWindow: 64000, vision: false, metadataSource: 'upstream', metadataDefaults: ['tools'] });
+    expect(result.models[0]).not.toHaveProperty('metadataInferred');
+    expect(result.models[1]).toMatchObject({ contextWindow: 200000, vision: true, metadataSource: 'upstream', metadataDefaults: ['tools'] });
+    expect(result.models[2]).toMatchObject({ contextWindow: 128000, vision: false, metadataSource: 'upstream', metadataDefaults: ['tools'] });
+  });
+  it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, '128000'])('fills invalid upstream context (%j) while ignoring unusable input metadata', async contextWindow => {
+    const known = lookupModelMetadata('gpt-4o')!;
+    const f = fixture(vi.fn(async () => json({ data: [{ id: 'gpt-4o', context_window: contextWindow, vision: 'yes', input_modalities: [false, null, {}, 'invalid'] }] })) as typeof fetch);
+    expect((await f.catalog.discover('api')).models[0]).toMatchObject({ contextWindow: known.contextWindow, vision: true,
+      metadataSource: 'defaults', metadataDefaults: ['tools'], metadataInferred: ['contextWindow', 'vision'] });
+  });
+  it('keeps unknown and near-collision IDs unset instead of inferring from their display names', async () => {
+    const f = fixture(vi.fn(async () => json({ data: [{ id: 'gpt-4o-not-a-release' }, { id: 'custom-model', display_name: 'gpt-4o' }] })) as typeof fetch);
+    for (const model of (await f.catalog.discover('api')).models) {
+      expect(model).toMatchObject({ contextWindow: 0, vision: false, tools: false, metadataSource: 'defaults', metadataDefaults: ['contextWindow', 'tools', 'vision'] });
+      expect(model).not.toHaveProperty('metadataInferred');
+      expect(model).not.toHaveProperty('metadataReference');
+    }
+  });
+  it('persists explicit user zero and false overrides and displays saved settings after rediscovery', async () => {
+    const fetcher = vi.fn(async () => json({ data: [{ id: 'gpt-4o' }] }));
+    const f = fixture(fetcher as typeof fetch);
+    await f.catalog.discover('api');
+    expect(f.catalog.addSelected('api', [{ upstreamId: 'gpt-4o', alias: 'my-model', displayName: 'My Model', contextWindow: 0,
+      vision: false, tools: true, wireApi: 'responses', reasoningEfforts: ['low'], defaultReasoningEffort: 'low' }]).added[0])
+      .toMatchObject({ contextWindow: 0, vision: false, tools: true });
+    f.store.models[0].enabled = false;
+    const saved = structuredClone(f.store.models[0]);
+    fetcher.mockImplementation(async () => json({ data: [{ id: 'gpt-4o', context_window: 32000, vision: true, tools: false,
+      supported_reasoning_levels: ['high'], default_reasoning_level: 'high' }] }));
+    const model = (await f.catalog.discover('api')).models[0];
+    expect(model).toMatchObject({ existingModelId: saved.id, alias: 'my-model', displayName: 'My Model', contextWindow: 0,
+      vision: false, tools: true, wireApi: 'responses', reasoningEfforts: ['low'], defaultReasoningEffort: 'low' });
+    expect(model).not.toHaveProperty('metadataDefaults');
+    expect(model).not.toHaveProperty('metadataInferred');
+    expect(model).not.toHaveProperty('metadataReference');
+    expect(f.catalog.addSelected('api', [{ upstreamId: 'gpt-4o', contextWindow: 32000, vision: true }])).toEqual({ added: [], skipped: ['gpt-4o'] });
+    expect(f.store.models).toEqual([saved]);
+    expect(f.store.batches).toHaveLength(1);
   });
   it('accepts native subscription strings and objects but always keeps Responses', async () => {
     const f = fixture(vi.fn(async () => json({ models: ['native-model', { slug: 'native-other', display_name: 'Native Display', contextWindow: 250000 }] })) as typeof fetch);

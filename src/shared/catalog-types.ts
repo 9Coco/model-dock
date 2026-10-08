@@ -10,9 +10,13 @@ export interface DiscoveredModel {
   contextWindow: number;
   tools: boolean;
   vision: boolean;
+  /** Whether upstream supplied at least one usable context, tools or vision field. */
   metadataSource: 'upstream' | 'defaults';
-  /** Fields omitted by upstream; their current values are local defaults. */
+  /** Fields with no usable upstream declaration or dictionary entry; their values are local defaults. */
   metadataDefaults?: ('contextWindow' | 'tools' | 'vision')[];
+  /** Missing upstream fields filled from the maintained model dictionary. */
+  metadataInferred?: ('contextWindow' | 'vision')[];
+  metadataReference?: { sourceUrl: string; verifiedAt: string };
   /** Thinking levels declared by upstream; omitted when the catalog does not declare them. */
   reasoningEfforts?: ReasoningEffort[];
   defaultReasoningEffort?: ReasoningEffort;

@@ -8,6 +8,7 @@ import { extractFile, listPackage, statFile } from '@electron/asar';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const digest = value => createHash('sha256').update(value).digest('hex');
 const fixtureSymbols = [
+  'verifyModelMetadata', 'model-metadata-validation.json',
   'verifyCompactUi', 'verifySidebarScroll', 'verifyGatewayStartup', 'createGatewayStartupSmokeVault', 'gateway-startup-ready.json', 'authQuotaFixture',
   'SYNTHETIC_COPILOT_QUOTA_TOKEN', 'MOCK_ACCESS_AUTH_NETWORK',
 ];
