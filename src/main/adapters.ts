@@ -148,11 +148,14 @@ const CODEX_REASONING_DESCRIPTIONS: Record<ReasoningEffort, string> = {
   xhigh: 'Extra high reasoning depth for complex problems', max: 'Maximum reasoning depth for the hardest problems',
 };
 function vscode(groups: ClientGroup[]) {
+  // VS Code 把 customendpoint 的 apiKey 当作其秘密存储的 ${input:...} 引用解析，chatLanguageModels.json
+  // 里的明文会被解析为空；requestHeaders 原样透传且允许覆盖 authorization，凭据必须随模型放在这里。
   return groups.map(group => ({ name: group.name, vendor: 'customendpoint', apiKey: group.key, models: group.models.map(m => ({
     id: m.alias, name: m.displayName || m.alias, apiType: m.wireApi,
     url: group.base + (m.wireApi === 'responses' ? '/responses' : '/chat/completions'),
     toolCalling: m.tools, vision: m.vision, contextWindow: clientBudget(m).context,
     maxOutputTokens: clientBudget(m).output,
+    requestHeaders: { authorization: `Bearer ${group.key}` },
     // Without supportsReasoningEffort VS Code shows no Thinking Effort picker.
     ...(m.reasoningEfforts?.length ? { supportsReasoningEffort: [...m.reasoningEfforts], ...(m.defaultReasoningEffort ? { defaultReasoningEffort: m.defaultReasoningEffort } : {}) } : {}),
   })) }));
@@ -250,7 +253,7 @@ export function buildConfig(store: AdapterStore, tool: ToolId, port: number, rev
   const defaultModel = models.find(m => m.id === binding.defaultModelId) ?? models[0];
   if (tool === 'vscode') return {
     filename: 'modeldock-vscode.json', content: JSON.stringify(vscode(groups), null, 2), canApply: true,
-    instructions: connection + '使用 VS Code Copilot Chat 的 Custom Endpoint schema。'
+    instructions: connection + '使用 VS Code Copilot Chat 的 Custom Endpoint schema；凭据随每个模型的 requestHeaders 写入（apiKey 明文字段会被 VS Code 当作秘密存储引用忽略）。'
       + (binding.vscodeSyncScope === 'managed' ? '当前范围仅替换 ModelDock 分组，保留其他自定义来源。' : '当前范围仅保留所选自定义供应商：原文件先备份，所有 customendpoint 分组会替换为当前选择；保留其他 vendor 和注释。')
       + '默认仅写入 Code/User/chatLanguageModels.json；其他 profile 需在对应的模型配置文件中手动合并导出内容。同步后重新加载窗口。' + clientBudgetNotice(models),
   };

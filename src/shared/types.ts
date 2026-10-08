@@ -152,7 +152,14 @@ export interface AuthProgress {
   statusCode?: number;
   category?: AuthFailureCategory;
 }
+export type { DiagnosticEntry, DiagnosticQuery, DiagnosticSnapshot } from './diagnostic-types';
 export interface ModelDockApi {
+  /** Only a fixed failure kind/name can be reported; never arbitrary log text. */
+  reportRendererError(input: { kind: 'error' | 'unhandled-rejection'; errorName?: string }): Promise<void>;
+  queryDiagnostics(query?: import('./diagnostic-types').DiagnosticQuery): Promise<import('./diagnostic-types').DiagnosticSnapshot>;
+  diagnosticsText(query?: import('./diagnostic-types').DiagnosticQuery): Promise<string>;
+  exportDiagnostics(query?: import('./diagnostic-types').DiagnosticQuery): Promise<string | null>;
+  openDiagnosticsDir(): Promise<void>;
   snapshot(): Promise<Snapshot>;
   saveProvider(input: ProviderInput): Promise<Provider>;
   deleteProvider(id: string): Promise<void>;

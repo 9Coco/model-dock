@@ -4,6 +4,7 @@ import { firstConnectionModel } from '../shared/connection-types';
 import { presetById } from '../shared/presets';
 import { upstreamEndpoint, type PreparedUpstream } from './oauth';
 import { isCopilotUpstream } from './copilot-provider';
+import type { DiagnosticContext, DiagnosticEvent, DiagnosticLevel } from '../shared/diagnostic-types';
 
 export interface ConnectionStore {
   getProvider(id: string): Provider | undefined;
@@ -81,6 +82,22 @@ function responsesReasoning(payload: Json): boolean {
       return data.type === 'summary_text' && typeof data.text === 'string' && data.text.trim().length > 0;
     }));
   });
+}
+/** 修改点：仅提取响应形状与计数，不保存正文、模型名称或上游任意字符串。 */
+function responseMetadata(payload: unknown, wireApi: WireApi): DiagnosticContext {
+  const data = record(payload), usage = record(data.usage), details = record(data.incomplete_details);
+  const count = (value: unknown): number | undefined => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+  const choices = Array.isArray(data.choices) ? data.choices.map(record) : [];
+  const responseStatus = data.status === 'completed' || data.status === 'incomplete' || data.status === 'failed' || data.status === 'in_progress' ? data.status : 'unknown';
+  const incompleteReason = details.reason === 'max_output_tokens' || details.reason === 'content_filter' ? details.reason
+    : details.reason == null || typeof details.reason === 'string' && !details.reason.trim() ? 'missing' : 'unknown';
+  return { responseStatus, incompleteReason,
+    outputItems: wireApi === 'responses' ? Array.isArray(data.output) ? data.output.length : 0 : choices.length,
+    outputTokens: count(wireApi === 'responses' ? usage.output_tokens : usage.completion_tokens),
+    reasoningTokens: count(record(wireApi === 'responses' ? usage.output_tokens_details : usage.completion_tokens_details).reasoning_tokens),
+    hasOutputText: wireApi === 'responses' ? responsesText(data) : choices.some(choice => assistantText(choice.message)),
+    hasReasoning: wireApi === 'responses' ? responsesReasoning(data) : choices.some(choice => reasoningText(choice.message)),
+  };
 }
 function responseEnvelope(payload: Json): boolean {
   return payload.object === 'response' && typeof payload.id === 'string' && payload.id.trim().length > 0 && Array.isArray(payload.output);
@@ -196,7 +213,10 @@ async function boundedBody(response: Response, signal: AbortSignal): Promise<str
 /** A single small inference request; model discovery is a separate operation. */
 export class ConnectionTester {
   private readonly fetcher: typeof fetch;
-  constructor(private readonly store: ConnectionStore, private readonly oauth: ConnectionOAuth, options: { fetch?: typeof fetch } = {}) { this.fetcher = options.fetch ?? fetch; }
+  constructor(private readonly store: ConnectionStore, private readonly oauth: ConnectionOAuth, private readonly options: { fetch?: typeof fetch; diagnostics?: (level: DiagnosticLevel, event: DiagnosticEvent, context?: DiagnosticContext) => void } = {}) { this.fetcher = options.fetch ?? fetch; }
+  private diagnostic(context: DiagnosticContext): void {
+    try { this.options.diagnostics?.('info', 'connection.response', context); } catch { /* Diagnostics cannot change the inference result. */ }
+  }
 
   async test(providerId: string, input: ConnectionTestInput = {}): Promise<ConnectionResult> {
     const start = Date.now();
@@ -253,9 +273,13 @@ export class ConnectionTester {
         if (contentType && contentType !== 'application/json' && !contentType.endsWith('+json') && contentType !== 'text/event-stream') { void response.body?.cancel().catch(() => undefined); throw new ConnectionFailure('invalid-response', '推理接口未返回 JSON 或事件流，请检查 API 地址与协议。'); }
         const raw = await boundedBody(response, controller.signal);
         const outputBudget = positiveCount(prepared.body.max_output_tokens) ? prepared.body.max_output_tokens : undefined;
-        if (contentType === 'text/event-stream') return validateSse(raw, wireApi!, outputBudget);
+        if (contentType === 'text/event-stream') {
+          this.diagnostic({ stage: 'inference', providerId, wireApi, statusCode, contentType: 'sse', responseBytes: Buffer.byteLength(raw) });
+          return validateSse(raw, wireApi!, outputBudget);
+        }
         let payload: unknown;
         try { payload = JSON.parse(raw); } catch { throw new ConnectionFailure('invalid-response', '推理接口返回了无效 JSON，请检查 API 地址与协议。'); }
+        this.diagnostic({ stage: 'inference', providerId, wireApi, statusCode, contentType: 'json', responseBytes: Buffer.byteLength(raw), ...responseMetadata(payload, wireApi!) });
         return validateJson(payload, wireApi!, outputBudget);
       };
       const evidence = await Promise.race([request(), timeout]);
