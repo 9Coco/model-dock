@@ -1,5 +1,6 @@
 import { isCopilotUpstream } from './copilot-provider';
 import type { Model, ModelInput, Provider, WireApi } from '../shared/types';
+import { isReasoningEffort, sanitizeReasoningEfforts } from '../shared/types';
 import type { AddModelsResult, DiscoveredModel, DiscoveryErrorCategory, DiscoveryResult, ModelSelection } from '../shared/catalog-types';
 import { presetById } from '../shared/presets';
 import { modelLocalAlias, suggestModelAlias } from '../shared/model-names';
@@ -67,6 +68,13 @@ function parseModel(entry: unknown, provider: Provider): Omit<DiscoveredModel, '
   if (typeof declaredTools !== 'boolean') metadataDefaults.push('tools');
   if (typeof declaredVision !== 'boolean' && modalities.length === 0) metadataDefaults.push('vision');
   const metadataSource = metadataDefaults.length < 3 ? 'upstream' : 'defaults';
+  // Codex catalogs use supported_reasoning_levels (+ default_reasoning_level);
+  // Copilot catalogs declare capabilities.supports.reasoning_effort. Entries may
+  // be plain level strings or { effort } objects; unknown levels are dropped.
+  const declaredLevels = data.supported_reasoning_levels ?? data.reasoning_efforts ?? supports.reasoning_effort;
+  const reasoningEfforts = sanitizeReasoningEfforts(Array.isArray(declaredLevels) ? declaredLevels.map(level => typeof level === 'string' ? level : object(level).effort) : []);
+  const declaredDefaultLevel = data.default_reasoning_level ?? data.default_reasoning_effort;
+  const defaultReasoningEffort = isReasoningEffort(declaredDefaultLevel) && reasoningEfforts.includes(declaredDefaultLevel) ? declaredDefaultLevel : undefined;
   // A model ID/name alone does not prove modality, tool support or endpoint compatibility.
   // 修改点：Copilot 按目录声明的模型接口选择协议，不把全部订阅强制当成 Responses。
   const endpoints = data.supported_endpoints ?? capabilities.supported_endpoints;
@@ -74,7 +82,8 @@ function parseModel(entry: unknown, provider: Provider): Omit<DiscoveredModel, '
   const wireApi: WireApi = provider.kind === 'copilot' ? Array.isArray(endpoints) && (endpoints.includes('responses') || endpoints.includes('/responses')) ? 'responses' : 'chat-completions'
     : provider.kind === 'openai-compatible' ? presetById(provider.presetId)?.defaultWireApi ?? 'chat-completions' : 'responses';
   return { upstreamId, displayName: safeText(data.display_name ?? data.displayName ?? data.name) || upstreamId,
-    wireApi, contextWindow, tools: declaredTools === true, vision: typeof declaredVision === 'boolean' ? declaredVision : modalities.includes('image'), metadataSource, metadataDefaults };
+    wireApi, contextWindow, tools: declaredTools === true, vision: typeof declaredVision === 'boolean' ? declaredVision : modalities.includes('image'), metadataSource, metadataDefaults,
+    ...(reasoningEfforts.length ? { reasoningEfforts, ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}) } : {}) };
 }
 function httpFailure(status: number): CatalogFailure {
   if (status === 401) return new CatalogFailure('authentication', '模型目录返回 HTTP 401：上游拒绝了当前凭据。请确认 API Key 属于此供应商和套餐，并重新保存密钥。', status);
@@ -263,7 +272,10 @@ export class ModelCatalog {
       const tools = selection.tools ?? found.tools;
       const vision = selection.vision ?? found.vision;
       if (!Number.isSafeInteger(contextWindow) || contextWindow < 0 || typeof tools !== 'boolean' || typeof vision !== 'boolean') throw new Error('模型能力参数无效。');
-      inputs.push({ providerId, upstreamId: found.upstreamId, alias, displayName, wireApi, contextWindow, tools, vision, enabled: true });
+      const reasoningEfforts = selection.reasoningEfforts === undefined ? found.reasoningEfforts ?? [] : sanitizeReasoningEfforts(selection.reasoningEfforts);
+      const defaultReasoningEffort = selection.defaultReasoningEffort ?? found.defaultReasoningEffort;
+      if (defaultReasoningEffort !== undefined && (!isReasoningEffort(defaultReasoningEffort) || !reasoningEfforts.includes(defaultReasoningEffort))) throw new Error('默认思考强度必须属于模型支持的级别。');
+      inputs.push({ providerId, upstreamId: found.upstreamId, alias, displayName, wireApi, contextWindow, tools, vision, enabled: true, ...(reasoningEfforts.length ? { reasoningEfforts, ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}) } : {}) });
     }
     const added = inputs.length ? this.store.saveModels(inputs) : [];
     return { added, skipped };

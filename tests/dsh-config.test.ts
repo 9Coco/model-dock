@@ -299,6 +299,14 @@ describe('DSH native configuration synchronization', () => {
     expect(() => validateDshPlan(invalid)).toThrow('同步模型');
     expect(f.store.createManagedBackup).not.toHaveBeenCalled();
   });
+  it('accepts declared model thinking levels and rejects malformed ones before any mutation', () => {
+    const valid = plan(); valid.providers['modeldock-a'].models[0].reasoningEfforts = ['low', 'high'];
+    expect(() => validateDshPlan(valid)).not.toThrow();
+    for (const bad of [['ultra'], ['low', 'low'], [], ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'low']]) {
+      const invalid = plan(); invalid.providers['modeldock-a'].models[0].reasoningEfforts = bad;
+      expect(() => validateDshPlan(invalid)).toThrow('同步模型');
+    }
+  });
   it('does not touch files when encrypted backup or recovery-journal persistence fails', () => {
     const f = fixture(); vi.mocked(f.store.createManagedBackup).mockImplementationOnce(() => { throw new Error('private detail'); });
     expect(() => applyDshConfig(f.store, plan(), f.home)).toThrow('加密备份');

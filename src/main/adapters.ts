@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { parse as parseToml, stringify as stringifyToml } from '@iarna/toml';
 import { parse as parseJsonc, modify, applyEdits, createScanner, SyntaxKind, type Edit, type ParseError } from 'jsonc-parser';
-import type { ConfigPreview, Model, Provider, ProviderSecret, ToolBinding, ToolId } from '../shared/types';
+import type { ConfigPreview, Model, Provider, ProviderSecret, ReasoningEffort, ToolBinding, ToolId } from '../shared/types';
 import { bindingConnectionPolicy, resolveBindingModels } from '../shared/bindings';
 import { modelDisplayLabel, modelLocalAlias } from '../shared/model-names';
 import type { CopilotDesktopPlan } from './copilot-desktop';
@@ -141,6 +141,12 @@ export function connectionKey(store: AdapterStore, tool: ToolId): string {
   if (groups.length !== 1) throw new Error('此工具使用多个供应商的独立凭据，请导出配置；没有共用的单一连接密钥。');
   return groups[0].key;
 }
+/** Codex catalog entries need a label per level; VS Code supplies its own labels. */
+const CODEX_REASONING_DESCRIPTIONS: Record<ReasoningEffort, string> = {
+  none: 'Disables reasoning', minimal: 'Minimal reasoning effort', low: 'Fast responses with lighter reasoning',
+  medium: 'Balances speed and reasoning depth', high: 'Greater reasoning depth for complex problems',
+  xhigh: 'Extra high reasoning depth for complex problems', max: 'Maximum reasoning depth for the hardest problems',
+};
 function vscode(groups: ClientGroup[]) {
   // VS Code 把 customendpoint 的 apiKey 当作其秘密存储的 ${input:...} 引用解析，chatLanguageModels.json
   // 里的明文会被解析为空；requestHeaders 原样透传且允许覆盖 authorization，凭据必须随模型放在这里。
@@ -150,6 +156,8 @@ function vscode(groups: ClientGroup[]) {
     toolCalling: m.tools, vision: m.vision, contextWindow: clientBudget(m).context,
     maxOutputTokens: clientBudget(m).output,
     requestHeaders: { authorization: `Bearer ${group.key}` },
+    // Without supportsReasoningEffort VS Code shows no Thinking Effort picker.
+    ...(m.reasoningEfforts?.length ? { supportsReasoningEffort: [...m.reasoningEfforts], ...(m.defaultReasoningEffort ? { defaultReasoningEffort: m.defaultReasoningEffort } : {}) } : {}),
   })) }));
 }
 function nativeCopilotId(namespace: string, kind: 'provider' | 'model', id: string): string {
@@ -181,6 +189,7 @@ export function buildCopilotDesktopPlan(store: AdapterStore, port: number, revea
         // Copilot stores an input budget, separately from the output budget.
         contextWindow: model.contextWindow > 0 ? budget.context - budget.output : 0,
         maxOutputTokens: budget.output,
+        ...(model.reasoningEfforts?.length ? { supportedReasoningEfforts: [...model.reasoningEfforts] } : {}),
       };
     }) };
   }) };
@@ -205,7 +214,8 @@ export function buildDshPlan(store: AdapterStore, port: number, revealKey = fals
       providers[route] = { displayName: group.name, baseURL: group.base, apiKeyEnv: reference,
         api: protocol === 'responses' ? 'openai-responses' : 'openai-completions',
         models: distinctModels.map(model => ({ id: model.alias, name: model.displayName || model.alias,
-          contextWindow: clientBudget(model).context, maxTokens: clientBudget(model).output, input: model.vision ? ['text', 'image'] : ['text'] })),
+          contextWindow: clientBudget(model).context, maxTokens: clientBudget(model).output, input: model.vision ? ['text', 'image'] as ('text' | 'image')[] : ['text'] as ('text' | 'image')[],
+          ...(model.reasoningEfforts?.length ? { reasoningEfforts: [...model.reasoningEfforts] } : {}) })),
       };
       // Only the official DeepSeek API with the exact upstream ID can replace
       // a legacy DeepSeek dispatch. Similar display names or third-party plans
@@ -367,7 +377,7 @@ export function applyConfig(store: AdapterStore, tool: ToolId, port: number, app
     };
     const catalog = { models: models.map(m => ({ slug: m.alias, display_name: m.displayName, description: `ModelDock · ${m.upstreamId}`,
       ...(m.contextWindow > 0 ? { context_window: m.contextWindow } : {}), supports_parallel_tool_calls: m.tools, input_modalities: m.vision ? ['text', 'image'] : ['text'],
-      supported_reasoning_levels: [], default_reasoning_level: null, visibility: 'list', supported_in_api: true, priority: 100,
+      supported_reasoning_levels: (m.reasoningEfforts ?? []).map(level => ({ effort: level, description: CODEX_REASONING_DESCRIPTIONS[level] })), default_reasoning_level: m.defaultReasoningEffort ?? null, visibility: 'list', supported_in_api: true, priority: 100,
       shell_type: 'unified_exec', support_verbosity: false, supports_reasoning_summaries: false,
       truncation_policy: { mode: 'tokens', limit: 10000 }, experimental_supported_tools: [],
       base_instructions: 'You are a coding assistant. Follow the user’s instructions and use the available tools to complete their task.',
