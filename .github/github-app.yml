@@ -3,7 +3,12 @@ scripts:
     command: npm run dev
   - name: start
     command: npm run start
-  - name: dev:ui
-    command: npm run dev:ui
-  - name: pack:win
-    command: npm run pack:win
+  - name: "dev:ui"
+    command: "npm run dev:ui"
+  - name: "pack:win"
+    command: "npm run pack:win"
+  - name: "npm run dist:deb"
+    command: "npm run dist:deb"
+automation:
+  auto_issue_session: true
+  remote_control: false
