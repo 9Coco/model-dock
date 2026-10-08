@@ -9,8 +9,9 @@ import {
 } from './MaterialIcon';
 import type {
   AuthProgress, ConfigPreview, ConnectionResult, Model, ModelInput,
-  Provider, ProviderInput, ProviderKind, ProviderPresetId, Snapshot, ToolBinding, ToolId,
+  Provider, ProviderInput, ProviderKind, ProviderPresetId, ReasoningEffort, Snapshot, ToolBinding, ToolId,
 } from '../shared/types';
+import { REASONING_EFFORTS } from '../shared/types';
 import type { AuthAccount } from '../shared/auth-types';
 import { providerPresets, presetById } from '../shared/presets';
 import { bindingConnectionPolicy, resolveBindingModels } from '../shared/bindings';
@@ -72,6 +73,7 @@ const errorText = (error: unknown) => error instanceof Error ? error.message : S
 const number = (value: number) => new Intl.NumberFormat('zh-CN').format(value);
 const contextLabel = (value: number) => value === 0 ? '未设置' : value >= 1000000 ? `${(value / 1000000).toFixed(value % 1000000 ? 1 : 0)}M` : `${Math.round(value / 1000)}K`;
 const protocolLabel = (model: Model) => model.wireApi === 'responses' ? 'Responses' : 'Chat Completions';
+const reasoningEffortLabels: Record<ReasoningEffort, string> = { none: '无', minimal: '最小', low: '低', medium: '中', high: '高', xhigh: '超高', max: '最大' };
 const testModelStorageKey = 'modeldock.connection-test-models';
 function savedTestModelIds(): Record<string, string> {
   try {
@@ -688,6 +690,12 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
         {modelDraftProvider && modelDraft.alias.trim() && <div className="model-route-preview">{modelRoutePreview.error ? <span role="alert">{modelRoutePreview.error}</span> : <><strong>{modelDisplayLabel({ ...modelDraft, displayName: modelDraft.displayName || modelDraft.alias }, modelDraftProvider)}</strong><small>聚合接口 ID：<code data-field="model-route-preview">{modelRoutePreview.alias}</code></small></>}</div>}
         <div className="form-columns"><label className="form-field">调用接口<select data-field="wire-api" value={modelDraft.wireApi} onChange={event => setModelDraft({ ...modelDraft, wireApi: event.target.value as Model['wireApi'] })}><option value="responses">Responses</option><option value="chat-completions">Chat Completions</option></select></label><label className="form-field">上下文长度（0 表示未设置）<input data-field="context-window" type="number" required min="0" step="1" value={modelDraft.contextWindow} onChange={event => setModelDraft({ ...modelDraft, contextWindow: Number(event.target.value) })} /></label></div>
         <div className="capability-field"><span className="field-label">模型能力</span><label><input type="checkbox" checked={modelDraft.tools} onChange={event => setModelDraft({ ...modelDraft, tools: event.target.checked })} /><Terminal size={16} />工具调用</label><label><input type="checkbox" checked={modelDraft.vision} onChange={event => setModelDraft({ ...modelDraft, vision: event.target.checked })} /><Sparkles size={16} />图片输入</label></div>
+        <div className="capability-field reasoning-field"><span className="field-label">思考强度</span>{REASONING_EFFORTS.map(level => <label key={level}><input type="checkbox" data-field={`reasoning-effort-${level}`} checked={(modelDraft.reasoningEfforts ?? []).includes(level)} onChange={event => {
+          const current = modelDraft.reasoningEfforts ?? [];
+          const next = event.target.checked ? [...current, level] : current.filter(item => item !== level);
+          setModelDraft({ ...modelDraft, reasoningEfforts: next, defaultReasoningEffort: modelDraft.defaultReasoningEffort && next.includes(modelDraft.defaultReasoningEffort) ? modelDraft.defaultReasoningEffort : undefined });
+        }} />{reasoningEffortLabels[level]}</label>)}</div>
+        {(modelDraft.reasoningEfforts ?? []).length > 0 && <label className="form-field">默认思考强度<select data-field="default-reasoning-effort" value={modelDraft.defaultReasoningEffort ?? ''} onChange={event => setModelDraft({ ...modelDraft, defaultReasoningEffort: (event.target.value || undefined) as ReasoningEffort | undefined })}><option value="">由工具选择</option>{(modelDraft.reasoningEfforts ?? []).map(level => <option key={level} value={level}>{reasoningEffortLabels[level]}（{level}）</option>)}</select><small>勾选级别后同步到 VS Code、Codex、Copilot 和 DSH 的思考强度配置；全部不勾选则不写入思考强度。</small></label>}
         <div className="form-switch-row"><div><strong>启用模型</strong><small>启用后可以为工具选择此模型。</small></div><Toggle checked={modelDraft.enabled} onChange={enabled => setModelDraft({ ...modelDraft, enabled })} label="启用模型" /></div>
       </div><div className="modal-footer"><button type="button" className="button secondary" onClick={() => setModelDraft(null)}>取消</button><button type="submit" className="button primary" disabled={busy['save-model'] || !!modelRoutePreview.error}><BusyIcon active={!!busy['save-model']}><Plus size={16} /></BusyIcon>{modelDraft.id ? '保存修改' : '添加模型'}</button></div></form>
     </Modal>}

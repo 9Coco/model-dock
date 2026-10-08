@@ -1,4 +1,4 @@
-import type { Model, WireApi } from './types';
+import type { Model, ReasoningEffort, WireApi } from './types';
 
 export type DiscoveryErrorCategory = 'missing-credentials' | 'authentication' | 'permission' | 'unsupported' | 'rate-limit' | 'network' | 'timeout' | 'invalid-response' | 'invalid-provider' | 'upstream';
 export interface DiscoveredModel {
@@ -13,6 +13,9 @@ export interface DiscoveredModel {
   metadataSource: 'upstream' | 'defaults';
   /** Fields omitted by upstream; their current values are local defaults. */
   metadataDefaults?: ('contextWindow' | 'tools' | 'vision')[];
+  /** Thinking levels declared by upstream; omitted when the catalog does not declare them. */
+  reasoningEfforts?: ReasoningEffort[];
+  defaultReasoningEffort?: ReasoningEffort;
   existingModelId?: string;
 }
 export interface DiscoveryResult {
@@ -32,6 +35,8 @@ export interface ModelSelection {
   contextWindow?: number;
   tools?: boolean;
   vision?: boolean;
+  reasoningEfforts?: ReasoningEffort[];
+  defaultReasoningEffort?: ReasoningEffort;
 }
 export interface AddModelsResult {
   added: Model[];

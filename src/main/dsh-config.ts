@@ -4,11 +4,12 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { isMap, isSeq, parseDocument, Document, YAMLSeq, type YAMLMap, type Node } from 'yaml';
 import { isDeepStrictEqual } from 'node:util';
 import { DSH_LEGACY_PLUGIN_ID, DSH_LEGACY_SCRIPT, DSH_LEGACY_PLUGIN_SOURCE, dshLegacyPluginEntry, validateDshLegacyDispatch, type DshLegacyDispatchPlan } from './dsh-runtime';
+import { isReasoningEffort } from '../shared/types';
 
 export interface DshProviderProfile {
   displayName: string; baseURL: string; apiKeyEnv: string;
   api: 'openai-completions' | 'openai-responses';
-  models: { id: string; name: string; contextWindow: number; maxTokens: number; input: ('text' | 'image')[] }[];
+  models: { id: string; name: string; contextWindow: number; maxTokens: number; input: ('text' | 'image')[]; reasoningEfforts?: string[] }[];
 }
 export interface DshPlan {
   syncScope?: 'managed' | 'selected';
@@ -188,9 +189,10 @@ export function validateDshPlan(value: DshPlan): DshPlan {
     references.add(provider.apiKeyEnv);
     const seen = new Set<string>();
     for (const model of provider.models) {
-      if (!record(model) || Object.keys(model).some(key => !['id', 'name', 'contextWindow', 'maxTokens', 'input'].includes(key)) || typeof model.id !== 'string' || !model.id || /[\0\r\n]/.test(model.id) || seen.has(model.id) || typeof model.name !== 'string' || !model.name
+      if (!record(model) || Object.keys(model).some(key => !['id', 'name', 'contextWindow', 'maxTokens', 'input', 'reasoningEfforts'].includes(key)) || typeof model.id !== 'string' || !model.id || /[\0\r\n]/.test(model.id) || seen.has(model.id) || typeof model.name !== 'string' || !model.name
         || !Number.isSafeInteger(model.contextWindow) || model.contextWindow < 1 || !Number.isSafeInteger(model.maxTokens) || model.maxTokens < 1 || model.maxTokens > model.contextWindow
-        || !Array.isArray(model.input) || !model.input.includes('text') || model.input.some(input => input !== 'text' && input !== 'image')) fail('DSH 同步模型配置无效。');
+        || !Array.isArray(model.input) || !model.input.includes('text') || model.input.some(input => input !== 'text' && input !== 'image')
+        || model.reasoningEfforts !== undefined && (!Array.isArray(model.reasoningEfforts) || !model.reasoningEfforts.length || model.reasoningEfforts.length > 7 || new Set(model.reasoningEfforts).size !== model.reasoningEfforts.length || model.reasoningEfforts.some((level: unknown) => !isReasoningEffort(level)))) fail('DSH 同步模型配置无效。');
       seen.add(model.id);
     }
   }

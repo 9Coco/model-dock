@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import type { Provider, ProviderInput, ProviderSecret, Model, ModelInput, ToolBinding, ToolId, RequestLog } from '../shared/types';
+import { isReasoningEffort, sanitizeReasoningEfforts } from '../shared/types';
 import { providerPresets, presetById } from '../shared/presets';
 import { resolveBindingModels } from '../shared/bindings';
 import type { UsageRecord } from '../shared/usage-types';
@@ -73,7 +74,7 @@ export class Store {
     db.run(`PRAGMA foreign_keys=ON;
       CREATE TABLE IF NOT EXISTS providers(id TEXT PRIMARY KEY,name TEXT NOT NULL,kind TEXT NOT NULL,base_url TEXT NOT NULL,enabled INTEGER NOT NULL,auth_status TEXT NOT NULL,note TEXT NOT NULL,preset_id TEXT NOT NULL DEFAULT 'custom');
       CREATE TABLE IF NOT EXISTS secrets(provider_id TEXT PRIMARY KEY REFERENCES providers(id) ON DELETE CASCADE,ciphertext TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS models(id TEXT PRIMARY KEY,provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,upstream_id TEXT NOT NULL,alias TEXT NOT NULL UNIQUE,display_name TEXT NOT NULL,wire_api TEXT NOT NULL,context_window INTEGER NOT NULL,tools INTEGER NOT NULL,vision INTEGER NOT NULL,enabled INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS models(id TEXT PRIMARY KEY,provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,upstream_id TEXT NOT NULL,alias TEXT NOT NULL UNIQUE,display_name TEXT NOT NULL,wire_api TEXT NOT NULL,context_window INTEGER NOT NULL,tools INTEGER NOT NULL,vision INTEGER NOT NULL,enabled INTEGER NOT NULL,reasoning_efforts TEXT NOT NULL DEFAULT '[]',default_reasoning_effort TEXT);
       CREATE TABLE IF NOT EXISTS bindings(id TEXT PRIMARY KEY,name TEXT NOT NULL,enabled INTEGER NOT NULL,model_ids TEXT NOT NULL,default_model_id TEXT NOT NULL,note TEXT NOT NULL,mode TEXT NOT NULL DEFAULT 'aggregate',provider_ids TEXT,model_selection TEXT,vscode_sync_scope TEXT NOT NULL DEFAULT 'managed',copilot_sync_scope TEXT NOT NULL DEFAULT 'managed',dsh_sync_scope TEXT NOT NULL DEFAULT 'managed');
       CREATE TABLE IF NOT EXISTS logs(id TEXT PRIMARY KEY,time TEXT NOT NULL,alias TEXT NOT NULL,provider_name TEXT NOT NULL,endpoint TEXT NOT NULL,status INTEGER NOT NULL,duration_ms INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS usage_events(id TEXT PRIMARY KEY,time TEXT NOT NULL,alias TEXT NOT NULL,provider_name TEXT NOT NULL,endpoint TEXT NOT NULL,status INTEGER NOT NULL,duration_ms INTEGER NOT NULL,tool TEXT,provider_id TEXT,model_id TEXT,input_tokens INTEGER,output_tokens INTEGER,cached_input_tokens INTEGER,cache_creation_input_tokens INTEGER,source TEXT NOT NULL DEFAULT 'gateway');
@@ -99,8 +100,12 @@ export class Store {
     const providerColumns = this.rows('PRAGMA table_info(providers)').map(row => String(row.name));
     const bindingColumns = this.rows('PRAGMA table_info(bindings)').map(row => String(row.name));
     const usageColumns = this.rows('PRAGMA table_info(usage_events)').map(row => String(row.name));
+    const modelColumns = this.rows('PRAGMA table_info(models)').map(row => String(row.name));
     this.db.run('BEGIN');
     try {
+      // Model metadata only; client configs receive thinking levels on explicit sync.
+      if (!modelColumns.includes('reasoning_efforts')) this.db.run("ALTER TABLE models ADD COLUMN reasoning_efforts TEXT NOT NULL DEFAULT '[]'");
+      if (!modelColumns.includes('default_reasoning_effort')) this.db.run('ALTER TABLE models ADD COLUMN default_reasoning_effort TEXT');
       if (!usageColumns.includes('source')) this.db.run("ALTER TABLE usage_events ADD COLUMN source TEXT NOT NULL DEFAULT 'gateway'");
       if (!usageColumns.includes('cache_creation_input_tokens')) this.db.run('ALTER TABLE usage_events ADD COLUMN cache_creation_input_tokens INTEGER');
       if (!providerColumns.includes('preset_id')) {
@@ -489,7 +494,11 @@ export class Store {
     if (!this.getProvider(providerId)) throw new Error('供应商不存在。');
     this.mutate(() => this.db.run('UPDATE providers SET auth_status=? WHERE id=?', [status, providerId]));
   }
-  private model(row: Record<string, unknown>): Model { return { id: String(row.id), providerId: String(row.provider_id), upstreamId: String(row.upstream_id), alias: String(row.alias), displayName: String(row.display_name), wireApi: row.wire_api as Model['wireApi'], contextWindow: Number(row.context_window), tools: Boolean(row.tools), vision: Boolean(row.vision), enabled: Boolean(row.enabled) }; }
+  private model(row: Record<string, unknown>): Model {
+    const reasoningEfforts = sanitizeReasoningEfforts(JSON.parse(String(row.reasoning_efforts ?? '[]')));
+    const defaultLevel = row.default_reasoning_effort;
+    return { id: String(row.id), providerId: String(row.provider_id), upstreamId: String(row.upstream_id), alias: String(row.alias), displayName: String(row.display_name), wireApi: row.wire_api as Model['wireApi'], contextWindow: Number(row.context_window), tools: Boolean(row.tools), vision: Boolean(row.vision), enabled: Boolean(row.enabled), reasoningEfforts, ...(isReasoningEffort(defaultLevel) && reasoningEfforts.includes(defaultLevel) ? { defaultReasoningEffort: defaultLevel } : {}) };
+  }
   listModels(): Model[] { return this.rows('SELECT * FROM models ORDER BY rowid').map(row => this.model(row)); }
   saveModel(input: ModelInput): Model { return this.saveModels([input])[0]; }
   saveModels(inputs: ModelInput[]): Model[] {
@@ -509,8 +518,12 @@ export class Store {
     if (alias.length > 400) throw new Error('模型别名过长。');
     if (!['chat-completions', 'responses'].includes(input.wireApi)) throw new Error('模型协议无效。');
     if (!Number.isSafeInteger(input.contextWindow) || input.contextWindow < 0 || [input.tools, input.vision, input.enabled].some(v => typeof v !== 'boolean')) throw new Error('模型能力参数无效。');
-    const model: Model = { ...input, id: modelId, upstreamId: text(input.upstreamId, '上游模型 ID'), alias, displayName: text(input.displayName, '模型显示名称') };
-    this.db.run('INSERT INTO models(id,provider_id,upstream_id,alias,display_name,wire_api,context_window,tools,vision,enabled) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET provider_id=excluded.provider_id,upstream_id=excluded.upstream_id,alias=excluded.alias,display_name=excluded.display_name,wire_api=excluded.wire_api,context_window=excluded.context_window,tools=excluded.tools,vision=excluded.vision,enabled=excluded.enabled', [modelId, model.providerId, model.upstreamId, alias, model.displayName, model.wireApi, model.contextWindow, Number(model.tools), Number(model.vision), Number(model.enabled)]); return model;
+    const reasoningEfforts = input.reasoningEfforts ?? [];
+    if (!Array.isArray(reasoningEfforts) || reasoningEfforts.length > 7 || new Set(reasoningEfforts).size !== reasoningEfforts.length || reasoningEfforts.some(level => !isReasoningEffort(level))) throw new Error('思考强度级别无效。');
+    const defaultReasoningEffort = input.defaultReasoningEffort;
+    if (defaultReasoningEffort !== undefined && (!isReasoningEffort(defaultReasoningEffort) || !reasoningEfforts.includes(defaultReasoningEffort))) throw new Error('默认思考强度必须属于模型支持的级别。');
+    const model: Model = { ...input, id: modelId, upstreamId: text(input.upstreamId, '上游模型 ID'), alias, displayName: text(input.displayName, '模型显示名称'), reasoningEfforts, ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}) };
+    this.db.run('INSERT INTO models(id,provider_id,upstream_id,alias,display_name,wire_api,context_window,tools,vision,enabled,reasoning_efforts,default_reasoning_effort) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET provider_id=excluded.provider_id,upstream_id=excluded.upstream_id,alias=excluded.alias,display_name=excluded.display_name,wire_api=excluded.wire_api,context_window=excluded.context_window,tools=excluded.tools,vision=excluded.vision,enabled=excluded.enabled,reasoning_efforts=excluded.reasoning_efforts,default_reasoning_effort=excluded.default_reasoning_effort', [modelId, model.providerId, model.upstreamId, alias, model.displayName, model.wireApi, model.contextWindow, Number(model.tools), Number(model.vision), Number(model.enabled), JSON.stringify(reasoningEfforts), defaultReasoningEffort ?? null]); return model;
   }
   deleteModel(modelId: string): void { this.mutate(() => { this.db.run('DELETE FROM models WHERE id=?', [modelId]); this.pruneBindings(); }); }
   private allBindings(): ToolBinding[] { return this.rows('SELECT * FROM bindings ORDER BY rowid').map(row => ({ id: row.id as ToolId, name: String(row.name), enabled: Boolean(row.enabled), mode: row.mode === 'direct' ? 'direct' : row.mode === 'auto' ? 'auto' : 'aggregate', providerIds: row.provider_ids === null ? undefined : JSON.parse(String(row.provider_ids)), modelIds: JSON.parse(String(row.model_ids)), ...(row.model_selection === 'selected' || row.model_selection === 'all' ? { modelSelection: row.model_selection } : {}), defaultModelId: String(row.default_model_id), note: String(row.note), ...(row.id === 'vscode' ? { vscodeSyncScope: row.vscode_sync_scope === 'managed' ? 'managed' as const : 'selected' as const } : {}), ...(row.id === 'copilot' ? { copilotSyncScope: row.copilot_sync_scope === 'managed' ? 'managed' as const : 'selected' as const } : {}), ...(row.id === 'dsh' ? { dshSyncScope: row.dsh_sync_scope === 'managed' ? 'managed' as const : 'selected' as const } : {}) })); }
