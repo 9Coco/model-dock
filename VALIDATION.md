@@ -1,5 +1,22 @@
-# ModelDock 0.3.35 验证记录
+# ModelDock 0.3.36 验证记录
 
+
+
+## 0.3.36 持久化诊断日志
+
+日期：2026-10-08（Asia/Hong_Kong）。
+
+- 「服务与日志」页新增诊断面板：按信息／警告／错误筛选、搜索、选择最近条数、查看结构化详情、刷新、复制筛选结果、导出 JSONL 和打开日志目录。原有网关请求日志保持。
+- 日志在资料目录的 logs/diagnostics.jsonl 自动保存，重启后可读取；单文件最多 2 MiB，包含当前文件共保留 5 份，最多约 10 MiB。每次启动有会话 ID，每个关键操作及每个 HTTP 请求有独立关联 ID。查询／格式化／复制自身不生成日志，导出仅记录固定完成事件。
+- 覆盖启动与启动失败（日志先于 Store/vault 初始化）、授权阶段与终态、网络响应与故障、模型测试结果和响应形状、模型发现、网关启停／启动失败／请求、工具配置同步与恢复、MCP／Skills／用量操作、界面错误与进程异常。正常授权等待按状态变化记录，不逐次刷屏；异常 401／429／5xx 等仍记录。全局使用 uncaughtExceptionMonitor 保留 Node 原有致命退出语义。
+- 固定事件／文案与明确元数据白名单；不保存凭据、请求头、请求或响应正文、设备验证码、验证地址参数、上游错误正文或原始异常文本。网络错误保留 .code/cause 中的受控编码，并从有界 Chromium 文本只提取既有封闭 ERR_* 枚举。未知路径替换为 /[redacted]，地址参数和 userinfo 移除；错误堆栈只保留相对项目文件位置。
+- 日志写入或读取失败不会中断服务；面板说明不可用。新增回归涵盖轮转／重启／断写恢复、读写限额、恶意记录白名单过滤、链接与读写期间替换、磁盘满、错误 getter、Chromium 代理／DNS／证书／超时脱敏，以及真实回环网关独立关联和诊断回调异常不会重复执行推理。
+- 类型检查、生产构建、verify:production、git diff --check 通过。Linux 子进程 umask 022 下 48 个测试文件、935 项测试全部通过。现有 0.3.35 Linux 工具同步、凭据与自定义路径修复保持。
+- 源生产窗口与从最终 deb 解包的实际程序均在 KDE Wayland 使用独立资料／客户端目录验证：dark/light × 1080×720 / 980×680，无横向溢出，级别筛选、搜索、条数、详情、复制、导出与目录按钮正常。401、ECONNRESET、Chromium ERR_PROXY_CONNECTION_FAILED、模型成功、IPC 失败、界面异常和两次设备码立即失败均实际经过应用调用链产生诊断；日志／复制／导出未出现合成的名称、密钥、模型上游 ID、正文或错误文案。两个失败登录有不同关联，重启保留旧会话。renderer sandbox/contextIsolation 仍启用。
+- 所有上游为测试进程内模拟，没有读取真实账号／客户端资料，没有调用计费模型。剪贴板、目录打开与保存框使用隔离替身，最终 JSONL 实际写入并确认 Linux 私有权限。正常退出两个测试实例，未结束用户应用、安装系统包或同步真实客户端配置。
+- Linux amd64 deb 与标准 Windows 目录均使用最终 dist 更新；包内 15 个生产文件逐字节匹配，生产入口、日志 UI、SQL WASM 和 Windows 图标／资源检查通过。Windows 为 Linux 宿主上的静态交付，没有 Windows 实机运行。缺失的 Electron 44.5.1 运行依赖从本机官方缓存离线恢复，没有修改锁定依赖版本。此次未生成 AppImage。
+- 最终 main SHA256：210594781773ba6d3b0914cbb35cef24ad2b653d1ac4ab999a0758c0078bfe39；deb SHA256：fe4cea2727cbd868a505e8795256875abf36beff708a87cf64a41ea0dcabd34c。
+- 本任务证据根：/home/coco/Documents/Codex/2026-10-07/zh/work/。包括 diagnostics-all-tests.log、diagnostic-core-chromium-tests.log、diagnostic-integration-tests.log、model-dock-diagnostics-ui-ciA0PL/、model-dock-diagnostics-deb-ZbSwVG/ 与 diagnostics-v0.3.36-package-validation-release-final.json；源最后一次复核的第二次启动因测试探针在 Electron Bootstrap 尚未就绪时访问 BrowserWindow 失败，第一实例和完整最终 deb 双启动通过，探针已增加 isReady 防护。没有把这个探针失败当成产品启动故障。
 
 ## 0.3.35 Linux 工具同步修复
 

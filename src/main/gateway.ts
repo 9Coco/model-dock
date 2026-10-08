@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
 import type { Socket } from 'node:net';
-import { timingSafeEqual } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { Store, validateUpstreamUrl } from './store';
 import { isCopilotUpstream } from './copilot-provider';
 import { resolveBindingModels } from '../shared/bindings';
@@ -9,6 +9,8 @@ import type { Provider, ProviderSecret, Model, ToolId, GatewayStatus } from '../
 import { reportedUsage } from './usage';
 import type { TokenUsage } from '../shared/usage-types';
 import { DEFAULT_SETTINGS } from '../shared/settings-types';
+import type { DiagnosticContext, DiagnosticEvent, DiagnosticLevel } from '../shared/diagnostic-types';
+import { describeError } from './diagnostic-log';
 
 type Json = Record<string, unknown>;
 export interface PreparedRequest { url: string; headers: Record<string, string>; body: Json }
@@ -17,6 +19,8 @@ export interface GatewayOptions {
   fetch?: typeof fetch;
   prepareRequest?: (provider: Provider, secret: ProviderSecret, path: string, body: Json) => Promise<PreparedRequest>;
   timeoutMs?: number;
+  diagnostics?: (level: DiagnosticLevel, event: DiagnosticEvent, context?: DiagnosticContext) => void;
+  runWithDiagnostics?: (context: DiagnosticContext, action: () => Promise<void>) => Promise<void>;
 }
 const BODY_LIMIT = 8 * 1024 * 1024;
 const toolIds = new Set(['codex', 'opencode', 'dsh', 'vscode', 'copilot']);
@@ -162,6 +166,10 @@ export class Gateway {
   private controllers = new Set<AbortController>();
   private state: GatewayStatus = { running: false, host: '127.0.0.1', port: 18181, baseUrl: 'http://127.0.0.1:18181/v1', requests: 0, lastError: '' };
   constructor(private store: Store, private options: GatewayOptions = {}) { this.configurePort(options.port ?? DEFAULT_SETTINGS.gatewayPort); }
+  // 修改点：诊断只记录固定事件和安全元数据；写日志失败不得影响本地 API。
+  private diagnostic(level: DiagnosticLevel, event: DiagnosticEvent, context: DiagnosticContext): void {
+    try { this.options.diagnostics?.(level, event, context); } catch { /* Logging cannot affect service lifecycle or requests. */ }
+  }
   status(): GatewayStatus { return { ...this.state }; }
   configurePort(port: number): void {
     if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('网关端口无效。');
@@ -172,37 +180,50 @@ export class Gateway {
   async start(port = this.state.port): Promise<GatewayStatus> {
     if (this.server?.listening) return this.status();
     try { this.configurePort(port); }
-    catch { this.state.lastError = '网关端口无效。'; throw new Error(this.state.lastError); }
+    catch (error) {
+      this.diagnostic('error', 'gateway.start_failed', { operation: 'start', stage: 'gateway', outcome: 'configuration', ...describeError(error) });
+      this.state.lastError = '网关端口无效。'; throw new Error(this.state.lastError);
+    }
     for (const provider of this.store.listProviders()) {
       if (!provider.enabled || !provider.baseUrl.trim()) continue;
       try { validateUpstreamUrl(provider.baseUrl, port); }
       catch (error) {
         // This validator emits fixed messages and never includes the supplied URL or credentials.
+        this.diagnostic('error', 'gateway.start_failed', { operation: 'start', stage: 'gateway', outcome: 'configuration', port, providerId: provider.id, ...describeError(error) });
         this.state.lastError = error instanceof Error ? error.message : '供应商配置无效，无法启动本地网关。';
         throw new Error(this.state.lastError);
       }
     }
-    const server = createServer((request, response) => { void this.handle(request, response); });
+    const server = createServer((request, response) => { this.handleWithDiagnostics(request, response); });
     server.requestTimeout = 30_000; server.headersTimeout = 15_000;
     server.on('connection', socket => { this.sockets.add(socket); socket.once('close', () => this.sockets.delete(socket)); });
     try {
       await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', () => { server.removeListener('error', reject); resolve(); }); });
-    } catch { this.state.lastError = '无法启动本地网关，端口可能已被占用。'; server.close(); throw new Error(this.state.lastError); }
+    } catch (error) {
+      this.diagnostic('error', 'gateway.start_failed', { operation: 'start', stage: 'gateway', outcome: 'failure', port, ...describeError(error) });
+      this.state.lastError = '无法启动本地网关，端口可能已被占用。'; server.close(); throw new Error(this.state.lastError);
+    }
     this.server = server;
     const address = server.address();
     const actualPort = typeof address === 'object' && address ? address.port : port;
     this.store.setGatewayPort(actualPort);
     this.state = { ...this.state, running: true, port: actualPort, baseUrl: `http://127.0.0.1:${actualPort}/v1`, lastError: '' };
-    server.on('error', () => { this.state.lastError = '本地网关发生错误。'; });
+    server.on('error', error => {
+      this.state.lastError = '本地网关发生错误。';
+      this.diagnostic('error', 'gateway.runtime_error', { stage: 'gateway', outcome: 'failure', port: this.state.port, ...describeError(error) });
+    });
+    this.diagnostic('info', 'gateway.started', { operation: 'start', stage: 'gateway', outcome: 'success', port: actualPort });
     return this.status();
   }
   async stop(): Promise<GatewayStatus> {
     const server = this.server;
+    const wasRunning = this.state.running;
     this.server = undefined;
     for (const controller of this.controllers) controller.abort();
     for (const socket of this.sockets) socket.destroy();
     if (server) await new Promise<void>(resolve => server.close(() => resolve()));
     this.state.running = false;
+    if (server || wasRunning) this.diagnostic('info', 'gateway.stopped', { operation: 'stop', stage: 'gateway', outcome: 'success', port: this.state.port });
     return this.status();
   }
   private authenticated(request: IncomingMessage): boolean {
@@ -230,10 +251,41 @@ export class Gateway {
     const binding = this.store.listBindings().find(item => item.id === tool);
     return binding ? resolveBindingModels(binding, models, this.store.listProviders()) : [];
   }
+  /** 修改点：每次 HTTP 请求建立独立关联，不继承启动监听器时的 IPC 关联。 */
+  private handleWithDiagnostics(request: IncomingMessage, response: ServerResponse): void {
+    const context: DiagnosticContext = { traceId: randomUUID(), operation: 'request', stage: 'gateway' };
+    let task: Promise<void> | undefined;
+    let reported = false;
+    const report = (error: unknown) => {
+      if (reported) return;
+      reported = true;
+      this.diagnostic('error', 'gateway.runtime_error', { ...context, outcome: 'failure', ...describeError(error) });
+    };
+    // The scope hook may fail before or after invoking action. Cache the first
+    // task so a repeated call, exception or fallback cannot send inference twice.
+    const action = (): Promise<void> => {
+      if (!task) {
+        task = this.handle(request, response);
+        void task.catch(error => { report(error); if (!response.writableEnded) response.destroy(); });
+      }
+      return task;
+    };
+    const scopeFailed = (error: unknown): void => {
+      report(error);
+      // A diagnostic failure before action is the sole safe fallback: it has
+      // not sent a request. A task that already started is never retried.
+      if (!task) void action();
+    };
+    try {
+      void (this.options.runWithDiagnostics ? this.options.runWithDiagnostics(context, action) : action()).catch(scopeFailed);
+    } catch (error) { scopeFailed(error); }
+  }
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const began = Date.now(); let alias = ''; let providerName = ''; let endpoint = '/'; let logStatus = 200;
     let tool: ToolId | undefined, providerId: string | undefined, modelId: string | undefined;
     let usage: TokenUsage | undefined, upstreamFailed = false;
+    let diagnosticEndpoint: string | undefined;
+    let diagnosticError: Pick<DiagnosticContext, 'errorName' | 'networkCode' | 'projectFrames'> | undefined;
     const observe = (value: unknown) => {
       usage = reportedUsage(value) ?? usage;
       if (isObject(value) && ['error', 'response.failed', 'response.incomplete'].includes(String(value.type ?? ''))) upstreamFailed = true;
@@ -241,6 +293,9 @@ export class Gateway {
     this.state.requests++;
     try {
       endpoint = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
+      // Unknown paths and query parameters can contain secrets; only known route names are retained.
+      const knownRoute = endpoint.replace(/^\/tool\/(?:codex|opencode|dsh|vscode|copilot)/, '');
+      if (['/v1/models', '/v1/chat/completions', '/v1/responses'].includes(knownRoute)) diagnosticEndpoint = knownRoute;
       if (!this.authenticated(request)) throw new GatewayError(401, '需要有效的 ModelDock API Key。');
       const route = this.route(endpoint);
       tool = route.tool;
@@ -278,12 +333,21 @@ export class Gateway {
       await this.forward(request, response, provider, model, route.endpoint, { ...body, model: model.upstreamId }, observe);
       logStatus = upstreamFailed ? 502 : response.statusCode;
     } catch (error) {
+      diagnosticError = describeError(error);
       logStatus = error instanceof GatewayError ? error.status : 502;
       const message = error instanceof GatewayError ? error.message : '上游请求失败，请检查连接和供应商状态。';
       if (logStatus !== 499) this.state.lastError = message;
       if (!response.destroyed && !response.headersSent) errorResponse(response, logStatus === 499 ? 400 : logStatus, message);
       else if (!response.writableEnded) response.destroy();
     } finally {
+      const successful = logStatus >= 200 && logStatus < 300;
+      const outcome = successful ? 'success' : logStatus === 499 ? 'cancelled' : logStatus === 401 ? 'authentication'
+        : logStatus === 403 ? 'permission' : logStatus === 429 ? 'rate-limit' : logStatus === 408 || logStatus === 504 ? 'timeout'
+        : logStatus >= 500 ? 'upstream' : 'configuration';
+      this.diagnostic(successful ? 'info' : logStatus < 500 || logStatus === 499 ? 'warn' : 'error', 'gateway.request', {
+        operation: 'request', stage: 'gateway', outcome, statusCode: logStatus, durationMs: Date.now() - began,
+        endpoint: diagnosticEndpoint, toolId: tool, providerId, modelId, ...diagnosticError,
+      });
       if (request.method === 'POST') {
         try { this.store.addLog({ alias, providerName, endpoint, status: logStatus, durationMs: Date.now() - began, tool, providerId, modelId, usage }); } catch { /* logging must not break a completed response */ }
       }

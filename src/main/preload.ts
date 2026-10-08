@@ -1,7 +1,14 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { ModelDockApi } from '../shared/types';
 const call = (method: string, ...args: unknown[]) => ipcRenderer.invoke('modeldock:' + method, ...args);
+const rendererErrorNames = new Set(['Error', 'TypeError', 'ReferenceError', 'SyntaxError', 'RangeError', 'URIError', 'EvalError', 'AggregateError', 'AbortError', 'TimeoutError']);
 const api: ModelDockApi = {
+  reportRendererError: async input => {
+    if (!input || (input.kind !== 'error' && input.kind !== 'unhandled-rejection')) return;
+    ipcRenderer.send('modeldock:renderer-diagnostic', { kind: input.kind, errorName: typeof input.errorName === 'string' && rendererErrorNames.has(input.errorName) ? input.errorName : 'Error' });
+  },
+  queryDiagnostics: query => call('queryDiagnostics', query), diagnosticsText: query => call('diagnosticsText', query),
+  exportDiagnostics: query => call('exportDiagnostics', query), openDiagnosticsDir: () => call('openDiagnosticsDir'),
   snapshot: () => call('snapshot'), saveProvider: input => call('saveProvider', input),
   listProviderDuplicates: () => call('listProviderDuplicates'), mergeProviderDuplicates: (ids, fingerprint) => call('mergeProviderDuplicates', ids, fingerprint),
   deleteProvider: id => call('deleteProvider', id), saveModel: input => call('saveModel', input),
@@ -35,3 +42,13 @@ const api: ModelDockApi = {
   openTerminal: () => call('openTerminal'), rendererReady: () => call('rendererReady'),
 };
 contextBridge.exposeInMainWorld('modelDock', Object.freeze(api));
+
+// 修改点：界面异常只报告受控类型；不传异常正文、页面地址、堆栈或聊天内容。
+
+window.addEventListener('error', event => {
+  if (event.target !== window) return;
+  ipcRenderer.send('modeldock:renderer-diagnostic', { kind: 'error', errorName: rendererErrorNames.has(event.error?.name) ? event.error.name : 'Error' });
+});
+window.addEventListener('unhandledrejection', event => {
+  ipcRenderer.send('modeldock:renderer-diagnostic', { kind: 'unhandled-rejection', errorName: rendererErrorNames.has(event.reason?.name) ? event.reason.name : 'Error' });
+});
