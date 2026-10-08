@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { join } from 'node:path';
+import { collectLinuxCopilotProcessEvidence, isVerifiedLinuxCopilotProcess } from './copilot-process-linux';
 
 interface Identity {
   pid: number;
@@ -164,6 +165,8 @@ interface VerificationOptions {
  * It is not a renderer API and never includes paths, command lines or tokens. */
 export function collectCopilotProcessEvidence(pid: number, port: number): Promise<unknown> {
   if (!number(pid) || !Number.isInteger(port) || port < 1 || port > 65535) return Promise.resolve({ failedStage: 'invalid-target' });
+  // 修改点：Linux 通过 /proc 和系统安装权限验证，Windows 继续使用签名证据。
+  if (process.platform === 'linux') return collectLinuxCopilotProcessEvidence(pid, port);
   return new Promise(resolve => {
     const systemRoot = process.env.SystemRoot ?? process.env.WINDIR ?? 'C:\\Windows';
     const shell = join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
@@ -178,7 +181,12 @@ export function collectCopilotProcessEvidence(pid: number, port: number): Promis
 }
 export async function verifyCopilotDesktopProcess(pid: number, port: number, options: VerificationOptions = {}): Promise<boolean> {
   if (!number(pid) || !Number.isInteger(port) || port < 1 || port > 65535) return false;
-  if ((options.platform ?? process.platform) !== 'win32') throw new CopilotProcessVerificationError('unsupported-platform');
+  const platform = options.platform ?? process.platform;
+  if (platform !== 'win32' && platform !== 'linux') throw new CopilotProcessVerificationError('unsupported-platform');
+  if (platform === 'linux') {
+    try { return isVerifiedLinuxCopilotProcess(await (options.inspect ?? collectLinuxCopilotProcessEvidence)(pid, port), pid, port); }
+    catch { return false; }
+  }
   try { return isVerifiedCopilotProcess(await (options.inspect ?? collectCopilotProcessEvidence)(pid, port), pid, port); }
   catch { return false; }
 }

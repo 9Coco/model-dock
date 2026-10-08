@@ -30,6 +30,15 @@ afterEach(() => {
 });
 
 describe('managed skills', () => {
+  it('deploys OpenCode skills under the configured XDG root without creating default-profile files', () => {
+    const home = join(fixture, 'home'), configHome = join(fixture, 'custom-config');
+    const custom = new SkillManager(store, { homeDir: home, appDataDir: join(fixture, 'data'), configHome });
+    const imported = custom.importLocal(skill(join(fixture, 'source'))), deployed = custom.deploy(imported.id, 'opencode', true);
+    const path = deployed.deployments.find(d => d.tool === 'opencode')!.path;
+    expect(path).toBe(join(configHome, 'opencode', 'skills', 'example'));
+    expect(readFileSync(join(path, 'SKILL.md'), 'utf8')).toContain('example');
+    expect(existsSync(join(home, '.config', 'opencode'))).toBe(false);
+  });
   it('parses metadata as data and rejects malformed or unsafe names', () => {
     expect(parseSkillMetadata('---\nname: useful-skill\ndescription: |\n  Line one.\n  Line two.\n---\nbody').description).toBe('Line one.\nLine two.');
     for (const name of ['../escape', 'CON', 'con', 'bad--name', 'a/b', '']) expect(() => parseSkillMetadata(`---\nname: "${name}"\ndescription: test\n---\n`)).toThrow();

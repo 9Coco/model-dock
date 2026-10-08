@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export interface DshProfileModelPlugin { id: string; name: string }
@@ -23,6 +23,7 @@ export interface DshProfileResolveOptions {
   env?: NodeJS.ProcessEnv;
   execPath?: string;
   workerPath?: string;
+  homeDir?: string;
 }
 type Failure = 'home' | 'profile' | 'runtime' | 'worker' | 'timeout' | 'protocol' | 'unsafe-baseline';
 const messages: Record<Failure, string> = {
@@ -154,7 +155,32 @@ async function installationAnchors(profile: DshProfileMetadata['profileName'], o
     const npmAnchors = env.APPDATA ? [join(env.APPDATA, 'npm', 'node_modules', '@deepseek-ai', 'dsh', 'package.json')] : [];
     candidates.push(...(profile === 'desktop' ? [...desktopAnchors, ...npmAnchors] : [...npmAnchors, ...desktopAnchors]));
   } else {
-    candidates.push(...['/usr/local/lib/node_modules', '/usr/lib/node_modules', join(homedir(), '.local', 'lib', 'node_modules'), join(homedir(), '.npm-global', 'lib', 'node_modules')].map((root) => join(root, '@deepseek-ai', 'dsh', 'package.json')));
+    const home = options.homeDir ?? homedir();
+    const addPrefix = (prefix: string) => candidates.push(join(prefix, 'lib', 'node_modules', '@deepseek-ai', 'dsh', 'package.json'));
+    // 修改点：桌面启动不继承交互 shell 的 nvm 初始化，先核对 PATH 的
+    // dsh 链接和 npm 前缀，再有限扫描 nvm 版本；始终验证原生包名。
+    const bins = [...new Set([...(env.PATH ?? '').split(delimiter), env.NVM_BIN ?? ''])]
+      .filter((path) => path.length > 0 && isAbsolute(path));
+    for (const bin of bins) {
+      try {
+        let current = dirname(realpathSync(join(bin, 'dsh')));
+        for (let depth = 0; depth < 8; depth++) {
+          const manifest = join(current, 'package.json');
+          if (nativeAnchor(manifest)) { candidates.push(manifest); break; }
+          if (current === dirname(current)) break;
+          current = dirname(current);
+        }
+      } catch { /* Missing PATH entries are normal; no executable is run. */ }
+      addPrefix(dirname(bin));
+    }
+    const nvmRoot = env.NVM_DIR && isAbsolute(env.NVM_DIR) ? env.NVM_DIR : join(home, '.nvm');
+    try {
+      const versions = readdirSync(join(nvmRoot, 'versions', 'node'), { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && /^v\d+\.\d+\.\d+$/.test(entry.name))
+        .sort((a, b) => b.name.localeCompare(a.name, 'en', { numeric: true })).slice(0, 64);
+      for (const version of versions) addPrefix(join(nvmRoot, 'versions', 'node', version.name));
+    } catch { /* nvm is optional. */ }
+    candidates.push(...['/usr/local/lib/node_modules', '/usr/lib/node_modules', join(home, '.local', 'lib', 'node_modules'), join(home, '.npm-global', 'lib', 'node_modules')].map((root) => join(root, '@deepseek-ai', 'dsh', 'package.json')));
   }
   return [...new Set(candidates)].filter(nativeAnchor);
 }

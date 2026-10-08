@@ -22,6 +22,14 @@ function session(root: string) {
   ].map(value => JSON.stringify(value)).join('\n'));
 }
 describe('native usage synchronization and data sources', () => {
+  it('reports the configured OpenCode data directory separately from the fixture home default', async () => {
+    const f = fixture(), opencodeDataDir = join(f.root, 'custom-data', 'opencode'); mkdirSync(opencodeDataDir, { recursive: true });
+    writeFileSync(join(opencodeDataDir, 'opencode.db'), 'fixture-source');
+    const service = new UsageSyncService(f.store, { homeDir: f.root, opencodeDataDir });
+    expect((await service.sources()).sources.find(row => row.tool === 'opencode')).toMatchObject({ status: 'ready', paths: [join(opencodeDataDir, 'opencode.db')] });
+    expect((await f.service.sources()).sources.find(row => row.tool === 'opencode')).toMatchObject({ status: 'missing', paths: [join(f.root, '.local', 'share', 'opencode', 'opencode.db')] });
+    expect(f.records.size).toBe(0);
+  });
   it('inspects sources and persisted timestamps without importing at construction or source reads', async () => {
     const f = fixture(); session(f.root); const sources = await f.service.sources();
     expect(sources.sources).toHaveLength(6); expect(f.records.size).toBe(0); expect(f.state.size).toBe(0);

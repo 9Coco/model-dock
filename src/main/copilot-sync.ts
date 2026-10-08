@@ -213,6 +213,9 @@ export async function applyCopilotDesktop(store: CopilotSyncStore, rawPlan: Copi
             const affectedProviderIds = [...new Set([...ownedProviderIds, ...beforeSnapshot.providers.map(entry => entry.provider.id)])];
             const credentials = validateCopilotCredentialBackup(await captureCredentials(affectedProviderIds));
             if (!sameIds(credentials.providers.map(provider => provider.providerId), affectedProviderIds)) fail('backup');
+            // 修改点：原生来源明确已有秘密时，精确钥匙串查找不能以“未找到”冒充成功备份。
+            // 这样客户端变更 service/username 或使用不同后端时，会在任何清理前停止。
+            if (beforeSnapshot.providers.some(entry => entry.provider.hasSecret && !credentials.providers.find(provider => provider.providerId === entry.provider.id)?.entries.length)) fail('backup');
             const backupPath = store.createManagedBackup('copilot-sync', { version: 1, target, previous, beforeSnapshot, attemptedPlan: desired, credentials, affectedProviderIds });
             pendingState = { ...previous, ownedProviderIds, pending: { recoveryMode: 'opaque', beforeOwnedProviderIds: previous.ownedProviderIds, beforeSnapshot, attemptedPlan: desired, backupPath, affectedProviderIds, credentials } };
           } else {

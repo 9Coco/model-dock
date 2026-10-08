@@ -31,6 +31,15 @@ function nativeFixture(ids = ['provider-a', 'provider-b', 'subscription']) {
   };
 }
 describe('tool adapters', () => {
+  it('writes OpenCode to the explicit XDG config root and preserves the unused default configuration', () => {
+    const root = mkdtempSync(join(tmpdir(), 'modeldock-adapter-xdg-')); roots.push(root);
+    const configHome = join(root, 'custom-config'), defaultTarget = join(root, '.config', 'opencode', 'opencode.json');
+    mkdirSync(dirname(defaultTarget), { recursive: true }); writeFileSync(defaultTarget, '{"keep":"default"}');
+    const target = applyConfig(store, 'opencode', 19191, root, join(root, 'backups'), root, { configHome });
+    expect(target).toBe(join(configHome, 'opencode', 'opencode.json'));
+    expect(parseJsonc(readFileSync(target, 'utf8')).provider.modeldock).toBeDefined();
+    expect(readFileSync(defaultTarget, 'utf8')).toBe('{"keep":"default"}');
+  });
   it('allows multiple direct API providers for native multi-source clients while Codex remains a single active direct endpoint', () => {
     const native = nativeFixture(['provider-a', 'provider-b']);
     const direct = { ...native, listBindings: () => native.listBindings().map(binding => ({ ...binding, mode: 'direct' as const })) };

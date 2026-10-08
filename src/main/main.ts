@@ -49,6 +49,7 @@ import { createVault } from './vault';
 import { buildConfig, buildCopilotDesktopPlan, buildDshPlan, applyConfig, connectionKey } from './adapters';
 import { applyDshConfig } from './dsh-config';
 import { resolveDshProfile } from './dsh-profile';
+import { openCodeDataDirectory } from './opencode-paths';
 import type { ModelDockApi, ModelInput, Provider, ProviderInput, ToolBinding, ToolId } from '../shared/types';
 import type { SubscriptionKind } from '../shared/auth-types';
 import type { McpServerInput } from '../shared/mcp-types';
@@ -500,6 +501,7 @@ function registerIpc() {
     const appData = __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-appdata') : app.getPath('appData');
     return applyConfig(store, id, gateway.status().port, appData, join(dataDir, 'backups'), featureHome, {
       codexHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome!, '.codex') : process.env.CODEX_HOME?.trim() ? resolve(process.env.CODEX_HOME.trim()) : undefined,
+      configHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome!, '.config') : process.env.XDG_CONFIG_HOME,
     });
     } finally { toolConfigPending.delete(id); }
   }
@@ -608,6 +610,7 @@ function registerIpc() {
       ], baselineProviders: {} } : await resolveDshProfile(dshHome) : undefined;
       return await restoreToolBinding(store, id, () => restoreOfficialConfig(store, id, appData, join(dataDir, 'backups'), featureHome, {
         codexHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.codex') : process.env.CODEX_HOME?.trim() ? resolve(process.env.CODEX_HOME.trim()) : join(featureHome, '.codex'),
+        configHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.config') : process.env.XDG_CONFIG_HOME,
         dshHome, dshOptions, copilotHome: target.home, copilotOptions: { openClient: target.openClient },
       }));
     } finally { toolRestorePending = false; }
@@ -762,13 +765,16 @@ else {
       await shell.openExternal(url);
     } });
     copilotProviders = new CopilotProviderManager(store, copilotAccounts, { fetch: runtimeFetch });
-    mcp = new McpManager(store, { homeDir: featureHome, appDataDir: featureAppData, backupDir: join(dataDir, 'backups', 'mcp'), codexHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.codex') : process.env.CODEX_HOME });
-    skills = new SkillManager(store, { homeDir: featureHome, appDataDir: featureAppData, libraryDir: join(dataDir, 'skill-library'), backupDir: join(dataDir, 'backups', 'skills'), ...(!__MODELDOCK_SMOKE_BUILD__ ? { codexHome: process.env.CODEX_HOME, dshHome: process.env.DSH_HOME } : {}) });
+    // 修改点：显式传递生产 XDG 根，homeDir 同时用于其他工具，不能让它掩盖 OpenCode 环境配置。
+    const openCodeConfigHome = __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.config') : process.env.XDG_CONFIG_HOME;
+    const openCodeDataDir = openCodeDataDirectory(__MODELDOCK_SMOKE_BUILD__ ? featureHome : undefined);
+    mcp = new McpManager(store, { homeDir: featureHome, appDataDir: featureAppData, backupDir: join(dataDir, 'backups', 'mcp'), configHome: openCodeConfigHome, codexHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.codex') : process.env.CODEX_HOME });
+    skills = new SkillManager(store, { homeDir: featureHome, appDataDir: featureAppData, libraryDir: join(dataDir, 'skill-library'), backupDir: join(dataDir, 'backups', 'skills'), configHome: openCodeConfigHome, ...(!__MODELDOCK_SMOKE_BUILD__ ? { codexHome: process.env.CODEX_HOME, dshHome: process.env.DSH_HOME } : {}) });
     usage = new UsageManager(store);
     usageSync = new UsageSyncService(store, {
       homeDir: featureHome,
       codexHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.codex') : process.env.CODEX_HOME,
-      opencodeDataDir: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.local', 'share', 'opencode') : undefined,
+      opencodeDataDir: openCodeDataDir,
       appDataDir: featureAppData,
       dshHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.dsh') : process.env.DSH_HOME,
       copilotHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.copilot') : process.env.COPILOT_HOME,

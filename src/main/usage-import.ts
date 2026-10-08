@@ -7,6 +7,7 @@ import type { ToolId } from '../shared/types';
 import type { TokenUsage, UsageRecord } from '../shared/usage-types';
 import type { ToolUsageImportResult } from '../shared/usage-import-types';
 import { importOpenCodeUsage } from './usage-opencode';
+import { openCodeDataDirectory } from './opencode-paths';
 
 export interface ClientUsageStore {
   /** INSERT OR IGNORE on record.id: returns true only for newly inserted metadata. */
@@ -157,7 +158,7 @@ async function parseSession(filename: string, root: string, maxLineBytes: number
 export async function importToolUsage(tool: ToolId, store: ClientUsageStore, options: UsageImportOptions = {}): Promise<ToolUsageImportResult> {
   if (!['codex', 'opencode', 'dsh', 'vscode', 'copilot'].includes(tool)) throw new Error('未知工具。');
   const result: ToolUsageImportResult = { tool, scannedFiles: 0, imported: 0, skipped: 0, deferredFiles: 0, warnings: [], status: 'ready' };
-  if (tool === 'opencode') return importOpenCodeUsage(resolve(options.opencodeDataDir ?? join(options.homeDir ? join(options.homeDir, '.local', 'share') : process.env.XDG_DATA_HOME ?? join(homedir(), '.local', 'share'), 'opencode')), store, limits(options));
+  if (tool === 'opencode') return importOpenCodeUsage(openCodeDataDirectory(options.homeDir, options.opencodeDataDir), store, limits(options));
   if (tool !== 'codex') { result.unsupported = unsupported[tool]; result.status = 'unsupported'; return result; }
   const cap = limits(options);
   const home = resolve(options.codexHome ?? (options.homeDir ? join(options.homeDir, '.codex') : process.env.CODEX_HOME ?? join(homedir(), '.codex')));

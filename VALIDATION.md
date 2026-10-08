@@ -1,6 +1,22 @@
-# ModelDock 0.3.33 验证记录
+# ModelDock 0.3.35 验证记录
 
-日期：2026-10-07（Asia/Hong_Kong）。
+
+## 0.3.35 Linux 工具同步修复
+
+日期：2026-10-08（Asia/Hong_Kong）。
+
+- Copilot 桌面：私有祖先目录中的 run(0775) 正确接受，文件 0600、当前属主、链接与读期间身份检查保留。Linux 仅信任 root 管理且不可由普通用户替换的 `/usr/bin/github`，验证 ELF、执行文件 inode、当前 UID、同网络命名空间、启动时间及 PID 持有的 IPv4 loopback socket，并在读取和写配置前重新核实。此信任来源为系统管理员安装，不是厂商签名。Windows 原有签名规则保留；用户可写 AppImage 与 macOS 暂不放行。
+- Linux 凭据：固定 `/usr/bin/python3 -I` + Secret Service 加密会话，精确处理所需 UUID 的 apiKey/bearerToken，保留原始字节、全部属性、标签、内容类型和集合，恢复时复核原始值及原先不存在的目标。旧 Windows version 1 日记仍兼容，Linux version 2 不允许跨平台恢复。锁定、歧义、缺依赖或恢复集合变化在写入前停止并保留记录；原生来源 hasSecret=true 而精确匹配为空时禁止清理。
+- DSH：发现 PATH 中实际 dsh 的 npm 包、NVM_BIN 和桌面 PATH 缺失时的 nvm 版本；不运行 shell 初始化脚本。OpenCode：配置同步、还原、MCP、Skills、用量路径统一遵循有效绝对 XDG 根；QA 注入 home 时保持隔离。Codex CODEX_HOME 与 VS Code Code/User 路径核查没有发现本次同类缺陷，原有文件合并/备份保持。
+- 44 个测试文件、888 项测试全部通过；typecheck、生产 build、verify:production、git diff --check 通过。新增安全反例覆盖可替换目录、公开秘密文件、PID/可执行文件/socket 变化、错误安装身份、错误凭据范围、重复或锁定项以及自定义 XDG/nvm。
+- 本机真实 Copilot 1.1.27 只读连接成功（6 个供应商、17 个模型），未同步真实配置或调用推理。本机 Codex 原生 app-server 在独立资料目录解析合成模型目录成功；DSH 只读解析 0.1.7-rc.2 web profile 与 3 个模型插件成功。
+- 真实 gnome-keyring 的两项随机 UUID 合成凭据完成创建、捕获、删除、恢复、字节与元数据精确比较，最后确认清理。系统缺少 python3-secretstorage；测试从本机 APT 下载并解包固定依赖目录，仅注入测试 transport，未安装系统依赖或读取真实账号。deb 已声明 python3-secretstorage；apt 模拟确认升级 ModelDock、安装 secretstorage/jeepney 两包，0 移除。
+- XWayland 原生 Electron 的五工具专项 UI smoke 成功：真实渲染/preload、工具选择、合成网关 HTTP 200、工具还原、DSH 配置验证；独立数据库和客户端目录。通用历史 smoke 在旧“模型单价”按钮选择器处失败（当前已更换用量页面），Wayland 隐藏窗口截图停滞；专项检查已通过，不将这些脚本结果称为 Wayland 全流程或 Windows 实机验收。
+- Linux amd64 deb 的 ASAR 内 15 个构建文件与最终 dist/dist-electron 字节一致，生产测试入口已剔除。包 SHA-256：`10f5f182f1cb02462480da927eb5b5b20c169d222c8b57c058210ac16b291f5f`。本轮不替换正在运行的 ModelDock，不执行真实客户端同步；Windows 可执行发行包需在 Windows 使用项目 pack:win 生成。
+- 完整隔离实现及原生验证证据：`/home/coco/Documents/Codex/2026-10-08/zh/work/model-dock-linux-fix/`；deb 与源码 patch 交付于同任务 outputs。
+
+
+历史记录：2026-10-07（Asia/Hong_Kong）。
 
 ## 0.3.33 Copilot 订阅来源与无目录模型推理
 

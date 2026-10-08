@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path';
 import type { ToolId } from '../shared/types';
 import type { ToolUsageImportResult, UsageDataSource, UsageSourcesSnapshot, UsageSyncResult } from '../shared/usage-import-types';
 import { importToolUsage, type ClientUsageStore, type UsageImportOptions } from './usage-import';
+import { openCodeDataDirectory } from './opencode-paths';
 
 interface UsageSyncStore extends ClientUsageStore {
   dataDir?: string;
@@ -51,7 +52,7 @@ export class UsageSyncService {
   async sources(): Promise<UsageSourcesSnapshot> {
     const home = this.options.homeDir ?? homedir();
     const codex = resolve(this.options.codexHome ?? (this.options.homeDir ? join(home, '.codex') : process.env.CODEX_HOME ?? join(home, '.codex')));
-    const openCode = resolve(this.options.opencodeDataDir ?? join(this.options.homeDir ? join(home, '.local', 'share') : process.env.XDG_DATA_HOME ?? join(home, '.local', 'share'), 'opencode'));
+    const openCode = openCodeDataDirectory(this.options.homeDir, this.options.opencodeDataDir);
     const dsh = resolve(this.options.dshHome ?? (this.options.homeDir ? join(home, '.dsh') : process.env.DSH_HOME ?? join(home, '.dsh')));
     const copilot = resolve(this.options.copilotHome ?? (this.options.homeDir ? join(home, '.copilot') : process.env.COPILOT_HOME ?? join(home, '.copilot')));
     const appData = this.options.appDataDir ?? (this.options.homeDir ? join(home, 'AppData', 'Roaming') : process.env.APPDATA ?? join(home, '.config'));

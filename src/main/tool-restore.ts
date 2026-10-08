@@ -8,10 +8,12 @@ import type { ToolId } from '../shared/types';
 import { codexHistoryKey, editJsonc } from './adapters';
 import { restoreDshOfficialConfig, type DshApplyOptions, type DshConfigStore } from './dsh-config';
 import { applyCopilotDesktop, type CopilotSyncOptions } from './copilot-sync';
+import { openCodeConfigDirectory } from './opencode-paths';
 
 export interface ToolRestoreStore extends DshConfigStore {}
 export interface ToolRestoreOptions {
   codexHome?: string;
+  configHome?: string;
   dshHome?: string;
   copilotHome?: string;
   dshOptions?: DshApplyOptions;
@@ -72,7 +74,7 @@ export async function restoreOfficialConfig(store: ToolRestoreStore, tool: ToolI
   if (tool === 'copilot') return applyCopilotDesktop(store, { providers: [] }, options.copilotHome ?? join(homeDirectory, '.copilot'), { ...options.copilotOptions, syncScope: 'selected' });
   if (tool === 'dsh') return restoreDshOfficialConfig(store, options.dshHome ?? join(homeDirectory, '.dsh'), options.dshOptions);
   if (!['codex', 'opencode', 'vscode'].includes(tool)) throw new Error('不支持的工具，未还原配置。');
-  const openCodeHome = join(homeDirectory, '.config', 'opencode');
+  const openCodeHome = openCodeConfigDirectory(homeDirectory, options.configHome);
   const jsoncPath = join(openCodeHome, 'opencode.jsonc');
   const target = tool === 'codex' ? join(options.codexHome ?? join(homeDirectory, '.codex'), 'config.toml')
     : tool === 'opencode' ? existsSync(jsoncPath) ? jsoncPath : join(openCodeHome, 'opencode.json')

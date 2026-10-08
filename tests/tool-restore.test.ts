@@ -24,6 +24,14 @@ function fixture() {
   return { root, states, store, backups, write };
 }
 describe('official tool model-source restoration', () => {
+  it('restores OpenCode in a configured XDG root while leaving the default profile intact', async () => {
+    const f = fixture(), configHome = join(f.root, 'custom-config'), target = join(configHome, 'opencode', 'opencode.jsonc');
+    const defaultFile = join(f.root, '.config', 'opencode', 'opencode.json'), originalDefault = '{"provider":{"default-profile":{}}}';
+    f.write(defaultFile, originalDefault); f.write(target, '{\n// custom XDG\n"model":"foreign/model","provider":{"foreign":{}},"mcp":{"keep":{}}\n}');
+    expect(await restoreOfficialConfig(f.store, 'opencode', f.root, f.backups, f.root, { configHome })).toBe(target);
+    const output = readFileSync(target, 'utf8'); expect(parseJsonc(output)).toEqual({ mcp: { keep: {} } }); expect(output).toContain('custom XDG');
+    expect(readFileSync(defaultFile, 'utf8')).toBe(originalDefault);
+  });
   it('returns Codex to official active defaults instead of restoring a prior third-party selection, preserving native auth and unrelated configuration', async () => {
     const f = fixture(), target = join(f.root, '.codex', 'config.toml');
     const original = 'model = "prior-thirdparty-model"\nmodel_provider = "thirdparty"\nmodel_catalog_json = "/prior/catalog.json"\nopenai_base_url = "https://custom-openai.fixture/v1"\nchatgpt_base_url = "https://custom-chatgpt.fixture"\n[model_providers.thirdparty]\nbase_url="https://prior.fixture/v1"\n[model_providers.openai]\nbase_url="https://override-openai.fixture/v1"\n[mcp_servers.keep]\ncommand="keep-mcp"\n[skills]\nkeep=true\n';
