@@ -60,7 +60,7 @@ export function JetBrainsPanel({ tool, aggregate, api, models, defaultModel, gat
       {parameter('核心功能模型 ID', modelId, '复制核心模型 ID')}
       {parameter('轻量 / 快速功能模型 ID', modelId, '复制轻量模型 ID')}
       {parameter('工具调用', defaultModel?.tools ? '开启；仍需在 IDE 中测试实际模型支持' : '当前模型未声明工具支持，建议关闭')}
-      {parameter('上下文', defaultModel?.contextWindow ? `${defaultModel.contextWindow.toLocaleString('zh-CN')} tokens；如 IDE 可设置，请以套餐实际限制为准` : '未设置；请查阅供应商规格后在模型目录填写')}
+      {parameter('上下文', defaultModel?.contextWindow ? `${defaultModel.contextWindow.toLocaleString('zh-CN')} tokens；如 IDE 可设置，请以套餐实际限制为准` : '未设置；请查阅供应商规格后在供应商模型设置填写')}
     </dl>
     <div className="jetbrains-completion-config" data-jetbrains-completion={tool} data-completion-supported={completion.supported}>
       <h3>AI 补全配置</h3>

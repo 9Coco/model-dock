@@ -27,8 +27,6 @@ export async function seedProviderDuplicates(dataDir) {
       CREATE TABLE models(id TEXT PRIMARY KEY,provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,upstream_id TEXT NOT NULL,alias TEXT NOT NULL UNIQUE,display_name TEXT NOT NULL,wire_api TEXT NOT NULL,context_window INTEGER NOT NULL,tools INTEGER NOT NULL,vision INTEGER NOT NULL,enabled INTEGER NOT NULL);
       CREATE TABLE bindings(id TEXT PRIMARY KEY,name TEXT NOT NULL,enabled INTEGER NOT NULL,model_ids TEXT NOT NULL,default_model_id TEXT NOT NULL,note TEXT NOT NULL,mode TEXT NOT NULL DEFAULT 'aggregate',provider_ids TEXT);
       CREATE TABLE logs(id TEXT PRIMARY KEY,time TEXT NOT NULL,alias TEXT NOT NULL,provider_name TEXT NOT NULL,endpoint TEXT NOT NULL,status INTEGER NOT NULL,duration_ms INTEGER NOT NULL);
-      CREATE TABLE usage_events(id TEXT PRIMARY KEY,time TEXT NOT NULL,alias TEXT NOT NULL,provider_name TEXT NOT NULL,endpoint TEXT NOT NULL,status INTEGER NOT NULL,duration_ms INTEGER NOT NULL,tool TEXT,provider_id TEXT,model_id TEXT,input_tokens INTEGER,output_tokens INTEGER,cached_input_tokens INTEGER,source TEXT NOT NULL DEFAULT 'gateway');
-      CREATE INDEX usage_time_idx ON usage_events(time);
       CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);`);
     const presets = [
       ['deepseek', 'DeepSeek', 'openai-compatible', 'https://api.deepseek.com'],

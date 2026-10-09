@@ -161,6 +161,12 @@ child.on('exit', code => {
       console.log(JSON.stringify({exitCode:code,bridge:value.bridge,jetBrains:result,requests:jetBrainsRequests,output}));
       process.exit(code || 0);
     }
+    if (env.MODELDOCK_SMOKE_TOOL_SYNC_ONLY === '1') {
+      const result = JSON.parse(readFileSync(resolve(output, 'tool-auto-sync-validation.json'), 'utf8'));
+      if (!result.ok) throw new Error('Debounced tool synchronization or undo failed');
+      console.log(JSON.stringify({ exitCode: code, bridge: value.bridge, toolSync: result, output }));
+      return;
+    }
     if (env.MODELDOCK_SMOKE_CLAUDE_ONLY === '1') {
       const result = JSON.parse(readFileSync(resolve(output,'claude-ui-validation.json'),'utf8'));
       if (!result.ok || claudeMessagesRequests !== 1) throw new Error('Claude configuration UI or Messages contract failed');
@@ -182,12 +188,6 @@ child.on('exit', code => {
     if (env.MODELDOCK_SMOKE_COMPACT_ONLY === '1') {
       const result = JSON.parse(readFileSync(resolve(output, 'compact-ui-validation.json'), 'utf8'));
       console.log(JSON.stringify({ exitCode: code, bridge: value.bridge, compactUi: true, output }));
-      process.exit(code || 0);
-    }
-    if (env.MODELDOCK_SMOKE_USAGE_ONLY === '1') {
-      const result = JSON.parse(readFileSync(resolve(output, 'usage-analytics-validation.json'), 'utf8'));
-      if (!result.ok || !result.readonlyClientFiles || !result.rawMessagesNotStored) throw new Error('Usage analytics integration failed');
-      console.log(JSON.stringify({ exitCode: code, bridge: value.bridge, usageRecords: result.clientEvents, output }));
       process.exit(code || 0);
     }
     if (env.MODELDOCK_SMOKE_AUTH_QUOTAS_ONLY === '1') {

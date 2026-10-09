@@ -47,7 +47,8 @@ describe('Claude local gateway integration', () => {
     expect(requests[1].messages).toEqual(expect.arrayContaining([{ role: 'tool', tool_call_id: 'call_fixture', content: 'SYNTHETIC_TOOL_RESULT' }]));
     expect(requests.every(body => body.model === 'upstream-model')).toBe(true);
     expect(JSON.stringify([first, second, f.store.logs()])).not.toMatch(/SYNTHETIC_API_KEY/);
-    expect(f.store.usageRecords('2000-01-01T00:00:00Z', '2100-01-01T00:00:00Z')[0]).toMatchObject({ tool: 'claude-code', status: 200, endpoint: '/tool/claude-code/v1/messages' });
+    expect(f.store.logs()[0]).toMatchObject({ status: 200, endpoint: '/v1/messages' });
+    expect(second.usage).toMatchObject({ input_tokens: 10, output_tokens: 4 });
   });
   it('collects forced subscription Responses SSE for Claude nonstream requests and preserves function results', async () => {
     const requests: any[] = [];
@@ -62,7 +63,7 @@ describe('Claude local gateway integration', () => {
     expect(second.content).toEqual([{ type: 'text', text: 'Subscription fixture complete.' }]);
     expect(requests[1].input).toEqual(expect.arrayContaining([{ type: 'function_call_output', call_id: 'call_fixture', output: 'SYNTHETIC_RESULT' }]));
     expect(JSON.stringify([first, second, f.store.logs()])).not.toMatch(/SYNTHETIC_ROTATED_OAUTH|SYNTHETIC_REFRESH/);
-    expect(f.store.usageRecords('2000-01-01T00:00:00Z', '2100-01-01T00:00:00Z')[0].usage).toMatchObject({ inputTokens: 8, outputTokens: 3 });
+    expect(second.usage).toMatchObject({ input_tokens: 8, output_tokens: 3 });
   });
   it('returns proper Messages SSE and marks failed streams without a completion event', async () => {
     const f = await fixture('chat-completions', async (request, response) => {

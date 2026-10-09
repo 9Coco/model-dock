@@ -317,6 +317,21 @@ export class CopilotDesktopClient {
     if (!text(providerId)) return Promise.reject(new CopilotDesktopError('configuration'));
     return this.enqueue(() => this.models(providerId));
   }
+  /** Main-process only, read-only checkpoint of the explicitly owned native
+   * registry. Reads use the same verified loopback connection as mutations. */
+  captureSnapshot(ownedProviderIds: readonly string[]): Promise<CopilotDesktopSnapshot> {
+    if (!Array.isArray(ownedProviderIds) || ownedProviderIds.length > 1000 || ownedProviderIds.some(id => !text(id) || !UUID.test(id)) || new Set(ownedProviderIds).size !== ownedProviderIds.length) return Promise.reject(new CopilotDesktopError('ownership'));
+    const owned = new Set(ownedProviderIds);
+    return this.enqueue(async () => {
+      const snapshot: CopilotDesktopSnapshot = { providers: [] };
+      for (const provider of await this.providers()) if (owned.has(provider.id)) {
+        if (provider.kind !== 'custom' || provider.accountId) fail('ownership');
+        snapshot.providers.push({ provider, models: await this.models(provider.id) });
+      }
+      await this.guardTrusted();
+      return validateCopilotDesktopSnapshot(snapshot);
+    });
+  }
   sync(rawPlan: CopilotDesktopPlan, options: CopilotDesktopSyncOptions): Promise<CopilotDesktopSyncResult> {
     let plan: CopilotDesktopPlan;
     try { plan = validatePlan(rawPlan); } catch (error) { return Promise.reject(error); }

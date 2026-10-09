@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { DiagnosticsLog, describeError, sanitizeDiagnosticEndpoint } from './diagnostic-log';
 import { diagnosticOperationContext, diagnosticOperationResult, ignoresDiagnosticOperation, isQuietDiagnosticOperation } from './diagnostic-operations';
 import type { DiagnosticContext, DiagnosticEvent, DiagnosticLevel, DiagnosticQuery } from '../shared/diagnostic-types';
@@ -16,14 +17,11 @@ import { CopilotAuthCenter, isCopilotAccountId } from './copilot-auth';
 import { authQuotaFixture } from './auth-quota-fixtures';
 import { McpManager } from './mcp';
 import { SkillManager } from './skills';
-import { UsageManager } from './usage';
 import { SettingsManager } from './settings';
 import { ModelCatalog } from './catalog';
 import { ConnectionTester } from './connection-test';
 import { verifyProviderDuplicates } from './provider-duplicate-smoke';
 import { verifyModelNames } from './model-names-smoke';
-import { verifyUsageDashboard } from './usage-dashboard-smoke';
-import { verifyUsageAnalytics } from './usage-analytics-smoke';
 import { verifyCompactUi } from './compact-ui-smoke';
 import { verifyConnectionTest } from './connection-test-smoke';
 import { verifyModelMetadata } from './model-metadata-smoke';
@@ -40,6 +38,8 @@ import { verifySidebarScroll } from './sidebar-scroll-smoke';
 import { verifyDshConfiguration } from './dsh-config-smoke';
 import { CopilotDesktopClient } from './copilot-desktop';
 import { applyCopilotDesktop } from './copilot-sync';
+import { ToolSyncUndoManager } from './tool-sync-undo';
+import { verifyToolAutoSync } from './tool-auto-sync-smoke';
 import { removeProviderAndSync } from './provider-removal';
 import { restoreOfficialConfig } from './tool-restore';
 import { jetBrainsStatus, type JetBrainsConfigOptions } from './jetbrains-config';
@@ -54,18 +54,14 @@ import { createSystemNetworkFetch } from './system-network';
 import { resolveRuntimeConfig } from './runtime-mode';
 import { bindingConnectionPolicy } from '../shared/bindings';
 import { writeClipboardText } from './clipboard-text';
-import { importToolUsage } from './usage-import';
-import { UsageSyncService } from './usage-sync';
 import { createVault } from './vault';
 import { buildConfig, buildCopilotDesktopPlan, buildDshPlan, applyConfig, connectionKey } from './adapters';
 import { applyDshConfig } from './dsh-config';
 import { resolveDshProfile } from './dsh-profile';
-import { openCodeDataDirectory } from './opencode-paths';
 import type { ModelDockApi, ModelInput, Provider, ProviderInput, ToolBinding, ToolId } from '../shared/types';
 import type { SubscriptionKind } from '../shared/auth-types';
 import type { McpServerInput } from '../shared/mcp-types';
 import type { SkillRepositoryInput } from '../shared/skill-types';
-import type { ModelPrice, UsageQuery } from '../shared/usage-types';
 import type { AppSettings } from '../shared/settings-types';
 import type { ModelSelection } from '../shared/catalog-types';
 import type { ConnectionTestInput } from '../shared/connection-types';
@@ -81,8 +77,6 @@ let copilotAccounts: CopilotAuthCenter;
 let copilotProviders: CopilotProviderManager;
 let mcp: McpManager;
 let skills: SkillManager;
-let usage: UsageManager;
-let usageSync: UsageSyncService;
 let preferences: SettingsManager;
 let catalog: ModelCatalog;
 let connectionTester: ConnectionTester;
@@ -218,6 +212,8 @@ async function createWindow(forceShow = false) {
           await verifyAggregateModes(window!, store, outputDir, captureUi);
         } else if (process.env.MODELDOCK_SMOKE_JETBRAINS_ONLY === '1') {
           await verifyJetBrainsConnections(window!, store, outputDir, captureUi);
+        } else if (process.env.MODELDOCK_SMOKE_TOOL_SYNC_ONLY === '1') {
+          await verifyToolAutoSync(window!, store, outputDir, captureUi);
         } else if (process.env.MODELDOCK_SMOKE_CLAUDE_ONLY === '1') {
           await verifyClaudeConfiguration(window!, store, outputDir, captureUi);
         } else if (process.env.MODELDOCK_SMOKE_METADATA_ONLY === '1') {
@@ -226,8 +222,6 @@ async function createWindow(forceShow = false) {
           await verifySidebarScroll(window!, store, outputDir, captureUi);
         } else if (process.env.MODELDOCK_SMOKE_COMPACT_ONLY === '1') {
           await verifyCompactUi(window!, store, outputDir, captureUi);
-        } else if (process.env.MODELDOCK_SMOKE_USAGE_ONLY === '1') {
-          await verifyUsageAnalytics(window!, store, outputDir, captureUi);
         } else if (process.env.MODELDOCK_SMOKE_CONNECTION_ONLY === '1') {
           await verifyConnectionTest(window!, outputDir, captureUi);
         } else if (process.env.MODELDOCK_SMOKE_GATEWAY_STARTUP === '1') {
@@ -357,33 +351,15 @@ async function createWindow(forceShow = false) {
             await api.skillsDeploy(skill.id,'vscode',true);
             const library=await api.skillsList();
             const file=await api.skillsReadFile(skill.id,'SKILL.md');
-            await api.usageSavePrice({modelId:${JSON.stringify(outcome.modelId)},inputUsdPerMillion:10,cachedInputUsdPerMillion:2,outputUsdPerMillion:20});
-            const usage=await api.usageQuery({from:new Date(Date.now()-86400000).toISOString(),to:new Date(Date.now()+86400000).toISOString(),source:'gateway'});
-            const client=await api.usageQuery({from:new Date(Date.now()-86400000).toISOString(),to:new Date(Date.now()+86400000).toISOString(),source:'client'});
-            return {mcpApplied:applied.changed,mcpRedacted:!JSON.stringify(server).includes('synthetic-mcp-secret')&&!preview.content.includes('synthetic-mcp-secret'),skillRead:file.content.includes('# Fixture'),skillTools:library.skills.find(s=>s.id===skill.id).deployments.filter(d=>d.state==='deployed').map(d=>d.tool),usage:{requests:usage.requests,reported:usage.reportedRequests,input:usage.inputTokens,output:usage.outputTokens,cache:usage.cachedInputTokens,cost:usage.estimatedCostUsd},clientIndependent:client.requests===0,accountsSafe:!(await api.authAccounts()).some(a=>'accessToken' in a||'refreshToken' in a)};
+            return {mcpApplied:applied.changed,mcpRedacted:!JSON.stringify(server).includes('synthetic-mcp-secret')&&!preview.content.includes('synthetic-mcp-secret'),skillRead:file.content.includes('# Fixture'),skillTools:library.skills.find(s=>s.id===skill.id).deployments.filter(d=>d.state==='deployed').map(d=>d.tool),accountsSafe:!(await api.authAccounts()).some(a=>'accessToken' in a||'refreshToken' in a)};
           })()`);
           const clientConfig = readFileSync(join(testHome, '.codex', 'config.toml'), 'utf8');
-          if (!featureOutcome.mcpApplied || !featureOutcome.mcpRedacted || !clientConfig.includes('preserve-me') || !clientConfig.includes('preserved-model') || !clientConfig.includes('synthetic-mcp-secret') || !featureOutcome.skillRead || !featureOutcome.skillTools.includes('copilot') || featureOutcome.usage.input!==7 || featureOutcome.usage.output!==3 || featureOutcome.usage.cache!==2 || Math.abs(featureOutcome.usage.cost-0.000114)>1e-9 || !featureOutcome.clientIndependent || !featureOutcome.accountsSafe) throw new Error('Feature integration validation failed: '+JSON.stringify(featureOutcome));
+          if (!featureOutcome.mcpApplied || !featureOutcome.mcpRedacted || !clientConfig.includes('preserve-me') || !clientConfig.includes('preserved-model') || !clientConfig.includes('synthetic-mcp-secret') || !featureOutcome.skillRead || !featureOutcome.skillTools.includes('copilot') || !featureOutcome.accountsSafe) throw new Error('Feature integration validation failed: '+JSON.stringify(featureOutcome));
           writeFileSync(join(outputDir,'feature-integration.json'),JSON.stringify(featureOutcome,null,2));
-          mkdirSync(join(testHome, '.codex', 'sessions'), { recursive: true });
-          const clientTime = new Date().toISOString();
-          writeFileSync(join(testHome, '.codex', 'sessions', 'rollout-native.jsonl'), [
-            { timestamp: clientTime, type: 'session_meta', payload: { id: 'native-usage-fixture' } },
-            { timestamp: clientTime, type: 'turn_context', payload: { model: 'smoke-client-model', turn_id: 'native-turn' } },
-            { timestamp: clientTime, type: 'event_msg', payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 7, cached_input_tokens: 3, output_tokens: 1, total_tokens: 8 }, last_token_usage: { input_tokens: 7, cached_input_tokens: 3, output_tokens: 1, total_tokens: 8 } }, rate_limits: { limit_id: 'codex' } } },
-          ].map(item=>JSON.stringify(item)).join('\n')+'\n');
-          const clientUsage = await window!.webContents.executeJavaScript(`(async()=>{
-            const api=window.modelDock, first=await api.usageImportTool('codex'), second=await api.usageImportTool('codex');
-            const query={from:new Date(Date.now()-86400000).toISOString(),to:new Date(Date.now()+86400000).toISOString()};
-            const client=await api.usageQuery({...query,source:'client'}), gateway=await api.usageQuery({...query,source:'gateway'});
-            return {first:first.imported,second:second.imported,client:client.requests,input:client.inputTokens,output:client.outputTokens,gateway:gateway.requests};
-          })()`);
-          if(clientUsage.first!==1||clientUsage.second!==0||clientUsage.client!==1||clientUsage.input!==7||clientUsage.output!==1||clientUsage.gateway!==1) throw new Error('Client usage IPC import or deduplication failed');
-          writeFileSync(join(outputDir,'client-usage-integration.json'),JSON.stringify(clientUsage,null,2));
           const featureLayouts=[];
           for (const [width,height] of [[1320,880],[980,680]]) {
             window!.setSize(width,height);
-            for (const page of ['auth','mcp','skills','usage']) {
+            for (const page of ['auth','mcp','skills']) {
               await window!.webContents.executeJavaScript(`document.querySelector('[data-page="${page}"]').click()`);
               await new Promise(resolve=>setTimeout(resolve,200));
               const layout=await window!.webContents.executeJavaScript(`(()=>{const main=document.querySelector('.main-content'),functions=document.querySelector('.sidebar-functions');return {title:document.querySelector('.breadcrumbs').textContent,documentOverflow:document.documentElement.scrollWidth>innerWidth,mainOverflow:main.scrollWidth>main.clientWidth,functionsVisible:functions.getBoundingClientRect().bottom<=innerHeight,hasError:!!document.querySelector('[role="alert"]')};})()`);
@@ -394,7 +370,7 @@ async function createWindow(forceShow = false) {
           }
           writeFileSync(join(outputDir,'feature-layout-validation.json'),JSON.stringify(featureLayouts,null,2));
           const featureDialogs=[];
-          for (const [page,label] of [['auth','添加账号'],['mcp','添加 MCP'],['skills','仓库导入'],['usage','模型单价']] as const) {
+          for (const [page,label] of [['auth','添加账号'],['mcp','添加 MCP'],['skills','仓库导入']] as const) {
             await window!.webContents.executeJavaScript(`document.querySelector('[data-page="${page}"]').click()`);
             await new Promise(resolve=>setTimeout(resolve,150));
             await window!.webContents.executeJavaScript(`Array.from(document.querySelectorAll('button')).find(button=>button.textContent.includes(${JSON.stringify(label)})).click()`);
@@ -437,7 +413,7 @@ async function createWindow(forceShow = false) {
           window!.setSize(1320,880);
           await new Promise(resolve=>setTimeout(resolve,200));
           writeFileSync(join(outputDir,'electron-settings-dark-1320.png'),await captureUi());
-          for (const page of ['tools','auth','mcp','skills','usage']) {
+          for (const page of ['tools','auth','mcp','skills']) {
             await window!.webContents.executeJavaScript(`document.querySelector('[data-page="${page}"]').click()`);
             await new Promise(resolve=>setTimeout(resolve,150));
             writeFileSync(join(outputDir,`electron-theme-dark-${page}.png`),await captureUi());
@@ -495,7 +471,6 @@ async function createWindow(forceShow = false) {
           writeFileSync(join(outputDir,'discovery-validation.json'),JSON.stringify({discoveredUi,discoveryLayout,addedUi,repeated:{added:repeated.added.length,skipped:repeated.skipped.length},unknownEditable,automatic,failedDiscovery},null,2));
           await verifyProviderDuplicates(window!, outputDir, captureUi);
           await verifyModelNames(window!, outputDir, captureUi);
-          await verifyUsageDashboard(window!, store, outputDir, captureUi);
           await verifyConnectionTest(window!, outputDir, captureUi);
           await verifyAuthNetwork(window!, store, outputDir, captureUi);
           process.env.MODELDOCK_SMOKE_AUTH_PENDING = '1'; process.env.MODELDOCK_SMOKE_AUTH_PENDING_POLLS = '0';
@@ -543,6 +518,18 @@ function registerIpc() {
   let providerRemovalPending = false;
   let toolRestorePending = false;
   const toolConfigPending = new Set<ToolId>();
+  const beforeToolSelections = new Map<ToolId, ToolBinding>();
+  const featureHome = __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home') : app.getPath('home');
+  const copilot = copilotTarget();
+  const undoManager = new ToolSyncUndoManager(store, {
+    appData: __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-appdata') : app.getPath('appData'),
+    homeDirectory: featureHome,
+    codexHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.codex') : process.env.CODEX_HOME?.trim() ? resolve(process.env.CODEX_HOME.trim()) : undefined,
+    configHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.config') : process.env.XDG_CONFIG_HOME,
+    claudeConfigDir: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.claude') : process.env.CLAUDE_CONFIG_DIR,
+    dshHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.dsh') : process.env.DSH_HOME?.trim() ? resolve(process.env.DSH_HOME.trim()) : join(featureHome, '.dsh'),
+    copilotHome: copilot.home, copilotOptions: { openClient: copilot.openClient },
+  });
   const assertEditable = () => {
     if (providerRemovalPending) throw new Error('供应商正在删除并同步，请稍后修改配置。');
     if (toolRestorePending) throw new Error('正在还原官方配置，请稍后修改配置。');
@@ -551,6 +538,7 @@ function registerIpc() {
   async function synchronizeTool(id: ToolId): Promise<string> {
     if (toolRestorePending || toolConfigPending.has(id)) throw new Error('此工具配置正在更新，请稍后再试。');
     toolConfigPending.add(id);
+    let synchronized = false;
     try {
     const binding = store.listBindings().find(item => item.id === id);
     const preview = buildConfig(store, id, gateway.status().port, true, __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home') : app.getPath('home'), { jetBrainsOptions: jetBrainsOptions() });
@@ -560,11 +548,11 @@ function registerIpc() {
       const status = await gateway.start(gateway.status().port);
       if (!status.running) throw new Error('本地入口未能启动，尚未写入工具配置。');
     }
+    let operation: () => string | Promise<string>;
     if (id === 'copilot') {
       const target = copilotTarget();
-      return applyCopilotDesktop(store, buildCopilotDesktopPlan(store, gateway.status().port, true), target.home, { openClient: target.openClient, syncScope: binding?.copilotSyncScope ?? 'selected' });
-    }
-    if (id === 'dsh') {
+      operation = () => applyCopilotDesktop(store, buildCopilotDesktopPlan(store, gateway.status().port, true), target.home, { openClient: target.openClient, syncScope: binding?.copilotSyncScope ?? 'selected', recordUndo: !providerRemovalPending });
+    } else if (id === 'dsh') {
       const configuredDshHome = process.env.DSH_HOME?.trim();
       const dshHome = __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home', '.dsh')
         : configuredDshHome ? resolve(configuredDshHome) : join(app.getPath('home'), '.dsh');
@@ -573,17 +561,23 @@ function registerIpc() {
         { id: 'llm-deepseek', name: '@deepseek-ai/dsh-llm-deepseek-api-key' },
         { id: 'llm-deepseek-account', name: '@deepseek-ai/dsh-llm-deepseek-account' },
       ], baselineProviders: {} } : await resolveDshProfile(dshHome);
-      return applyDshConfig(store, buildDshPlan(store, gateway.status().port, true), dshHome, profile);
-    }
+      operation = () => applyDshConfig(store, buildDshPlan(store, gateway.status().port, true), dshHome, profile);
+    } else {
     const featureHome = __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home') : undefined;
     const appData = __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-appdata') : app.getPath('appData');
-    return applyConfig(store, id, gateway.status().port, appData, join(dataDir, 'backups'), featureHome, {
+    operation = () => applyConfig(store, id, gateway.status().port, appData, join(dataDir, 'backups'), featureHome, {
       codexHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome!, '.codex') : process.env.CODEX_HOME?.trim() ? resolve(process.env.CODEX_HOME.trim()) : undefined,
       configHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome!, '.config') : process.env.XDG_CONFIG_HOME,
       claudeConfigDir: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome!, '.claude') : process.env.CLAUDE_CONFIG_DIR,
       jetBrainsOptions: jetBrainsOptions(),
     });
-    } finally { toolConfigPending.delete(id); }
+    }
+    // Global deletion has its own recovery transaction; its removed references cannot be reintroduced by a tool undo.
+    const result = providerRemovalPending ? await operation() : await undoManager.run(id, beforeToolSelections.get(id), operation);
+    if (providerRemovalPending) undoManager.clear(id);
+    synchronized = true;
+    return result;
+    } finally { if (synchronized) beforeToolSelections.delete(id); toolConfigPending.delete(id); }
   }
   function handle(name: keyof ModelDockApi, fn: (...args: any[]) => unknown) {
     ipcMain.handle('modeldock:' + name, async (event, ...args: unknown[]) => {
@@ -688,7 +682,35 @@ function registerIpc() {
   });
   handle('saveModel', (input: ModelInput) => { assertEditable(); return store.saveModel(input); });
   handle('deleteModel', (id: string) => { assertEditable(); return store.deleteModel(id); });
-  handle('saveBinding', (binding: ToolBinding) => { assertEditable(); return store.saveBinding({ ...binding, id: toolId(binding.id) }); });
+  handle('saveBinding', (binding: ToolBinding) => {
+    assertEditable();
+    const id = toolId(binding.id), before = store.listBindings().find(value => value.id === id);
+    store.saveBinding({ ...binding, id });
+    if (!isJetBrainsTool(id) && before && !beforeToolSelections.has(id)) beforeToolSelections.set(id, structuredClone(before));
+  });
+  handle('toolSyncUndoStatus', (value: ToolId) => undoManager.status(toolId(value)));
+  handle('undoToolSync', async (value: ToolId) => {
+    assertEditable();
+    const id = toolId(value);
+    toolRestorePending = true;
+    const current = store.listBindings().find(binding => binding.id === id);
+    const draftBefore = beforeToolSelections.get(id);
+    let restoredDraft = false;
+    try {
+      // Pending choices have been saved, but their external write was cancelled by the renderer.
+      if (draftBefore) { restoredDraft = true; store.restoreBindingSelection(draftBefore); }
+      const target = await undoManager.undo(id); beforeToolSelections.delete(id); return target;
+    } catch (error) {
+      if (restoredDraft && current) {
+        const latest = store.listBindings().find(binding => binding.id === id);
+        const fields = ['enabled', 'mode', 'providerIds', 'modelIds', 'modelSelection', 'defaultModelId', 'connectionChoices', 'vscodeSyncScope', 'copilotSyncScope', 'dshSyncScope', 'claudeDisableTelemetry'] as const;
+        const selection = (binding: ToolBinding) => Object.fromEntries(fields.map(field => [field, binding[field]]));
+        if (latest && draftBefore && isDeepStrictEqual(selection(latest), selection(draftBefore))) store.restoreBindingSelection(current);
+      }
+      throw error;
+    }
+    finally { toolRestorePending = false; }
+  });
   handle('startGateway', async (port?: number) => {
     const status = await gateway.start(port ?? preferences.get().settings.gatewayPort);
     if (status.running) preferences.save({ gatewayPort: status.port });
@@ -726,13 +748,15 @@ function registerIpc() {
         { id: 'llm-deepseek', name: '@deepseek-ai/dsh-llm-deepseek-api-key' },
         { id: 'llm-deepseek-account', name: '@deepseek-ai/dsh-llm-deepseek-account' },
       ], baselineProviders: {} } : await resolveDshProfile(dshHome) : undefined;
-      return await restoreToolBinding(store, id, () => restoreOfficialConfig(store, id, appData, join(dataDir, 'backups'), featureHome, {
+      const location = await restoreToolBinding(store, id, () => restoreOfficialConfig(store, id, appData, join(dataDir, 'backups'), featureHome, {
         codexHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.codex') : process.env.CODEX_HOME?.trim() ? resolve(process.env.CODEX_HOME.trim()) : join(featureHome, '.codex'),
         configHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.config') : process.env.XDG_CONFIG_HOME,
         claudeConfigDir: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.claude') : process.env.CLAUDE_CONFIG_DIR,
         jetBrainsOptions: jetBrainsOptions(),
         dshHome, dshOptions, copilotHome: target.home, copilotOptions: { openClient: target.openClient },
       }));
+      undoManager.clear(id); beforeToolSelections.delete(id);
+      return location;
     } finally { toolRestorePending = false; }
   });
   handle('openDataDir', async () => { const error = await shell.openPath(dataDir); if (error) throw new Error(error); });
@@ -786,15 +810,6 @@ function registerIpc() {
   handle('skillsReadFile', (id: string, path?: string) => skills.readFile(id, path));
   handle('skillsPreviewRemove', (id: string) => skills.previewRemove(id));
   handle('skillsDelete', (id: string) => skills.remove(id));
-  handle('usageQuery', (query: UsageQuery) => usage.query(query));
-  handle('usageSyncTools', () => usageSync.sync());
-  handle('usageSources', () => usageSync.sources());
-  handle('usageSavePrice', (price: ModelPrice) => usage.savePrice(price));
-  handle('usageDeletePrice', (id: string) => usage.removePrice(id));
-  handle('usageImportTool', (tool: ToolId) => importToolUsage(toolId(tool), store, {
-    homeDir: __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'test-home') : app.getPath('home'),
-    codexHome: __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'test-home', '.codex') : process.env.CODEX_HOME,
-  }));
   handle('testProvider', (id: string, input?: ConnectionTestInput) => connectionTester.test(id, input));
   handle('discoverModels', (id: string) => catalog.discover(id));
   handle('addDiscoveredModels', (id: string, selected: ModelSelection[]) => { assertEditable(); return catalog.addSelected(id, selected); });
@@ -922,18 +937,8 @@ else {
     copilotProviders = new CopilotProviderManager(store, copilotAccounts, { fetch: runtimeFetch });
     // 修改点：显式传递生产 XDG 根，homeDir 同时用于其他工具，不能让它掩盖 OpenCode 环境配置。
     const openCodeConfigHome = __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.config') : process.env.XDG_CONFIG_HOME;
-    const openCodeDataDir = openCodeDataDirectory(__MODELDOCK_SMOKE_BUILD__ ? featureHome : undefined);
     mcp = new McpManager(store, { homeDir: featureHome, appDataDir: featureAppData, backupDir: join(dataDir, 'backups', 'mcp'), configHome: openCodeConfigHome, codexHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.codex') : process.env.CODEX_HOME });
     skills = new SkillManager(store, { homeDir: featureHome, appDataDir: featureAppData, libraryDir: join(dataDir, 'skill-library'), backupDir: join(dataDir, 'backups', 'skills'), configHome: openCodeConfigHome, claudeConfigDir: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.claude') : process.env.CLAUDE_CONFIG_DIR, ...(!__MODELDOCK_SMOKE_BUILD__ ? { codexHome: process.env.CODEX_HOME, dshHome: process.env.DSH_HOME } : {}) });
-    usage = new UsageManager(store);
-    usageSync = new UsageSyncService(store, {
-      homeDir: featureHome,
-      codexHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.codex') : process.env.CODEX_HOME,
-      opencodeDataDir: openCodeDataDir,
-      appDataDir: featureAppData,
-      dshHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.dsh') : process.env.DSH_HOME,
-      copilotHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.copilot') : process.env.COPILOT_HOME,
-    });
     // 修改点：Copilot 订阅与其他来源共享目录、连通性及本地网关，凭据准备在主进程分派。
     const upstream = { prepareRequest: (provider: Provider, path: string, body: Record<string, unknown>) => provider.kind === 'copilot'
       ? copilotProviders.prepareRequest(provider, path, body) : oauth.prepareRequest(provider, path, body) };

@@ -32,7 +32,14 @@ export async function verifyAggregateModes(window: BrowserWindow, store: Store, 
   }
   const stored = (tool: ToolId) => store.listBindings().find(binding => binding.id === tool)!;
   async function idle(tool: ToolId): Promise<void> {
-    await waitFor(`!!document.querySelector('[data-tool-binding="${tool}"]')&&!document.querySelector('[data-action="tool-use-aggregate"]').disabled&&!document.querySelector('[data-action="tool-default-model"]').disabled`, `${tool} saved`);
+    // Offline IDEs deliberately retain pending selections. Copilot serialization
+    // fixtures have no running desktop registry; its expected failed write must
+    // settle before another selection replaces it. Other clients must finish
+    // their isolated configuration write, including the short debounce window.
+    const completed = isJetBrainsTool(tool) ? 'true' : tool === 'copilot'
+      ? `['synced','cleared','error'].includes(status?.dataset.toolApplicationState)`
+      : `status?.dataset.toolApplicationState===(summary?.dataset.selectedModelCount==='0'?'cleared':'synced')`;
+    await waitFor(`(()=>{const summary=document.querySelector('[data-tool-binding="${tool}"]'),status=document.querySelector('[data-tool-application-status]');return !!summary&&${completed}&&!document.querySelector('[data-action="tool-use-aggregate"]').disabled&&(summary.dataset.selectedModelCount==='0'||!document.querySelector('[data-action="tool-default-model"]').disabled);})()`, `${tool} synchronization settled`);
   }
   const gateway = await evaluate<any>('window.modelDock.startGateway(0)'); assert.equal(gateway.running, true);
   await click('[aria-label="刷新本机配置"]');
@@ -45,6 +52,7 @@ export async function verifyAggregateModes(window: BrowserWindow, store: Store, 
     for (const provider of providers) {
       await click(`article[data-provider-id="${provider.id}"] input[data-action="select-tool-provider"]`);
       await waitFor(`(async()=>{const binding=(await window.modelDock.snapshot()).bindings.find(b=>b.id===${JSON.stringify(tool)});return binding.providerIds.includes(${JSON.stringify(provider.id)})&&!document.querySelector('[data-action="tool-use-aggregate"]').disabled;})()`, `${tool} source`);
+      await idle(tool);
     }
     const protocol = tool === 'codex' ? 'responses' : tool === 'claude-code' ? 'messages' : 'chat-completions';
     const chosen = models.filter(model => model.wireApi === protocol);
@@ -55,6 +63,7 @@ export async function verifyAggregateModes(window: BrowserWindow, store: Store, 
     }
     await evaluate(`(()=>{const select=document.querySelector('[data-action="tool-default-model"]');Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(select,${JSON.stringify(chosen[1].id)});select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
     await waitFor(`(async()=>{const binding=(await window.modelDock.snapshot()).bindings.find(b=>b.id===${JSON.stringify(tool)});return binding.defaultModelId===${JSON.stringify(chosen[1].id)}&&!document.querySelector('[data-action="tool-use-aggregate"]').disabled;})()`, `${tool} default B`);
+    await idle(tool);
     assert.deepEqual(new Set(stored(tool).providerIds), new Set(providers.map(provider => provider.id)));
     assert.deepEqual(new Set(stored(tool).modelIds), new Set(chosen.map(model => model.id)));
     assert.equal(bindingConnectionPolicy(stored(tool), store.listModels(), store.listProviders()).groups.length, 1);
@@ -91,6 +100,7 @@ export async function verifyAggregateModes(window: BrowserWindow, store: Store, 
       await evaluate(`(()=>{const select=document.querySelector('[data-action="tool-default-model"]');Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(select,${JSON.stringify(chosen[1].id)});select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
     }
     await waitFor(`(async()=>{const binding=(await window.modelDock.snapshot()).bindings.find(b=>b.id===${JSON.stringify(tool)});return binding.mode==='direct'&&binding.providerIds.length===1&&!document.querySelector('[data-action="tool-use-aggregate"]').disabled;})()`, `${tool} direct mode`);
+    await idle(tool);
     assert.deepEqual(stored(tool).providerIds, [providers[1].id]); assert.equal(stored(tool).defaultModelId, chosen[1].id);
     const direct = await evaluate<any>(`window.modelDock.previewConfig(${JSON.stringify(tool)})`);
     assert.ok(!direct.content.includes(`/tool/${tool}`));

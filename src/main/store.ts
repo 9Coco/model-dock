@@ -10,7 +10,6 @@ import { providerPresets, presetById } from '../shared/presets';
 import { resolveBindingModels } from '../shared/bindings';
 import { directModelsForProvider, isSingleEntryTool, updateSingleEntryBinding } from '../shared/single-entry';
 import { isJetBrainsTool } from '../shared/jetbrains';
-import type { UsageRecord } from '../shared/usage-types';
 import { normalizeApiKey } from './credentials';
 import { providerIdentity, type ProviderDuplicateGroup, type ProviderMergeResult } from '../shared/provider-duplicates';
 import { suggestModelAlias } from '../shared/model-names';
@@ -79,11 +78,8 @@ export class Store {
       CREATE TABLE IF NOT EXISTS models(id TEXT PRIMARY KEY,provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,upstream_id TEXT NOT NULL,alias TEXT NOT NULL UNIQUE,display_name TEXT NOT NULL,wire_api TEXT NOT NULL,context_window INTEGER NOT NULL,tools INTEGER NOT NULL,vision INTEGER NOT NULL,enabled INTEGER NOT NULL,reasoning_efforts TEXT NOT NULL DEFAULT '[]',default_reasoning_effort TEXT);
       CREATE TABLE IF NOT EXISTS bindings(id TEXT PRIMARY KEY,name TEXT NOT NULL,enabled INTEGER NOT NULL,model_ids TEXT NOT NULL,default_model_id TEXT NOT NULL,note TEXT NOT NULL,mode TEXT NOT NULL DEFAULT 'aggregate',provider_ids TEXT,model_selection TEXT,vscode_sync_scope TEXT NOT NULL DEFAULT 'managed',copilot_sync_scope TEXT NOT NULL DEFAULT 'managed',dsh_sync_scope TEXT NOT NULL DEFAULT 'managed',claude_disable_telemetry INTEGER NOT NULL DEFAULT 1,connection_choices TEXT);
       CREATE TABLE IF NOT EXISTS logs(id TEXT PRIMARY KEY,time TEXT NOT NULL,alias TEXT NOT NULL,provider_name TEXT NOT NULL,endpoint TEXT NOT NULL,status INTEGER NOT NULL,duration_ms INTEGER NOT NULL);
-      CREATE TABLE IF NOT EXISTS usage_events(id TEXT PRIMARY KEY,time TEXT NOT NULL,alias TEXT NOT NULL,provider_name TEXT NOT NULL,endpoint TEXT NOT NULL,status INTEGER NOT NULL,duration_ms INTEGER NOT NULL,tool TEXT,provider_id TEXT,model_id TEXT,input_tokens INTEGER,output_tokens INTEGER,cached_input_tokens INTEGER,cache_creation_input_tokens INTEGER,source TEXT NOT NULL DEFAULT 'gateway');
-      CREATE INDEX IF NOT EXISTS usage_time_idx ON usage_events(time);
       CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);`);
     store.migrateSchema();
-    db.run('INSERT OR IGNORE INTO usage_events(id,time,alias,provider_name,endpoint,status,duration_ms) SELECT id,time,alias,provider_name,endpoint,status,duration_ms FROM logs');
     if (!store.one("SELECT value FROM settings WHERE key='initialized'")) {
       // Existing databases keep their accounts exactly as stored. Templates are
       // seeded only for an empty, never-initialized store.
@@ -108,15 +104,12 @@ export class Store {
   private migrateSchema(): void {
     const providerColumns = this.rows('PRAGMA table_info(providers)').map(row => String(row.name));
     const bindingColumns = this.rows('PRAGMA table_info(bindings)').map(row => String(row.name));
-    const usageColumns = this.rows('PRAGMA table_info(usage_events)').map(row => String(row.name));
     const modelColumns = this.rows('PRAGMA table_info(models)').map(row => String(row.name));
     this.db.run('BEGIN');
     try {
       // Model metadata only; client configs receive thinking levels on explicit sync.
       if (!modelColumns.includes('reasoning_efforts')) this.db.run("ALTER TABLE models ADD COLUMN reasoning_efforts TEXT NOT NULL DEFAULT '[]'");
       if (!modelColumns.includes('default_reasoning_effort')) this.db.run('ALTER TABLE models ADD COLUMN default_reasoning_effort TEXT');
-      if (!usageColumns.includes('source')) this.db.run("ALTER TABLE usage_events ADD COLUMN source TEXT NOT NULL DEFAULT 'gateway'");
-      if (!usageColumns.includes('cache_creation_input_tokens')) this.db.run('ALTER TABLE usage_events ADD COLUMN cache_creation_input_tokens INTEGER');
       if (!providerColumns.includes('preset_id')) {
         this.db.run("ALTER TABLE providers ADD COLUMN preset_id TEXT NOT NULL DEFAULT 'custom'");
         for (const row of this.rows('SELECT id,kind,base_url FROM providers')) {
@@ -408,7 +401,6 @@ export class Store {
       this.db.run('UPDATE providers SET note=?,auth_status=? WHERE id=?', [note, sourceSecret ? 'ready' : 'missing', keptProviderId]);
       for (const providerId of removedProviderIds) {
         this.db.run('UPDATE models SET provider_id=? WHERE provider_id=?', [keptProviderId, providerId]);
-        this.db.run('UPDATE usage_events SET provider_id=? WHERE provider_id=?', [keptProviderId, providerId]);
       }
       for (const binding of bindings) this.db.run('UPDATE bindings SET enabled=?,provider_ids=?,model_ids=?,model_selection=?,default_model_id=?,connection_choices=? WHERE id=?', [Number(binding.enabled), binding.providerIds === undefined ? null : JSON.stringify(binding.providerIds), JSON.stringify(binding.modelIds), binding.modelSelection ?? null, binding.defaultModelId, binding.connectionChoices ? JSON.stringify(binding.connectionChoices) : null, binding.id]);
       for (const providerId of removedProviderIds) {
@@ -583,6 +575,22 @@ export class Store {
   }
   private allBindings(): ToolBinding[] { return this.rows('SELECT * FROM bindings ORDER BY rowid').map(row => ({ id: row.id as ToolId, name: String(row.name), enabled: Boolean(row.enabled), mode: row.mode === 'direct' ? 'direct' : row.mode === 'auto' ? 'auto' : 'aggregate', providerIds: row.provider_ids === null ? undefined : JSON.parse(String(row.provider_ids)), modelIds: JSON.parse(String(row.model_ids)), ...(row.model_selection === 'selected' || row.model_selection === 'all' ? { modelSelection: row.model_selection } : {}), defaultModelId: String(row.default_model_id), ...(row.connection_choices ? { connectionChoices: JSON.parse(String(row.connection_choices)) } : {}), note: String(row.note), ...(row.id === 'vscode' ? { vscodeSyncScope: row.vscode_sync_scope === 'managed' ? 'managed' as const : 'selected' as const } : {}), ...(row.id === 'copilot' ? { copilotSyncScope: row.copilot_sync_scope === 'managed' ? 'managed' as const : 'selected' as const } : {}), ...(row.id === 'dsh' ? { dshSyncScope: row.dsh_sync_scope === 'managed' ? 'managed' as const : 'selected' as const } : {}), ...(row.id === 'claude-code' ? { claudeDisableTelemetry: row.claude_disable_telemetry !== 0 } : {}) })); }
   listBindings(): ToolBinding[] { const bindings = this.allBindings(); return Object.keys(TOOL_NAMES).flatMap(tool => bindings.filter(binding => binding.id === tool)); }
+  /** Restore a captured sync choice exactly, without replacing unrelated tool metadata. */
+  restoreBindingSelection(binding: ToolBinding): void {
+    if (!Object.hasOwn(TOOL_NAMES, binding.id) || !this.one('SELECT id FROM bindings WHERE id=?', [binding.id]) || typeof binding.enabled !== 'boolean' || !Array.isArray(binding.modelIds) || typeof binding.defaultModelId !== 'string') throw new Error('工具绑定无效。');
+    const models = this.listModels(), providers = this.listProviders();
+    const providerIds = binding.providerIds;
+    if (providerIds !== undefined && (!Array.isArray(providerIds) || providerIds.some(providerId => typeof providerId !== 'string' || !providers.some(provider => provider.id === providerId)))) throw new Error('撤销引用的来源已不存在。');
+    if (binding.modelIds.some(modelId => typeof modelId !== 'string' || !models.some(model => model.id === modelId)) || binding.defaultModelId && !models.some(model => model.id === binding.defaultModelId)) throw new Error('撤销引用的模型已不存在。');
+    if (binding.connectionChoices !== undefined) this.validateConnectionChoices(binding.connectionChoices, models, providers);
+    const mode = binding.mode ?? (binding.id === 'claude-code' ? 'direct' : 'aggregate');
+    if (!['direct', 'aggregate', 'auto'].includes(mode) || binding.modelSelection !== undefined && !['all', 'selected'].includes(binding.modelSelection)) throw new Error('工具选择方式无效。');
+    if ([binding.vscodeSyncScope, binding.copilotSyncScope, binding.dshSyncScope].some(scope => scope !== undefined && !['managed', 'selected'].includes(scope)) || binding.claudeDisableTelemetry !== undefined && typeof binding.claudeDisableTelemetry !== 'boolean') throw new Error('工具同步选项无效。');
+    this.mutate(() => this.db.run('UPDATE bindings SET enabled=?,model_ids=?,default_model_id=?,mode=?,provider_ids=?,model_selection=?,vscode_sync_scope=?,copilot_sync_scope=?,dsh_sync_scope=?,claude_disable_telemetry=?,connection_choices=? WHERE id=?', [
+      Number(binding.enabled), JSON.stringify(binding.modelIds), binding.defaultModelId, mode, providerIds === undefined ? null : JSON.stringify(providerIds), binding.modelSelection ?? null,
+      binding.vscodeSyncScope ?? (binding.id === 'vscode' ? 'selected' : 'managed'), binding.copilotSyncScope ?? (binding.id === 'copilot' ? 'selected' : 'managed'), binding.dshSyncScope ?? (binding.id === 'dsh' ? 'selected' : 'managed'), Number(binding.claudeDisableTelemetry ?? true), binding.connectionChoices === undefined ? null : JSON.stringify(binding.connectionChoices), binding.id,
+    ]));
+  }
   saveBinding(binding: ToolBinding): void {
     if (!Object.hasOwn(TOOL_NAMES, binding.id) || typeof binding.enabled !== 'boolean' || !Array.isArray(binding.modelIds) || typeof binding.defaultModelId !== 'string') throw new Error('工具绑定无效。');
     if (binding.modelSelection !== undefined && !['all', 'selected'].includes(binding.modelSelection)) throw new Error('模型选择方式无效。');
@@ -662,24 +670,7 @@ export class Store {
     const fields = [logId, time, log.alias.slice(0, 200), log.providerName.slice(0, 120), log.endpoint.slice(0, 200), log.status, Math.max(0, Math.round(log.durationMs))];
     this.mutate(() => {
       this.db.run('INSERT OR REPLACE INTO logs(id,time,alias,provider_name,endpoint,status,duration_ms) VALUES(?,?,?,?,?,?,?)', fields);
-      this.db.run('INSERT OR REPLACE INTO usage_events(id,time,alias,provider_name,endpoint,status,duration_ms,tool,provider_id,model_id,input_tokens,output_tokens,cached_input_tokens,cache_creation_input_tokens) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [...fields, log.tool ?? null, log.providerId ?? null, log.modelId ?? null, log.usage?.inputTokens ?? null, log.usage?.outputTokens ?? null, log.usage?.cachedInputTokens ?? null, log.usage?.cacheCreationInputTokens ?? null]);
       this.db.run('DELETE FROM logs WHERE id NOT IN(SELECT id FROM logs ORDER BY rowid DESC LIMIT 1000)');
-    });
-  }
-  usageRecords(from: string, to: string): UsageRecord[] {
-    return this.rows('SELECT * FROM usage_events WHERE time>=? AND time<? ORDER BY time', [from, to]).map(row => ({ id: String(row.id), time: String(row.time), alias: String(row.alias), providerName: String(row.provider_name), endpoint: String(row.endpoint), status: Number(row.status), durationMs: Number(row.duration_ms), tool: row.tool ? row.tool as ToolId : undefined, providerId: row.provider_id ? String(row.provider_id) : undefined, modelId: row.model_id ? String(row.model_id) : undefined, source: row.source === 'client' ? 'client' : 'gateway', usage: row.input_tokens === null || row.output_tokens === null ? undefined : { inputTokens: Number(row.input_tokens), outputTokens: Number(row.output_tokens), cachedInputTokens: Number(row.cached_input_tokens ?? 0), ...(row.cache_creation_input_tokens == null ? {} : { cacheCreationInputTokens: Number(row.cache_creation_input_tokens) }) } }));
-  }
-  addClientUsage(record: UsageRecord): boolean { return this.addClientUsages([record]) === 1; }
-  addClientUsages(records: UsageRecord[]): number {
-    return this.mutate(() => {
-      let added = 0;
-      for (const record of records) {
-        if (typeof record.id !== 'string' || !record.id.startsWith('client:') || record.id.length > 200 || !Number.isFinite(Date.parse(record.time))) throw new Error('客户端用量记录无效。');
-        if (record.usage?.cacheCreationInputTokens !== undefined && (!Number.isSafeInteger(record.usage.cacheCreationInputTokens) || record.usage.cacheCreationInputTokens < 0 || record.usage.cacheCreationInputTokens + record.usage.cachedInputTokens > record.usage.inputTokens)) throw new Error('客户端缓存写入用量无效。');
-        this.db.run('INSERT OR IGNORE INTO usage_events(id,time,alias,provider_name,endpoint,status,duration_ms,tool,provider_id,model_id,input_tokens,output_tokens,cached_input_tokens,cache_creation_input_tokens,source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [record.id, new Date(record.time).toISOString(), record.alias.slice(0, 200), record.providerName.slice(0, 120), record.endpoint.slice(0, 200), record.status, Math.max(0, Math.round(record.durationMs)), record.tool ?? null, record.providerId ?? null, record.modelId ?? null, record.usage?.inputTokens ?? null, record.usage?.outputTokens ?? null, record.usage?.cachedInputTokens ?? null, record.usage?.cacheCreationInputTokens ?? null, 'client']);
-        added += this.db.getRowsModified();
-      }
-      return added;
     });
   }
   logs(limit = 100): RequestLog[] { const count = Math.min(500, Math.max(1, Number.isFinite(limit) ? Math.floor(limit) : 100)); return this.rows('SELECT * FROM logs ORDER BY rowid DESC LIMIT ?', [count]).map(row => ({ id: String(row.id), time: String(row.time), alias: String(row.alias), providerName: String(row.provider_name), endpoint: String(row.endpoint), status: Number(row.status), durationMs: Number(row.duration_ms) })); }

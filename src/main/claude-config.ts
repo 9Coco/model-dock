@@ -55,7 +55,7 @@ export function claudeHistoryKey(target: string): string {
   const normalized = process.platform === 'win32' ? resolve(target).toLowerCase() : resolve(target);
   return `tool-config:claude-code:${createHash('sha256').update(normalized).digest('hex')}`;
 }
-function selection(store: ClaudeConfigStore, revealKey: boolean, port: number): { binding: ToolBinding; env: Record<string, string>; model: string; authMode: 'api-key' | 'bearer'; localManaged: boolean; disableThinking: boolean; aggregate: boolean; availableModels?: string[]; modelPicker?: ClaudeModelPicker } | null {
+function selection(store: ClaudeConfigStore, revealKey: boolean, port: number): { binding: ToolBinding; env: Record<string, string>; model: string; authMode: 'api-key' | 'bearer'; localManaged: boolean; disableThinking: boolean; aggregate: boolean; availableModels: string[]; modelPicker: ClaudeModelPicker } | null {
   const binding = store.listBindings().find(item => item.id === 'claude-code');
   if (!binding) throw new Error('找不到 Claude Code 的配置。');
   if (!binding.enabled) return null;
@@ -98,24 +98,27 @@ function selection(store: ClaudeConfigStore, revealKey: boolean, port: number): 
   // 修改点：隐私选择独立保留，取消来源或还原模型配置时不重新开启遥测。
   // 该开关按“非空”判断，不能用字符串 0/false 关闭，取消勾选时必须删除。
   if (binding.claudeDisableTelemetry !== false) env[telemetryKey] = '1';
-  const options = aggregate ? models.filter((item, index) => models.findIndex(other => other.alias === item.alias) === index).map(item => ({ model: item.alias, label: modelDisplayLabel(item, selectedProviders.find(source => source?.id === item.providerId)) })) : undefined;
-  if (options?.some(item => !item.model.trim() || /[\x00-\x1f\x7f]/.test(item.model))) throw new Error('Claude Code 模型标识无效。');
+  // 修改点：直连也发布供应商的真实模型 ID，SDK 模型发现不能只依靠默认模型和角色映射。
+  const modelId = (item: Model) => aggregate ? item.alias : item.upstreamId;
+  const options = models.filter((item, index) => models.findIndex(other => modelId(other) === modelId(item)) === index)
+    .map(item => ({ model: modelId(item), label: modelDisplayLabel(item, selectedProviders.find(source => source?.id === item.providerId)) }));
+  if (options.some(item => !item.model.trim() || /[\x00-\x1f\x7f]/.test(item.model))) throw new Error('Claude Code 模型标识无效。');
   return { binding, env, model, authMode, localManaged, disableThinking, aggregate,
-    ...(options ? { availableModels: options.map(item => item.model), modelPicker: { options, replaceBuiltInOptions: true } } : {}) };
+    availableModels: options.map(item => item.model), modelPicker: { options, replaceBuiltInOptions: true } };
 }
 
 export function buildClaudeConfig(store: ClaudeConfigStore, revealKey = false, port = 18181): ConfigPreview {
   const selected = selection(store, revealKey, port);
   return { filename: 'modeldock-claude-code.json', canApply: true,
-    content: JSON.stringify(selected ? { model: selected.model, env: selected.env, ...(selected.aggregate ? { availableModels: selected.availableModels, modelPicker: selected.modelPicker } : {}) } : {}, null, 2),
+    content: JSON.stringify(selected ? { model: selected.model, env: selected.env, availableModels: selected.availableModels, modelPicker: selected.modelPicker } : {}, null, 2),
     instructions: selected
       ? (selected.localManaged ? `Claude Code CLI 通过 ModelDock 本机入口使用所选${selected.aggregate ? '聚合模型' : '单一来源'}。原生 Messages 模型按原协议转发，其他模型在本机转换为 Chat Completions 或 Responses 协议；API 密钥与订阅 OAuth 凭据留在主进程，仅将固定本机密钥写入工具。使用时需保持 ModelDock 入口运行。${selected.disableThinking ? '兼容桥关闭客户端 thinking 协议，不限制上游模型自身的推理；原生 Anthropic 服务端工具等专属能力不能由此保证。' : '全部所选模型使用原生 Messages 转发，保留客户端 thinking 设置。'}` : 'Claude Code CLI 使用单个 API 供应商的 Anthropic Messages 原生兼容入口；千问、火山与 DeepSeek 使用各自协议专属地址并复用已保存的 API Key，其他工具的 OpenAI 地址保持原值。')
         + (selected.authMode === 'api-key' ? '鉴权使用 ANTHROPIC_API_KEY 对应的 x-api-key 请求头；原生交互模式可能要求首次确认 API Key。' : '鉴权使用 ANTHROPIC_AUTH_TOKEN 对应的 Authorization: Bearer 请求头。')
         + '服务地址标准化为 SDK 追加 /v1/messages 前的根地址；默认模型与 Sonnet、Opus、Haiku、子代理角色均使用所选' + (selected.localManaged ? '本机模型别名。' : '真实上游 ID。')
-        + (selected.aggregate ? '聚合模型写入 availableModels 与 modelPicker，可用 /model 切换；模型选择器要求 Claude Code v2.1.242 或更高版本，旧版可用 /model <本机别名> 或 --model 切换。' : '')
+        + '已启用模型写入 availableModels 与 modelPicker，可用 /model 切换；直连使用真实上游 ID，聚合使用本机别名。模型选择器要求 Claude Code v2.1.242 或更高版本，旧版可用 /model <模型 ID> 或 --model 切换。'
         + '预览隐藏密钥，导出或应用才写入所用凭据。同步仅合并用户 settings.json，不修改登录、权限、Hooks、MCP 或插件。冲突的另一种鉴权变量、OAuth、云供应商开关及 apiKeyHelper 会暂时移除并保存恢复记录；取消来源会恢复此前未被外部修改的字段。'
         + (selected.binding.claudeDisableTelemetry === false ? '当前未启用非必要联网关闭总开关，其他独立隐私选项保留。' : '默认关闭遥测、错误上报、反馈等非必要联网，并关闭自动更新；这不停止供应商模型请求，也不改变 WebFetch 域名安全检查。')
-        + '重启 Claude Code 后用 /status 核对地址、凭据来源和模型。项目、托管设置、命令行以及继承环境可能影响最终配置，JSON 合并不能保证所有运行环境；VS Code 扩展还需在 claudeCode.environmentVariables 设置凭据，Claude Desktop 使用独立配置入口。'
+        + '重启 Claude Code 后用 /status 核对地址、凭据来源和模型。VS Code 内置 Claude 智能体会缓存凭据和模型列表，同步后按 Ctrl+Shift+P，运行 Developer: Restart Local Agent Host 重启代理主机以重新读取配置；仅 Reload Window 不保证刷新共用代理主机。Anthropic 官方 VS Code 扩展还需在 claudeCode.environmentVariables 设置凭据，Claude Desktop 本机 Code 会话共用用户设置，远端会话需在执行端配置。项目、托管设置、命令行以及继承环境可能影响最终配置，JSON 合并不能保证所有运行环境。'
       : '取消来源会撤销仍属于 ModelDock 的路由与模型字段，恢复其原值；用户后续修改、登录、权限、Hooks、MCP 和隐私设置保留。没有管理记录时不修改现有配置。',
   };
 }
@@ -236,14 +239,8 @@ export function applyClaudeConfig(store: ClaudeConfigStore, backups: string, hom
   }
   const next: ClaudeHistory = { version: 1, target, envWasPresent: history?.envWasPresent ?? Object.hasOwn(settings, 'env'), fields: {} };
   const desired = new Map<string, Value>([['model', { present: true, value: selected.model }], ['apiKeyHelper', { present: false }]]);
-  for (const field of pickerRootKeys) {
-    if (selected.aggregate) desired.set(field, { present: true, value: selected[field] });
-    else {
-      // 修改点：切回单来源时撤销仍属于 ModelDock 的模型选择器，保留用户后续手改和最初配置。
-      const saved = history?.fields[field];
-      if (saved && equalValue(fieldValue(settings, field), saved.applied)) writeField(settings, field, saved.before);
-    }
-  }
+  // 修改点：两种模式都更新模型选择器，原有列表只在取消来源时按管理记录恢复。
+  for (const field of pickerRootKeys) desired.set(field, { present: true, value: selected[field] });
   for (const key of envKeys) desired.set(`env.${key}`, Object.hasOwn(selected.env, key) ? { present: true, value: selected.env[key] } : { present: false });
   for (const key of bridgeEnvKeys) {
     const field = `env.${key}`;

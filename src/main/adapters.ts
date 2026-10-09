@@ -298,7 +298,7 @@ export function buildConfig(store: AdapterStore, tool: ToolId, port: number, rev
     instructions: '移除 ModelDock 供应商配置并保留原生授权、MCP 和其他供应商。仍使用 ModelDock 时恢复本机记录的原模型选择；旧版没有恢复记录时回到 Codex 原生默认配置。用户已切换其他供应商时保留当前选择。',
   };
   const responses = models.filter(m => m.wireApi === 'responses');
-  if (!responses.length) throw new Error('Codex 接入需要 Responses 模型，请在模型目录设置协议后再选择。');
+  if (!responses.length) throw new Error('Codex 接入需要 Responses 模型，请在供应商模型设置中配置协议后再选择。');
   const chosen = responses.find(m => m.id === binding.defaultModelId) ?? responses[0];
   return { filename: 'modeldock-codex.toml', canApply: true,
     content: stringifyToml({ model: chosen.alias, model_provider: 'modeldock', model_providers: { modeldock: {

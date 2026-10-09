@@ -6,8 +6,6 @@ import { isCopilotUpstream } from './copilot-provider';
 import { resolveBindingModels } from '../shared/bindings';
 import { modelDisplayLabel } from '../shared/model-names';
 import type { Provider, ProviderSecret, Model, ToolId, GatewayStatus } from '../shared/types';
-import { reportedUsage } from './usage';
-import type { TokenUsage } from '../shared/usage-types';
 import { DEFAULT_SETTINGS } from '../shared/settings-types';
 import type { DiagnosticContext, DiagnosticEvent, DiagnosticLevel } from '../shared/diagnostic-types';
 import { describeError } from './diagnostic-log';
@@ -310,11 +308,10 @@ export class Gateway {
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const began = Date.now(); let alias = ''; let providerName = ''; let endpoint = '/'; let logStatus = 200;
     let tool: ToolId | undefined, providerId: string | undefined, modelId: string | undefined;
-    let usage: TokenUsage | undefined, upstreamFailed = false, anthropic = false, chatResponses = false;
+    let upstreamFailed = false, anthropic = false, chatResponses = false;
     let diagnosticEndpoint: string | undefined;
     let diagnosticError: Pick<DiagnosticContext, 'errorName' | 'networkCode' | 'projectFrames'> | undefined;
     const observe = (value: unknown) => {
-      usage = reportedUsage(value) ?? usage;
       if (isObject(value) && ['error', 'response.failed', 'response.incomplete'].includes(String(value.type ?? ''))) {
         // 修改点：合法预算截断会映射为 Messages max_tokens，不能把成功回复记录成 502。
         const details = isObject(value.response) && isObject(value.response.incomplete_details) ? value.response.incomplete_details : undefined;
@@ -400,7 +397,7 @@ export class Gateway {
         endpoint: diagnosticEndpoint, toolId: tool, providerId, modelId, ...diagnosticError,
       });
       if (request.method === 'POST') {
-        try { this.store.addLog({ alias, providerName, endpoint, status: logStatus, durationMs: Date.now() - began, tool, providerId, modelId, usage }); } catch { /* logging must not break a completed response */ }
+        try { this.store.addLog({ alias, providerName, endpoint: diagnosticEndpoint ?? '/', status: logStatus, durationMs: Date.now() - began }); } catch { /* logging must not break a completed response */ }
       }
     }
   }

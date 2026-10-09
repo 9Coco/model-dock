@@ -2,10 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { applyCopilotDesktop, CopilotSyncError, type CopilotSyncStore } from '../src/main/copilot-sync';
+import { applyCopilotDesktop, copilotSyncUndoKey, copilotSyncUndoStatus, undoCopilotDesktop, CopilotSyncError, type CopilotSyncStore } from '../src/main/copilot-sync';
 import { CopilotDesktopClient, CopilotDesktopError, type CopilotDesktopPlan, type CopilotDesktopSocket, type CopilotNativeProvider, type CopilotNativeModel } from '../src/main/copilot-desktop';
 import type { CopilotCredentialBackup } from '../src/main/copilot-credentials';
 import { restoreOfficialConfig } from '../src/main/tool-restore';
+import { ToolSyncUndoManager, toolSyncUndoKey } from '../src/main/tool-sync-undo';
+import type { ToolBinding } from '../src/shared/types';
 
 const A = '23d4bf21-4897-4e6e-9cc7-69c25b738cc0', B = '23d4bf21-4897-4e6e-9cc7-69c25b738cc1';
 const MA = '23d4bf21-4897-4e6e-9cc7-69c25b738cd0', MB = '23d4bf21-4897-4e6e-9cc7-69c25b738cd1', EXTRA = '23d4bf21-4897-4e6e-9cc7-69c25b738cd2';
@@ -326,5 +328,95 @@ describe('running Copilot app synchronization and encrypted ownership recovery',
     f.app.failNext = body => body.type === 'upsert_provider_model'; await safeFailure(f.apply(makePlan(A, MA, 'PRIVATE_NEW_KEY')), 'recovery');
     f.app.failNext = undefined; f.app.closeThrows = false; await f.apply({ providers: [] });
     expect(f.store.state().ownedProviderIds).toEqual([]);
+  });
+});
+
+describe('explicit Copilot single-step undo through native registry and opaque credentials', () => {
+  function setup() {
+    const f = exclusiveFixture();
+    const options = { openClient: f.app.open, syncScope: 'selected' as const, captureCredentials: f.captureCredentials, restoreCredentials: f.restoreCredentials, recordUndo: true };
+    const apply = (desired: CopilotDesktopPlan, scope: 'selected' | 'managed' = 'selected') => applyCopilotDesktop(f.store, desired, home, { ...options, syncScope: scope });
+    const undo = (commit?: () => void) => undoCopilotDesktop(f.store, home, options, commit);
+    return { ...f, options, apply, undo };
+  }
+  it('restores removed foreign custom metadata and original opaque keys while retaining GitHub account state', async () => {
+    const f = setup(), before = structuredClone({ providers: [...f.app.providers], models: [...f.app.models], secrets: [...f.app.secrets] });
+    await f.apply(makePlan()); expect(f.app.providers.has(FOREIGN)).toBe(false);
+    const status = copilotSyncUndoStatus(f.store, home); expect(status.available).toBe(true); expect(status.changed).toBe(true); expect(JSON.stringify(status)).not.toMatch(/PRIVATE_|foreign\.example/);
+    await f.undo();
+    expect(new Map(f.app.providers)).toEqual(new Map(before.providers)); expect(new Map(f.app.models)).toEqual(new Map(before.models)); expect(new Map(f.app.secrets)).toEqual(new Map(before.secrets));
+    expect(f.store.state()).toMatchObject({ ownedProviderIds: [], lastSuccessfulPlan: { providers: [] } });
+    expect(copilotSyncUndoStatus(f.store, home).available).toBe(false);
+    expect(f.app.mutations.filter(body => body.type === 'upsert_model_provider' && body.provider.id === FOREIGN).every(body => body.secret === undefined)).toBe(true);
+    expect(f.store.backups.every(value => !value.includes('PRIVATE_'))).toBe(true);
+  });
+  it('undoes managed scope updates without touching unrelated custom providers, account state or newly added unrelated sources', async () => {
+    const f = setup(); await f.apply(makePlan(), 'managed');
+    const original = structuredClone({ providers: [...f.app.providers], models: [...f.app.models], secrets: [...f.app.secrets] });
+    await f.apply(makePlan(A, MA, 'PRIVATE_ROTATED'), 'managed');
+    const newlyAdded = '83d4bf21-4897-4e6e-9cc7-69c25b738ce0';
+    f.app.providers.set(newlyAdded, { id: newlyAdded, name: 'Unrelated new custom', kind: 'custom', settings: { baseUrl: 'https://new.fixture' }, hasSecret: false });
+    await f.undo();
+    for (const [id, value] of original.providers) expect(f.app.providers.get(id)).toEqual(value);
+    for (const [id, value] of original.models) expect(f.app.models.get(id)).toEqual(value);
+    expect(new Map(f.app.secrets)).toEqual(new Map(original.secrets)); expect(f.app.providers.has(newlyAdded)).toBe(true);
+    expect(f.store.state().lastSuccessfulPlan.providers[0].apiKey).toBe('PRIVATE_OLD_KEY');
+  });
+  it.each(['provider', 'model', 'key', 'orphan-key', 'journal'] as const)('rejects an external %s change before restoring any native state', async changed => {
+    const f = setup(); await f.apply(makePlan());
+    if (changed === 'provider') f.app.providers.get(A)!.name = 'External source label';
+    if (changed === 'model') f.app.models.get(MA)!.displayName = 'External model label';
+    if (changed === 'key') f.app.secrets.set(A, 'PRIVATE_MANUAL_ROTATION');
+    if (changed === 'orphan-key') f.app.secrets.set(FOREIGN, 'PRIVATE_NEW_ORPHAN_KEY');
+    if (changed === 'journal') f.store.setManagedState(key, { ...f.store.state(), ownedProviderIds: [], lastSuccessfulPlan: { providers: [] } });
+    const before = structuredClone({ providers: [...f.app.providers], models: [...f.app.models], secrets: [...f.app.secrets] }), mutations = f.app.mutations.length;
+    await safeFailure(f.undo(), 'changed');
+    expect(f.app.mutations).toHaveLength(mutations); expect([...f.app.providers]).toEqual(before.providers); expect([...f.app.models]).toEqual(before.models); expect([...f.app.secrets]).toEqual(before.secrets);
+    expect(copilotSyncUndoStatus(f.store, home).available).toBe(true);
+  });
+  it('keeps the previous undo record when a subsequent apply fails and its native rollback succeeds', async () => {
+    const f = setup(); await f.apply(makePlan());
+    const saved = f.store.getManagedState(copilotSyncUndoKey(home), null);
+    let failed = false; f.app.failAfterMutation = true;
+    f.app.failNext = body => { if (!failed && body.type === 'upsert_provider_model') { failed = true; return true; } return false; };
+    await safeFailure(f.apply(makePlan(A, MA, 'PRIVATE_FAILED_ROTATION')), 'restored');
+    expect(f.store.getManagedState(copilotSyncUndoKey(home), null)).toEqual(saved); expect(f.app.secrets.get(A)).toBe('PRIVATE_OLD_KEY');
+    f.app.failNext = undefined; await f.undo(); expect(f.app.providers.has(FOREIGN)).toBe(true);
+  });
+  it('rolls a partially failed undo back to the synchronized runtime and preserves its retry record', async () => {
+    const f = setup(); await f.apply(makePlan());
+    const saved = f.store.getManagedState(copilotSyncUndoKey(home), null), state = f.store.state();
+    let failed = false; f.app.failAfterMutation = true;
+    f.app.failNext = body => { if (!failed && body.type === 'upsert_provider_model' && body.model.providerId === FOREIGN) { failed = true; return true; } return false; };
+    await safeFailure(f.undo(), 'restored');
+    expect(f.app.providers.has(A)).toBe(true); expect(f.app.providers.has(FOREIGN)).toBe(false); expect(f.app.secrets.get(A)).toBe('PRIVATE_OLD_KEY'); expect(f.app.secrets.has(FOREIGN)).toBe(false);
+    expect(f.store.state()).toEqual(state); expect(f.store.getManagedState(copilotSyncUndoKey(home), null)).toEqual(saved);
+    f.app.failNext = undefined; await f.undo(); expect(f.app.providers.has(FOREIGN)).toBe(true);
+  });
+  it('rolls native undo back when committing its storage or local binding fails, without exposing the raw failure', async () => {
+    const f = setup(); await f.apply(makePlan()); const saved = f.store.getManagedState(copilotSyncUndoKey(home), null);
+    f.store.failWrite = f.store.writes + 2;
+    await safeFailure(f.undo(), 'restored');
+    expect(f.store.getManagedState(copilotSyncUndoKey(home), null)).toEqual(saved); expect(f.app.providers.has(A)).toBe(true); expect(f.app.providers.has(FOREIGN)).toBe(false);
+    f.store.failWrite = undefined; await safeFailure(f.undo(() => { throw new Error('PRIVATE_LOCAL_BINDING_COMMIT_FAILURE'); }), 'restored');
+    expect(f.store.getManagedState(copilotSyncUndoKey(home), null)).toEqual(saved); expect(f.app.secrets.get(A)).toBe('PRIVATE_OLD_KEY');
+    await f.undo(); expect(f.app.providers.has(FOREIGN)).toBe(true);
+  });
+  it('captures a native owned snapshot with read commands only, retaining process identity checks and excluding account providers', async () => {
+    const f = setup(); await f.apply(makePlan()); const client = await f.app.open(home), mutations = f.app.mutations.length;
+    const captured = await client.captureSnapshot([A, FOREIGN]); expect(captured.providers.map(entry => entry.provider.id)).toEqual([A]); expect(f.app.mutations).toHaveLength(mutations);
+    await expect(client.captureSnapshot(['account'])).rejects.toBeInstanceOf(CopilotDesktopError); expect(f.app.mutations).toHaveLength(mutations); client.close();
+  });
+  it('restores the pre-burst binding with the running Copilot native checkpoint and keeps unrelated binding notes', async () => {
+    const f = setup();
+    const before: ToolBinding = { id: 'copilot', name: 'Copilot', note: 'Original note', enabled: false, providerIds: [], modelIds: [], defaultModelId: '', mode: 'direct', copilotSyncScope: 'selected' };
+    let binding: ToolBinding = { ...before, enabled: true, providerIds: ['fixture-source'], modelIds: ['fixture-model'], defaultModelId: 'fixture-model', mode: 'aggregate' };
+    const store = Object.assign(f.store, { listBindings: () => [structuredClone(binding)], restoreBindingSelection: (saved: ToolBinding) => { binding = { ...structuredClone(saved), name: binding.name, note: binding.note }; } });
+    const manager = new ToolSyncUndoManager(store, { appData: join(tmpdir(), 'fixture-appdata'), homeDirectory: home, copilotHome: home, copilotOptions: f.options });
+    await manager.run('copilot', before, () => f.apply(makePlan())); expect(manager.status('copilot').available).toBe(true);
+    const record = store.getManagedState(toolSyncUndoKey('copilot'), null); binding.note = 'New unrelated note';
+    await manager.run('copilot', binding, () => f.apply(makePlan())); expect(store.getManagedState(toolSyncUndoKey('copilot'), null)).toEqual(record);
+    await manager.undo('copilot'); expect(binding).toMatchObject({ enabled: false, providerIds: [], modelIds: [], defaultModelId: '', note: 'New unrelated note' });
+    expect(f.app.providers.has(FOREIGN)).toBe(true); expect(manager.status('copilot').available).toBe(false);
   });
 });

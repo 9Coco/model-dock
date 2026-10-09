@@ -15,21 +15,66 @@ async function setup() {
   const codec = { encrypt: (value: string) => `test:${Buffer.from(value).toString('base64')}`, decrypt: (value: string) => Buffer.from(value.slice(5), 'base64').toString() };
   const store = await Store.create(dir, codec); stores.push(store); return { store, dir, codec };
 }
-describe('cache creation usage persistence', () => {
-  it('preserves separate cache-write metadata through persistence and rejects invalid batches atomically', async () => {
+describe('request logs without local usage storage', () => {
+  it('keeps request metadata without creating usage tables in a fresh store', async () => {
     const { store, dir, codec } = await setup();
-    const time = '2026-10-07T01:00:00Z';
-    const item = { id: 'client:opencode:cache-write', time, alias: 'test', providerName: 'Native', endpoint: 'session', status: 0, durationMs: 0, tool: 'opencode' as const,
-      usage: { inputTokens: 200, cachedInputTokens: 60, cacheCreationInputTokens: 40, outputTokens: 25 } };
-    expect(store.addClientUsage(item)).toBe(true);
-    expect(() => store.addClientUsages([{ ...item, id: 'client:opencode:rollback' }, { ...item, id: 'client:opencode:invalid', usage: { ...item.usage, cacheCreationInputTokens: 150 } }])).toThrow('缓存写入');
-    expect(store.usageRecords('2026-10-07T00:00:00Z', '2026-10-08T00:00:00Z')).toHaveLength(1);
+    const item = { id: 'request-only', time: '2026-10-07T01:00:00Z', alias: 'test', providerName: 'Native', endpoint: '/v1/responses', status: 200, durationMs: 12 };
+    store.addLog(item);
     store.close(); const reopened = await Store.create(dir, codec); stores.push(reopened);
-    expect(reopened.usageRecords('2026-10-07T00:00:00Z', '2026-10-08T00:00:00Z')[0].usage).toEqual(item.usage);
+    expect(reopened.logs()).toEqual([item]);
+    const SQL = await initSqlJs({ locateFile: file => join(process.cwd(), 'node_modules/sql.js/dist', file) });
+    const raw = new SQL.Database(readFileSync(join(dir, 'modeldock.sqlite')));
+    try { expect(raw.exec("SELECT name FROM sqlite_master WHERE type='table' AND name='usage_events'")).toEqual([]); }
+    finally { raw.close(); }
+  });
+  it('preserves legacy usage tables and values without updating or accumulating records', async () => {
+    const { store, dir, codec } = await setup(); store.close();
+    const SQL = await initSqlJs({ locateFile: file => join(process.cwd(), 'node_modules/sql.js/dist', file) });
+    const filename = join(dir, 'modeldock.sqlite'), legacy = new SQL.Database(readFileSync(filename));
+    legacy.run('CREATE TABLE usage_events(id TEXT PRIMARY KEY, provider_id TEXT, input_tokens INTEGER)');
+    legacy.run('INSERT INTO usage_events VALUES(?, ?, ?)', ['historical', 'historical-provider', 13]);
+    const before = legacy.exec('SELECT * FROM usage_events');
+    writeFileSync(filename, legacy.export()); legacy.close();
+    const reopened = await Store.create(dir, codec); stores.push(reopened);
+    reopened.addLog({ alias: 'new', providerName: 'Native', endpoint: '/v1/responses', status: 200, durationMs: 1 }); reopened.close();
+    const raw = new SQL.Database(readFileSync(filename));
+    try { expect(raw.exec('SELECT * FROM usage_events')).toEqual(before); expect(raw.exec('PRAGMA table_info(usage_events)')[0].values.map(row => row[1])).toEqual(['id', 'provider_id', 'input_tokens']); }
+    finally { raw.close(); }
   });
 });
 function model(providerId: string, alias = 'test/model'): ModelInput { return { providerId, alias, upstreamId: 'upstream-id', displayName: 'Test Model', wireApi: 'chat-completions', contextWindow: 64000, tools: true, vision: false, enabled: true }; }
 afterEach(() => { for (const store of stores.splice(0)) store.close(); for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true }); });
+
+describe('restoring a captured tool selection', () => {
+  it('clears optional selection fields while preserving current unrelated metadata', async () => {
+    const { store } = await setup();
+    const provider = store.saveProvider({ name: 'Restore source', kind: 'openai-compatible', baseUrl: 'https://restore.example/v1', enabled: true, apiKey: 'synthetic' });
+    const first = store.saveModel(model(provider.id, 'restore-first')), second = store.saveModel(model(provider.id, 'restore-second'));
+    const binding = store.listBindings().find(row => row.id === 'dsh')!;
+    store.saveBinding({ ...binding, enabled: true, mode: 'aggregate', providerIds: [provider.id], modelIds: [first.id], defaultModelId: first.id, dshSyncScope: 'selected', note: 'original note' });
+    const captured = store.listBindings().find(row => row.id === 'dsh')!;
+    store.saveBinding({ ...captured, modelIds: [second.id], defaultModelId: second.id, modelSelection: 'selected', dshSyncScope: 'managed', note: 'current note' });
+    store.restoreBindingSelection({ ...captured, providerIds: undefined, modelSelection: undefined, connectionChoices: undefined });
+    expect(store.listBindings().find(row => row.id === 'dsh')).toEqual({ ...captured, providerIds: undefined, note: 'current note' });
+  });
+  it('restores both single-entry connection drafts and refuses removed references before writing', async () => {
+    const { store } = await setup();
+    const provider = store.saveProvider({ name: 'Restore source', kind: 'openai-compatible', baseUrl: 'https://restore.example/v1', enabled: true, apiKey: 'synthetic' });
+    const savedModel = store.saveModel({ ...model(provider.id, 'restore-codex'), wireApi: 'responses' });
+    const binding = store.listBindings().find(row => row.id === 'codex')!;
+    store.saveBinding({ ...binding, enabled: true, mode: 'direct', providerIds: [provider.id], modelIds: [], defaultModelId: savedModel.id });
+    const captured = store.listBindings().find(row => row.id === 'codex')!;
+    store.saveBinding({ ...captured, mode: 'aggregate', modelIds: [savedModel.id], modelSelection: 'selected' });
+    store.restoreBindingSelection(captured);
+    expect(store.listBindings().find(row => row.id === 'codex')).toEqual(captured);
+    store.restoreBindingSelection({ ...captured, modelSelection: undefined, connectionChoices: undefined });
+    expect(store.listBindings().find(row => row.id === 'codex')?.connectionChoices).toBeUndefined();
+    store.deleteProvider(provider.id);
+    const afterRemoval = store.listBindings();
+    expect(() => store.restoreBindingSelection(captured)).toThrow('来源已不存在');
+    expect(store.listBindings()).toEqual(afterRemoval);
+  });
+});
 
 describe('model reasoning effort persistence', () => {
   it('round-trips supported levels and the default level through reopen', async () => {

@@ -7,7 +7,6 @@ import { tmpdir } from 'node:os';
 import { Store } from '../src/main/store';
 import { Gateway } from '../src/main/gateway';
 import { collectNativeMessagesStream, createNativeMessagesStream, nativeMessagesToSse, prepareNativeMessagesRequest, toNativeMessagesResponse } from '../src/main/native-messages';
-import { reportedUsage } from '../src/main/usage';
 import type { Provider } from '../src/shared/types';
 
 const cleanups: (() => void | Promise<void>)[] = [];
@@ -89,7 +88,6 @@ function byteChunks(text: string): ReadableStream<Uint8Array> {
   const bytes = new TextEncoder().encode(text);
   return new ReadableStream({ start(controller) { for (let index = 0; index < bytes.length; index += 7) controller.enqueue(bytes.slice(index, index + 7)); controller.close(); } });
 }
-const records = (store: Store) => store.usageRecords('2000-01-01T00:00:00Z', '2100-01-01T00:00:00Z');
 
 describe('Native Messages response handling', () => {
   it('uses strict official dual-protocol endpoints and exactly one source auth header', () => {
@@ -130,12 +128,13 @@ describe('Native Messages response handling', () => {
     expect(error).toMatchObject({ status: 400 });
     expect(String(error)).not.toMatch(/injected|PRIVATE_CLIENT|SYNTHETIC_SOURCE_KEY|私人标记/);
   });
-  it('collects split UTF-8, thinking signatures, tool inputs and cumulative native cache usage', async () => {
+  it('collects split UTF-8, thinking signatures, tool inputs and native protocol usage without synthetic observer totals', async () => {
     const observed: unknown[] = [];
     const result = await collectNativeMessagesStream(byteChunks(nativeStream()), 'local-alias', { onUpstreamEvent: value => observed.push(value) });
     expect(result).toMatchObject({ model: 'local-alias', stop_reason: 'tool_use', usage });
     expect(result.content).toEqual([{ type: 'thinking', thinking: 'SYNTHETIC_THINKING', signature: 'SYNTHETIC_SIGNATURE' }, { type: 'tool_use', id: 'tool_fixture', name: 'read_fixture', input: { path: '测试' } }]);
-    expect(observed.map(reportedUsage).filter(Boolean).at(-1)).toEqual({ inputTokens: 14, outputTokens: 3, cachedInputTokens: 4, cacheCreationInputTokens: 2 });
+    expect(observed).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'message_start', message: expect.objectContaining({ usage: { ...usage, output_tokens: 0 } }) }), expect.objectContaining({ type: 'message_delta', usage: { output_tokens: 3 } })]));
+    expect(observed.every(value => (value as { type?: string }).type)).toBe(true);
   });
   it('preserves native thinking and opaque server-tool blocks when a JSON reply is requested as a stream', async () => {
     const content = [{ type: 'thinking', thinking: 'SYNTHETIC_THINKING', signature: 'SYNTHETIC_SIGNATURE' }, { type: 'web_search_tool_result', tool_use_id: 'server_fixture', content: [{ type: 'web_search_result', title: 'Synthetic result', url: 'https://example.com', encrypted_content: 'SYNTHETIC_OPAQUE_PAYLOAD' }] }];
@@ -185,7 +184,8 @@ describe('Claude aggregate gateway with native Messages and subscriptions', () =
     expect(f.requests[0].body.thinking).toEqual({ type: 'enabled', budget_tokens: 128 });
     expect(f.requests[2].body.messages).toEqual(history.messages);
     expect(JSON.stringify([a, b, done, subscription, f.store.logs()])).not.toMatch(/SYNTHETIC_API_KEY|SYNTHETIC_SUBSCRIPTION_(?:ACCESS|REFRESH)|MALICIOUS_CLIENT_SECRET/);
-    expect(records(f.store).find(value => value.alias === 'native-b')).toMatchObject({ status: 200, tool: 'claude-code', usage: { inputTokens: 14, outputTokens: 3, cachedInputTokens: 4, cacheCreationInputTokens: 2 } });
+    expect(b.usage).toEqual(usage);
+    expect(f.store.logs().find(value => value.alias === 'native-b')).toMatchObject({ status: 200, endpoint: '/v1/messages' });
   });
   it('maps native SSE nested model aliases, preserves thinking, and collects forced SSE for nonstream clients', async () => {
     const f = await fixture({ handlerA: async (_body, response) => { response.setHeader('content-type', 'text/event-stream'); response.end(nativeStream()); } });
@@ -193,7 +193,8 @@ describe('Claude aggregate gateway with native Messages and subscriptions', () =
     expect(streamed).toContain('event: message_stop'); expect(streamed).toContain('"model":"native-a"'); expect(streamed).not.toContain('shared-upstream-id');
     expect(streamed).toContain('SYNTHETIC_SIGNATURE');
     const collected = await (await f.post(input())).json(); expect(collected.content[1].input).toEqual({ path: '测试' }); expect(collected.stop_reason).toBe('tool_use');
-    expect(records(f.store).every(value => value.status === 200 && value.usage?.inputTokens === 14 && value.usage.outputTokens === 3)).toBe(true);
+    expect(collected.usage).toEqual(usage);
+    expect(f.store.logs().every(value => value.status === 200)).toBe(true);
   });
   it.each([{ error: true }, { truncated: true }])('records native SSE failure without exposing private errors or claiming completion: %j', async options => {
     const f = await fixture({ handlerA: async (_body, response) => { response.setHeader('content-type', 'text/event-stream'); response.end(nativeStream(options)); } });

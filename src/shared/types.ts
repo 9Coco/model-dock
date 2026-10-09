@@ -1,8 +1,6 @@
-import type { TokenUsage, ModelPrice, UsageQuery, UsageSnapshot } from './usage-types';
 import type { AuthAccount, SubscriptionKind } from './auth-types';
 import type { McpServer, McpServerInput, McpImportResult, McpConfigPreview, McpApplyResult } from './mcp-types';
 import type { ManagedSkill, SkillSnapshot, SkillRepositoryInput, SkillImportResult, SkillFilePreview, SkillRemovePreview } from './skill-types';
-import type { ToolUsageImportResult } from './usage-import-types';
 import type { AppSettings, SettingsSnapshot } from './settings-types';
 import type { DiscoveryResult, ModelSelection, AddModelsResult } from './catalog-types';
 import type { ConnectionResult, ConnectionTestInput } from './connection-types';
@@ -141,7 +139,6 @@ export interface RequestLog {
   tool?: ToolId;
   providerId?: string;
   modelId?: string;
-  usage?: TokenUsage;
 }
 export interface Snapshot {
   providers: Provider[];
@@ -194,6 +191,8 @@ export interface ModelDockApi {
   previewConfig(tool: ToolId): Promise<ConfigPreview>;
   exportConfig(tool: ToolId): Promise<string | null>;
   applyConfig(tool: ToolId): Promise<string>;
+  toolSyncUndoStatus(tool: ToolId): Promise<import('./tool-sync-types').ToolSyncUndoStatus>;
+  undoToolSync(tool: ToolId): Promise<string>;
   restoreOfficialConfig(tool: ToolId): Promise<string>;
   beginLogin(id: string): Promise<AuthProgress>;
   authProgress(id: string): Promise<AuthProgress | null>;
@@ -223,12 +222,6 @@ export interface ModelDockApi {
   skillsReadFile(id: string, relativePath?: string): Promise<SkillFilePreview>;
   skillsPreviewRemove(id: string): Promise<SkillRemovePreview>;
   skillsDelete(id: string): Promise<void>;
-  usageQuery(query: UsageQuery): Promise<UsageSnapshot>;
-  usageSavePrice(price: ModelPrice): Promise<void>;
-  usageDeletePrice(modelId: string): Promise<void>;
-  usageImportTool(tool: ToolId): Promise<ToolUsageImportResult>;
-  usageSyncTools(): Promise<import('./usage-import-types').UsageSyncResult>;
-  usageSources(): Promise<import('./usage-import-types').UsageSourcesSnapshot>;
   getSettings(): Promise<SettingsSnapshot>;
   probeAuthNetwork(): Promise<import('./network-types').AuthNetworkDiagnostic>;
   saveSettings(patch: Partial<AppSettings>): Promise<SettingsSnapshot>;

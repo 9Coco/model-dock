@@ -96,7 +96,7 @@ describe('loopback gateway', () => {
     await new Promise<void>(resolve => mock.server.close(() => resolve()));
     await expect(gateway.start()).resolves.toMatchObject({ running: true, port, lastError: '' });
   });
-  it('meters JSON, streamed Chat and collected Responses usage once without storing conversation text', async () => {
+  it('forwards protocol usage in JSON, streamed Chat and collected Responses while retaining only request metadata logs', async () => {
     const mock = await upstream(async (req, res) => {
       const body = await requestBody(req);
       if (req.url?.endsWith('/responses')) {
@@ -113,15 +113,18 @@ describe('loopback gateway', () => {
     });
     const f = await fixture(mock.url);
     const responseModel = f.store.saveModel({ ...f.model, id: undefined, alias: 'meter-responses', wireApi: 'responses' });
+    const replies: string[] = [];
     for (const [endpoint, model, stream] of [['chat/completions', f.model.alias, false], ['chat/completions', f.model.alias, true], ['responses', responseModel.alias, false]] as const) {
       const response = await fetch(`${f.url}/${endpoint}`, { method: 'POST', headers: f.headers, body: JSON.stringify({ model, stream, messages: [{ role: 'user', content: 'private prompt' }], input: 'private prompt' }) });
-      expect(response.status).toBe(200); await response.text();
+      expect(response.status).toBe(200); replies.push(await response.text());
     }
-    const records = f.store.usageRecords(new Date(Date.now() - 60_000).toISOString(), new Date(Date.now() + 60_000).toISOString());
+    expect(JSON.parse(replies[0]).usage).toEqual({ prompt_tokens: 10, completion_tokens: 7, prompt_tokens_details: { cached_tokens: 2 } });
+    expect(replies[1]).toContain('"prompt_tokens":20');
+    expect(JSON.parse(replies[2]).usage).toEqual({ input_tokens: 30, output_tokens: 9, input_tokens_details: { cached_tokens: 4 }, output_tokens_details: { reasoning_tokens: 6 } });
+    const records = f.store.logs();
     expect(records).toHaveLength(3);
-    expect(records.map(record => record.usage)).toEqual([{ inputTokens: 10, outputTokens: 7, cachedInputTokens: 2 }, { inputTokens: 20, outputTokens: 8, cachedInputTokens: 3 }, { inputTokens: 30, outputTokens: 9, cachedInputTokens: 4 }]);
-    expect(JSON.stringify(records)).not.toMatch(/private (prompt|answer)/);
-    expect(records.every(record => record.providerId === f.provider.id && record.source === 'gateway')).toBe(true);
+    expect(records.every(record => record.status === 200 && record.providerName === f.provider.name)).toBe(true);
+    expect(JSON.stringify(records)).not.toMatch(/private (prompt|answer)|usage|tokens/);
   });
 
   it('authenticates local keys, presents a standard model directory, routes aliases and hides secrets in metadata logs', async () => {

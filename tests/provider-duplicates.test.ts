@@ -139,7 +139,7 @@ describe('explicit legacy duplicate preview and safe merge', () => {
     expect(JSON.stringify(group)).not.toContain('synthetic-key');
   });
 
-  it('moves every model intact, preserves tool scopes/defaults, updates usage references, and backs up original ciphertext and logs', async () => {
+  it('moves every model intact, preserves tool scopes/defaults, and backs up original ciphertext and request logs', async () => {
     const { store } = await setup(); const first = source(store), second = duplicate(store, first, 'second', 'synthetic-key', { note: 'second note' });
     const a = model(store, first.id, 'a'), b = model(store, second.id, 'b'), c = model(store, second.id, 'c', { contextWindow: 128000, vision: true });
     const independent = source(store, 'Independent', 'independent-key'), d = model(store, independent.id, 'd');
@@ -148,7 +148,7 @@ describe('explicit legacy duplicate preview and safe merge', () => {
     store.saveBinding({ ...bindings[1], mode: 'auto', enabled: true, providerIds: [first.id, second.id], modelIds: [], defaultModelId: c.id });
     store.saveBinding({ ...bindings[2], mode: 'auto', enabled: true, providerIds: [first.id, independent.id], modelIds: [a.id, d.id], defaultModelId: d.id });
     store.saveBinding({ ...bindings[3], enabled: false, providerIds: [second.id], modelIds: [b.id], defaultModelId: b.id });
-    store.addLog({ alias: a.alias, providerName: first.name, endpoint: '/v1/responses', status: 200, durationMs: 10, providerId: first.id, modelId: a.id, usage: { inputTokens: 7, outputTokens: 3, cachedInputTokens: 2 } });
+    store.addLog({ alias: a.alias, providerName: first.name, endpoint: '/v1/responses', status: 200, durationMs: 10 });
     const beforeProviders = store.listProviders(), beforeModels = store.listModels(), beforeBindings = store.listBindings(), beforeLogs = store.logs();
     const beforeScopes = beforeBindings.map(binding => resolveBindingModels(binding, beforeModels, beforeProviders).map(value => value.id).sort());
     const [group] = store.listProviderDuplicates(), result = store.mergeProviderDuplicates(group.providerIds, group.fingerprint);
@@ -159,7 +159,6 @@ describe('explicit legacy duplicate preview and safe merge', () => {
     expect(store.listBindings().map(binding => binding.modelIds)).toEqual([[a.id], [], [a.id, d.id], [b.id], [], [], [], [], [], []]);
     expect(store.getProvider(second.id)?.note).toBe('second note\n\noriginal note');
     expect(store.logs()).toEqual(beforeLogs);
-    expect(store.usageRecords('2000-01-01T00:00:00Z', '2100-01-01T00:00:00Z')[0]).toMatchObject({ providerId: second.id, modelId: a.id, usage: { inputTokens: 7, outputTokens: 3, cachedInputTokens: 2 } });
     expect(store.getSecret(second.id)?.apiKey).toBe('synthetic-key');
     const SQL = await initSqlJs({ locateFile: file => join(process.cwd(), 'node_modules/sql.js/dist', file) });
     const backup = new SQL.Database(readFileSync(result.backupPath));
