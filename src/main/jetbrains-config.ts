@@ -6,6 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import type { ConfigPreview, Model, Provider, ProviderSecret, ToolBinding } from '../shared/types';
 import { bindingConnectionPolicy, resolveBindingModels } from '../shared/bindings';
 import { nativeDirectBaseUrl } from '../shared/single-entry';
+import { jetBrainsCompletionParameters } from '../shared/jetbrains-completion';
 import { JETBRAINS_TOOLS, type JetBrainsToolId, type JetBrainsStatus } from '../shared/jetbrains';
 export type { JetBrainsToolId } from '../shared/jetbrains';
 
@@ -26,11 +27,17 @@ export interface JetBrainsConfigOptions {
 }
 export type JetBrainsConfigStatus = JetBrainsStatus;
 const products = Object.fromEntries(Object.entries(JETBRAINS_TOOLS).map(([id, value]) => [id, { name: value.name, selector: value.selectorPrefix }])) as Record<JetBrainsToolId, { name: string; selector: string }>;
-const specs = [
+const legacySpecs = [
   { file: 'llm.provider.openai.like.xml', component: 'OpenAILikeLlmProviderSettings', fields: ['baseUrl', 'httpClientVersion', 'toolEnabled'] },
   { file: 'llm.custom.models.xml', component: 'LlmCustomModelsSettings', fields: ['smart_model_id', 'quick_model_id'] },
   { file: 'llm.third.party.ai.providers.xml', component: 'LLMThirdPartyAIProvidersSettings', fields: ['OpenAIAPI'] },
 ] as const;
+interface Spec { file: string; component: string; fields: readonly string[]; requiredFields?: readonly string[]; json?: boolean }
+// 修改点：真实 IDE 的 SerializablePersistentStateComponent 把补全状态存为 component 内的 JSON CDATA，而非模型指定字段。
+const completionFields = ['selectedProvider.id', 'selectedProvider.kind', 'selectedProvider.name', 'openAiCompatible.baseUrl', 'openAiCompatible.model', 'openAiCompatible.providerId', 'openAiCompatible.modelId', 'openAiCompatible.schemaId'] as const;
+const completionSpec: Spec = { file: 'llm.next.edit.providers.xml', component: 'NextEditProviderSettings', json: true,
+  fields: [...completionFields, 'openAiCompatible.maxOutputTokens'], requiredFields: completionFields };
+const specs: readonly Spec[] = [...legacySpecs, completionSpec];
 const maximumFileSize = 512 * 1024;
 function fail(message: string): never { throw new Error(`JetBrains ${message}，未修改原配置。`); }
 function metadata(path: string) {
@@ -86,7 +93,7 @@ export function jetBrainsStatus(tool: JetBrainsToolId, homeDirectory = homedir()
     if (!pidText || !/^\d{1,10}$/.test(pidText) || !Number.isSafeInteger(Number(pidText)) || Number(pidText) < 1) return { ...status, message: '无法确认 IDE 是否仍运行；请复制参数，在 IDE 设置中配置。' };
     const running = (options.processProbe ?? defaultProcessProbe)(Number(pidText));
     if (running !== 'stopped') return { ...status, running, message: running === 'running' ? 'IDE 记录的进程仍在运行，请先自行退出 IDE 后刷新，再离线同步设置。' : '无法确认 IDE 已退出；请使用复制接入参数。' };
-    for (const spec of specs) { const text = readConfig(join(configDir, 'options', spec.file)); if (text !== null) locate(parseXml(text), spec.component); }
+    for (const spec of specs) { const text = readConfig(join(configDir, 'options', spec.file)); if (text !== null) { const doc = parseXml(text); locate(doc, spec.component); if (spec.json) for (const name of spec.fields) completionValue(doc, spec, name); } }
     return { ...status, running, canApply: true, message: '已确认该 IDE 进程退出，可离线同步模型与地址；API Key 须在 IDE 中手动填写一次。' };
   } catch { return { ...located, canApply: false, message: '配置路径、XML 或进程检测不安全，离线同步已禁用；请使用复制接入参数。' }; }
 }
@@ -113,17 +120,23 @@ function selection(store: JetBrainsConfigStore, tool: JetBrainsToolId, port: num
   if (!key || typeof key !== 'string') fail(directApi ? '直连供应商尚未填写 API Key' : '本机入口密钥无效');
   const baseUrl = directApi ? nativeDirectBaseUrl(tool, provider!, models)! : `http://127.0.0.1:${port}/tool/${tool}/v1`;
   if (!baseUrl) fail('直连供应商地址为空');
-  return { models, core, key, baseUrl, directApi, coreId: modelId(core), modelId };
+  const completion = jetBrainsCompletionParameters(binding, allModels, providers ?? [], port);
+  return { models, core, key, baseUrl, directApi, coreId: modelId(core), modelId, completion };
 }
 export function buildJetBrainsConfig(store: JetBrainsConfigStore, tool: JetBrainsToolId, port: number, revealKey = false, homeDirectory = homedir(), options: JetBrainsConfigOptions = {}): ConfigPreview {
   const selected = selection(store, tool, port, revealKey), status = jetBrainsStatus(tool, homeDirectory, options);
   return { filename: `modeldock-${tool}-connection-guide.json`, canApply: status.canApply,
     content: JSON.stringify(selected ? { tool: products[tool].name, provider: 'OpenAI-compatible', baseUrl: selected.baseUrl, apiKey: selected.key, httpVersion: 'HTTP/1.1', toolCalling: selected.core.tools,
       models: selected.models.map(model => ({ id: selected.modelId(model), name: model.displayName || selected.modelId(model), wireApi: 'chat-completions' })), modelAssignment: { core: `OpenAIAPI/${selected.coreId}`, lightweight: `OpenAIAPI/${selected.coreId}` },
+      completion: { configured: selected.completion.configured, supported: selected.completion.supported, baseUrl: selected.completion.baseUrl, model: selected.completion.model,
+        schemaId: selected.completion.schemaId, maxOutputTokens: selected.completion.maxOutputTokens, reason: selected.completion.reason,
+        apiKey: selected.completion.configured ? selected.key : undefined, keyConfirmation: '请在 IDE 的 AI 补全区单独确认 Key，参数更新后选择兼容 OpenAI 启用' },
     } : {}, null, 2),
     instructions: '此 JSON 是接入参数说明，不能作为 IDE 原生配置导入。打开 设置 → 工具 → AI Assistant → 提供商与 API 密钥，选择兼容 OpenAI，填写 URL 与' + (selected?.directApi ? '供应商 API Key' : '本机 API Key') + '，使用 HTTP/1.1，然后测试连接并在模型指定中选择核心功能和即时助手。'
       + '模型聊天在 IDE 的模型选择器中切换。工具调用只在模型支持时勾选；JetBrains 订阅、Junie、Claude Agent、Codex 和 Gemini CLI 的授权使用各自入口。'
-      + '离线同步仅调整本产品已验证的地址、HTTP 版本、核心功能与即时助手模型、工具调用开关，并启用 OpenAIAPI；保留其他模型、提供商和设置。API Key 由 IDE 的 PasswordSafe 管理，必须在 IDE 中手动粘贴一次，本软件不写密码库或 OAuth 凭据。'
+      + '离线同步调整本产品已验证的聊天地址、HTTP 版本、核心功能与即时助手模型、工具调用开关，并启用 OpenAIAPI。'
+      + (selected?.completion.configured ? '同步也会更新独立 AI 补全地址、模型和 FIM 提示架构；仅在超过已确认接口限制时把补全最大输出降至 4096，保留补全上下文和其他参数。' + (selected.completion.supported ? '' : `当前补全接口能力未确认，补全保持关闭：${selected.completion.reason}`) : `AI 补全未同步：${selected?.completion.reason ?? '未选择可用补全模型。'}旧补全配置保留；聊天模型可用并不代表支持补全。`)
+      + '补全地址或提供商身份改变时，会暂时把 AI 补全提供商设为无；未确认补全能力时也保持关闭。参数仍已更新，请在 IDE 的 AI 补全区填写对应 API Key，再选择兼容 OpenAI 启用。聊天和 AI 补全使用 IDE PasswordSafe 的两个独立密钥位置；首次接入或切换来源/连接方式后，须在 IDE 两处分别粘贴或确认 API Key。本软件不读写密码库，不伪造密钥已配置标记，不写 OAuth 凭据；保留其他提供商、参数和设置。'
       + (selected?.directApi ? '当前直接连接所选单一 API 来源，模型使用真实上游 ID；预览隐藏 API Key，显式复制或导出接入参数才读取该供应商密钥。' : '当前使用 ModelDock 聚合接口；内部可选择供应商及允许映射的模型。Responses 模型和订阅由聚合入口转换为 IDE 使用的 Chat Completions 协议；只把固定本机密钥交给 IDE，OAuth 凭据留在主进程。使用时保持 ModelDock 本机入口运行。')
       + '协议桥与模型清单不代表真实 IDE 或上游推理验收。' + status.message,
   };
@@ -212,7 +225,53 @@ function enabledNode(doc: XmlDoc, component: string): { container?: XmlNode; mem
   const members = container.children.filter(node => node.attrs.get('value')!.value === 'OpenAIAPI');
   if (members.length > 1) fail('启用提供商重复'); return { container, member: members[0] };
 }
-function fieldValue(doc: XmlDoc, spec: typeof specs[number], name: string): Value {
+function completionState(doc: XmlDoc, spec: Spec): Record<string, unknown> {
+  const node = locate(doc, spec.component);
+  if (!node) return {};
+  if (node.children.length) fail('AI 补全 JSON 配置结构不受支持');
+  const raw = doc.text.slice(node.openEnd, node.closeStart);
+  if (!raw.trim()) return {};
+  // 原生配置使用 CDATA；支持标准分段 CDATA，以便保留包含 ]]> 的 JSON 字符串。
+  let json = '', cursor = 0;
+  while (cursor < raw.length) {
+    if (/\s/.test(raw[cursor])) { cursor++; continue; }
+    if (!raw.startsWith('<![CDATA[', cursor)) fail('AI 补全状态不是原生 JSON CDATA');
+    const end = raw.indexOf(']]>', cursor + 9); if (end < 0) fail('AI 补全 CDATA 不完整');
+    json += raw.slice(cursor + 9, end); cursor = end + 3;
+  }
+  let value: unknown;
+  try { value = JSON.parse(json); } catch { fail('AI 补全 JSON 无效'); }
+  if (!record(value)) fail('AI 补全 JSON 必须为对象');
+  return value;
+}
+function completionValue(doc: XmlDoc, spec: Spec, name: string): Value {
+  const [parentName, field] = name.split('.'), state = completionState(doc, spec), parent = state[parentName];
+  if (parent === undefined) return { present: false };
+  if (!record(parent)) fail('AI 补全托管状态不是对象');
+  if (!Object.hasOwn(parent, field)) return { present: false };
+  const value = parent[field];
+  if (typeof value !== 'string') fail(name === 'openAiCompatible.maxOutputTokens' ? 'AI 补全最大输出参数不是原生字符串' : 'AI 补全托管字段不是原生字符串');
+  return { present: true, value: JSON.stringify(value) };
+}
+function patchCompletionField(text: string, spec: Spec, name: string, value: Value): string {
+  let doc = parseXml(text), state = completionState(doc, spec);
+  const [parentName, field] = name.split('.');
+  if (state[parentName] !== undefined && !record(state[parentName])) fail('AI 补全托管状态不是对象');
+  const parent = state[parentName] as Record<string, unknown> | undefined;
+  if (value.present) {
+    let decoded: unknown;
+    try { decoded = JSON.parse(value.value!); } catch { fail('AI 补全恢复字段无效'); }
+    if (typeof decoded !== 'string') fail('AI 补全恢复字段不是原生字符串');
+    if (!parent) state[parentName] = {};
+    (state[parentName] as Record<string, unknown>)[field] = decoded;
+  } else if (parent) { delete parent[field]; }
+  text = ensureComponent(text, spec.component); doc = parseXml(text);
+  const node = locate(doc, spec.component)!, json = JSON.stringify(state).replaceAll(']]>', ']]]]><![CDATA[>'), serialized = `<![CDATA[${json}]]>`;
+  if (node.selfClosing) { const start = doc.text.lastIndexOf('/', node.openEnd - 1); return doc.text.slice(0, start) + `>${serialized}</${node.name}>` + doc.text.slice(node.end); }
+  return text.slice(0, node.openEnd) + serialized + text.slice(node.closeStart);
+}
+function fieldValue(doc: XmlDoc, spec: Spec, name: string): Value {
+  if (spec.json) return completionValue(doc, spec, name);
   return name === 'OpenAIAPI' ? { present: true, value: enabledNode(doc, spec.component).member ? 'true' : 'false' } : valueOf(doc, spec.component, name);
 }
 function equal(a: Value, b: Value): boolean { return a.present === b.present && a.value === b.value; }
@@ -227,7 +286,8 @@ function removeNode(doc: XmlDoc, node: XmlNode): string {
   const comments = doc.text.slice(node.start, node.end).match(/<!--[^]*?-->/g)?.join('') ?? '';
   return doc.text.slice(0, node.start) + comments + doc.text.slice(node.end);
 }
-function patchField(text: string, spec: typeof specs[number], name: string, value: Value): string {
+function patchField(text: string, spec: Spec, name: string, value: Value): string {
+  if (spec.json) return patchCompletionField(text, spec, name, value);
   let doc = parseXml(text);
   if (name === 'OpenAIAPI') {
     let { container, member } = enabledNode(doc, spec.component);
@@ -255,21 +315,34 @@ function patchField(text: string, spec: typeof specs[number], name: string, valu
 }
 interface FieldHistory { before: Value; applied: Value }
 interface FileHistory { file: string; before: string | null; after: string | null; whole: boolean; fields: Record<string, FieldHistory> }
-interface History { version: 1; tool: JetBrainsToolId; target: string; files: FileHistory[] }
+interface History { version: 1 | 2; tool: JetBrainsToolId; target: string; files: FileHistory[]; completionKeyIdentity?: string }
 interface Change { file: string; original: string | null; content: string | null }
-interface Pending { version: 1; tool: JetBrainsToolId; target: string; pending: { previous: History | null; next: History | null; changes: Change[] } }
+interface Pending { version: 1 | 2; tool: JetBrainsToolId; target: string; pending: { previous: History | null; next: History | null; changes: Change[] } }
 function record(value: unknown): value is Record<string, any> { return !!value && typeof value === 'object' && !Array.isArray(value); }
 function validValue(value: unknown): value is Value { return record(value) && typeof value.present === 'boolean' && Object.keys(value).every(key => ['present', 'value'].includes(key)) && (value.present ? typeof value.value === 'string' : value.value === undefined); }
 export function jetBrainsHistoryKey(target: string, tool: JetBrainsToolId): string { return `tool-config:${tool}:${createHash('sha256').update(resolve(target)).digest('hex')}`; }
+// 修改点：v1 保留原来的三文件恢复语义；v2 只恢复有记录的字段，升级时不推测旧版未托管的补全原值。
 function validateHistory(value: unknown, tool: JetBrainsToolId, target: string): History | null {
   if (value === null) return null;
-  if (!record(value) || value.version !== 1 || value.tool !== tool || value.target !== target || !Array.isArray(value.files) || value.files.length !== specs.length) fail('恢复记录无效');
+  if (!record(value) || ![1, 2].includes(value.version) || value.tool !== tool || value.target !== target || !Array.isArray(value.files)
+    || value.files.length < legacySpecs.length || value.files.length > specs.length || value.version === 1 && value.files.length !== legacySpecs.length) fail('恢复记录无效');
+  if (value.completionKeyIdentity !== undefined && (value.version !== 2 || typeof value.completionKeyIdentity !== 'string' || !value.completionKeyIdentity.length || value.completionKeyIdentity.length > 1024 || /[\x00-\x1f\x7f]/.test(value.completionKeyIdentity))) fail('AI 补全密钥身份恢复记录无效');
+  const names = new Set<string>();
   for (const [index, row] of value.files.entries()) {
-    const spec = specs[index];
-    if (!record(row) || row.file !== spec.file || typeof row.whole !== 'boolean' || ![row.before, row.after].every(item => item === null || typeof item === 'string') || !record(row.fields)
-      || spec.fields.some(name => !Object.hasOwn(row.fields, name)) || Object.keys(row.fields).some(name => !(spec.fields as readonly string[]).includes(name)) || Object.values(row.fields).some(field => !record(field) || !validValue(field.before) || !validValue(field.applied))) fail('恢复记录无效');
-    for (const text of [row.before, row.after]) if (text !== null) parseXml(text);
+    const spec: Spec | undefined = value.version === 1 ? legacySpecs[index] : specs.find(spec => spec.file === row?.file);
+    const required = legacySpecs.find(legacy => legacy.file === spec?.file)?.fields ?? spec?.requiredFields ?? spec?.fields;
+    if (!spec || !record(row) || row.file !== spec.file || names.has(row.file) || typeof row.whole !== 'boolean'
+      || ![row.before, row.after].every(item => item === null || typeof item === 'string') || !record(row.fields)
+      || required?.some(name => !Object.hasOwn(row.fields, name)) || Object.keys(row.fields).some(name => !(spec.fields as readonly string[]).includes(name))
+      || Object.values(row.fields).some(field => !record(field) || !validValue(field.before) || !validValue(field.applied))) fail('恢复记录无效');
+    names.add(row.file);
+    for (const text of [row.before, row.after]) if (text !== null) { const doc = parseXml(text); if (spec.json) completionState(doc, spec); }
+    if (spec.json) for (const field of Object.values(row.fields) as FieldHistory[]) for (const recorded of [field.before, field.applied]) if (recorded.present) {
+      let decoded: unknown; try { decoded = JSON.parse(recorded.value!); } catch { fail('恢复记录中的 AI 补全字段无效'); }
+      if (typeof decoded !== 'string') fail('恢复记录中的 AI 补全字段无效');
+    }
   }
+  if (legacySpecs.some(spec => !names.has(spec.file))) fail('恢复记录无效');
   return value as unknown as History;
 }
 function historyStore(store: Partial<JetBrainsHistoryStore>): JetBrainsHistoryStore {
@@ -279,11 +352,12 @@ function historyStore(store: Partial<JetBrainsHistoryStore>): JetBrainsHistorySt
 function readHistory(store: ReturnType<typeof historyStore>, tool: JetBrainsToolId, target: string): History | null | Pending {
   const value = store.getManagedState<unknown>(jetBrainsHistoryKey(target, tool), null);
   if (!record(value) || !Object.hasOwn(value, 'pending')) return validateHistory(value, tool, target);
-  if (value.version !== 1 || value.tool !== tool || value.target !== target || !record(value.pending) || !Array.isArray(value.pending.changes) || value.pending.changes.length > specs.length) fail('事务恢复记录无效');
+  const transactionSpecs = value.version === 1 ? legacySpecs : specs;
+  if (![1, 2].includes(value.version) || value.tool !== tool || value.target !== target || !record(value.pending) || !Array.isArray(value.pending.changes) || value.pending.changes.length > transactionSpecs.length) fail('事务恢复记录无效');
   validateHistory(value.pending.previous, tool, target); validateHistory(value.pending.next, tool, target);
   const names = new Set<string>();
   for (const change of value.pending.changes) {
-    if (!record(change) || !specs.some(spec => spec.file === change.file) || names.has(change.file) || ![change.original, change.content].every(item => item === null || typeof item === 'string')) fail('事务恢复记录无效');
+    if (!record(change) || !transactionSpecs.some(spec => spec.file === change.file) || names.has(change.file) || ![change.original, change.content].every(item => item === null || typeof item === 'string')) fail('事务恢复记录无效');
     names.add(change.file); for (const text of [change.original, change.content]) if (text !== null) parseXml(text);
   }
   return value as unknown as Pending;
@@ -322,7 +396,7 @@ function transact(store: ReturnType<typeof historyStore>, tool: JetBrainsToolId,
     writeFileSync(backup, change.original, { mode: 0o600, flag: 'wx' }); chmodSync(backup, 0o600);
     if (readFileSync(backup, 'utf8') !== change.original) fail('备份验证失败');
   }
-  const journal: Pending = { version: 1, tool, target, pending: { previous: before, next: after, changes: changed } };
+  const journal: Pending = { version: 2, tool, target, pending: { previous: before, next: after, changes: changed } };
   if (Buffer.byteLength(JSON.stringify(journal), 'utf8') > 7 * 1024 * 1024) fail('事务记录过大');
   store.createManagedBackup('jetbrains-sync', journal);
   let journalWritten = false; const committed: Change[] = [];
@@ -348,38 +422,104 @@ function transact(store: ReturnType<typeof historyStore>, tool: JetBrainsToolId,
     throw error;
   }
 }
-function restoreChanges(history: History, target: string): Change[] {
-  return specs.map((spec, index) => {
-    const saved = history.files[index], path = join(target, 'options', spec.file), original = readConfig(path);
+// 修改点：恢复参数不恢复 PasswordSafe 的密钥。切回旧补全地址或身份时先停用，不能把后来粘贴的 Key 自动发给旧来源。
+function safeCompletionRestore(change: Change, version: 1 | 2, originalBeforeRecovery?: string | null): Change {
+  if (version !== 2 || change.file !== completionSpec.file || change.original === null || change.content === null) return change;
+  const snapshot = originalBeforeRecovery === undefined ? change.original : originalBeforeRecovery;
+  const current = snapshot === null ? {} : completionState(parseXml(snapshot), completionSpec), restored = completionState(parseXml(change.content), completionSpec);
+  if (!record(restored.selectedProvider) || restored.selectedProvider.kind !== 'OPENAI_COMPATIBLE') return change;
+  const currentEndpoint = record(current.openAiCompatible) ? current.openAiCompatible.baseUrl : undefined;
+  const restoredEndpoint = record(restored.openAiCompatible) ? restored.openAiCompatible.baseUrl : undefined;
+  const currentProviderId = record(current.selectedProvider) ? current.selectedProvider.id : undefined;
+  const currentAssignment = record(current.openAiCompatible) ? current.openAiCompatible.providerId : undefined;
+  const restoredAssignment = record(restored.openAiCompatible) ? restored.openAiCompatible.providerId : undefined;
+  if (currentEndpoint === restoredEndpoint && currentProviderId === restored.selectedProvider.id && currentAssignment === restoredAssignment) return change;
+  let content = change.content;
+  for (const [name, value] of Object.entries({ 'selectedProvider.id': '', 'selectedProvider.kind': 'NONE', 'selectedProvider.name': '' })) {
+    content = patchCompletionField(content, completionSpec, name, { present: true, value: JSON.stringify(value) });
+  }
+  return { ...change, content };
+}
+function restoreChanges(history: History, target: string, originalBeforeRecovery?: string | null): Change[] {
+  return history.files.map(saved => {
+    const spec = specs.find(spec => spec.file === saved.file)!;
+    const path = join(target, 'options', spec.file), original = readConfig(path);
     if (original === saved.after && saved.whole) return { file: spec.file, original, content: saved.before };
     if (original === null) return { file: spec.file, original, content: null };
     let content = original;
     for (const [name, field] of Object.entries(saved.fields)) if (equal(fieldValue(parseXml(content), spec, name), field.applied)) content = patchField(content, spec, name, field.before);
     parseXml(content); return { file: spec.file, original, content };
-  });
+  }).map(change => safeCompletionRestore(change, history.version, originalBeforeRecovery));
+}
+interface CompletionRestoreContext { original: string | null }
+function completionRestoreContext(history: History | Pending | null, target: string): CompletionRestoreContext | undefined {
+  const ownsCompletion = (value: History | null) => value?.version === 2 && value.files.some(row => row.file === completionSpec.file);
+  const owned = history && ('pending' in history ? history.version === 2 && (history.pending.changes.some(change => change.file === completionSpec.file)
+    || ownsCompletion(history.pending.previous) || ownsCompletion(history.pending.next)) : ownsCompletion(history));
+  return owned ? { original: readConfig(join(target, 'options', completionSpec.file)) } : undefined;
+}
+function completionSafeRestoreChanges(history: History | null, target: string, context?: CompletionRestoreContext): Change[] {
+  const changes = history ? restoreChanges(history, target, context?.original) : [];
+  // 中断的 v2 事务可能回到 previous=null 或旧版三文件记录；仍要检查刚回滚的补全参数，不能遗漏其固定 Key namespace。
+  if (context && !changes.some(change => change.file === completionSpec.file)) {
+    const original = readConfig(join(target, 'options', completionSpec.file));
+    const change = safeCompletionRestore({ file: completionSpec.file, original, content: original }, 2, context.original);
+    if (change.original !== change.content) changes.push(change);
+  }
+  return changes;
 }
 export function applyJetBrainsConfig(store: JetBrainsConfigStore, tool: JetBrainsToolId, backups: string, homeDirectory = homedir(), options: JetBrainsConfigOptions = {}): string {
   const stateStore = historyStore(store), status = stopped(tool, homeDirectory, options), target = status.configDir!;
-  const history = recover(stateStore, tool, target, readHistory(stateStore, tool, target), homeDirectory, options), selected = selection(store, tool, options.port ?? 18181, false);
-  if (!selected) return history ? transact(stateStore, tool, target, backups, history, null, restoreChanges(history, target), homeDirectory, options) : target;
-  const next: History = { version: 1, tool, target, files: [] }, changes: Change[] = [];
+  const selected = selection(store, tool, options.port ?? 18181, false), recorded = readHistory(stateStore, tool, target);
+  const restoreContext = selected === null ? completionRestoreContext(recorded, target) : undefined;
+  const history = recover(stateStore, tool, target, recorded, homeDirectory, options);
+  if (!selected) {
+    const changes = completionSafeRestoreChanges(history, target, restoreContext);
+    return history || changes.length ? transact(stateStore, tool, target, backups, history, null, changes, homeDirectory, options) : target;
+  }
+  const next: History = { version: 2, tool, target, files: [], ...(selected.completion.configured ? { completionKeyIdentity: selected.completion.keyIdentity } : history?.completionKeyIdentity ? { completionKeyIdentity: history.completionKeyIdentity } : {}) }, changes: Change[] = [];
   for (const [index, spec] of specs.entries()) {
+    if (spec.json && !selected.completion.configured) {
+      const prior = history?.files.find(saved => saved.file === spec.file); if (prior) next.files.push(prior);
+      continue;
+    }
     const original = readConfig(join(target, 'options', spec.file)); let content = original ?? '<application>\n</application>\n';
-    const prior = history?.files[index], fields: Record<string, FieldHistory> = {};
+    const prior = history?.files.find(saved => saved.file === spec.file), fields: Record<string, FieldHistory> = {};
+    const completionStateBefore = spec.json ? completionState(parseXml(content), spec) : {};
+    // 修改点：补全密钥固定存于独立 PasswordSafe namespace；跨地址或身份切换先关闭，避免把旧 Key 自动发往新来源。
+    const retainCompletionActivation = selected.completion.supported && history?.completionKeyIdentity === selected.completion.keyIdentity && record(completionStateBefore.openAiCompatible)
+      && completionStateBefore.openAiCompatible.baseUrl === selected.completion.baseUrl && record(completionStateBefore.selectedProvider)
+      && completionStateBefore.selectedProvider.id === 'openai-compatible' && completionStateBefore.selectedProvider.kind === 'OPENAI_COMPATIBLE';
     const desired: Record<string, Value> = index === 0 ? { baseUrl: { present: true, value: selected.baseUrl }, httpClientVersion: { present: true, value: 'HTTP_1_1' }, toolEnabled: { present: true, value: String(selected.core.tools) } }
       : index === 1 ? { smart_model_id: { present: true, value: `OpenAIAPI/${selected.coreId}` }, quick_model_id: { present: true, value: `OpenAIAPI/${selected.coreId}` } }
-        : { OpenAIAPI: { present: true, value: 'true' } };
+        : index === 2 ? { OpenAIAPI: { present: true, value: 'true' } }
+          : Object.fromEntries(Object.entries({ 'selectedProvider.id': retainCompletionActivation ? 'openai-compatible' : '', 'selectedProvider.kind': retainCompletionActivation ? 'OPENAI_COMPATIBLE' : 'NONE', 'selectedProvider.name': retainCompletionActivation ? 'OpenAI Compatible' : '',
+            'openAiCompatible.baseUrl': selected.completion.baseUrl, 'openAiCompatible.model': selected.completion.model, 'openAiCompatible.providerId': '', 'openAiCompatible.modelId': '', 'openAiCompatible.schemaId': selected.completion.schemaId,
+          }).map(([name, value]) => [name, { present: true, value: JSON.stringify(value) }]));
+    if (spec.json && selected.completion.maxOutputTokens !== undefined) {
+      const name = 'openAiCompatible.maxOutputTokens', current = completionValue(parseXml(content), spec, name);
+      if (current.present) {
+        const output = JSON.parse(current.value!);
+        // 原生 State 以字符串保存输入框；空串表示 IDE 默认值，不能写成 JSON number。
+        if (typeof output !== 'string' || output !== '' && (!/^\d{1,10}$/.test(output) || !Number.isSafeInteger(Number(output)) || Number(output) < 1)) fail('AI 补全最大输出参数不是已验证的正整数字符串');
+        if (output !== '' && Number(output) > selected.completion.maxOutputTokens) desired[name] = { present: true, value: JSON.stringify(String(selected.completion.maxOutputTokens)) };
+      }
+      // 已钳制的参数继续保留原始恢复记录；用户后来改为更小的值则不再托管该字段。
+      const previous = prior?.fields[name]; if (!Object.hasOwn(desired, name) && previous && equal(current, previous.applied)) fields[name] = previous;
+    }
     for (const [name, applied] of Object.entries(desired)) {
       const current = fieldValue(parseXml(content), spec, name), previous = prior?.fields[name];
       fields[name] = { before: previous && equal(current, previous.applied) ? previous.before : current, applied }; content = patchField(content, spec, name, applied);
     }
-    parseXml(content); next.files.push({ file: spec.file, before: prior ? prior.before : original, after: content, whole: prior ? prior.whole && original === prior.after : true, fields });
+    parseXml(content); next.files.push({ file: spec.file, before: prior ? prior.before : original, after: content, whole: prior ? prior.whole && original === prior.after && Object.keys(desired).every(name => Object.hasOwn(prior.fields, name)) : true, fields });
     changes.push({ file: spec.file, original, content });
   }
+  validateHistory(next, tool, target);
   return transact(stateStore, tool, target, backups, history, next, changes, homeDirectory, options);
 }
 export function restoreJetBrainsConfig(store: JetBrainsHistoryStore, tool: JetBrainsToolId, backups: string, homeDirectory = homedir(), options: JetBrainsConfigOptions = {}): string {
   const stateStore = historyStore(store), status = stopped(tool, homeDirectory, options), target = status.configDir!;
-  const history = recover(stateStore, tool, target, readHistory(stateStore, tool, target), homeDirectory, options);
-  return history ? transact(stateStore, tool, target, backups, history, null, restoreChanges(history, target), homeDirectory, options) : target;
+  const recorded = readHistory(stateStore, tool, target), context = completionRestoreContext(recorded, target);
+  const history = recover(stateStore, tool, target, recorded, homeDirectory, options), changes = completionSafeRestoreChanges(history, target, context);
+  return history || changes.length ? transact(stateStore, tool, target, backups, history, null, changes, homeDirectory, options) : target;
 }

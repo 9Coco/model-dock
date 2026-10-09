@@ -22,8 +22,8 @@ export function nativeDirectBaseUrl(tool: ToolId, provider: Provider, models: re
 }
 function capture(binding: ToolBinding): ToolConnectionChoices {
   const choices: ToolConnectionChoices = structuredClone(binding.connectionChoices ?? {});
-  if (binding.mode === 'direct') choices.direct = { providerId: binding.providerIds?.[0] ?? '', defaultModelId: binding.defaultModelId };
-  else choices.aggregate = { providerIds: [...(binding.providerIds ?? [])], modelIds: [...binding.modelIds], defaultModelId: binding.defaultModelId, ...(binding.modelSelection ? { modelSelection: binding.modelSelection } : {}) };
+  if (binding.mode === 'direct') choices.direct = { ...choices.direct, providerId: binding.providerIds?.[0] ?? '', defaultModelId: binding.defaultModelId };
+  else choices.aggregate = { ...choices.aggregate, providerIds: [...(binding.providerIds ?? [])], modelIds: [...binding.modelIds], defaultModelId: binding.defaultModelId, ...(binding.modelSelection ? { modelSelection: binding.modelSelection } : {}) };
   return choices;
 }
 /** Keep both mode drafts; callers persist only the active flat fields as gateway permissions. */
@@ -48,7 +48,12 @@ export function switchSingleEntryMode(binding: ToolBinding, mode: 'direct' | 'ag
   const enabled = available.length > 0 && (!choice.defaultModelId || available.some(model => model.id === choice.defaultModelId));
   return { ...binding, mode, providerIds: [...choice.providerIds], modelIds: [...choice.modelIds], modelSelection: choice.modelSelection, defaultModelId: choice.defaultModelId, enabled, connectionChoices: choices };
 }
-export function updateSingleEntryBinding(binding: ToolBinding, update: Partial<ToolBinding>, _models: readonly Model[], _providers: readonly Provider[]): ToolBinding {
+export function updateSingleEntryBinding(binding: ToolBinding, update: Partial<ToolBinding>, models: readonly Model[], _providers: readonly Provider[]): ToolBinding {
   const next = { ...binding, ...update };
-  return isSingleEntryTool(binding.id) ? { ...next, connectionChoices: capture(next) } : next;
+  if (!isSingleEntryTool(binding.id)) return next;
+  const choices = capture(next);
+  if (choices.direct?.completionModelId && !models.some(model => model.id === choices.direct!.completionModelId && model.providerId === choices.direct!.providerId)) delete choices.direct.completionModelId;
+  if (choices.aggregate?.completionModelId && !models.some(model => model.id === choices.aggregate!.completionModelId && choices.aggregate!.providerIds.includes(model.providerId)
+    && (choices.aggregate!.modelSelection !== 'selected' || choices.aggregate!.modelIds.includes(model.id)))) delete choices.aggregate.completionModelId;
+  return { ...next, connectionChoices: choices };
 }

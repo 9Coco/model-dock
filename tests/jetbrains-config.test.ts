@@ -44,6 +44,30 @@ function fixture(tool: JetBrainsToolId = 'webstorm') {
   return { root, tool, profileRoot, cacheRoot, selector, target, backups, store, states, journals, provider, providers, models, binding, options, write, file, read, apply, restore, key, seed, originals };
 }
 
+
+const completionFile = (f: ReturnType<typeof fixture>) => join(f.target, 'options', 'llm.next.edit.providers.xml');
+function enableNativeCompletion(f: ReturnType<typeof fixture>) {
+  f.provider.presetId = 'deepseek'; f.provider.baseUrl = 'https://api.deepseek.com'; f.models[0].upstreamId = 'deepseek-flash';
+}
+function completionFixture(f: ReturnType<typeof fixture>) {
+  const state = { selectedProvider: { id: 'manual-openai', kind: 'OPENAI_COMPATIBLE', name: 'Manual completion' },
+    openAiCompatible: { baseUrl: 'https://old-completion.fixture/v1', model: 'old-completion', providerId: 'OpenAIAPI', modelId: 'OpenAIAPI/old-assignment', schemaId: 'fim.deepseek', maxTokens: '24576', maxOutputTokens: '768', apiKeyConfigured: false },
+    inception: { model: 'keep-mercury' }, mistral: { model: 'keep-codestral' }, deepSeek: { model: 'keep-deepseek' }, migration: { completed: false }, unknownFutureSetting: { items: [1, 'stay'] } };
+  const original = `<application>\n<!-- keep completion comment -->\n<component name="UnrelatedCompletion"><option name="keep" value="same"/></component>\n<component name="NextEditProviderSettings"><![CDATA[${JSON.stringify(state)}]]></component>\n</application>\n`;
+  f.write(completionFile(f), original);
+  return { state, original };
+}
+function safeRestoredOriginal(original: string): string {
+  const raw = original.match(/<component name="NextEditProviderSettings">([^]*?)<\/component>/)?.[1] ?? '';
+  const json = [...raw.matchAll(/<!\[CDATA\[([^]*?)\]\]>/g)].map(match => match[1]).join('');
+  const state = JSON.parse(json); state.selectedProvider = { ...state.selectedProvider, id: '', kind: 'NONE', name: '' };
+  return original.replace(raw, `<![CDATA[${JSON.stringify(state).replaceAll(']]>', ']]]]><![CDATA[>')}]]>`);
+}
+function readCompletion(f: ReturnType<typeof fixture>): any {
+  const raw = readFileSync(completionFile(f), 'utf8').match(/<component name="NextEditProviderSettings">([^]*?)<\/component>/)?.[1] ?? '';
+  return JSON.parse([...raw.matchAll(/<!\[CDATA\[([^]*?)\]\]>/g)].map(match => match[1]).join(''));
+}
+
 describe('JetBrains AI Assistant explicit offline configuration', () => {
   it.each(Object.keys(JETBRAINS_TOOLS) as JetBrainsToolId[])('finds the verified %s profile and exports only the local credential', tool => {
     const f = fixture(tool), status = jetBrainsStatus(tool, f.root, f.options);
@@ -232,4 +256,288 @@ describe('JetBrains AI Assistant explicit offline configuration', () => {
     f.apply(); const saved = f.states.get(f.key) as any; saved.files[0].fields['unknown-field'] = { before: { present: false }, applied: { present: true, value: 'unsafe' } }; f.states.set(f.key, saved);
     const raw = fileNames.map((_, index) => f.read(index)); expect(() => f.restore()).toThrow('恢复记录'); raw.forEach((text, index) => expect(f.read(index)).toBe(text));
   });
+  it('restores legacy version 1 three-file ownership without claiming or modifying completion settings', () => {
+    const f = fixture('rider'); f.seed(); f.apply();
+    const legacy = structuredClone(f.states.get(f.key)) as any;
+    legacy.version = 1; legacy.files = legacy.files.slice(0, 3); delete legacy.completionKeyIdentity;
+    f.states.set(f.key, legacy);
+    const completion = join(f.target, 'options', 'llm.next.edit.providers.xml');
+    const manual = '<application><component name="ManualCompletionConfiguration"><option name="preserved" value="current"/></component></application>';
+    f.write(completion, manual); f.restore();
+    f.originals.forEach((text, index) => expect(f.read(index)).toBe(text));
+    expect(readFileSync(completion, 'utf8')).toBe(manual); expect(f.states.get(f.key)).toBeNull();
+  });
+  it('recovers an interrupted legacy version 1 journal and leaves unrecorded completion bytes untouched', () => {
+    const f = fixture('pycharm'); f.seed(); f.apply();
+    const journal = structuredClone(f.journals[0]) as any;
+    journal.version = 1; journal.pending.next.version = 1; delete journal.pending.next.completionKeyIdentity;
+    journal.pending.next.files = journal.pending.next.files.slice(0, 3);
+    journal.pending.changes = journal.pending.changes.filter((change: any) => fileNames.includes(change.file));
+    f.originals.forEach((text, index) => f.write(f.file(index), text));
+    f.write(f.file(0), journal.pending.changes[0].content); f.states.set(f.key, journal);
+    const completion = join(f.target, 'options', 'llm.next.edit.providers.xml');
+    const manual = '<application><component name="ManualCompletionConfiguration"/></application>';
+    f.write(completion, manual); f.restore();
+    f.originals.forEach((text, index) => expect(f.read(index)).toBe(text));
+    expect(readFileSync(completion, 'utf8')).toBe(manual); expect(f.states.get(f.key)).toBeNull();
+  });
+  it('restores version 2 ownership by file identity independently of record ordering', () => {
+    const f = fixture(); f.seed(); f.apply();
+    const saved = structuredClone(f.states.get(f.key)) as any; saved.files.reverse(); f.states.set(f.key, saved);
+    f.restore(); f.originals.forEach((text, index) => expect(f.read(index)).toBe(text)); expect(f.states.get(f.key)).toBeNull();
+  });
+
+  it.each(Object.keys(JETBRAINS_TOOLS) as JetBrainsToolId[])('synchronizes %s aggregate chat and independent AI completion while preserving completion budgets and other providers', tool => {
+    const f = fixture(tool); enableNativeCompletion(f); f.seed(); const c = completionFixture(f);
+    const value = JSON.parse(buildJetBrainsConfig(f.store, tool, 19876, false, f.root, f.options).content);
+    expect(value.completion).toMatchObject({ supported: true, baseUrl: `http://127.0.0.1:19876/tool/${tool}/v1`, model: 'local-core', schemaId: 'fim.generic' });
+    f.apply(); const state = readCompletion(f);
+    expect(state.selectedProvider).toEqual({ id: '', kind: 'NONE', name: '' });
+    expect(state.openAiCompatible).toEqual({ ...c.state.openAiCompatible, baseUrl: value.completion.baseUrl, model: value.completion.model, providerId: '', modelId: '', schemaId: 'fim.generic' });
+    for (const key of ['inception', 'mistral', 'deepSeek', 'migration', 'unknownFutureSetting']) expect(state[key]).toEqual((c.state as any)[key]);
+    expect(readFileSync(completionFile(f), 'utf8')).toContain('<!-- keep completion comment -->');
+    expect(readFileSync(completionFile(f), 'utf8')).toContain('<component name="UnrelatedCompletion"><option name="keep" value="same"/></component>');
+    expect(f.store.getSecret).not.toHaveBeenCalled(); expect(f.store.gatewayKey).not.toHaveBeenCalled();
+    const history = f.states.get(f.key) as any; expect(history.version).toBe(2); expect(history.files).toHaveLength(4);
+    expect(history.files[3].fields).not.toHaveProperty('openAiCompatible.apiKeyConfigured');
+    expect(history.files[3].fields).not.toHaveProperty('openAiCompatible.maxTokens'); expect(history.files[3].fields).not.toHaveProperty('openAiCompatible.maxOutputTokens');
+    f.models[0].alias = 'updated-completion'; f.apply(); expect(readCompletion(f).openAiCompatible.model).toBe('updated-completion');
+    f.restore(); expect(readFileSync(completionFile(f), 'utf8')).toBe(safeRestoredOriginal(c.original)); f.originals.forEach((text, index) => expect(f.read(index)).toBe(text));
+  });
+  it('rolls back all four settings files when the completion file commit fails', () => {
+    const f = fixture(); enableNativeCompletion(f); f.seed(); const c = completionFixture(f);
+    expect(() => f.apply({ afterFileCommit: index => { if (index === 3) throw new Error('SYNTHETIC_COMPLETION_WRITE_FAILURE'); } })).toThrow('SYNTHETIC_COMPLETION_WRITE_FAILURE');
+    f.originals.forEach((text, index) => expect(f.read(index)).toBe(text)); expect(readFileSync(completionFile(f), 'utf8')).toBe(c.original); expect(f.states.get(f.key)).toBeNull();
+  });
+  it('removes the newly created completion settings file when restoring a new aggregate connection', () => {
+    const f = fixture(); enableNativeCompletion(f); f.apply(); expect(existsSync(completionFile(f))).toBe(true); f.restore(); expect(existsSync(completionFile(f))).toBe(false);
+  });
+  it('preserves a later manual completion model, credential marker and budgets while restoring untouched owned fields', () => {
+    const f = fixture(); enableNativeCompletion(f); f.seed(); const c = completionFixture(f); f.apply();
+    const state = readCompletion(f); state.openAiCompatible.model = 'manually-selected'; state.openAiCompatible.apiKeyConfigured = true;
+    state.openAiCompatible.maxTokens = '16384'; state.newUserProperty = { keep: true };
+    f.write(completionFile(f), `<application><!-- added outside completion --><component name="NextEditProviderSettings"><![CDATA[${JSON.stringify(state)}]]></component></application>`);
+    f.restore(); const restored = readCompletion(f);
+    expect(restored.openAiCompatible).toEqual({ ...c.state.openAiCompatible, model: 'manually-selected', apiKeyConfigured: true, maxTokens: '16384' });
+    expect(restored.selectedProvider).toEqual({ id: '', kind: 'NONE', name: '' }); expect(restored.newUserProperty).toEqual({ keep: true });
+    expect(readFileSync(completionFile(f), 'utf8')).toContain('<!-- added outside completion -->');
+  });
+  it('upgrades legacy ownership using the current unrecorded completion baseline instead of the older chat backup', () => {
+    const f = fixture(); enableNativeCompletion(f); f.seed(); f.apply();
+    const legacy = structuredClone(f.states.get(f.key)) as any; legacy.version = 1; legacy.files = legacy.files.slice(0, 3); delete legacy.completionKeyIdentity; f.states.set(f.key, legacy);
+    const current = completionFixture(f); f.models[0].alias = 'upgrade-model'; f.apply();
+    const next = f.states.get(f.key) as any; expect(next.version).toBe(2); expect(next.files[3].before).toBe(current.original);
+    expect(next.files[3].fields['openAiCompatible.model'].before).toEqual({ present: true, value: JSON.stringify('old-completion') });
+    f.restore(); expect(readFileSync(completionFile(f), 'utf8')).toBe(safeRestoredOriginal(current.original)); f.originals.forEach((text, index) => expect(f.read(index)).toBe(text));
+  });
+  it.each([
+    '<application><component name="NextEditProviderSettings"><state><![CDATA[{}]]></state></component></application>',
+    '<application><component name="NextEditProviderSettings"><![CDATA[{not-json}]]></component></application>',
+    '<application><component name="NextEditProviderSettings"><![CDATA[{"openAiCompatible":[]}]]></component></application>',
+    '<application><component name="NextEditProviderSettings"><![CDATA[{"selectedProvider":{"kind":{"unsafe":true}}}]]></component></application>',
+  ])('rejects incompatible completion persistence before writing the chat settings: %s', xml => {
+    const f = fixture(); f.seed(); f.write(completionFile(f), xml);
+    expect(jetBrainsStatus(f.tool, f.root, f.options).canApply).toBe(false); expect(() => f.apply()).toThrow();
+    f.originals.forEach((text, index) => expect(f.read(index)).toBe(text)); expect(readFileSync(completionFile(f), 'utf8')).toBe(xml);
+    expect(f.states.size).toBe(0); expect(existsSync(f.backups)).toBe(false);
+  });
+  it('uses safe split CDATA for an aggregate model alias containing the CDATA terminator', () => {
+    const f = fixture(); enableNativeCompletion(f); f.models[0].alias = 'model]]>tail'; f.apply();
+    expect(readCompletion(f).openAiCompatible.model).toBe('model]]>tail');
+    expect(readFileSync(completionFile(f), 'utf8')).toContain(']]]]><![CDATA[>'); f.restore(); expect(existsSync(completionFile(f))).toBe(false);
+  });
+
+  it.each(Object.keys(JETBRAINS_TOOLS) as JetBrainsToolId[])('writes %s native completion endpoint and upstream model while requiring separate key confirmation on source change', tool => {
+    const f = fixture(tool); enableNativeCompletion(f); f.binding.mode = 'direct'; f.seed(); const c = completionFixture(f);
+    const preview = JSON.parse(buildJetBrainsConfig(f.store, tool, 19876, false, f.root, f.options).content);
+    expect(preview.baseUrl).toBe('https://api.deepseek.com');
+    expect(preview.completion).toMatchObject({ supported: true, baseUrl: 'https://api.deepseek.com/beta', model: 'deepseek-flash', schemaId: 'fim.generic' });
+    expect(preview.completion.apiKey).toBe('__PROVIDER_API_KEY__');
+    f.apply(); const state = readCompletion(f);
+    expect(state.openAiCompatible.baseUrl).toBe('https://api.deepseek.com/beta'); expect(state.openAiCompatible.model).toBe('deepseek-flash');
+    expect(state.openAiCompatible.providerId).toBe(''); expect(state.openAiCompatible.modelId).toBe(''); expect(state.openAiCompatible.schemaId).toBe('fim.generic');
+    expect(state.selectedProvider).toEqual({ id: '', kind: 'NONE', name: '' }); expect(state.openAiCompatible.apiKeyConfigured).toBe(false);
+    expect(f.store.getSecret).not.toHaveBeenCalled(); expect(f.store.gatewayKey).not.toHaveBeenCalled();
+    f.restore(); expect(readFileSync(completionFile(f), 'utf8')).toBe(safeRestoredOriginal(c.original));
+  });
+  it('keeps a separately authorized completion active for model changes at the same endpoint and identity, then closes it when switching endpoint', () => {
+    const f = fixture(); enableNativeCompletion(f); f.seed(); completionFixture(f); f.apply();
+    const confirmed = readCompletion(f); confirmed.selectedProvider = { id: 'openai-compatible', kind: 'OPENAI_COMPATIBLE', name: 'OpenAI Compatible' };
+    confirmed.openAiCompatible.apiKeyConfigured = true;
+    f.write(completionFile(f), `<application><component name="NextEditProviderSettings"><![CDATA[${JSON.stringify(confirmed)}]]></component></application>`);
+    f.models[0].alias = 'after-key-confirmation'; f.apply();
+    expect(readCompletion(f).selectedProvider).toEqual(confirmed.selectedProvider); expect(readCompletion(f).openAiCompatible.apiKeyConfigured).toBe(true);
+    f.binding.mode = 'direct'; f.apply();
+    expect(readCompletion(f).selectedProvider).toEqual({ id: '', kind: 'NONE', name: '' }); expect(readCompletion(f).openAiCompatible.baseUrl).toBe('https://api.deepseek.com/beta');
+    expect(readCompletion(f).openAiCompatible.apiKeyConfigured).toBe(true); expect(f.store.getSecret).not.toHaveBeenCalled();
+  });
+  it('clamps only a confirmed excessive FIM output budget and restores its exact original value after resync', () => {
+    const f = fixture(); enableNativeCompletion(f); f.seed(); const c = completionFixture(f);
+    c.state.openAiCompatible.maxOutputTokens = '8192';
+    c.original = `<application><component name="NextEditProviderSettings"><![CDATA[${JSON.stringify(c.state)}]]></component></application>`; f.write(completionFile(f), c.original);
+    f.apply(); expect(readCompletion(f).openAiCompatible.maxOutputTokens).toBe('4096'); expect(readCompletion(f).openAiCompatible.maxTokens).toBe('24576');
+    const record = (f.states.get(f.key) as any).files[3].fields['openAiCompatible.maxOutputTokens'];
+    expect(record).toEqual({ before: { present: true, value: JSON.stringify('8192') }, applied: { present: true, value: JSON.stringify('4096') } });
+    f.apply(); expect((f.states.get(f.key) as any).files[3].fields['openAiCompatible.maxOutputTokens']).toEqual(record);
+    f.restore(); expect(readFileSync(completionFile(f), 'utf8')).toBe(safeRestoredOriginal(c.original));
+  });
+  it('leaves a later smaller manual completion budget untouched during resync and restore', () => {
+    const f = fixture(); enableNativeCompletion(f); f.seed(); const c = completionFixture(f);
+    c.state.openAiCompatible.maxOutputTokens = '8192';
+    f.write(completionFile(f), `<application><component name="NextEditProviderSettings"><![CDATA[${JSON.stringify(c.state)}]]></component></application>`); f.apply();
+    const manual = readCompletion(f); manual.openAiCompatible.maxOutputTokens = '2048';
+    f.write(completionFile(f), `<application><component name="NextEditProviderSettings"><![CDATA[${JSON.stringify(manual)}]]></component></application>`); f.apply();
+    expect((f.states.get(f.key) as any).files[3].fields).not.toHaveProperty('openAiCompatible.maxOutputTokens');
+    f.restore(); expect(readCompletion(f).openAiCompatible.maxOutputTokens).toBe('2048');
+  });
+  it.each(['unknown', '0', '-1', '1.5', 512, null])('refuses to guess an invalid confirmed completion output budget: %s', output => {
+    const f = fixture(); enableNativeCompletion(f); f.seed(); const c = completionFixture(f); (c.state.openAiCompatible as any).maxOutputTokens = output;
+    const raw = `<application><component name="NextEditProviderSettings"><![CDATA[${JSON.stringify(c.state)}]]></component></application>`; f.write(completionFile(f), raw);
+    expect(() => f.apply()).toThrow();
+    f.originals.forEach((text, index) => expect(f.read(index)).toBe(text)); expect(readFileSync(completionFile(f), 'utf8')).toBe(raw); expect(f.states.size).toBe(0);
+  });
+
+  it.each(Object.keys(JETBRAINS_TOOLS) as JetBrainsToolId[])('updates %s completion URL and model for a different native supplier even when its completion protocol is unverified', tool => {
+    const f = fixture(tool); f.binding.mode = 'direct'; f.binding.defaultModelId = 'chat'; f.binding.modelSelection = 'selected'; f.binding.modelIds = ['chat'];
+    f.seed(); const c = completionFixture(f);
+    const preview = JSON.parse(buildJetBrainsConfig(f.store, tool, 19876, false, f.root, f.options).content);
+    expect(preview.completion).toMatchObject({ configured: true, supported: false, baseUrl: f.provider.baseUrl, model: 'upstream-chat', schemaId: 'fim.generic', apiKey: '__PROVIDER_API_KEY__' });
+    expect(preview.completion.reason).toBeTruthy(); f.apply();
+    const current = readCompletion(f);
+    expect(current.openAiCompatible.baseUrl).toBe(f.provider.baseUrl); expect(current.openAiCompatible.model).toBe('upstream-chat');
+    expect(current.openAiCompatible.providerId).toBe(''); expect(current.openAiCompatible.modelId).toBe(''); expect(current.selectedProvider).toEqual({ id: '', kind: 'NONE', name: '' });
+    expect(current.openAiCompatible.maxTokens).toBe(c.state.openAiCompatible.maxTokens); expect(current.openAiCompatible.maxOutputTokens).toBe(c.state.openAiCompatible.maxOutputTokens);
+    expect(current.openAiCompatible.apiKeyConfigured).toBe(false); expect(f.store.getSecret).not.toHaveBeenCalled();
+    f.restore(); expect(readFileSync(completionFile(f), 'utf8')).toBe(safeRestoredOriginal(c.original));
+  });
+  it('deactivates a completion for the same native URL when switching to another supplier account identity', () => {
+    const f = fixture(); enableNativeCompletion(f); f.binding.mode = 'direct'; f.seed(); completionFixture(f); f.apply();
+    const confirmed = readCompletion(f); confirmed.selectedProvider = { id: 'openai-compatible', kind: 'OPENAI_COMPATIBLE', name: 'OpenAI Compatible' }; confirmed.openAiCompatible.apiKeyConfigured = true;
+    f.write(completionFile(f), `<application><component name="NextEditProviderSettings"><![CDATA[${JSON.stringify(confirmed)}]]></component></application>`); f.apply();
+    expect(readCompletion(f).selectedProvider.kind).toBe('OPENAI_COMPATIBLE');
+    f.provider.id = 'another-deepseek-account'; f.models.forEach(model => { model.providerId = f.provider.id; }); f.binding.providerIds = [f.provider.id]; f.apply();
+    expect(readCompletion(f).openAiCompatible.baseUrl).toBe(confirmed.openAiCompatible.baseUrl); expect(readCompletion(f).selectedProvider.kind).toBe('NONE');
+    expect(readCompletion(f).openAiCompatible.apiKeyConfigured).toBe(true); expect((f.states.get(f.key) as any).completionKeyIdentity).toBe('supplier:another-deepseek-account');
+    expect(f.store.getSecret).not.toHaveBeenCalled();
+  });
+  it('keeps a first sync inactive when the current XML appears connected but its credential identity has never been recorded', () => {
+    const f = fixture(); enableNativeCompletion(f); f.seed(); const c = completionFixture(f);
+    c.state.selectedProvider = { id: 'openai-compatible', kind: 'OPENAI_COMPATIBLE', name: 'OpenAI Compatible' };
+    c.state.openAiCompatible.baseUrl = 'http://127.0.0.1:19876/tool/webstorm/v1'; c.state.openAiCompatible.apiKeyConfigured = true;
+    f.write(completionFile(f), `<application><component name="NextEditProviderSettings"><![CDATA[${JSON.stringify(c.state)}]]></component></application>`); f.apply();
+    expect(readCompletion(f).selectedProvider.kind).toBe('NONE'); expect(readCompletion(f).openAiCompatible.apiKeyConfigured).toBe(true);
+    expect((f.states.get(f.key) as any).completionKeyIdentity).toBe('modeldock-local');
+  });
+  it('switches known completion parameters to another supplier without losing the original restoration baseline', () => {
+    const f = fixture(); enableNativeCompletion(f); f.seed(); const c = completionFixture(f); f.apply();
+    f.provider.presetId = undefined; f.provider.baseUrl = 'https://another-supplier.fixture/v1'; f.models[0].wireApi = 'chat-completions'; f.binding.mode = 'direct'; f.apply();
+    expect(readCompletion(f).openAiCompatible.baseUrl).toBe(f.provider.baseUrl); expect(readCompletion(f).openAiCompatible.model).toBe('deepseek-flash');
+    expect(readCompletion(f).selectedProvider.kind).toBe('NONE'); f.restore();
+    expect(readFileSync(completionFile(f), 'utf8')).toBe(safeRestoredOriginal(c.original)); f.originals.forEach((text, index) => expect(f.read(index)).toBe(text));
+  });
+  it('synchronizes an independent completion model in the selected scope while keeping the chat assignment unchanged', () => {
+    const f = fixture(); enableNativeCompletion(f); f.binding.mode = 'direct';
+    f.models.push({ ...f.models[0], id: 'completion-pro', upstreamId: 'deepseek-v4-pro', alias: 'completion-pro-alias' });
+    f.binding.connectionChoices = { direct: { providerId: f.provider.id, defaultModelId: 'core', completionModelId: 'completion-pro' } };
+    f.apply(); expect(readCompletion(f).openAiCompatible.model).toBe('deepseek-v4-pro'); expect(f.read(1)).toContain('OpenAIAPI/deepseek-flash');
+    const guide = JSON.parse(buildJetBrainsConfig(f.store, f.tool, 19876, false, f.root, f.options).content).completion;
+    expect(guide.model).toBe('deepseek-v4-pro');
+    expect(guide).not.toHaveProperty('requestedModelId'); expect(guide).not.toHaveProperty('keyIdentity');
+  });
+
+  it.each(['absent', 'empty'] as const)('preserves the native default completion output budget when it is %s', kind => {
+    const f = fixture(); enableNativeCompletion(f); f.seed(); const c = completionFixture(f);
+    if (kind === 'absent') delete (c.state.openAiCompatible as any).maxOutputTokens; else c.state.openAiCompatible.maxOutputTokens = '';
+    const raw = `<application><component name="NextEditProviderSettings"><![CDATA[${JSON.stringify(c.state)}]]></component></application>`; f.write(completionFile(f), raw); f.apply();
+    const output = readCompletion(f).openAiCompatible;
+    if (kind === 'absent') expect(output).not.toHaveProperty('maxOutputTokens'); else expect(output.maxOutputTokens).toBe('');
+    expect((f.states.get(f.key) as any).files[3].fields).not.toHaveProperty('openAiCompatible.maxOutputTokens');
+    f.restore(); expect(readFileSync(completionFile(f), 'utf8')).toBe(safeRestoredOriginal(raw));
+  });
+  it('rolls back completion parameters, chat settings and previous ownership when encrypted final state persistence fails', () => {
+    const f = fixture(); enableNativeCompletion(f); f.seed(); const c = completionFixture(f);
+    f.store.setManagedState.mockImplementationOnce((key, value) => { f.states.set(key, structuredClone(value)); }).mockImplementationOnce((key, value) => { f.states.set(key, structuredClone(value)); throw new Error('SYNTHETIC_COMPLETION_STATE_FAILURE'); });
+    expect(() => f.apply()).toThrow('SYNTHETIC_COMPLETION_STATE_FAILURE');
+    f.originals.forEach((text, index) => expect(f.read(index)).toBe(text)); expect(readFileSync(completionFile(f), 'utf8')).toBe(c.original); expect(f.states.get(f.key)).toBeNull();
+  });
+  it('does not overwrite a completion file changed concurrently between preview and the atomic transaction', () => {
+    const f = fixture(); enableNativeCompletion(f); f.seed(); const c = completionFixture(f);
+    const external = c.original.replace('old-completion', 'concurrent-completion');
+    expect(() => f.apply({ beforeCommit: () => f.write(completionFile(f), external) })).toThrow('其他程序');
+    f.originals.forEach((text, index) => expect(f.read(index)).toBe(text)); expect(readFileSync(completionFile(f), 'utf8')).toBe(external); expect(f.states.size).toBe(0);
+  });
+  it('recovers an interrupted version 2 four-file transaction without leaving partially updated completion settings', () => {
+    const f = fixture(); enableNativeCompletion(f); f.seed(); const c = completionFixture(f); f.apply();
+    const journal = structuredClone(f.journals[0]);
+    f.originals.forEach((text, index) => f.write(f.file(index), text)); f.write(completionFile(f), journal.pending.changes.find((change: any) => change.file === 'llm.next.edit.providers.xml').content); f.states.set(f.key, journal);
+    f.restore(); f.originals.forEach((text, index) => expect(f.read(index)).toBe(text)); expect(readFileSync(completionFile(f), 'utf8')).toBe(safeRestoredOriginal(c.original)); expect(f.states.get(f.key)).toBeNull();
+  });
+  it('rejects a corrupt completion credential identity before attempting any restoration', () => {
+    const f = fixture(); enableNativeCompletion(f); f.seed(); completionFixture(f); f.apply();
+    const state = structuredClone(f.states.get(f.key)) as any; state.completionKeyIdentity = { fake: 'identity' }; f.states.set(f.key, state);
+    const current = readFileSync(completionFile(f), 'utf8'); expect(() => f.restore()).toThrow('密钥身份恢复记录'); expect(readFileSync(completionFile(f), 'utf8')).toBe(current);
+  });
+
+  it('validates the new completion credential identity before writing any config or history', () => {
+    const f = fixture(); enableNativeCompletion(f); f.binding.mode = 'direct'; f.provider.id = 'invalid\nidentity';
+    f.models.forEach(model => { model.providerId = f.provider.id; }); f.binding.providerIds = [f.provider.id]; f.seed(); const c = completionFixture(f);
+    expect(() => f.apply()).toThrow('密钥身份恢复记录');
+    f.originals.forEach((text, index) => expect(f.read(index)).toBe(text)); expect(readFileSync(completionFile(f), 'utf8')).toBe(c.original); expect(f.states.size).toBe(0); expect(existsSync(f.backups)).toBe(false);
+  });
+
+  it('restores the old completion parameters while deactivating a later manual OpenAI activation and preserving its new credential marker', () => {
+    const f = fixture(); enableNativeCompletion(f); f.seed(); const c = completionFixture(f); f.apply();
+    const manual = readCompletion(f); manual.selectedProvider = { id: 'openai-compatible', kind: 'OPENAI_COMPATIBLE', name: 'OpenAI Compatible' };
+    manual.openAiCompatible.apiKeyConfigured = true; manual.unrelatedManualFlag = 'keep';
+    f.write(completionFile(f), `<application><component name="NextEditProviderSettings"><![CDATA[${JSON.stringify(manual)}]]></component></application>`);
+    const credential = join(f.target, 'c.kdbx'); f.write(credential, 'SYNTHETIC_NEW_COMPLETION_CREDENTIAL');
+    f.restore(); const restored = readCompletion(f);
+    expect(restored.selectedProvider).toEqual({ id: '', kind: 'NONE', name: '' });
+    expect(restored.openAiCompatible).toEqual({ ...c.state.openAiCompatible, apiKeyConfigured: true });
+    expect(restored.unrelatedManualFlag).toBe('keep'); expect(readFileSync(credential, 'utf8')).toBe('SYNTHETIC_NEW_COMPLETION_CREDENTIAL');
+    expect(f.store.getSecret).not.toHaveBeenCalled(); expect(f.store.gatewayKey).not.toHaveBeenCalled();
+  });
+  it('retains OpenAI activation when restoration changes only the model and schema at the same recorded endpoint and credential identity', () => {
+    const f = fixture(); enableNativeCompletion(f); f.seed(); const c = completionFixture(f);
+    c.state.selectedProvider = { id: 'openai-compatible', kind: 'OPENAI_COMPATIBLE', name: 'OpenAI Compatible' };
+    c.state.openAiCompatible.baseUrl = 'http://127.0.0.1:19876/tool/webstorm/v1'; c.state.openAiCompatible.providerId = ''; c.state.openAiCompatible.modelId = ''; c.state.openAiCompatible.apiKeyConfigured = true;
+    f.write(completionFile(f), `<application><component name="NextEditProviderSettings"><![CDATA[${JSON.stringify(c.state)}]]></component></application>`); f.apply();
+    const confirmed = readCompletion(f); confirmed.selectedProvider = c.state.selectedProvider;
+    f.write(completionFile(f), `<application><component name="NextEditProviderSettings"><![CDATA[${JSON.stringify(confirmed)}]]></component></application>`);
+    f.models[0].alias = 'updated-same-endpoint'; f.apply(); expect(readCompletion(f).selectedProvider.kind).toBe('OPENAI_COMPATIBLE');
+    f.restore(); const restored = readCompletion(f);
+    expect(restored.selectedProvider).toEqual(c.state.selectedProvider); expect(restored.openAiCompatible).toEqual(c.state.openAiCompatible);
+    expect(f.store.getSecret).not.toHaveBeenCalled();
+  });
+  it.each(['JETBRAINS', 'INCEPTION', 'MISTRAL', 'DEEPSEEK', 'ACP', 'NONE'])('does not rewrite the independently restored %s completion provider activation', kind => {
+    const f = fixture(); enableNativeCompletion(f); f.seed(); const c = completionFixture(f);
+    c.state.selectedProvider = { id: kind === 'NONE' ? '' : `independent-${kind.toLowerCase()}`, kind, name: kind };
+    c.original = `<application><component name="NextEditProviderSettings"><![CDATA[${JSON.stringify(c.state)}]]></component></application>`; f.write(completionFile(f), c.original);
+    f.apply(); f.restore(); expect(readFileSync(completionFile(f), 'utf8')).toBe(c.original); expect(readCompletion(f).selectedProvider.kind).toBe(kind);
+  });
+  it.each(['restore', 'disable'] as const)('safely deactivates a completion after %s recovers an interrupted first version 2 transaction with no previous ownership', action => {
+    const f = fixture(); enableNativeCompletion(f); f.seed(); const c = completionFixture(f); c.state.openAiCompatible.apiKeyConfigured = true;
+    c.original = `<application><component name="NextEditProviderSettings"><![CDATA[${JSON.stringify(c.state)}]]></component></application>`; f.write(completionFile(f), c.original); f.apply();
+    const journal = structuredClone(f.journals[0]); expect(journal.pending.previous).toBeNull(); f.states.set(f.key, journal);
+    const credential = join(f.target, 'c.kdbx'); f.write(credential, 'SYNTHETIC_LATER_NEW_CREDENTIAL');
+    if (action === 'restore') f.restore(); else { f.binding.enabled = false; f.apply(); }
+    const restored = readCompletion(f); expect(restored.selectedProvider).toEqual({ id: '', kind: 'NONE', name: '' });
+    expect(restored.openAiCompatible).toEqual(c.state.openAiCompatible); expect(restored.openAiCompatible.apiKeyConfigured).toBe(true);
+    expect(readFileSync(credential, 'utf8')).toBe('SYNTHETIC_LATER_NEW_CREDENTIAL'); f.originals.forEach((text, index) => expect(f.read(index)).toBe(text));
+    expect(f.states.get(f.key)).toBeNull(); expect(f.store.getSecret).not.toHaveBeenCalled();
+  });
+  it('guards newly owned completion parameters when an interrupted version 2 update recovers to an older three-file history', () => {
+    const f = fixture(); enableNativeCompletion(f); f.seed(); const c = completionFixture(f); f.apply();
+    const legacy = structuredClone(f.states.get(f.key)) as any; legacy.version = 1; legacy.files = legacy.files.slice(0, 3); delete legacy.completionKeyIdentity;
+    f.states.set(f.key, legacy); f.write(completionFile(f), c.original); f.models[0].alias = 'new-journal-model'; f.apply();
+    const pending = structuredClone(f.journals.at(-1)); expect(pending.pending.previous.version).toBe(1); expect(pending.pending.next.version).toBe(2); f.states.set(f.key, pending);
+    f.restore(); expect(readFileSync(completionFile(f), 'utf8')).toBe(safeRestoredOriginal(c.original)); f.originals.forEach((text, index) => expect(f.read(index)).toBe(text));
+    expect(f.states.get(f.key)).toBeNull();
+  });
+  it('does not touch a real OpenAI completion component that is outside legacy version 1 restoration ownership', () => {
+    const f = fixture(); f.seed(); f.apply();
+    const legacy = structuredClone(f.states.get(f.key)) as any; legacy.version = 1; legacy.files = legacy.files.slice(0, 3); delete legacy.completionKeyIdentity; f.states.set(f.key, legacy);
+    const c = completionFixture(f); f.restore(); expect(readFileSync(completionFile(f), 'utf8')).toBe(c.original);
+  });
+
 });

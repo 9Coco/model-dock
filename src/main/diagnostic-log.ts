@@ -10,7 +10,7 @@ const ERROR_NAMES = ['Error', 'TypeError', 'RangeError', 'SyntaxError', 'URIErro
 // 修改点：Chromium 的网络失败常只写入 message；仅允许现有授权网络诊断的封闭错误码。
 const CHROMIUM_NETWORK_CODES = ['ERR_TIMED_OUT', 'ERR_CONNECTION_TIMED_OUT', 'ERR_PROXY_CONNECTION_FAILED', 'ERR_TUNNEL_CONNECTION_FAILED', 'ERR_NAME_NOT_RESOLVED', 'ERR_CONNECTION_REFUSED', 'ERR_CONNECTION_CLOSED', 'ERR_CONNECTION_RESET', 'ERR_CERT_AUTHORITY_INVALID', 'ERR_CERT_DATE_INVALID', 'ERR_CERT_COMMON_NAME_INVALID', 'ERR_NETWORK_CHANGED', 'ERR_INTERNET_DISCONNECTED', 'ERR_ABORTED', 'ERR_BLOCKED_BY_CLIENT', 'ERR_FAILED', 'ERR_INVALID_RESPONSE', 'ERR_UNSAFE_REDIRECT', 'ERR_UNEXPECTED_PROXY_AUTH', 'ERR_PROXY_AUTH_UNSUPPORTED', 'ERR_NO_SUPPORTED_PROXIES', 'ERR_ADDRESS_UNREACHABLE'] as const;
 const NETWORK_CODES = ['ECONNREFUSED', 'ECONNRESET', 'ECONNABORTED', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT', 'EADDRINUSE', 'EADDRNOTAVAIL', 'ENETUNREACH', 'EHOSTUNREACH', 'EPIPE', 'ERR_NETWORK', 'ERR_ABORTED', 'ABORT_ERR', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_SOCKET', 'CERT_HAS_EXPIRED', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'ERR_TLS_CERT_ALTNAME_INVALID', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'ERR_CERT_AUTHORITY_INVALID', 'EACCES', 'EPERM', 'ENOSPC', 'EIO', 'EMFILE', 'ENOENT', ...CHROMIUM_NETWORK_CODES] as const;
-const ROUTES = ['/copilot_internal/v2/token', '/login/device/code', '/login/oauth/access_token', '/oauth/token', '/oauth/authorize', '/chat/completions', '/responses', '/messages', '/models', '/health', '/readyz'] as const;
+const ROUTES = ['/copilot_internal/v2/token', '/login/device/code', '/login/oauth/access_token', '/oauth/token', '/oauth/authorize', '/chat/completions', '/completions', '/responses', '/messages', '/models', '/health', '/readyz'] as const;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const UNAVAILABLE = '诊断日志暂不可用；请检查资料目录权限、可用磁盘空间或目录链接。';
 const PROJECT_FRAME_FILES = new Set([
@@ -45,6 +45,7 @@ const PROJECT_FRAME_FILES = new Set([
   'src/main/dsh-runtime.ts',
   'src/main/gateway-startup-smoke.ts',
   'src/main/gateway.ts',
+  'src/main/jetbrains-completion.ts',
   'src/main/grok-login-smoke.ts',
   'src/main/main.ts',
   'src/main/mcp.ts',
