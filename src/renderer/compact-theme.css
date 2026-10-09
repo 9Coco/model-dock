@@ -43,12 +43,6 @@
 .feature-toolbar { margin-bottom: 10px; }
 .panel, .provider-details { border-radius: 8px; }
 .provider-row { padding-top: 12px; padding-bottom: 12px; }
-.usage-dashboard .usage-tool-selector { margin-bottom: 10px; gap: 5px; }
-.usage-dashboard .usage-metrics > div { padding: 12px 13px; }
-.usage-dashboard .usage-metrics strong { margin: 7px 0 5px; font-size: 22px; }
-.usage-dashboard .usage-chart { padding: 12px 14px; margin: 10px 0 12px; }
-.usage-trend-plot { height: 152px; }
-.usage-attribution-note { padding-top: 6px; padding-bottom: 6px; margin-bottom: 8px; }
 .tool-inline-summary { padding: 14px 16px; }
 :root[data-theme="dark"] {
   color: #ebebf0; background: #19191c;
@@ -77,9 +71,9 @@
 :root[data-theme="dark"] .sidebar-bottom-actions .sidebar-settings.active { background: var(--accent-soft); color: var(--accent); }
 :root[data-theme="dark"] :is(.status-dot.green, .account-auth-status.ready > i) { background: var(--success); }
 :root[data-theme="dark"] .bridge-status.connected .status-dot { background: var(--success); }
-:root[data-theme="dark"] :is(.panel, .gateway-panel, .tool-detail-summary, .provider-row, .provider-details, .account-group, .service-metrics, .feature-target, .settings-card, .usage-source-card) { background: var(--surface); border-color: var(--line); }
+:root[data-theme="dark"] :is(.panel, .gateway-panel, .tool-detail-summary, .provider-row, .provider-details, .account-group, .service-metrics, .feature-target, .settings-card) { background: var(--surface); border-color: var(--line); }
 :root[data-theme="dark"] :is(.provider-row.selected, .provider-kind-picker > button.selected, .binding-mode-picker > button.selected, .binding-model-option.selected) { background: var(--surface-selected); border-color: var(--accent); }
-:root[data-theme="dark"] :is(.main-shell, .modal) :is(.provider-details strong, .service-metrics strong, .usage-metrics strong, .aggregate-strip strong, .form-info strong, .binding-catalog-note strong, .config-instructions strong) { color: var(--ink); }
+:root[data-theme="dark"] :is(.main-shell, .modal) :is(.provider-details strong, .service-metrics strong, .aggregate-strip strong, .form-info strong, .binding-catalog-note strong, .config-instructions strong) { color: var(--ink); }
 :root[data-theme="dark"] .aggregate-strip code { color: var(--muted); }
 :root[data-theme="dark"] :is(.main-shell, .modal) :is(.button.secondary, .feature-page button.secondary, .modal-actions button.secondary) { color: var(--ink); background: var(--surface); border-color: var(--line); }
 :root[data-theme="dark"] :is(.main-shell, .modal) :is(.button.secondary, .feature-page button.secondary, .modal-actions button.secondary):hover:not(:disabled) { background: var(--surface-hover); border-color: #62626e; }
@@ -99,7 +93,6 @@
 :root[data-theme="dark"] .quota-window progress, :root[data-theme="dark"] .quota-window progress::-webkit-progress-bar { background: #484851; }
 :root[data-theme="dark"] .quota-window progress::-webkit-progress-value { background: var(--accent); }
 :root[data-theme="dark"] :is(.daily-bar > span, .daily-bar > i) { background: var(--accent); }
-:root[data-theme="dark"] .usage-daily-bars .usage-day-partial > span { background: repeating-linear-gradient(135deg, var(--accent) 0 4px, #426177 4px 8px); }
 :root[data-theme="dark"] :is(input, select, textarea) { color: var(--ink); background: var(--field); border-color: var(--line); }
 :root[data-theme="dark"] :is(input, textarea)::placeholder { color: #85858f; }
 :root[data-theme="dark"] :is(.search-box, .form-field > input, .endpoint-field, .auth-code, .config-filename) { background: var(--field); color: var(--ink); border-color: var(--line); }

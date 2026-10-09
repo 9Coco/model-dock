@@ -175,7 +175,7 @@ export function ModelDiscovery({ api, provider, notify, onClose, onAdded, onManu
                     <label><span>工具调用 <small>{metadataOrigin(model, 'tools')}</small></span><select aria-label={`${model.upstreamId} 工具调用`} value={model.tools ? 'yes' : 'no'} disabled={locked} onChange={event => updateModel(model.upstreamId, { tools: event.target.value === 'yes' })}><option value="yes">启用</option><option value="no">关闭</option></select></label>
                     <label><span>图片输入 <small>{metadataOrigin(model, 'vision')}</small></span><select aria-label={`${model.upstreamId} 图片输入`} value={model.vision ? 'yes' : 'no'} disabled={locked} onChange={event => updateModel(model.upstreamId, { vision: event.target.value === 'yes' })}><option value="yes">启用</option><option value="no">关闭</option></select></label>
                   </div>
-                  <p className="discovery-settings-note">{model.existingModelId ? '这些参数已保存，可在模型目录中修改。' : '0 表示上下文未设置；手动修改会覆盖供应商或字典值，添加后保存。'}{!!inferredFields.length && model.metadataReference && <> <a href={model.metadataReference.sourceUrl} target="_blank" rel="noopener noreferrer">字典参考文档</a> · 核对日期 {model.metadataReference.verifiedAt}</>}</p>
+                  <p className="discovery-settings-note">{model.existingModelId ? '这些参数已保存，可在供应商模型列表中修改。' : '0 表示上下文未设置；手动修改会覆盖供应商或字典值，添加后保存。'}{!!inferredFields.length && model.metadataReference && <> <a href={model.metadataReference.sourceUrl} target="_blank" rel="noopener noreferrer">字典参考文档</a> · 核对日期 {model.metadataReference.verifiedAt}</>}</p>
                 </details>
               </div>;
             })}
@@ -183,7 +183,7 @@ export function ModelDiscovery({ api, provider, notify, onClose, onAdded, onManu
           <div className="discovery-note"><Info size={14} /><span>上下文和图片能力优先采用供应商参数，缺少时按内置字典补全，可展开「参数设置」手动修正。不同供应商可以添加同名模型；目录和工具中按「套餐名 - 模型名」展示。模型可见和字典规格不代表实际调用权限，仍需推理验证。未声明工具能力时允许客户端尝试；上下文未设置时，工具配置使用 32K 上下文 / 4K 输出的保守预算，以上预算并非上游规格。</span></div>
         </>}
         {!result && !error && <EmptyState compact icon={<Layers3 size={24} />} title="尚未获取模型" description="点击重新获取，从供应商读取真实模型列表。" />}
-        {added && <div className="discovery-success" role="status"><Check size={15} /><span>已添加 {added.added.length} 个模型{added.skipped.length ? `，跳过 ${added.skipped.length} 个已存在模型` : ''}，可在模型目录和工具配置中使用。</span></div>}
+        {added && <div className="discovery-success" role="status"><Check size={15} /><span>已添加 {added.added.length} 个模型{added.skipped.length ? `，跳过 ${added.skipped.length} 个已存在模型` : ''}，可在供应商模型列表和工具配置中使用。</span></div>}
       </>}
     </div>
     <div className="modal-footer discovery-footer"><span>{loading ? '正在读取模型列表' : result?.ok ? `已选择 ${selected.length} 个待添加模型` : '可手动添加模型并测试连接'}</span><div className="footer-actions">{onManualAdd && <button type="button" className="button secondary" disabled={loading || adding} onClick={onManualAdd}>手动添加</button>}<button className="button secondary" disabled={adding} onClick={onClose}>{added ? '完成' : '取消'}</button><button className="button primary" disabled={loading || adding || !api || !result?.ok || !selected.length} onClick={() => void addSelected()}><BusyIcon active={adding}><Download size={15} /></BusyIcon>{adding ? '添加中…' : `添加所选 ${selected.length} 个模型`}</button></div></div>

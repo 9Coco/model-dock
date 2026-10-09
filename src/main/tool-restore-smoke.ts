@@ -39,7 +39,7 @@ export async function verifyToolRestoreAndConnections(window: BrowserWindow, sto
     await waitFor(`!!document.querySelector('[data-tool-binding="${tool}"]')`, `${tool} tool page`);
   }
   async function idle() {
-    await waitFor(`!document.querySelector('[data-action="apply-tool-config"]')?.disabled&&!document.querySelector('[data-action="restore-official-tool-config"]')?.disabled`, 'configuration action finished');
+    await waitFor(`(()=>{const summary=document.querySelector('[data-tool-binding]'),status=document.querySelector('[data-tool-application-status]');return status?.dataset.toolApplicationState===(summary?.dataset.selectedModelCount==='0'?'cleared':'synced')&&!document.querySelector('[data-action="apply-tool-config"]')?.disabled&&!document.querySelector('[data-action="restore-official-tool-config"]')?.disabled;})()`, 'configuration write finished');
     assert.equal(await evaluate<boolean>('!!document.querySelector("[data-tool-sync-error]")'), false, 'Fixture synchronization must succeed');
   }
   async function binding(tool: ToolId): Promise<ToolBinding> {
@@ -172,7 +172,7 @@ export async function verifyToolRestoreAndConnections(window: BrowserWindow, sto
     }
     const before = readFileSync(paths[tool], 'utf8');
     await click('[data-action="restore-official-tool-config"]'); await click('[data-action="confirm-tool-restore"]');
-    await waitFor('!document.querySelector("[role=dialog]")&&!!document.querySelector("[data-tool-official-restored]")', `${tool} restored UI state`);
+    await waitFor('!document.querySelector("[role=dialog]")&&!!document.querySelector("[data-tool-official-restored]")&&document.querySelector("[data-tool-application-status]")?.dataset.toolApplicationState==="official"', `${tool} restored UI state`);
     const cleared = await binding(tool);
     assert.equal(cleared.enabled, false); assert.deepEqual(cleared.providerIds, []); assert.deepEqual(cleared.modelIds, []); assert.equal(cleared.defaultModelId, '');
     assert.equal(await evaluate<string>('document.querySelector("[data-tool-application-status]").dataset.toolApplicationState'), 'official');

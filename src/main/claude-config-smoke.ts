@@ -46,19 +46,24 @@ export async function verifyClaudeConfiguration(window: BrowserWindow, store: St
   assert.equal(config().env.ANTHROPIC_AUTH_TOKEN, 'synthetic-only');
   assert.equal(config().env.ANTHROPIC_API_KEY, undefined);
   assert.equal(config().env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, '1');
+  assert.deepEqual(config().availableModels, [first.upstreamId, second.upstreamId]);
+  assert.deepEqual(config().modelPicker.options.map((item: { model: string }) => item.model), [first.upstreamId, second.upstreamId]);
+  assert.equal(config().modelPicker.replaceBuiltInOptions, true);
+  assert.equal(await evaluate<boolean>(`document.querySelector('[data-claude-vscode-refresh]')?.textContent.includes('Developer: Restart Local Agent Host')`), true);
   assert.deepEqual(config().permissions, preserved.permissions); assert.deepEqual(config().hooks, preserved.hooks);
   assert.equal(config().env.USER_SENTINEL, 'keep');
   assert.ok(readdirSync(join(store.dataDir, 'backups')).some(name => name.startsWith('claude-code-')));
   const inference = await evaluate<any>(`window.modelDock.testProvider(${JSON.stringify(provider.id)},{modelId:${JSON.stringify(first.id)}})`);
   assert.equal(inference.ok, true); assert.equal(inference.wireApi, 'messages');
   await evaluate(`(()=>{const select=document.querySelector('[data-action="tool-default-model"]');Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(select,${JSON.stringify(second.id)});select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
-  await waitFor(`(async()=>{const binding=(await window.modelDock.snapshot()).bindings.find(b=>b.id==='claude-code');return binding.defaultModelId===${JSON.stringify(second.id)}&&!document.querySelector('[data-action="apply-tool-config"]')?.disabled;})()`);
+  await waitFor(`(async()=>{const binding=(await window.modelDock.snapshot()).bindings.find(b=>b.id==='claude-code');return binding.defaultModelId===${JSON.stringify(second.id)}&&document.querySelector('[data-tool-application-status]')?.dataset.toolApplicationState==='synced'&&!document.querySelector('[data-action="apply-tool-config"]')?.disabled;})()`);
   assert.equal(config().env.ANTHROPIC_MODEL, second.upstreamId);
   await click('[data-action="claude-disable-telemetry"]');
-  await waitFor(`(async()=>{const binding=(await window.modelDock.snapshot()).bindings.find(b=>b.id==='claude-code');return binding.claudeDisableTelemetry===false&&!document.querySelector('[data-action="apply-tool-config"]')?.disabled;})()`);
+  await waitFor(`(async()=>{const binding=(await window.modelDock.snapshot()).bindings.find(b=>b.id==='claude-code');return binding.claudeDisableTelemetry===false&&document.querySelector('[data-tool-application-status]')?.dataset.toolApplicationState==='synced'&&!document.querySelector('[data-action="apply-tool-config"]')?.disabled;})()`);
   assert.equal(Object.hasOwn(config().env, 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC'), false);
   await click('[data-action="claude-disable-telemetry"]');
-  await waitFor(`(async()=>{const binding=(await window.modelDock.snapshot()).bindings.find(b=>b.id==='claude-code');return binding.claudeDisableTelemetry===true&&!document.querySelector('[data-action="apply-tool-config"]')?.disabled;})()`);
+  await waitFor(`(async()=>{const binding=(await window.modelDock.snapshot()).bindings.find(b=>b.id==='claude-code');return binding.claudeDisableTelemetry===true&&document.querySelector('[data-tool-application-status]')?.dataset.toolApplicationState==='synced'&&!document.querySelector('[data-action="apply-tool-config"]')?.disabled;})()`);
+  assert.equal(config().env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, '1');
   const layouts = [];
   for (const theme of ['light', 'dark']) for (const [width, height] of [[1320, 880], [980, 680]]) {
     window.setSize(width, height);
@@ -85,7 +90,7 @@ export async function verifyClaudeConfiguration(window: BrowserWindow, store: St
   await waitFor(`!!document.querySelector('[data-aggregate-internal="claude-code"]')&&!document.querySelector('[data-action="tool-use-aggregate"]').disabled`);
   if (await evaluate<boolean>(`document.querySelector('article[data-provider-id="${provider.id}"] input[data-action="select-tool-provider"]')?.checked===true`)) await click(`article[data-provider-id="${provider.id}"] input[data-action="select-tool-provider"]`);
   await click(`article[data-provider-id="${subscription.id}"] input[data-action="select-tool-provider"]`);
-  await waitFor(`(async()=>{const binding=(await window.modelDock.snapshot()).bindings.find(b=>b.id==='claude-code');return binding.providerIds.length===1&&binding.providerIds[0]===${JSON.stringify(subscription.id)}&&!document.querySelector('[data-action="apply-tool-config"]')?.disabled;})()`);
+  await waitFor(`(async()=>{const binding=(await window.modelDock.snapshot()).bindings.find(b=>b.id==='claude-code');return binding.providerIds.length===1&&binding.providerIds[0]===${JSON.stringify(subscription.id)}&&document.querySelector('[data-tool-application-status]')?.dataset.toolApplicationState==='synced'&&!document.querySelector('[data-action="apply-tool-config"]')?.disabled;})()`);
   assert.equal(config().env.ANTHROPIC_MODEL, subscriptionModel.alias);
   assert.equal(config().env.ANTHROPIC_BASE_URL, `http://127.0.0.1:${gateway.port}/tool/claude-code`);
   assert.equal(config().env.CLAUDE_CODE_DISABLE_THINKING, '1');
@@ -95,7 +100,7 @@ export async function verifyClaudeConfiguration(window: BrowserWindow, store: St
   writeFileSync(join(outputDir, 'claude-subscription.png'), await captureUi());
   await click('[data-action="restore-official-tool-config"]');
   await click('[data-action="confirm-tool-restore"]');
-  await waitFor(`(async()=>{const binding=(await window.modelDock.snapshot()).bindings.find(b=>b.id==='claude-code');return !binding.enabled&&!document.querySelector('[data-action="restore-official-tool-config"]')?.disabled;})()`);
+  await waitFor(`(async()=>{const binding=(await window.modelDock.snapshot()).bindings.find(b=>b.id==='claude-code');return !binding.enabled&&document.querySelector('[data-tool-application-status]')?.dataset.toolApplicationState==='official'&&!document.querySelector('[data-action="restore-official-tool-config"]')?.disabled;})()`);
   assert.equal(config().env.ANTHROPIC_AUTH_TOKEN, undefined);
   assert.equal(config().env.ANTHROPIC_BASE_URL, undefined);
   assert.equal(config().env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, '1');

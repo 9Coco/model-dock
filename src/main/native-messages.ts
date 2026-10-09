@@ -24,7 +24,7 @@ export function prepareNativeMessagesRequest(provider: Provider, secret: Provide
   if (!key) return fail('原生 Messages 来源缺少 API Key。');
   const headers: Record<string, string> = { 'content-type': 'application/json', accept: body.stream ? 'text/event-stream' : 'application/json', 'anthropic-version': '2023-06-01' };
   // 修改点：原生协议仅保留受控版本和 beta 标记，客户端鉴权与其他头不进入上游。
-  // 格式错误只返回固定消息；这些协议头不交给日志/用量观察器。
+  // 格式错误只返回固定消息；这些协议头不交给日志或事件观察器。
   const version = protocolHeaders.anthropicVersion;
   if (version !== undefined) {
     if (typeof version !== 'string' || version.length < 1 || version.length > 128 || /[^A-Za-z0-9._-]/.test(version)) throw new NativeMessagesError('Messages 版本协议头格式无效。', 400);
@@ -40,36 +40,15 @@ export function prepareNativeMessagesRequest(provider: Provider, secret: Provide
   return { url: anthropicEndpoint(nativeClaudeBaseUrl(provider) ?? provider.baseUrl, '/messages'), headers, body: structuredClone(body) };
 }
 
-/** Anthropic 的缓存读/写计数不在 input_tokens 中；应用内部用量采用总输入。
- * 上游回复保持原值，只给主进程的用量观察器提供合并后的累计计数。
- */
-class UsageObserver {
-  private usage: Json = {};
-  constructor(private options: NativeMessagesOptions) {}
-  observe(value: unknown): void {
-    try { this.options.onUpstreamEvent?.(value); } catch { /* diagnostics cannot break inference */ }
-    const data = record(value), message = record(data.message);
-    const usage = object(message.usage) ? message.usage : object(data.usage) ? data.usage : undefined;
-    if (!usage) return;
-    this.usage = { ...this.usage, ...usage };
-    const counter = (key: string): number | undefined => {
-      const count = this.usage[key];
-      return typeof count === 'number' && Number.isSafeInteger(count) && count >= 0 ? count : undefined;
-    };
-    const input = counter('input_tokens'), output = counter('output_tokens');
-    if (input === undefined || output === undefined) return;
-    const read = counter('cache_read_input_tokens') ?? 0, write = counter('cache_creation_input_tokens') ?? 0;
-    const total = input + read + write;
-    if (!Number.isSafeInteger(total)) return;
-    try { this.options.onUpstreamEvent?.({ usage: { ...this.usage, input_tokens: total, input_tokens_details: { cached_tokens: read, cache_write_tokens: write } } }); } catch { /* diagnostics cannot break inference */ }
-  }
+function observeUpstream(value: unknown, options: NativeMessagesOptions): void {
+  try { options.onUpstreamEvent?.(value); } catch { /* observation cannot break inference */ }
 }
 
 /** 修改点：原生内容块（包括 thinking/signature）原样保留，仅替换客户端别名。 */
 export function toNativeMessagesResponse(value: unknown, alias: string, options: NativeMessagesOptions = {}): Json {
   if (!object(value) || object(value.error) || value.type !== 'message' || value.role !== 'assistant' || typeof value.id !== 'string' || !Array.isArray(value.content)
     || typeof value.stop_reason !== 'string' || !value.stop_reason || value.content.some(block => !object(block) || typeof block.type !== 'string')) return fail();
-  new UsageObserver(options).observe(value);
+  observeUpstream(value, options);
   return { ...value, model: alias };
 }
 
@@ -104,12 +83,12 @@ function indexOf(value: Json): number {
  * 最终 stop 等连接正常结束才发出，以免同一流随后出现错误仍表现为完成。
  */
 export function createNativeMessagesStream(alias: string, options: NativeMessagesOptions = {}): TransformStream<Uint8Array, Uint8Array> {
-  const frames = new Frames(), observer = new UsageObserver(options), openBlocks = new Set<number>(), seenBlocks = new Set<number>();
+  const frames = new Frames(), openBlocks = new Set<number>(), seenBlocks = new Set<number>();
   let started = false, finished = false, errored = false, stopReason: string | undefined;
   const failure = (controller: TransformStreamDefaultController<Uint8Array>) => {
     errored = true;
     const value = { type: 'error', error: { type: 'api_error', message: '上游 Messages 推理失败或响应不完整，请检查模型和供应商状态。' } };
-    observer.observe(value); controller.enqueue(event(value)); controller.terminate();
+    observeUpstream(value, options); controller.enqueue(event(value)); controller.terminate();
   };
   const add = (value: Json | undefined, controller: TransformStreamDefaultController<Uint8Array>) => {
     if (!value) return;
@@ -130,11 +109,11 @@ export function createNativeMessagesStream(alias: string, options: NativeMessage
       if (typeof value.delta.stop_reason === 'string') stopReason = value.delta.stop_reason;
     } else if (value.type === 'message_stop') {
       if (!started || finished || openBlocks.size || !stopReason || [...seenBlocks].some(index => index >= seenBlocks.size)) return fail();
-      finished = true; observer.observe(value); return;
+      finished = true; observeUpstream(value, options); return;
     }
     if (typeof value.model === 'string') value = { ...value, model: alias };
     if (object(value.delta) && typeof value.delta.model === 'string') value = { ...value, delta: { ...value.delta, model: alias } };
-    observer.observe(value);
+    observeUpstream(value, options);
     // 未知事件按官方版本策略保留；仅模型标识是本机别名。
     controller.enqueue(event(value));
   };

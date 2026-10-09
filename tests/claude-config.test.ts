@@ -47,6 +47,34 @@ describe('Claude Code native BYOK configuration', () => {
     expect(existsSync(f.target)).toBe(false); expect(f.states.size).toBe(0);
     expect(JSON.parse(buildClaudeConfig(f.store, true).content).env.ANTHROPIC_AUTH_TOKEN).toBe('SYNTHETIC_SECRET_API_KEY');
   });
+  it('publishes only enabled native direct model IDs with stable labels and deduplicates upstream IDs', () => {
+    const f = fixture();
+    const second: Model = { ...f.model, id: 'second-model', upstreamId: 'second-upstream-id', alias: 'second-local-alias', displayName: 'Second native model' };
+    f.models.push(second, { ...second, id: 'duplicate-model', alias: 'duplicate-local-alias', displayName: 'Duplicate label' },
+      { ...f.model, id: 'disabled-model', upstreamId: 'disabled-upstream-id', enabled: false },
+      { ...f.model, id: 'unselected-model', providerId: 'unselected-source', upstreamId: 'unselected-upstream-id' });
+    f.providers.push({ ...f.provider, id: 'unselected-source' });
+    f.binding.defaultModelId = second.id;
+    const preview = buildClaudeConfig(f.store), value = JSON.parse(preview.content);
+    expect(value.model).toBe(second.upstreamId); expect(value.env.ANTHROPIC_MODEL).toBe(second.upstreamId);
+    expect(value.availableModels).toEqual([f.model.upstreamId, second.upstreamId]);
+    expect(value.modelPicker).toEqual({ options: [
+      { model: f.model.upstreamId, label: 'Fixture Messages - Fixture model' },
+      { model: second.upstreamId, label: 'Fixture Messages - Second native model' },
+    ], replaceBuiltInOptions: true });
+    expect(preview.content).not.toMatch(/local-alias|disabled-upstream-id|unselected-upstream-id|Duplicate label|SYNTHETIC_SECRET/);
+    expect(preview.instructions).toContain('VS Code 内置 Claude'); expect(preview.instructions).toContain('重启代理主机');
+    expect(preview.instructions).toContain('Developer: Restart Local Agent Host');
+    expect(preview.instructions).toContain('Anthropic 官方 VS Code 扩展');
+    f.apply();
+    expect(f.read().availableModels).toEqual(value.availableModels); expect(f.read().modelPicker).toEqual(value.modelPicker);
+    expect(f.read().env.ANTHROPIC_AUTH_TOKEN).toBe('SYNTHETIC_SECRET_API_KEY');
+    expect(f.store.getManagedState<any>(claudeHistoryKey(f.target), null).fields.modelPicker.before).toEqual({ present: false });
+  });
+  it('rejects invalid non-default direct picker model IDs before changing settings', () => {
+    const f = fixture(); f.models.push({ ...f.model, id: 'invalid-model', upstreamId: 'invalid\nmodel' }); f.write(f.target, '{}');
+    expect(() => f.apply()).toThrow('模型标识'); expect(readFileSync(f.target, 'utf8')).toBe('{}'); expect(f.states.size).toBe(0);
+  });
   it.each(['https://messages.fixture', 'https://messages.fixture/v1', 'https://messages.fixture/v1/'])('normalizes the native SDK root for %s', baseUrl => {
     const f = fixture(); f.provider.baseUrl = baseUrl;
     expect(JSON.parse(buildClaudeConfig(f.store).content).env.ANTHROPIC_BASE_URL).toBe('https://messages.fixture');
@@ -219,16 +247,24 @@ describe('Claude Code native BYOK configuration', () => {
     f.apply({ port: 19876 }); expect(f.read().env.ANTHROPIC_AUTH_TOKEN).toBe('SYNTHETIC_GATEWAY_KEY'); expect(connectionKey(f.store, 'claude-code')).toBe('SYNTHETIC_GATEWAY_KEY');
     expect(f.store.getSecret).not.toHaveBeenCalled(); expect(JSON.stringify(f.read())).not.toMatch(/subscription-upstream|excluded-alias|SYNTHETIC_SECRET/);
   });
-  it('preserves thinking for all-native Messages aggregation and restores picker baselines when returning to direct mode', () => {
+  it('switches between native IDs and aggregate aliases while retaining original picker baselines until cancellation', () => {
     const f = fixture(); f.binding.mode = 'aggregate';
     const original = { modelPicker: { options: [{ model: 'manual-model', label: 'Manual' }], replaceBuiltInOptions: false }, availableModels: ['manual-model'], env: { MAX_THINKING_TOKENS: '8192' } };
     f.write(f.target, original); f.apply();
     expect(f.read().env.MAX_THINKING_TOKENS).toBe('8192'); expect(f.read().env).not.toHaveProperty('CLAUDE_CODE_DISABLE_THINKING'); expect(f.read().modelPicker.replaceBuiltInOptions).toBe(true);
     f.model.alias = 'updated-aggregate'; f.apply(); expect(f.read().availableModels).toEqual(['updated-aggregate']);
     f.binding.mode = 'direct'; f.apply();
-    expect(f.read().availableModels).toEqual(original.availableModels); expect(f.read().modelPicker).toEqual(original.modelPicker); expect(f.read().env.MAX_THINKING_TOKENS).toBe('8192');
-    expect(f.store.getManagedState<any>(claudeHistoryKey(f.target), null).fields).not.toHaveProperty('modelPicker');
+    expect(f.read().availableModels).toEqual([f.model.upstreamId]);
+    expect(f.read().modelPicker.options).toEqual([{ model: f.model.upstreamId, label: 'Fixture Messages - Fixture model' }]);
+    expect(f.read().env.MAX_THINKING_TOKENS).toBe('8192');
+    const history = f.store.getManagedState<any>(claudeHistoryKey(f.target), null);
+    expect(history.fields.availableModels.before.value).toEqual(original.availableModels); expect(history.fields.modelPicker.before.value).toEqual(original.modelPicker);
     expect(connectionKey(f.store, 'claude-code')).toBe('SYNTHETIC_SECRET_API_KEY');
+    f.binding.mode = 'aggregate'; f.apply(); expect(f.read().availableModels).toEqual(['updated-aggregate']);
+    f.binding.mode = 'direct'; f.apply(); expect(f.read().availableModels).toEqual([f.model.upstreamId]);
+    f.binding.enabled = false; f.apply();
+    expect(f.read()).toEqual({ ...original, env: { ...original.env, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' } });
+    expect(f.store.getManagedState(claudeHistoryKey(f.target), null)).toBeNull();
   });
   it('excludes a disabled aggregate source while keeping the remaining models usable and still refuses disabled direct sources', () => {
     const f = fixture(); f.binding.mode = 'aggregate';
@@ -247,8 +283,8 @@ describe('Claude Code native BYOK configuration', () => {
     expect(value.availableModels).toEqual([f.model.alias]); expect(value.env).not.toHaveProperty('CLAUDE_CODE_DISABLE_THINKING');
     f.apply(); expect(f.read().env.ANTHROPIC_AUTH_TOKEN).toBe('SYNTHETIC_GATEWAY_KEY'); expect(f.read().availableModels).toEqual([f.model.alias]);
   });
-  it('restores original aggregate picker objects on cancellation but preserves later manual edits', () => {
-    const f = fixture(); f.binding.mode = 'aggregate';
+  it.each(['direct', 'aggregate'] as const)('restores original %s picker objects on cancellation but preserves later manual edits', mode => {
+    const f = fixture(); f.binding.mode = mode;
     const original = { availableModels: ['original'], modelPicker: { options: [{ model: 'original', description: 'Keep original description' }] } };
     f.write(f.target, original); f.apply(); f.apply();
     f.binding.enabled = false; f.apply(); expect(f.read()).toMatchObject(original);
@@ -256,6 +292,13 @@ describe('Claude Code native BYOK configuration', () => {
     const manual = f.read(); manual.availableModels = ['manual']; manual.modelPicker.options[0].label = 'Manual'; f.write(f.target, manual);
     restoreClaudeOfficialConfig(f.store, f.backups, f.root);
     expect(f.read().availableModels).toEqual(['manual']); expect(f.read().modelPicker).toEqual(manual.modelPicker);
+  });
+  it.each(['direct', 'aggregate'] as const)('preserves external %s picker changes when cancelling the source', mode => {
+    const f = fixture(); f.binding.mode = mode; f.apply();
+    const manual = f.read(); manual.availableModels = ['manual-native-id']; manual.modelPicker = { options: [{ model: 'manual-native-id', label: 'User choice' }] };
+    f.write(f.target, manual); f.binding.enabled = false; f.apply();
+    expect(f.read().availableModels).toEqual(manual.availableModels); expect(f.read().modelPicker).toEqual(manual.modelPicker);
+    expect(f.read().env).toEqual({ CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' });
   });
   it('rejects corrupt non-string environment ownership values before writing aggregate configuration', () => {
     const f = fixture(); f.binding.mode = 'aggregate'; f.apply();
@@ -276,11 +319,24 @@ describe('Claude Code native BYOK configuration', () => {
     const f = fixture(); f.write(f.target, original);
     expect(() => f.apply()).toThrow(); expect(readFileSync(f.target, 'utf8')).toBe(original); expect(f.states.size).toBe(0); expect(existsSync(f.backups)).toBe(false);
   });
-  it('refuses symlink files/directories and oversized settings', () => {
-    const f = fixture(), outside = join(f.root, 'outside.json'); f.write(outside, '{}'); mkdirSync(dirname(f.target), { recursive: true }); symlinkSync(outside, f.target);
-    expect(() => f.apply()).toThrow('类型'); expect(readFileSync(outside, 'utf8')).toBe('{}'); rmSync(f.target); rmSync(dirname(f.target), { recursive: true });
-    const outsideDir = join(f.root, 'outside-dir'); mkdirSync(outsideDir); symlinkSync(outsideDir, dirname(f.target), 'dir'); expect(() => f.apply()).toThrow('目录'); rmSync(dirname(f.target));
-    f.write(f.target, ' '.repeat(2 * 1024 * 1024 + 1)); expect(() => f.apply()).toThrow('大小'); expect(f.states.size).toBe(0);
+  it('refuses symlink settings files when native link creation is permitted', ({ skip }) => {
+    const f = fixture(), outside = join(f.root, 'outside.json'); f.write(outside, '{}'); mkdirSync(dirname(f.target), { recursive: true });
+    try { symlinkSync(outside, f.target); }
+    catch (error) {
+      if (process.platform === 'win32' && (error as NodeJS.ErrnoException).code === 'EPERM') skip('Windows account cannot create file symlinks without Developer Mode or elevation.');
+      throw error;
+    }
+    expect(() => f.apply()).toThrow('类型'); expect(readFileSync(outside, 'utf8')).toBe('{}'); expect(f.states.size).toBe(0);
+  });
+  it('refuses linked configuration directories, including native Windows junctions', () => {
+    const f = fixture(), outsideDir = join(f.root, 'outside-dir'); mkdirSync(outsideDir);
+    symlinkSync(outsideDir, dirname(f.target), process.platform === 'win32' ? 'junction' : 'dir');
+    expect(() => f.apply()).toThrow('目录'); expect(existsSync(join(outsideDir, 'settings.json'))).toBe(false); expect(f.states.size).toBe(0);
+  });
+  it('refuses oversized settings before creating backups or ownership state', () => {
+    const f = fixture(), original = ' '.repeat(2 * 1024 * 1024 + 1); f.write(f.target, original);
+    expect(() => f.apply()).toThrow('大小'); expect(readFileSync(f.target, 'utf8')).toBe(original);
+    expect(f.states.size).toBe(0); expect(existsSync(f.backups)).toBe(false);
   });
   it('refuses corrupt ownership records and preserves exact native settings', () => {
     const f = fixture(); f.write(f.target, '{}'); f.states.set(claudeHistoryKey(f.target), { version: 1, target: f.target, envWasPresent: false, fields: { permissions: { before: { present: false }, applied: { present: false } } } });

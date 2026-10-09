@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { CopilotDesktopClient, CopilotDesktopError, validateCopilotDesktopSnapshot, type CopilotDesktopPlan, type CopilotDesktopProviderInput, type CopilotDesktopSnapshot, type CopilotDesktopSyncOptions, type CopilotDesktopSyncResult } from './copilot-desktop';
@@ -13,6 +13,7 @@ export interface CopilotSyncStore {
 export interface CopilotSyncClient {
   sync(plan: CopilotDesktopPlan, options: CopilotDesktopSyncOptions): Promise<CopilotDesktopSyncResult>;
   restoreSnapshot?(snapshot: CopilotDesktopSnapshot, options: CopilotDesktopSyncOptions): Promise<CopilotDesktopSyncResult>;
+  captureSnapshot?(ownedProviderIds: readonly string[]): Promise<CopilotDesktopSnapshot>;
   close(): void;
 }
 export interface CopilotSyncOptions {
@@ -20,6 +21,9 @@ export interface CopilotSyncOptions {
   syncScope?: 'managed' | 'selected';
   captureCredentials?: (providerIds: readonly string[]) => Promise<CopilotCredentialBackup>;
   restoreCredentials?: (backup: CopilotCredentialBackup) => Promise<void>;
+  /** Only enabled for explicit user-triggered synchronization. Never replayed
+   * on startup, and never exposed through the renderer bridge. */
+  recordUndo?: boolean;
 }
 interface RecoveryBase {
   beforeOwnedProviderIds: string[];
@@ -41,6 +45,12 @@ interface Journal {
   lastSuccessfulPlan: CopilotDesktopPlan;
   pending?: Recovery;
 }
+interface CopilotUndo {
+  version: 1; target: string; id: string; completedAt: number;
+  previous: Journal; complete: Journal; affectedProviderIds: string[];
+  beforeSnapshot: CopilotDesktopSnapshot; afterSnapshot: CopilotDesktopSnapshot;
+  beforeCredentials: CopilotCredentialBackup; afterCredentials: CopilotCredentialBackup;
+}
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const activeTargets = new Set<string>();
 const failures = {
@@ -51,6 +61,8 @@ const failures = {
   restored: 'Copilot 同步未完成，已恢复本次操作前的托管配置。请检查后重新同步。',
   recovery: 'Copilot 同步未完成且自动恢复失败，已保留加密恢复记录；请确认应用运行后重新同步。',
   unavailable: '无法连接本机 Copilot 桌面应用，请启动应用后重新同步。',
+  changed: 'Copilot 来源、模型或凭据已被其他操作修改，未覆盖新修改；无法撤销此次同步。',
+  undo: '找不到可撤销的 Copilot 同步记录。',
 };
 export class CopilotSyncError extends Error {
   constructor(readonly category: keyof typeof failures) { super(failures[category]); this.name = 'CopilotSyncError'; }
@@ -66,6 +78,33 @@ function ids(value: unknown): string[] {
 function targetHome(value: string): string {
   if (!text(value, 4096) || !isAbsolute(value)) fail('configuration');
   const result = resolve(value); return process.platform === 'win32' ? result.toLowerCase() : result;
+}
+export function copilotSyncStateKey(home: string): string { return `copilot-sync:${createHash('sha256').update(targetHome(home)).digest('hex')}`; }
+export function copilotSyncUndoKey(home: string): string { return `copilot-sync-undo:${createHash('sha256').update(targetHome(home)).digest('hex')}`; }
+function sameSnapshot(left: CopilotDesktopSnapshot, right: CopilotDesktopSnapshot): boolean {
+  const sorted = (snapshot: CopilotDesktopSnapshot) => snapshot.providers.map(entry => ({ provider: entry.provider, models: [...entry.models].sort((a, b) => a.id.localeCompare(b.id)) })).sort((a, b) => a.provider.id.localeCompare(b.provider.id));
+  return isDeepStrictEqual(sorted(left), sorted(right));
+}
+function sameCredentials(left: CopilotCredentialBackup, right: CopilotCredentialBackup): boolean {
+  const sorted = (backup: CopilotCredentialBackup) => ({ ...backup, providers: backup.providers.map(provider => ({ ...provider, entries: [...provider.entries].sort((a, b) => a.kind.localeCompare(b.kind)) })).sort((a, b) => a.providerId.localeCompare(b.providerId)) });
+  return isDeepStrictEqual(sorted(left), sorted(right));
+}
+function validCredentials(backup: CopilotCredentialBackup, affected: string[], snapshot: CopilotDesktopSnapshot): CopilotCredentialBackup {
+  const validated = validateCopilotCredentialBackup(backup);
+  if (!sameIds(validated.providers.map(provider => provider.providerId), affected) || snapshot.providers.some(entry => entry.provider.hasSecret && !validated.providers.find(provider => provider.providerId === entry.provider.id)?.entries.length)) fail('backup');
+  return validated;
+}
+function partialSnapshotMatches(current: CopilotDesktopSnapshot, before: CopilotDesktopSnapshot, after: CopilotDesktopSnapshot): boolean {
+  return current.providers.every(entry => {
+    const alternatives = [...before.providers, ...after.providers].filter(candidate => candidate.provider.id === entry.provider.id);
+    const metadata = ({ hasSecret: _secret, ...provider }: CopilotDesktopSnapshot['providers'][number]['provider']) => provider;
+    return alternatives.some(candidate => isDeepStrictEqual(metadata(candidate.provider), metadata(entry.provider)))
+      && entry.models.every(model => alternatives.some(candidate => candidate.models.some(saved => isDeepStrictEqual(saved, model))));
+  });
+}
+function partialCredentialsMatch(current: CopilotCredentialBackup, before: CopilotCredentialBackup, after: CopilotCredentialBackup): boolean {
+  return current.version === before.version && current.version === after.version && current.providers.every(provider =>
+    [...before.providers, ...after.providers].some(saved => isDeepStrictEqual(saved, provider)));
 }
 function endpoint(value: unknown): value is string {
   if (!text(value, 4096)) return false;
@@ -157,6 +196,92 @@ function history(value: unknown, target: string, store: CopilotSyncStore): Journ
   return { version: 1, target, ownedProviderIds, lastSuccessfulPlan, pending: { beforeOwnedProviderIds, beforeSnapshot, restorePlan, attemptedPlan, backupPath: pending.backupPath } };
 }
 
+function undoHistory(value: unknown, target: string, store: CopilotSyncStore): CopilotUndo | null {
+  if (value === null) return null;
+  try {
+    if (!record(value) || Object.keys(value).some(key => !['version', 'target', 'id', 'completedAt', 'previous', 'complete', 'affectedProviderIds', 'beforeSnapshot', 'afterSnapshot', 'beforeCredentials', 'afterCredentials'].includes(key))
+      || value.version !== 1 || value.target !== target || !text(value.id) || !UUID.test(value.id) || !Number.isSafeInteger(value.completedAt) || Number(value.completedAt) < 1) fail('history');
+    const previous = history(value.previous, target, store), complete = history(value.complete, target, store);
+    if (previous.pending || complete.pending) fail('history');
+    const affectedProviderIds = ids(value.affectedProviderIds), beforeSnapshot = validateCopilotDesktopSnapshot(value.beforeSnapshot), afterSnapshot = validateCopilotDesktopSnapshot(value.afterSnapshot);
+    if (!sameIds(affectedProviderIds, [...new Set([...previous.ownedProviderIds, ...complete.ownedProviderIds, ...beforeSnapshot.providers.map(entry => entry.provider.id)])])
+      || afterSnapshot.providers.some(entry => !complete.ownedProviderIds.includes(entry.provider.id))
+      || !sameIds(afterSnapshot.providers.map(entry => entry.provider.id), complete.ownedProviderIds)) fail('history');
+    const beforeCredentials = validCredentials(validateCopilotCredentialBackup(value.beforeCredentials), affectedProviderIds, beforeSnapshot);
+    const afterCredentials = validCredentials(validateCopilotCredentialBackup(value.afterCredentials), affectedProviderIds, afterSnapshot);
+    return { version: 1, target, id: value.id, completedAt: Number(value.completedAt), previous, complete, affectedProviderIds, beforeSnapshot, afterSnapshot, beforeCredentials, afterCredentials };
+  } catch { fail('history'); }
+}
+
+/** Only safe metadata may cross the main-process boundary. */
+export function copilotSyncUndoStatus(store: CopilotSyncStore, home: string): { available: boolean; id?: string; completedAt?: number; changed?: boolean } {
+  const target = targetHome(home), saved = undoHistory(store.getManagedState<unknown>(copilotSyncUndoKey(home), null), target, store);
+  return saved ? { available: true, id: saved.id, completedAt: saved.completedAt,
+    changed: !sameSnapshot(saved.beforeSnapshot, saved.afterSnapshot) || !sameCredentials(saved.beforeCredentials, saved.afterCredentials) || !isDeepStrictEqual(saved.previous, saved.complete) } : { available: false };
+}
+
+/** Explicit single-step undo through native commands and opaque OS credentials.
+ * The optional local commit lets the tool manager restore its binding inside
+ * the same failure boundary. No database is opened or written here. */
+export async function undoCopilotDesktop(store: CopilotSyncStore, home: string, options: CopilotSyncOptions = {}, commit?: () => void): Promise<string> {
+  const target = targetHome(home), key = copilotSyncStateKey(home), undoKey = copilotSyncUndoKey(home);
+  if (activeTargets.has(target)) fail('busy');
+  const saved = undoHistory(store.getManagedState<unknown>(undoKey, null), target, store);
+  if (!saved) fail('undo');
+  if (!isDeepStrictEqual(history(store.getManagedState<unknown>(key, null), target, store), saved.complete)) fail('changed');
+  activeTargets.add(target);
+  const openClient = options.openClient ?? (path => CopilotDesktopClient.open(path));
+  const captureCredentials = options.captureCredentials ?? captureCopilotCredentials;
+  const restoreCredentials = options.restoreCredentials ?? restoreCopilotCredentials;
+  let client: CopilotSyncClient | undefined, mutationStarted = false, changed = false;
+  const close = () => { try { client?.close(); } catch { /* Do not expose native details. */ } client = undefined; };
+  async function assertApplied(snapshot?: CopilotDesktopSnapshot) {
+    if (!client?.captureSnapshot || !client.restoreSnapshot) fail('history');
+    const current = snapshot ?? await client.captureSnapshot(saved!.affectedProviderIds);
+    const credentials = validCredentials(await captureCredentials(saved!.affectedProviderIds), saved!.affectedProviderIds, current);
+    if (!sameSnapshot(current, saved!.afterSnapshot) || !sameCredentials(credentials, saved!.afterCredentials)) { changed = true; fail('changed'); }
+  }
+  try {
+    client = await openClient(home);
+    await assertApplied();
+    store.createManagedBackup('copilot-undo', saved);
+    await client.restoreSnapshot!(saved.beforeSnapshot, { ownedProviderIds: saved.affectedProviderIds, beforeMutation: async snapshot => {
+      await assertApplied(snapshot);
+      mutationStarted = true;
+      await restoreCredentials(saved.beforeCredentials);
+    } });
+    await restoreCredentials(saved.beforeCredentials);
+    const restored = await client.captureSnapshot!(saved.affectedProviderIds);
+    if (!sameSnapshot(restored, saved.beforeSnapshot) || !sameCredentials(await captureCredentials(saved.affectedProviderIds), saved.beforeCredentials)) fail('recovery');
+    store.setManagedState(key, saved.previous);
+    // Consume before local commit so storage failure rolls native changes back
+    // without leaving a consumed binding-only undo record.
+    store.setManagedState(undoKey, null);
+    commit?.();
+    return join(resolve(home), 'data.db');
+  } catch (error) {
+    if (!mutationStarted) {
+      if (changed) fail('changed');
+      if (error instanceof CopilotSyncError || error instanceof CopilotCredentialError || error instanceof CopilotDesktopError) throw error;
+      fail('unavailable');
+    }
+    close();
+    try {
+      client = await openClient(home);
+      if (!client.captureSnapshot || !client.restoreSnapshot) fail('recovery');
+      const current = await client.captureSnapshot(saved.affectedProviderIds), credentials = await captureCredentials(saved.affectedProviderIds);
+      if (!partialSnapshotMatches(current, saved.beforeSnapshot, saved.afterSnapshot) || !partialCredentialsMatch(credentials, saved.beforeCredentials, saved.afterCredentials)) fail('recovery');
+      await client.restoreSnapshot(saved.afterSnapshot, { ownedProviderIds: saved.affectedProviderIds, beforeMutation: async snapshot => {
+        if (!sameSnapshot(snapshot, current) || !sameCredentials(await captureCredentials(saved.affectedProviderIds), credentials)) fail('changed');
+        await restoreCredentials(saved.afterCredentials);
+      } });
+      await restoreCredentials(saved.afterCredentials);
+      store.setManagedState(key, saved.complete); store.setManagedState(undoKey, saved);
+    } catch { fail('recovery'); }
+    fail('restored');
+  } finally { close(); activeTargets.delete(target); }
+}
+
 /** Update the running native app; never launch it or write its SQLite directly. */
 export async function applyCopilotDesktop(store: CopilotSyncStore, rawPlan: CopilotDesktopPlan, copilotHome: string, options: CopilotSyncOptions = {}): Promise<string> {
   const target = targetHome(copilotHome), desired = plan(rawPlan, 'configuration');
@@ -164,7 +289,9 @@ export async function applyCopilotDesktop(store: CopilotSyncStore, rawPlan: Copi
   if (syncScope !== 'managed' && syncScope !== 'selected') fail('configuration');
   if (activeTargets.has(target)) fail('busy');
   activeTargets.add(target);
-  const key = `copilot-sync:${createHash('sha256').update(target).digest('hex')}`;
+  const key = copilotSyncStateKey(copilotHome), undoKey = copilotSyncUndoKey(copilotHome);
+  const previousUndo = options.recordUndo ? store.getManagedState<unknown>(undoKey, null) : null;
+  let undoWritten = false;
   const openClient = options.openClient ?? (home => CopilotDesktopClient.open(home));
   const captureCredentials = options.captureCredentials ?? captureCopilotCredentials;
   const restoreCredentials = options.restoreCredentials ?? restoreCopilotCredentials;
@@ -207,8 +334,8 @@ export async function applyCopilotDesktop(store: CopilotSyncStore, rawPlan: Copi
       await client.sync(desired, { ownedProviderIds: previous.ownedProviderIds, syncScope, beforeMutation: async snapshot => {
         try {
           const ownedProviderIds = [...new Set([...previous.ownedProviderIds, ...desired.providers.map(provider => provider.id)])];
-          if (syncScope === 'selected') {
-            if (!client?.restoreSnapshot) fail('backup');
+          if (syncScope === 'selected' || options.recordUndo) {
+            if (!client?.restoreSnapshot || options.recordUndo && !client.captureSnapshot) fail('backup');
             const beforeSnapshot = validateCopilotDesktopSnapshot(snapshot);
             const affectedProviderIds = [...new Set([...ownedProviderIds, ...beforeSnapshot.providers.map(entry => entry.provider.id)])];
             const credentials = validateCopilotCredentialBackup(await captureCredentials(affectedProviderIds));
@@ -232,6 +359,19 @@ export async function applyCopilotDesktop(store: CopilotSyncStore, rawPlan: Copi
         }
       } });
       const complete: Journal = { version: 1, target, ownedProviderIds: desired.providers.map(provider => provider.id), lastSuccessfulPlan: desired };
+      if (options.recordUndo) {
+        const pending = pendingState?.pending;
+        if (!pending || pending.recoveryMode !== 'opaque' || !client.captureSnapshot) fail('backup');
+        const afterSnapshot = validateCopilotDesktopSnapshot(await client.captureSnapshot(pending.affectedProviderIds));
+        const afterCredentials = validCredentials(await captureCredentials(pending.affectedProviderIds), pending.affectedProviderIds, afterSnapshot);
+        const undo: CopilotUndo = { version: 1, target, id: randomUUID(), completedAt: Date.now(), previous, complete,
+          affectedProviderIds: pending.affectedProviderIds, beforeSnapshot: pending.beforeSnapshot, afterSnapshot,
+          beforeCredentials: pending.credentials, afterCredentials };
+        // Validate before encrypting; storing the checkpoint is part of the
+        // operation. A failed write uses the existing opaque rollback path.
+        undoHistory(undo, target, store);
+        store.setManagedState(undoKey, undo); undoWritten = true;
+      }
       store.setManagedState(key, complete);
       return join(resolve(copilotHome), 'data.db');
     } catch (error) {
@@ -245,6 +385,7 @@ export async function applyCopilotDesktop(store: CopilotSyncStore, rawPlan: Copi
         client = await openClient(copilotHome);
         await restorePending(pendingState.pending, pendingState.ownedProviderIds);
         store.setManagedState(key, previous);
+        if (undoWritten) store.setManagedState(undoKey, previousUndo);
       } catch {
         try { store.setManagedState(key, pendingState); } catch { /* The already persisted pending journal remains the recovery authority. */ }
         fail('recovery');

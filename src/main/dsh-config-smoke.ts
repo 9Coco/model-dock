@@ -257,7 +257,7 @@ export async function verifyDshConfiguration(window: BrowserWindow, store: Store
   await click('[data-action="restore-official-tool-config"]');
   await waitFor('!!document.querySelector("[data-action=confirm-tool-restore]")', 'DSH official restoration confirmation');
   await click('[data-action="confirm-tool-restore"]');
-  await waitFor('!document.querySelector("[role=dialog]")&&!!document.querySelector("[data-tool-official-restored]")', 'DSH official restoration completed');
+  await waitFor('!document.querySelector("[role=dialog]")&&!!document.querySelector("[data-tool-official-restored]")&&document.querySelector("[data-tool-application-status]")?.dataset.toolApplicationState==="official"', 'DSH official restoration completed');
   const officialBinding = await binding();
   assert.equal(officialBinding.enabled, false); assert.deepEqual(officialBinding.providerIds, []); assert.deepEqual(officialBinding.modelIds, []); assert.equal(officialBinding.defaultModelId, '');
   assert.equal(await evaluate<string>('document.querySelector("[data-tool-application-status]").dataset.toolApplicationState'), 'official');

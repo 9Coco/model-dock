@@ -160,7 +160,7 @@ describe('Copilot subscription source integration', () => {
     expect(JSON.stringify(discovered)).not.toContain(COPILOT_TOKEN);
   });
 
-  it('routes locally configured Chat and Responses models when listing is unsupported, retaining headers, streams and measured usage', async () => {
+  it('routes locally configured Chat and Responses models when listing is unsupported, retaining headers, streams and protocol usage', async () => {
     const inference: { url: string; headers: Headers; body: Record<string, unknown> }[] = [];
     const f = await fixture((url, init) => {
       if (url.endsWith('/models')) return json({ error: 'The catalog is not provided' }, 404);
@@ -186,7 +186,7 @@ describe('Copilot subscription source integration', () => {
     const directory = await (await fetch(`${local.url}/models`, { headers: local.headers })).json();
     expect(directory.data.map((entry: { id: string }) => entry.id)).toEqual([chat.alias, responses.alias]);
     const chatReply = await fetch(`${local.url}/chat/completions`, { method: 'POST', headers: { ...local.headers, Cookie: 'SYNTHETIC_LOCAL_COOKIE', 'X-Initiator': 'spoofed' }, body: JSON.stringify({ model: chat.alias, messages: [{ role: 'user', content: 'SYNTHETIC_PRIVATE_PROMPT' }] }) });
-    expect(chatReply.status).toBe(200); expect((await chatReply.json()).model).toBe(chat.alias);
+    expect(chatReply.status).toBe(200); expect(await chatReply.json()).toMatchObject({ model: chat.alias, usage: { prompt_tokens: 10, completion_tokens: 4, prompt_tokens_details: { cached_tokens: 2 } } });
     const responseReply = await fetch(`${local.url}/responses`, { method: 'POST', headers: local.headers, body: JSON.stringify({ model: responses.alias, input: 'SYNTHETIC_PRIVATE_PROMPT', stream: true }) });
     expect(responseReply.status).toBe(200); expect(responseReply.headers.get('content-type')).toContain('text/event-stream');
     const stream = await responseReply.text();
@@ -201,10 +201,10 @@ describe('Copilot subscription source integration', () => {
       expect(request.headers.get('x-request-id')).toBeTruthy(); expect(request.headers.get('x-initiator')).toBeNull();
       expect(request.headers.get('cookie')).toBeNull();
     }
-    await vi.waitFor(() => expect(f.store.usageRecords('2000-01-01T00:00:00Z', '2100-01-01T00:00:00Z')).toHaveLength(2));
-    const records = f.store.usageRecords('2000-01-01T00:00:00Z', '2100-01-01T00:00:00Z');
-    expect(records.map(entry => entry.usage)).toEqual([{ inputTokens: 10, outputTokens: 4, cachedInputTokens: 2 }, { inputTokens: 20, outputTokens: 8, cachedInputTokens: 3 }]);
-    const logs = JSON.stringify({ records, logs: f.store.logs() });
+    expect(stream).toContain('"input_tokens":20');
+    await vi.waitFor(() => expect(f.store.logs()).toHaveLength(2));
+    const logs = JSON.stringify(f.store.logs());
+    expect(logs).not.toMatch(/usage|tokens/);
     expect(logs).not.toMatch(new RegExp(`${GITHUB_TOKEN}|${COPILOT_TOKEN}|${f.store.gatewayKey()}|SYNTHETIC_PRIVATE_`));
     expect(f.store.listModels()).toEqual(before.models); expect(f.store.listBindings()).toEqual(before.bindings);
     expect(f.calls.filter(call => call.url.endsWith('/models'))).toHaveLength(1);

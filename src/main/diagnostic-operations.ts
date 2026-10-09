@@ -3,9 +3,9 @@ import type { DiagnosticContext, DiagnosticEvent, DiagnosticLevel, DiagnosticOpe
 
 // 修改点：只从操作结果挑选诊断字段，禁止把 IPC 参数、任意错误文案或返回正文交给日志。
 const ignored = new Set(['reportRendererError', 'queryDiagnostics', 'diagnosticsText', 'exportDiagnostics', 'openDiagnosticsDir', 'copyText', 'copyGatewayKey', 'copyConnectionKey']);
-const quiet = new Set(['jetBrainsStatus', 'snapshot', 'getSettings', 'rendererReady', 'authAccounts', 'authProgress', 'copilotAuthProgress', 'mcpList', 'skillsList', 'skillsReadFile', 'usageQuery', 'usageSources', 'listProviderDuplicates']);
+const quiet = new Set(['jetBrainsStatus', 'toolSyncUndoStatus', 'snapshot', 'getSettings', 'rendererReady', 'authAccounts', 'authProgress', 'copilotAuthProgress', 'mcpList', 'skillsList', 'skillsReadFile', 'listProviderDuplicates']);
 const providerIdOperations = new Set(['deleteProvider', 'testProvider', 'discoverModels', 'addDiscoveredModels', 'beginLogin', 'authProgress', 'cancelLogin', 'refreshAccountUsage', 'logoutAccount', 'copilotLogoutAccount']);
-const toolIdOperations = new Set(['previewConfig', 'exportConfig', 'applyConfig', 'restoreOfficialConfig', 'usageImportTool']);
+const toolIdOperations = new Set(['previewConfig', 'exportConfig', 'applyConfig', 'restoreOfficialConfig', 'toolSyncUndoStatus', 'undoToolSync']);
 const tools = new Set(['codex', 'opencode', 'dsh', 'vscode', 'copilot', 'claude-code', 'webstorm', 'intellij-idea', 'rider', 'pycharm']);
 const outcomes = new Set(['success', 'failure', 'cancelled', 'skipped', 'model-required', 'configuration', 'authentication', 'permission', 'model', 'rate-limit', 'upstream', 'network', 'timeout', 'invalid-response', 'unsupported', 'invalid-provider', 'missing-credentials', 'region', 'device-disabled', 'denied', 'expired', 'blocked']);
 const stages = new Set(['device-code', 'device-poll', 'token-exchange', 'account-info', 'refresh', 'discovery']);
@@ -13,9 +13,9 @@ const events: Partial<Record<keyof ModelDockApi, DiagnosticEvent>> = {
   saveProvider: 'provider.save', deleteProvider: 'provider.delete', testProvider: 'connection.result', discoverModels: 'models.discovery',
   beginLogin: 'account.login', beginCopilotLogin: 'account.login', logoutAccount: 'account.logout', copilotLogoutAccount: 'account.logout',
   refreshAccountUsage: 'account.refresh', previewConfig: 'config.preview', applyConfig: 'config.apply', restoreOfficialConfig: 'config.restore',
+  undoToolSync: 'config.restore',
   mcpSave: 'mcp.operation', mcpDelete: 'mcp.operation', mcpSetTool: 'mcp.operation', mcpImport: 'mcp.operation', mcpApply: 'mcp.operation',
   skillsImportLocal: 'skills.operation', skillsImportRepository: 'skills.operation', skillsDeploy: 'skills.operation', skillsAdopt: 'skills.operation', skillsDelete: 'skills.operation',
-  usageImportTool: 'usage.import', usageSyncTools: 'usage.import',
 };
 function object(value: unknown): Record<string, unknown> { return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
 function id(value: unknown): string | undefined { return typeof value === 'string' && /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|copilot:(?:[1-9]\d*|login)|deepseek|volcengine-agent|volcengine-token|qwen-token|codex-subscription|grok-build|copilot-subscription)$/i.test(value) ? value : undefined; }

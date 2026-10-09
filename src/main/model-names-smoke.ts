@@ -86,29 +86,30 @@ export async function verifyModelNames(window: BrowserWindow, outputDir: string,
   const editedAlias = await evaluate<string>(`(async()=>{const snapshot=await window.modelDock.snapshot();return snapshot.models.find(m=>m.id==='${saved[1].id}')?.alias})()`);
   if (editedAlias !== saved[1].alias) throw new Error('Editing a local same-name model changed its stable route ID');
 
-  await evaluate(`document.querySelectorAll('.toast-stack [aria-label="关闭提示"]').forEach(button=>button.click());document.querySelector('[data-page="models"]').click()`);
-  await waitFor(`!!document.querySelector('.catalog-toolbar [aria-label="搜索模型"]')`, 'model directory');
-  await evaluate(`(()=>{
-    const input=document.querySelector('.catalog-toolbar [aria-label="搜索模型"]');
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'同名模型');
-    input.dispatchEvent(new Event('input',{bubbles:true}));
-  })()`);
-  await waitFor(`document.querySelectorAll('.models-table tbody tr').length===2`, 'same-name directory rows');
-  const directory = await evaluate<{ labels: string[]; routes: string[] }>(`(()=>{
-    const rows=Array.from(document.querySelectorAll('.models-table tbody tr'));
-    return {labels:rows.map(row=>row.querySelector('.model-name strong').textContent),routes:rows.map(row=>row.querySelector('.model-name code').textContent)};
-  })()`);
-  if (!providers.every(provider => directory.labels.includes(`${provider.name} - 同名模型`))) throw new Error('Model directory labels did not distinguish supplier names');
-  window.setSize(1320, 880);
-  await waitFor(`innerWidth>1100`, 'large directory viewport');
-  writeFileSync(join(outputDir, 'electron-model-same-name-1320.png'), await captureUi());
-  window.setSize(980, 680);
-  await waitFor(`innerWidth<1100`, 'compact directory viewport');
-  const layout = await evaluate<{ inViewport: boolean; rowCount: number; tableScrollable: boolean }>(`(()=>{
-    const panel=document.querySelector('.catalog-panel'),rect=panel.getBoundingClientRect(),scroll=panel.querySelector('.table-scroll');
-    return {inViewport:rect.left>=0&&rect.right<=innerWidth+1,rowCount:panel.querySelectorAll('tbody tr').length,tableScrollable:scroll.scrollWidth>scroll.clientWidth};
-  })()`);
-  if (!layout.inViewport || layout.rowCount !== 2) throw new Error('Compact model directory lost same-name rows');
-  writeFileSync(join(outputDir, 'electron-model-same-name-980.png'), await captureUi());
-  writeFileSync(join(outputDir, 'model-names-validation.json'), JSON.stringify({ providers, saved, edit, editedAlias, directory, layout }, null, 2));
+  const providerModels: { providerId: string; labels: string[]; routes: string[]; modelIds: string[] }[] = [];
+  const layouts: { providerId: string; width: number; inViewport: boolean; rowCount: number; tableScrollable: boolean }[] = [];
+  for (const [index, provider] of providers.entries()) {
+    const model = saved[index];
+    await evaluate(`document.querySelectorAll('.toast-stack [aria-label="关闭提示"]').forEach(button=>button.click());document.querySelector('[data-source-id="${provider.id}"]').click()`);
+    await waitFor(`document.querySelector('.breadcrumbs')?.textContent.includes(${JSON.stringify(provider.name)})&&!!document.querySelector('.provider-models [data-model-id="${model.id}"]')`, 'same-name supplier model table');
+    const table = await evaluate<{ labels: string[]; routes: string[]; modelIds: string[] }>(`(()=>{
+      const rows=Array.from(document.querySelectorAll('.provider-models .models-table tbody tr'));
+      return {labels:rows.map(row=>row.querySelector('.model-name strong').textContent),routes:rows.map(row=>row.querySelector('.model-name code').textContent),modelIds:rows.map(row=>row.dataset.modelId)};
+    })()`);
+    if (table.modelIds.length !== 1 || table.modelIds[0] !== model.id || table.labels[0] !== `${provider.name} - 同名模型` || table.routes[0] !== model.alias) throw new Error('Supplier model table lost same-name source identity or stable route');
+    providerModels.push({ providerId: provider.id, ...table });
+    for (const [width, height] of [[1320, 880], [980, 680]]) {
+      window.setSize(width, height);
+      await waitFor(width > 1100 ? `innerWidth>1100` : `innerWidth<1100`, 'supplier model viewport');
+      const layout = await evaluate<{ inViewport: boolean; rowCount: number; tableScrollable: boolean }>(`(()=>{
+        const panel=document.querySelector('.provider-models'),rect=panel.getBoundingClientRect(),scroll=panel.querySelector('.table-scroll');
+        return {inViewport:rect.left>=0&&rect.right<=innerWidth+1,rowCount:panel.querySelectorAll('tbody tr').length,tableScrollable:scroll.scrollWidth>scroll.clientWidth};
+      })()`);
+      if (!layout.inViewport || layout.rowCount !== 1) throw new Error('Supplier model table overflows or lost its same-name model');
+      layouts.push({ providerId: provider.id, width, ...layout });
+      writeFileSync(join(outputDir, `electron-provider-same-name-${index + 1}-${width}.png`), await captureUi());
+    }
+  }
+  if (new Set(providerModels.flatMap(table => table.routes)).size !== 2 || providerModels.flatMap(table => table.labels).length !== 2) throw new Error('Same-name supplier model tables did not retain distinct routes');
+  writeFileSync(join(outputDir, 'model-names-validation.json'), JSON.stringify({ providers, saved, edit, editedAlias, providerModels, layouts }, null, 2));
 }

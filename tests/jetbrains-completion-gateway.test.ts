@@ -53,7 +53,7 @@ describe('JetBrains aggregate native FIM endpoint', () => {
     expect(f.targets).toEqual(['https://api.deepseek.com/beta/completions']);
     expect(f.upstreams).toEqual([{ url: '/beta/completions', auth: 'Bearer SYNTHETIC_NATIVE_FIM_KEY', body: { ...request(), model: 'deepseek-flash' } }]);
     expect(JSON.stringify(f.store.logs())).not.toMatch(/SYNTHETIC_NATIVE_FIM_KEY|function synthetic|return /);
-    expect(f.store.usageRecords('2000-01-01T00:00:00Z', '2100-01-01T00:00:00Z')).toEqual(expect.arrayContaining([expect.objectContaining({ tool, usage: { inputTokens: 8, outputTokens: 3, cachedInputTokens: 0 } })]));
+    expect(f.store.logs()).toEqual(expect.arrayContaining([expect.objectContaining({ status: 200, endpoint: '/v1/completions' })]));
     expect((await f.post(tool, { ...request(), model: f.other.alias })).status).toBe(403);
     expect(f.upstreams).toHaveLength(1);
   });

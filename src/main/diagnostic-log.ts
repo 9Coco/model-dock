@@ -5,7 +5,7 @@ import { DIAGNOSTIC_MESSAGES, DIAGNOSTIC_OPERATIONS, type DiagnosticContext, typ
 
 const LEVELS = ['info', 'warn', 'error'] as const;
 const OUTCOMES = ['success', 'failure', 'cancelled', 'skipped', 'model-required', 'configuration', 'authentication', 'permission', 'model', 'rate-limit', 'upstream', 'network', 'timeout', 'invalid-response', 'missing-credentials', 'unsupported', 'invalid-provider', 'region', 'device-disabled', 'denied', 'expired', 'blocked', 'pending', 'complete', 'error', 'ready', 'stale', 'unavailable', 'not-queried', 'crashed', 'oom', 'killed', 'launch-failed', 'clean-exit'] as const;
-const STAGES = ['startup', 'shutdown', 'store', 'vault', 'window', 'renderer', 'gateway', 'provider', 'account', 'model-list', 'inference', 'configuration', 'oauth', 'refresh', 'callback', 'mcp', 'skills', 'usage', 'diagnostics', 'device-code', 'device-poll', 'token-exchange', 'account-info', 'discovery', 'storage', 'preferences', 'proxy', 'managers', 'runtime', 'model-inference', 'model-catalog', 'github-profile', 'quota-query', 'token-refresh'] as const;
+const STAGES = ['startup', 'shutdown', 'store', 'vault', 'window', 'renderer', 'gateway', 'provider', 'account', 'model-list', 'inference', 'configuration', 'oauth', 'refresh', 'callback', 'mcp', 'skills', 'diagnostics', 'device-code', 'device-poll', 'token-exchange', 'account-info', 'discovery', 'storage', 'preferences', 'proxy', 'managers', 'runtime', 'model-inference', 'model-catalog', 'github-profile', 'quota-query', 'token-refresh'] as const;
 const ERROR_NAMES = ['Error', 'TypeError', 'RangeError', 'SyntaxError', 'URIError', 'EvalError', 'ReferenceError', 'AggregateError', 'AbortError', 'TimeoutError', 'FetchError'] as const;
 // 修改点：Chromium 的网络失败常只写入 message；仅允许现有授权网络诊断的封闭错误码。
 const CHROMIUM_NETWORK_CODES = ['ERR_TIMED_OUT', 'ERR_CONNECTION_TIMED_OUT', 'ERR_PROXY_CONNECTION_FAILED', 'ERR_TUNNEL_CONNECTION_FAILED', 'ERR_NAME_NOT_RESOLVED', 'ERR_CONNECTION_REFUSED', 'ERR_CONNECTION_CLOSED', 'ERR_CONNECTION_RESET', 'ERR_CERT_AUTHORITY_INVALID', 'ERR_CERT_DATE_INVALID', 'ERR_CERT_COMMON_NAME_INVALID', 'ERR_NETWORK_CHANGED', 'ERR_INTERNET_DISCONNECTED', 'ERR_ABORTED', 'ERR_BLOCKED_BY_CLIENT', 'ERR_FAILED', 'ERR_INVALID_RESPONSE', 'ERR_UNSAFE_REDIRECT', 'ERR_UNEXPECTED_PROXY_AUTH', 'ERR_PROXY_AUTH_UNSUPPORTED', 'ERR_NO_SUPPORTED_PROXIES', 'ERR_ADDRESS_UNREACHABLE'] as const;
@@ -68,12 +68,6 @@ const PROJECT_FRAME_FILES = new Set([
   'src/main/tool-restore-smoke.ts',
   'src/main/tool-restore.ts',
   'src/main/tool-selection-smoke.ts',
-  'src/main/usage-analytics-smoke.ts',
-  'src/main/usage-dashboard-smoke.ts',
-  'src/main/usage-import.ts',
-  'src/main/usage-opencode.ts',
-  'src/main/usage-sync.ts',
-  'src/main/usage.ts',
   'src/main/vault.ts',
   'src/renderer/AccountAvatar.tsx',
   'src/renderer/App.tsx',
@@ -86,7 +80,6 @@ const PROJECT_FRAME_FILES = new Set([
   'src/renderer/SettingsPanel.tsx',
   'src/renderer/SkillsPanel.tsx',
   'src/renderer/ToolIcon.tsx',
-  'src/renderer/UsagePanel.tsx',
   'src/renderer/components.tsx',
   'src/renderer/main.tsx',
   'src/renderer/theme.ts',
@@ -105,10 +98,6 @@ const PROJECT_FRAME_FILES = new Set([
   'src/shared/settings-types.ts',
   'src/shared/skill-types.ts',
   'src/shared/types.ts',
-  'src/shared/usage-display.ts',
-  'src/shared/usage-import-types.ts',
-  'src/shared/usage-report.ts',
-  'src/shared/usage-types.ts',
   'dist-electron/main.cjs',
 ]);
 const MAX_LINE_BYTES = 4096;

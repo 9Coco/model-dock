@@ -52,7 +52,8 @@ describe('JetBrains tool-scoped subscription gateway', () => {
     expect(f.bodies[1].input).toEqual(expect.arrayContaining([{ type: 'function_call_output', call_id: 'call_mock', output: 'SYNTHETIC_RESULT' }]));
     expect(f.bodies.every(body => body.model === 'upstream-model')).toBe(true);
     expect(JSON.stringify([catalog, first, result, f.store.logs()])).not.toMatch(/SYNTHETIC_SUB_TOKEN|SYNTHETIC_REFRESH_TOKEN/);
-    expect(f.store.usageRecords('2000-01-01T00:00:00Z', '2100-01-01T00:00:00Z')).toEqual(expect.arrayContaining([expect.objectContaining({ tool, usage: { inputTokens: 9, outputTokens: 4, cachedInputTokens: 0 } })]));
+    expect(result.usage).toEqual({ prompt_tokens: 9, completion_tokens: 4, total_tokens: 13 });
+    expect(f.store.logs()).toEqual(expect.arrayContaining([expect.objectContaining({ status: 200, endpoint: '/v1/chat/completions' })]));
     expect((await f.post(tool, { ...input(), model: f.second.alias })).status).toBe(403);
     expect(f.bodies).toHaveLength(2);
   });

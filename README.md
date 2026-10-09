@@ -37,7 +37,7 @@ Koog 会将显示用的 `assistant.reasoning_content` 回传下一轮。Response
 
 配置流程参考 JetBrains 官方 [自定义模型](https://www.jetbrains.com/help/ai-assistant/use-custom-models.html)及[提供商与 API 密钥设置](https://www.jetbrains.com/help/ai-assistant/settings-reference-providers-and-api-keys.html)。
 
-此接入管理 AI Assistant 聊天、核心 / 轻量模型与独立 AI 补全参数。Junie、Claude Agent、Codex、Gemini CLI 及各自独立的账号 / 模型配置仍由 IDE 管理。ModelDock 本次不导入或部署 JetBrains MCP / Skills，也不读取 IDE 聊天记录；经过本机网关的请求用量按四个工具独立统计。协议转换、配置文件和隔离 Electron 验证，与真实 IDE 界面和上游账号调用分别记录。
+此接入管理 AI Assistant 聊天、核心 / 轻量模型与独立 AI 补全参数。Junie、Claude Agent、Codex、Gemini CLI 及各自独立的账号 / 模型配置仍由 IDE 管理。ModelDock 本次不导入或部署 JetBrains MCP / Skills，也不读取 IDE 聊天记录；本机网关保留请求状态与耗时日志。协议转换、配置文件和隔离 Electron 验证，与真实 IDE 界面和上游账号调用分别记录。
 
 ### 独立 AI 补全
 
@@ -49,7 +49,7 @@ AI 补全使用独立的 `NextEditProviderSettings` 配置和独立 Key，不与
 
 保留现有补全上下文与其他参数，只有超过原生接口已确认限制的输出预算才降到 `4096`；原生设置中的预算以字符串保存。聊天及补全四文件统一备份和回滚，兼容升级前只有三文件的恢复记录。`(fim) Generic` 当前客户端使用前缀补全，不发送后缀；这里不宣称已验证完整 FIM 或下一处编辑预测。真实编辑器补全与供应商调用需另行确认。
 
-## 授权、MCP、Skills 和用量
+## 授权、MCP 和 Skills
 
 授权中心使用紧凑行布局：平台标题、账号身份、横向额度条和重置时间集中显示，账号详情、重新授权、注销与删除放入「…」菜单。空账号组使用简短提示；重置到期明细以浮层展开，不再撑高整张卡片。保留所有账号操作及键盘菜单控制。
 
@@ -57,7 +57,7 @@ AI 补全使用独立的 `NextEditProviderSettings` 配置和独立 Key，不与
 
 深色主题采用黑灰背景、蓝色强调，覆盖侧栏、卡片、菜单、设置、表单和弹窗。品牌图标统一为深灰白色 M 与蓝色连接标记；窗口、托盘、网页图标和 Windows EXE 使用同一套素材。`npm run build` 会生成七档 ICO 与 PNG / SVG；打包保留 Windows 图标资源编辑并关闭签名。
 
-导航和常用操作采用 [Google Material Symbols Rounded](https://fonts.google.com/icons?icon.style=Rounded)：聚合节点、MCP 服务、Skills 书籍、授权钥匙、用量统计、模型堆栈及服务监控使用统一的圆角线条。图标使用本地 SVG 路径和主题颜色，离线可用，无需加载 Google 字体；各工具的品牌图标与 ModelDock 应用标记保留。素材来自 [Google 官方图标仓库](https://github.com/google/material-design-icons)，选取记录与 Apache 2.0 许可随源码及 Windows 包提供。
+导航和常用操作采用 [Google Material Symbols Rounded](https://fonts.google.com/icons?icon.style=Rounded)：聚合节点、MCP 服务、Skills 书籍、授权钥匙、供应商模型及服务监控使用统一的圆角线条。图标使用本地 SVG 路径和主题颜色，离线可用，无需加载 Google 字体；各工具的品牌图标与 ModelDock 应用标记保留。素材来自 [Google 官方图标仓库](https://github.com/google/material-design-icons)，选取记录与 Apache 2.0 许可随源码及 Windows 包提供。
 
 授权中心按 GitHub Copilot、ChatGPT / OpenAI、xAI / Grok 分组展示账号。已授权账号进入页面后自动查询额度，并显示剩余百分比、上游提供的实际单位、重置倒计时、查询时间和旧结果状态。列表每 5 秒只读取本机缓存；额度缓存默认 5 分钟，已知重置时间到达后可提前查询，失败按 5 / 10 / 20 / 30 分钟延后，也可手动刷新。
 
@@ -69,26 +69,14 @@ GitHub 账号身份查询使用公共 REST 请求头，Copilot 额度查询使�
 
 协议对照 [CC Switch v4.0.0 Copilot](https://github.com/farion1231/cc-switch/blob/v4.0.0/src-tauri/src/proxy/providers/copilot_auth.rs)、[v4.0.0 ChatGPT](https://github.com/farion1231/cc-switch/blob/v4.0.0/src-tauri/src/services/subscription.rs) 和 [v4.0.3 Grok](https://github.com/farion1231/cc-switch/blob/v4.0.3/src-tauri/src/services/subscription_grok.rs)。xAI 未使用账号的已知 protobuf 缺省零值形状保留兼容解析，界面标注“按协议默认值解析”；缺少明确上下文或结构改变时仍显示未知。Copilot 当前/旧版额度类型依据 [GitHub 官方说明](https://docs.github.com/en/copilot/how-tos/manage-and-track-spending/monitor-ai-usage) 与实际响应，额度读取不代表每个模型的推理权限。
 
-左下功能区提供四个管理页面。工具与供应商列表共享剩余高度并分别滚动；窗口缩小时两组列表都可独立滚动，标题保持可见，底部功能入口和工作空间信息保持固定。
+左下功能区提供 MCP、Skills、授权中心及服务日志入口。工具与供应商列表共享剩余高度并分别滚动；窗口缩小时两组列表都可独立滚动，标题保持可见，底部功能入口和工作空间信息保持固定。
 
 - **授权中心**：统一管理现有 Codex / Grok Build 订阅来源，一个来源对应一个账号。可新增、登录、重新授权、注销 ModelDock 本地授权、删除来源，或明确点击从本机客户端的 `auth.json` 只读导入。额度查询复用续期机制，只向对应官方域名发送凭据；未查询或格式不支持显示未知，网络失败时注明上次成功结果。访问凭据到期不代表套餐到期。GitHub Copilot 目前仍是接入工具，尚未新增为 ModelDock 的订阅来源。
 - **MCP 管理**：全局目录支持 stdio、HTTP、SSE；勾选仅保存工具选择。先预览，再明确应用到工具，保留无关设置并备份原文件。Codex 支持 stdio / Streamable HTTP，SSE 会明确拒绝；OpenCode 使用 remote 协商；VS Code 与 Copilot CLI 使用各自用户配置。DSH 暂无已核实的统一 MCP 文件入口，只导出片段。Claude Code MCP 导入、预览和应用暂不支持，须在 Claude Code 中独立配置，不会复用其他客户端文件。目录、预览和导出隐藏环境变量、Headers、敏感参数及 URL 查询凭据；应用由主进程取出真实值。已被用户修改的受管项及非受管同名项会提示冲突，不会覆盖或删除。删除目录记录后，须再次预览 / 应用才清理客户端中未改过的受管项。
 - **Skills 管理**：支持导入本地目录、GitHub 仓库或已有工具技能，查看技能文件，并按工具部署或停用。导入只复制到管理库，勾选才实际部署；使用文件清单和哈希保护用户修改，保留备份，不执行技能脚本。Codex 使用仍兼容的 `CODEX_HOME/skills`，Claude Code 使用 `CLAUDE_CONFIG_DIR/skills`（默认 `~/.claude/skills`），OpenCode 使用全局 `skills`，DSH 对应官方文件系统技能插件。VS Code 与 Copilot 共享 `~/.copilot/skills`，两列同步。现有外部同名技能只读导入后不会自动接管；内容完全一致时，可点击「接管」并确认，仅登记管理关系。不同内容、用户修改、链接或额外 Git 元数据会拒绝接管。更新仓库技能前需显式管理原库项，尚无自动更新。
-- **用量统计**：提供「按供应商」「按工具」「按模型」三个视图，支持点击排行下钻及时间、工具、供应商、模型交叉筛选；总览、排行、每日趋势和 CSV / JSON 导出使用同一范围。展示请求数、成功率、输入 / 输出 / 缓存 Token、用量覆盖及估算费用，可按请求、Token、费用排序。默认今天，可选最近 7 / 30 / 90 / 365 天或最多 366 个香港自然日；没有记录的日期补 0。历史和已移除的来源仍可筛选；无法识别工具的调用单列为通用接口，不按当前绑定猜测归属。解析 Chat / Responses 的 JSON 与 SSE 实际 `usage`，缓存不会重复计价，推理 Token 不会重复计入输出。没返回计数的请求保持未知，手填模型 USD 单价后才估算费用；只覆盖部分记录时显示「部分估算」，不代表实际账单或订阅费。日志轮转不删除用量历史。
-
-用量页默认查询今天的客户端会话，提供工具快捷筛选、立即同步、30 秒自动刷新（可关闭或改成 15 / 60 / 300 秒）、数据来源、四项总览、小时/每日趋势和分页明细。日志、供应商、模型和定价分别在页签中查看，来源和状态码可进一步筛选。仅在用量页面进入或刷新时同步，不在应用启动时导入外部客户端资料；隐藏窗口时暂停自动刷新。
-
-本地会话目前支持 **Codex 和 OpenCode**。Codex 支持 `sessions` / `archived_sessions`、累计快照、重复额度事件、分支回放、截断文件和重复同步；OpenCode 支持 V1 / V2 SQLite，在内存中合并校验通过的已提交 WAL。读取不修改原数据库、WAL、SHM 或日志文件，只保存时间、模型和 Token 元数据。DSH、VS Code 和 Copilot 的原生历史暂未接入稳定可验证的格式，会在数据来源中明确说明；经过 ModelDock 网关的请求仍可统计。Claude Code 的原生用量解析暂未实现，本版不读取或导入其会话记录；通过 ModelDock 本机服务的请求会记录网关用量，官方 API 直连用量请查看供应商账单。
-
-总 Token 为总输入加输出，缓存读取和写入不重复相加；新输入排除缓存读取/写入，缓存命中率按输入量加权。模型定价支持已配置模型和实际观察到的历史模型；缓存写入单价缺失且记录含写入时，该条费用保持未知。费用按当前设置的 USD 单价估算，不代表订阅账单，也不猜测未设置的参考价格。客户端事件的 HTTP 状态和速率保持未知；网关速率由已报告输出和完整请求耗时计算，包含等待及网络时间。
-
-界面与解析参考 [CC Switch 4.0 指标](https://github.com/farion1231/cc-switch/blob/v4.0.0/src/components/usage/UsageHero.tsx) 和 [OpenCode 会话读取](https://github.com/farion1231/cc-switch/blob/v4.0.0/src-tauri/src/services/session_usage_opencode.rs)。SQLite 快照采用 [官方 WAL 格式](https://sqlite.org/walformat.html)，始终保持原文件只读。
-
-用量中点击某家供应商的「查看」，可在明细中继续筛选工具或模型。导出的报告含当前筛选、统计单位、香港日期/时区和计价覆盖；CSV 使用 UTF-8 并防止历史名称被表格软件当成公式执行，JSON 另含趋势及当前日志页。客户端事件与网关请求分别统计，避免同一调用被重复累计。
-
 MCP / Skills 的真实客户端加载、真实账号授权及额度查询仍需在对应工具和账号验证。配置写入成功不等于服务已经连接。
 
-这四项功能参考 [CC Switch 的 MCP 统一目录](https://github.com/farion1231/cc-switch/blob/d455dd85720a4e48a59d02396539b480d9767902/src-tauri/src/services/mcp.rs)、[Skills 管理库](https://github.com/farion1231/cc-switch/blob/d455dd85720a4e48a59d02396539b480d9767902/src-tauri/src/services/skill.rs) 与账号 / 会话用量设计，使用独立 TypeScript 实现。参考仓库为 MIT 许可，源码仅放在被 Git 忽略的 `work/references/`，不随应用打包。各工具目录依据官方文档和源码，说明链接可从 Skills 页面查看。
+这些管理功能参考 [CC Switch 的 MCP 统一目录](https://github.com/farion1231/cc-switch/blob/d455dd85720a4e48a59d02396539b480d9767902/src-tauri/src/services/mcp.rs)、[Skills 管理库](https://github.com/farion1231/cc-switch/blob/d455dd85720a4e48a59d02396539b480d9767902/src-tauri/src/services/skill.rs) 与账号授权设计，使用独立 TypeScript 实现。参考仓库为 MIT 许可，源码仅放在被 Git 忽略的 `work/references/`，不随应用打包。各工具目录依据官方文档和源码，说明链接可从 Skills 页面查看。
 
 这是按个人需求实现的初版，不是 CLIProxyAPI 的完整移植。项目源码无需 Go 或 Rust，不修改已有 CPA 安装。
 
@@ -236,14 +224,22 @@ Copilot 默认开启「仅保留所选供应商」，同步会先备份，再清
 
 每次写入前将原配置、凭据备份和恢复计划加密保存到 ModelDock 的管理记录与私有备份。部分写入失败会尝试恢复；恢复未完成时保留待恢复记录，下次同步先恢复再执行新计划。无法安全备份时先拒绝修改。同步串行发送写入，不盲目重试写请求；读取遇到原生凭据工作队列繁忙时有限退避，减少重复的全供应商凭据查询。Copilot 未运行时选择仍保存，打开应用后可重新同步。
 
-聚合及旧版多来源连接的工具页提供「全选可用」，所有工具均有「清空选择」，覆盖搜索结果之外的来源，批量操作只保存并同步一次。未授权、停用或没有兼容模型的来源不加入全选。每张供应商卡片均提供删除入口：删除会影响全局供应商及模型，并同步关联的自动接入工具；失败会恢复本地记录并尝试修复工具配置。删除前保存加密备份，历史用量保留。
+聚合及旧版多来源连接的工具页提供「全选可用」，所有工具均有「清空选择」，覆盖搜索结果之外的来源，批量操作只保存并同步一次。未授权、停用或没有兼容模型的来源不加入全选。每张供应商卡片均提供删除入口：删除会影响全局供应商及模型，并同步关联的自动接入工具；失败会恢复本地记录并尝试修复工具配置。删除前保存加密备份，已有数据库历史记录保留。
+
+## 自动同步与撤销
+
+非 JetBrains 工具的来源、连接方式、默认模型和范围修改立即保存到 ModelDock，停止操作 400 毫秒后才合并写入外部配置并备份；连续点选只同步最后一次选择。各工具的待办独立保存，实际写入按主进程锁串行执行。切换页面不创建新的同步请求，应用启动不重放上次待办；同步失败后保留选择，等待新的用户操作或点击「重新同步」。
+
+「重新同步」立即处理当前待办，不再追加延后的第二次写入。「撤销上次同步」取消尚未写入的新选择，恢复上次成功同步前的配置、管理记录和工具选择；原文件或凭据被外部修改时拒绝覆盖。每个工具仅保留最新一份撤销记录，内容在主进程加密保存，不传给界面。重复同步未变化的配置不会覆盖上一份有效记录。Copilot 通过原生接口恢复供应商注册表及精确备份的系统凭据；JetBrains 保留原有退出 IDE 后同步和同步前还原流程。
+
+本版移除本地用量统计、Token 采集、价格估算和客户端历史导入，也不再提供全局模型目录页。模型在供应商详情中添加、获取和编辑；聚合映射与工具选择继续使用现有模型。旧数据库中的历史统计表不删除，也不再追加记录。账号授权中心的供应商额度信息及 API 响应本身的 usage 字段保留。
 
 ## 使用流程
 
-界面按工具、供应商、功能三个区域组织：左侧上方选择十款工具，中间第一项是「聚合供应商」，其下是全局来源；下方进入模型目录和服务日志。右侧直接显示所选对象的配置与模型，供应商使用紧凑列表。切换导航不会修改已有工具绑定。
+界面按工具、供应商、功能三个区域组织：左侧上方选择十款工具，中间第一项是「聚合供应商」，其下是全局来源；下方进入 MCP、Skills、授权中心和服务日志。模型在各供应商详情中管理，不再提供全局模型目录页面。右侧直接显示所选对象的配置与模型，供应商使用紧凑列表。切换导航不会修改已有工具绑定。
 
 1. 在左侧「模型供应商」标题下点击「添加 API」或「添加订阅」，填写地址和密钥，或点击 GPT/Grok 来源的登录按钮。API 密钥留空表示保留原凭据。保存来源不强制读取模型列表；供应商未提供目录接口时，可直接手动添加模型再测试连接。
-2. 已有来源可在供应商详情点击「获取模型列表」，搜索并勾选模型，按需修改简称及显示名称，再批量加入目录。已添加的模型保持原接口 ID 并自动跳过；简称仅需在当前供应商内区分，跨供应商可重复。上游不提供模型目录时会显示具体错误，可改用「手动添加」。获取成功仅表示目录可读，模型是否可用须实际请求确认。
+2. 已有来源可在供应商详情点击「获取模型列表」，搜索并勾选模型，按需修改简称及显示名称，再批量加入该供应商。已添加的模型保持原接口 ID 并自动跳过；简称仅需在当前供应商内区分，跨供应商可重复。上游不提供模型目录时会显示具体错误，可改用「手动添加」。获取成功仅表示目录可读，模型是否可用须实际请求确认。
 3. 在左侧选择工具，先选择是否「使用聚合接口」，在供应商行左侧勾选需要的来源，聚合时按需启用模型，并在顶部选择模型偏好（VS Code / Copilot app 显示为「ModelDock 首选模型」）。VS Code、OpenCode、Codex 和已运行的 Copilot app 会自动同步，状态显示「本次选择已同步」；取消勾选也会更新配置。VS Code 和 Copilot app 默认开启「仅保留所选供应商」，会先备份再清理未选中的历史自定义来源；如需保留，请关闭此项。同步失败时选择仍保存，可处理后点击「重新同步」。
 4. 已有绑定可先点击「重新同步」应用现有选择，也可随时预览。修改来源地址、Key 或模型参数后，请再次同步；使用文件配置的工具可能需要重新加载。VS Code 默认写入 `Code/User/chatLanguageModels.json`，其他 profile 需要手工合并。Copilot app 使用正在运行的实例，不需要 JSON 导入。DSH 的原生热更新启用时会自动读取修改；未启用时重启 DSH。默认模型用于新会话，已有会话需切换模型或新建。
 5. 在工具中选择模型并发出请求。VS Code / Copilot app 同步后还需在自己的模型选择器选择模型；ModelDock 的首选模型不会切换已打开聊天的当前模型。经过本地入口的请求可在服务日志查看状态、耗时和实际来源；API 直连请求不经过网关。
@@ -262,7 +258,7 @@ Copilot 默认开启「仅保留所选供应商」，同步会先备份，再清
 
 API 来源按名称、类型和规范化地址防重复：添加预设时复用已有空记录，同一密钥重复保存返回原来源，双击提交也不会追加记录。若使用另一把 Key，请编辑已有记录或为不同账号设置不同名称；路径不同的套餐入口仍分别保留。
 
-旧版本已有同名同地址记录时，「聚合供应商」会出现「整理重复供应商」。页面会比较本机凭据并展示模型数量；仅相同密钥或空预设可合并。启用状态、预设不一致，或凭据无法读取时会给出原因。合并需先停止本地服务，操作前自动备份数据库，保留所有模型 ID、别名、用量历史和默认模型。只选择部分重复来源的工具会保持原模型范围；原本选择完整来源的工具继续自动包含新模型。整理不会自动运行，也不会删除同一上游模型的不同别名，以免破坏已有工具配置。
+旧版本已有同名同地址记录时，「聚合供应商」会出现「整理重复供应商」。页面会比较本机凭据并展示模型数量；仅相同密钥或空预设可合并。启用状态、预设不一致，或凭据无法读取时会给出原因。合并需先停止本地服务，操作前自动备份数据库，保留所有模型 ID、别名、已有数据库历史记录和默认模型。只选择部分重复来源的工具会保持原模型范围；原本选择完整来源的工具继续自动包含新模型。整理不会自动运行，也不会删除同一上游模型的不同别名，以免破坏已有工具配置。
 
 统一地址为 `http://127.0.0.1:18181/v1`。工具专用入口例如 `http://127.0.0.1:18181/tool/dsh/v1`，只发布该工具绑定的模型。聚合和订阅使用本地 Key；API 直连分组使用对应来源的 Key。
 
@@ -279,7 +275,8 @@ API 来源按名称、类型和规范化地址防重复：添加预设时复用�
 - 订阅路径使用 `store:false`，需要发送完整会话历史；不能依赖 `previous_response_id` 或服务端持久化对话。原生 WebSocket 续接尚未实现。千问 Token Plan 的 Responses 支持也需按具体模型选择，不能以套餐名称一概认定。
 - Claude Code 终端接入写入 `CLAUDE_CONFIG_DIR/settings.json`（默认 `~/.claude/settings.json`），关闭聚合时一次使用一个现有 API 或账号订阅来源，开启聚合时将多家已选模型发布到一个本机 Messages 入口。官方 API 单来源直连的 Claude 兼容入口使用同一 API Key；ChatGPT/Codex、GitHub Copilot、Grok Build 订阅通过 ModelDock 本机 Messages 服务调用其已有上游协议，OAuth 访问和刷新令牌留在主进程，客户端配置只使用本机 Key。需要本机入口时同步会按需启动服务；使用期间须保持 ModelDock 运行。
 - API 表单的「Claude Code 接口地址」留空时按已知官方地址映射，未识别的 OpenAI 兼容来源可通过本机服务转换；填写时须是支持 Anthropic Messages 的服务地址。此字段不替换已有 OpenAI 地址。Messages 鉴权可选择 `API Key（x-api-key）` 或 `Bearer Token（Authorization）`；Anthropic 新模板默认 API Key，自定义及未设置此字段的历史来源默认 Bearer，仅影响原生 Messages 接口。
-- Claude Code 原生直连的默认模型及 Haiku / Sonnet / Opus / 子代理角色使用所选默认模型的真实上游 ID；通过本机服务时使用 ModelDock 模型别名。单来源模式同步默认模型及角色映射；聚合模式还同步已启用模型列表及别名，可在 Claude Code 中切换。已有无关设置保留，预览脱敏，应用前备份；应用或还原后重启 Claude Code 终端。VS Code Claude Code 扩展需另配其运行环境，本版不把终端配置同步视为扩展验收。源码与界面使用原创字母 C 标识，不使用 Claude 官方品牌图形。
+- Claude Code 原生直连的默认模型及 Haiku / Sonnet / Opus / 子代理角色使用所选默认模型的真实上游 ID；通过本机服务时使用 ModelDock 模型别名。直连与聚合都同步 `availableModels` 和 `modelPicker`：直连发布所选供应商去重后的真实模型 ID，聚合发布已启用的模型别名；模型选择器需要 Claude Code v2.1.242 或更高版本，旧版可使用 `/model <模型 ID>` 或 `--model`。两种模式共用备份与字段恢复记录，取消来源会恢复未被用户后续修改的原列表。已有无关设置保留，预览脱敏，应用前备份；应用或还原后重启 Claude Code 终端。源码与界面使用原创字母 C 标识，不使用 Claude 官方品牌图形。
+- **VS Code 内置 Claude 代理**与 Claude Code CLI 共用用户 `settings.json`，与 Anthropic 官方 Claude Code 扩展是不同入口。Windows/Linux 均使用 `CLAUDE_CONFIG_DIR`（默认 `~/.claude`）；配置路径不会沿用另一台电脑的 home。VS Code 本机代理主机会缓存启动时的凭据与模型，ModelDock 写入外部文件后，新建聊天或重新打开窗口未必刷新缓存。同步或还原后，在 VS Code 按 `Ctrl+Shift+P`，运行 **Developer: Restart Local Agent Host**，再打开 Claude 会话。Anthropic 官方扩展仍需按其 `claudeCode.environmentVariables` 设置配置。配置同步、SDK 模型发现和真实推理分别验证，不能把文件已写入视为编辑器会话已验收。参考 [VS Code 代理接入说明](https://code.visualstudio.com/docs/agents/run/agent-harnesses)、[Claude 自定义模型配置](https://code.claude.com/docs/en/model-config#add-a-custom-model-option)。
 - Claude Code 本机入口为 `http://127.0.0.1:18181/tool/claude-code`，客户端调用其 `/v1/messages`（端口随 ModelDock 服务设置）。桥接支持文本、图片、工具调用、工具结果及流式响应；Messages 的 `thinking` 输入当前不支持，客户端配置省略/关闭该协议功能，不代表上游模型不会自行思考。复杂视觉及模型特有扩展须另行验证。转换路径以 mock 上游核对为准，不代表真实 ChatGPT/Copilot/Grok 账号或供应商已经验收。
 - 官方 API Claude 入口：DeepSeek `https://api.deepseek.com/anthropic`；火山 Agent Plan `https://ark.cn-beijing.volces.com/api/plan`；火山 Coding Plan `https://ark.cn-beijing.volces.com/api/coding`；国内千问 Token Plan `https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic`，国际 Token Plan 为 `https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic`。千问 Coding Plan 国内/国际分别为 `https://coding.dashscope.aliyuncs.com/apps/anthropic` / `https://coding-intl.dashscope.aliyuncs.com/apps/anthropic`。只匹配已知预设与完整官方地址，不会凭名称改写用户自定义来源；API Key 必须与对应地域及计费入口配套。阿里云 Anthropic 入口不提供 `/v1/models`，可复用现有模型或手工添加，目录 404 不代表推理失败。参考 [阿里云国内接入表](https://help.aliyun.com/zh/model-studio/more-tools)、[阿里云国际接入表](https://www.alibabacloud.com/help/en/model-studio/more-tools)、[Claude Code 配置](https://help.aliyun.com/zh/model-studio/claude-code)。
 - Claude Code 默认开启「关闭遥测和非必要联网」，保存并同步后关闭遥测、错误报告及自动更新，模型请求继续使用所选 API 或订阅来源。WebFetch 仍可能进行安全检查；这不是本地文件或网络隔离，也不控制 MCP、插件和 hook 的网络行为。关闭自动更新后需用户自行更新 Claude Code。参考 [官方数据使用说明](https://code.claude.com/docs/en/data-usage)、[设置说明](https://code.claude.com/docs/en/settings)；配置序列化与模拟请求通过不代表真实供应商或客户端隐私行为已验收。
@@ -299,8 +296,6 @@ API 来源按名称、类型和规范化地址防重复：添加预设时复用�
 | GitHub Copilot 账号 | GitHub 公开设备码、公共 `/user` 身份查询及已观察到的 Copilot 额度接口 | pending / slow_down、取消、身份校验和额度 fixture；不是 ModelDock 自注册应用 |
 | Copilot app 配置 | 原生本机供应商接口：Windows `1.1.26` / Linux `1.1.27` | Windows 保留产品、GitHub 签名及端口验证；Linux 验证 root 管理的 `/usr/bin/github`、当前用户进程和真实回环 socket，使用 Secret Service 精确备份恢复 BYOK 凭据；不把 Linux 系统安装信任称为厂商签名 |
 | DSH 配置 | CLI `0.1.7-rc.2` / Desktop `0.2.0-rc.2` 插件及凭据格式 | 原生 profile 解析、备份及只读/写入回归；未知布局拒绝覆盖 |
-| Codex 会话导入 | `sessions` / `archived_sessions` 的用量元数据，参考 CC Switch 会话实现 | 累计快照、回放、截断和幂等 fixture；仅提取用量字段，不保存聊天正文 |
-| OpenCode 会话导入 | V1 / V2 SQLite 元数据与 SQLite 官方 WAL 格式 | 校验已提交 WAL 的内存快照、字节不变和幂等 fixture；未知 schema 明确报告 |
 
 协议和私有接口可能变化。新增或升级适配时应一同更新固定参考版本、元数据 fixture、拒绝未知结构的行为，以及 README / VALIDATION 中的实际验收边界。单元测试、隔离原生渲染和真实工具 / 账号验收不能互相代替。
 
