@@ -9,9 +9,11 @@ import { codexHistoryKey, editJsonc } from './adapters';
 import { restoreDshOfficialConfig, type DshApplyOptions, type DshConfigStore } from './dsh-config';
 import { applyCopilotDesktop, type CopilotSyncOptions } from './copilot-sync';
 import { openCodeConfigDirectory } from './opencode-paths';
+import { restoreClaudeOfficialConfig } from './claude-config';
 
 export interface ToolRestoreStore extends DshConfigStore {}
 export interface ToolRestoreOptions {
+  claudeConfigDir?: string;
   codexHome?: string;
   configHome?: string;
   dshHome?: string;
@@ -71,6 +73,7 @@ function clearCodexSelection(config: Record<string, any>) {
  * unrelated settings. Calling this never requires an enabled ModelDock binding. */
 export async function restoreOfficialConfig(store: ToolRestoreStore, tool: ToolId, appData: string, backups: string,
   homeDirectory = homedir(), options: ToolRestoreOptions = {}): Promise<string> {
+  if (tool === 'claude-code') return restoreClaudeOfficialConfig(store, backups, homeDirectory, { claudeConfigDir: options.claudeConfigDir, beforeCommit: options.beforeCommit });
   if (tool === 'copilot') return applyCopilotDesktop(store, { providers: [] }, options.copilotHome ?? join(homeDirectory, '.copilot'), { ...options.copilotOptions, syncScope: 'selected' });
   if (tool === 'dsh') return restoreDshOfficialConfig(store, options.dshHome ?? join(homeDirectory, '.dsh'), options.dshOptions);
   if (!['codex', 'opencode', 'vscode'].includes(tool)) throw new Error('不支持的工具，未还原配置。');

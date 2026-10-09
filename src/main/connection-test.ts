@@ -4,6 +4,7 @@ import { firstConnectionModel } from '../shared/connection-types';
 import { presetById } from '../shared/presets';
 import { upstreamEndpoint, type PreparedUpstream } from './oauth';
 import { isCopilotUpstream } from './copilot-provider';
+import { anthropicEndpoint } from './anthropic-endpoint';
 import type { DiagnosticContext, DiagnosticEvent, DiagnosticLevel } from '../shared/diagnostic-types';
 
 export interface ConnectionStore {
@@ -16,7 +17,7 @@ export interface ConnectionOAuth {
 
 const TIMEOUT_MS = 30_000;
 const MAX_RESPONSE_BYTES = 512 * 1024;
-const permittedHeaders = new Set(['content-type', 'accept', 'authorization', 'user-agent', 'originator', 'chatgpt-account-id', 'x-xai-token-auth', 'x-grok-client-version', 'x-grok-client-identifier', 'x-authenticateresponse', 'x-grok-conv-id', 'copilot-integration-id', 'editor-version', 'editor-plugin-version', 'x-github-api-version', 'x-initiator', 'x-request-id']);
+const permittedHeaders = new Set(['content-type', 'accept', 'authorization', 'x-api-key', 'anthropic-version', 'user-agent', 'originator', 'chatgpt-account-id', 'x-xai-token-auth', 'x-grok-client-version', 'x-grok-client-identifier', 'x-authenticateresponse', 'x-grok-conv-id', 'copilot-integration-id', 'editor-version', 'editor-plugin-version', 'x-github-api-version', 'x-initiator', 'x-request-id']);
 type Json = Record<string, unknown>;
 type InferenceEvidence = 'completed' | 'processed' | 'limited';
 
@@ -33,6 +34,7 @@ function assertActive(signal: AbortSignal): void {
   if (signal.aborted) throw new ConnectionFailure('timeout', '推理测试超时（30 秒），请稍后重试或检查网络。');
 }
 function expectedEndpoint(provider: Provider, route: string): string {
+  if (route === '/v1/messages') return anthropicEndpoint(provider.baseUrl, '/messages');
   return upstreamEndpoint(provider.baseUrl || (provider.kind === 'codex' ? 'https://chatgpt.com/backend-api/codex' : provider.kind === 'grok' ? 'https://cli-chat-proxy.grok.com/v1' : ''), route);
 }
 function httpFailure(status: number): ConnectionFailure {
@@ -83,6 +85,31 @@ function responsesReasoning(payload: Json): boolean {
     }));
   });
 }
+function messagesEnvelope(payload: Json): boolean {
+  return payload.type === 'message' && payload.role === 'assistant' && typeof payload.id === 'string' && !!payload.id.trim() && Array.isArray(payload.content);
+}
+function messagesText(payload: Json): boolean {
+  return Array.isArray(payload.content) && payload.content.some(part => {
+    const block = record(part);
+    return block.type === 'text' && typeof block.text === 'string' && !!block.text.trim();
+  });
+}
+function messagesReasoning(payload: Json): boolean {
+  return Array.isArray(payload.content) && payload.content.some(part => {
+    const block = record(part);
+    return block.type === 'thinking' && typeof block.thinking === 'string' && !!block.thinking.trim()
+      || block.type === 'redacted_thinking' && typeof block.data === 'string' && !!block.data.trim();
+  });
+}
+function messagesEvidence(stopReason: unknown, content: boolean, reasoning: boolean, countedOutput: boolean): InferenceEvidence {
+  if (stopReason === 'refusal') throw new ConnectionFailure('upstream', '上游推理被拒绝，未通过测试。');
+  if (stopReason === 'max_tokens' && (content || reasoning || countedOutput)) return 'limited';
+  if (stopReason === 'end_turn' || stopReason === 'stop_sequence') {
+    if (content) return 'completed';
+    if (reasoning || countedOutput) return 'processed';
+  }
+  throw new ConnectionFailure('invalid-response', '上游没有返回正常完成的 Messages 推理结果，未通过测试。');
+}
 /** 修改点：仅提取响应形状与计数，不保存正文、模型名称或上游任意字符串。 */
 function responseMetadata(payload: unknown, wireApi: WireApi): DiagnosticContext {
   const data = record(payload), usage = record(data.usage), details = record(data.incomplete_details);
@@ -91,6 +118,13 @@ function responseMetadata(payload: unknown, wireApi: WireApi): DiagnosticContext
   const responseStatus = data.status === 'completed' || data.status === 'incomplete' || data.status === 'failed' || data.status === 'in_progress' ? data.status : 'unknown';
   const incompleteReason = details.reason === 'max_output_tokens' || details.reason === 'content_filter' ? details.reason
     : details.reason == null || typeof details.reason === 'string' && !details.reason.trim() ? 'missing' : 'unknown';
+  if (wireApi === 'messages') return {
+    responseStatus: data.stop_reason === 'max_tokens' ? 'incomplete' : ['end_turn', 'stop_sequence'].includes(String(data.stop_reason)) ? 'completed' : 'unknown',
+    incompleteReason: data.stop_reason === 'max_tokens' ? 'max_output_tokens' : 'missing',
+    outputItems: Array.isArray(data.content) ? data.content.length : 0,
+    outputTokens: count(usage.output_tokens), reasoningTokens: count(record(usage.output_tokens_details).thinking_tokens),
+    hasOutputText: messagesText(data), hasReasoning: messagesReasoning(data),
+  };
   return { responseStatus, incompleteReason,
     outputItems: wireApi === 'responses' ? Array.isArray(data.output) ? data.output.length : 0 : choices.length,
     outputTokens: count(wireApi === 'responses' ? usage.output_tokens : usage.completion_tokens),
@@ -128,6 +162,9 @@ function validateJson(payload: unknown, wireApi: WireApi, outputBudget?: number)
     const choices = Array.isArray(data.choices) ? data.choices.map(record) : [];
     if (choices.some(choice => assistantText(choice.message))) return choices.some(choice => choice.finish_reason === 'length') ? 'limited' : 'completed';
     if (choices.some(choice => choice.finish_reason === 'length' && record(choice.message).role === 'assistant' && (reasoningText(choice.message) || positiveCount(record(data.usage).completion_tokens)))) return 'limited';
+  } else if (wireApi === 'messages') {
+    if (record(data.stop_details).type === 'refusal') throw new ConnectionFailure('upstream', '上游推理被拒绝，未通过测试。');
+    if (messagesEnvelope(data)) return messagesEvidence(data.stop_reason, messagesText(data), messagesReasoning(data), positiveCount(record(data.usage).output_tokens));
   } else {
     rejectResponseErrors(data);
     if (data.status === 'incomplete') {
@@ -141,6 +178,8 @@ function validateJson(payload: unknown, wireApi: WireApi, outputBudget?: number)
 }
 function validateSse(raw: string, wireApi: WireApi, outputBudget?: number): InferenceEvidence {
   let content = false, reasoning = false, countedOutput = false, finished = false, limited = false, processed = false;
+  let messageStarted = false, messageStopReason: unknown;
+  const messageBlocks = new Map<number, unknown>();
   for (const block of raw.replace(/\r\n/g, '\n').split(/\n\n+/)) {
     const lines = block.split('\n');
     const event = lines.find(line => line.startsWith('event:'))?.slice(6).trim();
@@ -161,6 +200,43 @@ function validateSse(raw: string, wireApi: WireApi, outputBudget?: number): Infe
           reasoning ||= reasoningText(delta);
         }
         if (choice.finish_reason != null) { finished = true; limited ||= choice.finish_reason === 'length'; }
+      }
+    } else if (wireApi === 'messages') {
+      const type = data.type || event;
+      if (event && event !== type) throw new ConnectionFailure('invalid-response', 'Messages 流式事件与响应类型不一致。');
+      if (type === 'message_start') {
+        const message = record(data.message);
+        if (messageStarted || !messagesEnvelope(message)) throw new ConnectionFailure('invalid-response', 'Messages 流式开始事件无效。');
+        messageStarted = true;
+        content ||= messagesText(message); reasoning ||= messagesReasoning(message);
+        countedOutput ||= positiveCount(record(message.usage).output_tokens);
+      } else if (type === 'content_block_start' || type === 'content_block_delta' || type === 'content_block_stop') {
+        if (!messageStarted || finished || messageStopReason !== undefined || !Number.isSafeInteger(data.index) || Number(data.index) < 0) throw new ConnectionFailure('invalid-response', 'Messages 流式内容事件顺序无效。');
+        const index = Number(data.index);
+        if (type === 'content_block_start') {
+          if (messageBlocks.has(index)) throw new ConnectionFailure('invalid-response', 'Messages 流式内容块重复。');
+          const block = record(data.content_block);
+          messageBlocks.set(index, block.type);
+          content ||= messagesText({ content: [block] }); reasoning ||= messagesReasoning({ content: [block] });
+        } else {
+          if (!messageBlocks.has(index)) throw new ConnectionFailure('invalid-response', 'Messages 流式内容缺少开始事件。');
+          if (type === 'content_block_stop') messageBlocks.delete(index);
+          else {
+            const delta = record(data.delta), blockType = messageBlocks.get(index);
+            if (delta.type === 'text_delta' && blockType === 'text' && typeof delta.text === 'string' && delta.text.trim()) content = true;
+            if (delta.type === 'thinking_delta' && blockType === 'thinking' && typeof delta.thinking === 'string' && delta.thinking.trim()) reasoning = true;
+          }
+        }
+      } else if (type === 'message_delta') {
+        if (!messageStarted || finished || messageBlocks.size) throw new ConnectionFailure('invalid-response', 'Messages 流式完成事件顺序无效。');
+        const delta = record(data.delta);
+        if (record(delta.stop_details).type === 'refusal') throw new ConnectionFailure('upstream', '上游推理被拒绝，未通过测试。');
+        if (delta.stop_reason != null) messageStopReason = delta.stop_reason;
+        countedOutput ||= positiveCount(record(data.usage).output_tokens);
+      } else if (type === 'message_stop') {
+        if (!messageStarted || finished || messageBlocks.size || messageStopReason === undefined) throw new ConnectionFailure('invalid-response', 'Messages 流式推理缺少正常完成信息。');
+        const evidence = messagesEvidence(messageStopReason, content, reasoning, countedOutput);
+        finished = true; limited = evidence === 'limited'; processed = evidence === 'processed';
       }
     } else {
       const embedded = record(data.response);
@@ -184,7 +260,7 @@ function validateSse(raw: string, wireApi: WireApi, outputBudget?: number): Infe
       }
     }
   }
-  if (finished && (wireApi === 'responses' || content || limited && (reasoning || countedOutput))) return limited ? 'limited' : processed ? 'processed' : 'completed';
+  if (finished && (wireApi === 'responses' || wireApi === 'messages' || content || limited && (reasoning || countedOutput))) return limited ? 'limited' : processed ? 'processed' : 'completed';
   throw new ConnectionFailure('invalid-response', '上游流式推理没有正常完成，未通过测试。');
 }
 async function boundedBody(response: Response, signal: AbortSignal): Promise<string> {
@@ -240,8 +316,9 @@ export class ConnectionTester {
       }
       if (!testedModel) throw new ConnectionFailure('model-required', '请选择已添加的模型，或填写套餐支持的模型 ID，再发起推理测试。');
       if (provider.kind === 'codex' || provider.kind === 'grok') wireApi = 'responses';
-      if (!['chat-completions', 'responses'].includes(wireApi!)) throw new ConnectionFailure('configuration', '请选择 Chat Completions 或 Responses 调用协议。');
-      const route = wireApi === 'responses' ? '/responses' : '/chat/completions';
+      if (!['chat-completions', 'responses', 'messages'].includes(wireApi!)) throw new ConnectionFailure('configuration', '请选择 Chat Completions、Responses 或 Messages 调用协议。');
+      if (wireApi === 'messages' && provider.kind !== 'openai-compatible') throw new ConnectionFailure('configuration', 'Messages 仅支持 API Key 来源。');
+      const route = wireApi === 'responses' ? '/responses' : wireApi === 'messages' ? '/v1/messages' : '/chat/completions';
       let expected: string | undefined;
       try { if (provider.kind !== 'copilot') expected = expectedEndpoint(provider, route); }
       catch { throw new ConnectionFailure('configuration', 'API 地址无效，请填写 HTTPS 地址或本机 HTTP 回环地址；地址不能包含凭据、查询或片段。'); }
@@ -261,7 +338,15 @@ export class ConnectionTester {
         assertActive(controller.signal);
         if (!matchesEndpoint(prepared.url)) throw new ConnectionFailure('configuration', '推理请求地址与当前供应商不一致，已停止发送凭据。');
         if (prepared.body.model !== testedModel) throw new ConnectionFailure('configuration', '推理请求模型与所选模型不一致，已停止测试。');
-        if (!Object.entries(prepared.headers).every(([name, value]) => permittedHeaders.has(name.toLowerCase()) && typeof value === 'string' && !/[\r\n]/.test(value)) || !Object.entries(prepared.headers).some(([name, value]) => name.toLowerCase() === 'authorization' && /^Bearer \S+$/.test(value))) {
+        if (!Object.entries(prepared.headers).every(([name, value]) => permittedHeaders.has(name.toLowerCase()) && typeof value === 'string' && !/[\r\n]/.test(value))) {
+          throw new ConnectionFailure('configuration', '推理请求认证头无效，已停止发送请求。');
+        }
+        const headers = new Headers(prepared.headers);
+        const bearer = /^Bearer \S+$/.test(headers.get('authorization') || '');
+        const apiKey = /^\S+$/.test(headers.get('x-api-key') || '');
+        const messagesAuth = provider.messagesAuth === 'api-key' ? apiKey && !headers.has('authorization') : bearer && !headers.has('x-api-key');
+        const validAuth = wireApi === 'messages' ? messagesAuth && headers.get('anthropic-version') === '2023-06-01' : bearer;
+        if (!validAuth) {
           throw new ConnectionFailure('configuration', '推理请求认证头无效，已停止发送请求。');
         }
         const response = await this.fetcher(prepared.url, { method: 'POST', headers: prepared.headers, body: JSON.stringify(prepared.body), signal: controller.signal, redirect: 'manual' });

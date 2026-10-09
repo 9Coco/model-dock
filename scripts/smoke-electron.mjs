@@ -8,7 +8,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { createSmokeProfile } from './smoke-profile.mjs';
 import { verifyQaExecutable } from './smoke-package.mjs';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const args = process.argv.slice(2), noBuild = args.includes('--no-build'), ciNoSandbox = args.includes('--ci-no-sandbox'), values = args.filter(value => !['--no-build', '--ci-no-sandbox'].includes(value));
+const args = process.argv.slice(2), noBuild = args.includes('--no-build'), ciNoSandbox = args.includes('--ci-no-sandbox'), x11 = args.includes('--x11'), values = args.filter(value => !['--no-build', '--ci-no-sandbox', '--x11'].includes(value));
 if (values.length > 2 || values.some(value => value.startsWith('--'))) throw new Error('Usage: node scripts/smoke-electron.mjs [output] [dedicated-QA-ModelDock.exe] [--no-build] [--ci-no-sandbox]');
 if (ciNoSandbox && (process.platform !== 'linux' || process.env.CI !== 'true')) throw new Error('--ci-no-sandbox is restricted to an explicit Linux CI smoke run.');
 if (values.some(value => value.split(/[\\/]/).includes('..'))) throw new Error('Smoke paths must not contain traversal.');
@@ -24,6 +24,10 @@ else {
   execFileSync(process.execPath, [join(root, 'scripts/build-main.mjs'), '--smoke'], { cwd: root, stdio: 'inherit', windowsHide: true });
 }
 const profile = await createSmokeProfile(output);
+if (x11) {
+  if (process.platform !== 'linux') throw new Error('--x11 is only supported by the Linux smoke runner.');
+  applicationArgs.unshift('--ozone-platform=x11');
+}
 if (ciNoSandbox) {
   applicationArgs.unshift('--no-sandbox');
 }
@@ -34,7 +38,18 @@ env.MODELDOCK_SMOKE_AUTH_MOCK = '1';
 delete env.MODELDOCK_DEV_URL;
 let noCatalogModelRequests = 0, connectionTestPosts = 0, codexModelRequests = 0;
 const connectionRequests = [];
+let claudeMessagesRequests = 0;
 const upstream = createServer((req,res) => {
+  if (req.url === '/claude/v1/messages' && req.method === 'POST') {
+    const parts = []; req.on('data', part => parts.push(part));
+    req.on('end', () => {
+      const body = JSON.parse(Buffer.concat(parts).toString('utf8'));
+      const ok = req.headers.authorization === 'Bearer synthetic-only' && req.headers['x-api-key'] === undefined && req.headers['anthropic-version'] === '2023-06-01' && body.model === 'mock-claude' && Array.isArray(body.messages) && body.max_tokens > 0;
+      claudeMessagesRequests++; res.writeHead(ok ? 200 : 400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(ok ? { id: 'msg_mock', type: 'message', role: 'assistant', model: 'mock-claude', content: [{ type: 'text', text: 'OK' }], stop_reason: 'end_turn', usage: { input_tokens: 5, output_tokens: 2 } } : { type: 'error', error: { type: 'invalid_request_error', message: 'Synthetic Messages contract failed' } }));
+    }); return;
+  }
+
   if (req.url === '/metadata/v1/models') {
     if (req.method !== 'GET' || req.headers.authorization !== 'Bearer synthetic-only') { res.writeHead(401); res.end(); return; }
     res.writeHead(200, { 'content-type': 'application/json' });
@@ -110,6 +125,12 @@ child.on('exit', code => {
     if(existsSync(errorFile)) throw new Error(readFileSync(errorFile,'utf8'));
     const value = JSON.parse(readFileSync(resolve(output, 'electron-smoke.json'), 'utf8'));
     if (!value.bridge || !value.text.includes('ModelDock')) throw new Error('Renderer/preload bridge unavailable');
+    if (env.MODELDOCK_SMOKE_CLAUDE_ONLY === '1') {
+      const result = JSON.parse(readFileSync(resolve(output,'claude-ui-validation.json'),'utf8'));
+      if (!result.ok || claudeMessagesRequests !== 1) throw new Error('Claude configuration UI or Messages contract failed');
+      console.log(JSON.stringify({ exitCode: code, bridge: value.bridge, claudeCode: result, claudeMessagesRequests, output }));
+      process.exit(code || 0);
+    }
     if (env.MODELDOCK_SMOKE_METADATA_ONLY === '1') {
       const result = JSON.parse(readFileSync(resolve(output, 'model-metadata-validation.json'), 'utf8'));
       if (!result.ok || !result.manualZeroAndFalseSaved || !result.rediscoveryPreserved) throw new Error('Model metadata verification failed');

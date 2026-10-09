@@ -30,6 +30,17 @@ afterEach(() => {
 });
 
 describe('managed skills', () => {
+  it('deploys Claude Code skills to its explicit config directory and preserves changed files', () => {
+    const home = join(fixture, 'home'), claudeConfigDir = join(fixture, 'custom-claude');
+    const custom = new SkillManager(store, { homeDir: home, appDataDir: join(fixture, 'data'), claudeConfigDir });
+    const imported = custom.importLocal(skill(join(fixture, 'source'))), deployed = custom.deploy(imported.id, 'claude-code', true);
+    const path = deployed.deployments.find(d => d.tool === 'claude-code')!.path;
+    expect(path).toBe(join(claudeConfigDir, 'skills', 'example'));
+    expect(existsSync(join(home, '.claude'))).toBe(false);
+    writeFileSync(join(path, 'SKILL.md'), 'user changed skill');
+    expect(() => custom.deploy(imported.id, 'claude-code', false)).toThrow('修改');
+    expect(readFileSync(join(path, 'SKILL.md'), 'utf8')).toBe('user changed skill');
+  });
   it('deploys OpenCode skills under the configured XDG root without creating default-profile files', () => {
     const home = join(fixture, 'home'), configHome = join(fixture, 'custom-config');
     const custom = new SkillManager(store, { homeDir: home, appDataDir: join(fixture, 'data'), configHome });

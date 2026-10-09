@@ -11,8 +11,8 @@ interface UsageSyncStore extends ClientUsageStore {
   getManagedState?<T>(key: string, fallback: T): T;
   setManagedState?(key: string, value: unknown): void;
 }
-const TOOLS: ToolId[] = ['codex', 'opencode', 'dsh', 'vscode', 'copilot'];
-const NAMES: Record<ToolId, string> = { codex: 'Codex', opencode: 'OpenCode', dsh: 'DSH', vscode: 'VS Code', copilot: 'Copilot app' };
+const TOOLS: ToolId[] = ['codex', 'claude-code', 'opencode', 'dsh', 'vscode', 'copilot'];
+const NAMES: Record<ToolId, string> = { codex: 'Codex', 'claude-code': 'Claude Code', opencode: 'OpenCode', dsh: 'DSH', vscode: 'VS Code', copilot: 'Copilot app' };
 const PRIVACY = '只读取本地会话的时间、模型标识及 Token 计数；不保存提示词、回复、工具输出、账户凭据，也不修改外部客户端文件。原生事件无法证明 HTTP 成功率或请求速度。';
 const KEY = 'usage-sync:v1';
 
@@ -60,6 +60,8 @@ export class UsageSyncService {
       paths: this.store.dataDir ? [join(this.store.dataDir, 'modeldock.sqlite')] : [], format: '网关请求的最终上游用量',
       description: '自动记录经过本机网关的请求。直接连接供应商的客户端请求由下方原生会话来源提供。' }];
     const specs: { tool: ToolId; paths: string[]; format: string; supported: boolean; description: string }[] = [
+      // 修改点：未实现解析时不展示可读取目录，也不扫描或误导入其他工具的数据。
+      { tool: 'claude-code', paths: [], format: 'Claude Code 原生用量导入暂不支持', supported: false, description: '本版不读取或导入 Claude Code 会话记录。通过 ModelDock 本机服务的请求可统计；官方 API 直连用量请查看供应商账单。' },
       { tool: 'codex', paths: [join(codex, 'sessions'), join(codex, 'archived_sessions')], format: 'Codex rollout JSONL', supported: true, description: '读取 token_count 元数据；优先使用单次用量，处理累计计数、回放、归档与分支去重。' },
       { tool: 'opencode', paths: [join(openCode, 'opencode.db')], format: 'OpenCode SQLite V1 / V2 + WAL', supported: true, description: '只在内存中合并校验通过的已提交 WAL，读取已完成消息的模型和 Token 元数据；不创建客户端数据库旁的任何文件。' },
       { tool: 'dsh', paths: [dsh], format: '尚未核实可导入的原生会话格式', supported: false, description: 'DSH 的会话与 profile 布局未得到兼容验证；直接请求用量不能由会话数推算。' },

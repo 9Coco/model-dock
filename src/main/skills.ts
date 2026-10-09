@@ -17,6 +17,8 @@ export interface SkillManagerOptions {
   backupDir?: string;
   /** Overrides are explicit application configuration, never renderer-provided paths. */
   codexHome?: string;
+  /** 修改点：由主进程解析 CLAUDE_CONFIG_DIR，显式路径保持测试资料隔离。 */
+  claudeConfigDir?: string;
   dshHome?: string;
   agentsHome?: string;
   openCodeConfigDir?: string;
@@ -150,6 +152,7 @@ export class SkillManager {
     this.scanBoundary = existsSync(home) ? realpathSync(home) : home;
     const agents = join(resolve(options.agentsHome ?? join(home, '.agents')), 'skills');
     const codex = join(resolve(options.codexHome ?? join(home, '.codex')), 'skills');
+    const claude = join(resolve(options.claudeConfigDir ?? join(home, '.claude')), 'skills');
     const copilot = join(home, '.copilot', 'skills');
     const openCode = join(resolve(options.openCodeConfigDir ?? openCodeConfigDirectory(home, options.configHome)), 'skills');
     const dsh = join(resolve(options.dshHome ?? join(home, '.dsh')), 'skills');
@@ -159,6 +162,7 @@ export class SkillManager {
     this.fetcher = options.fetch ?? globalThis.fetch;
     this.targets = [
       { tool: 'codex', name: 'Codex', directory: codex, scanDirectories: [codex, agents], canDeploy: true, sharedWith: [], note: '使用仍兼容的 CODEX_HOME/skills 独立目录；当前官方推荐的 .agents/skills 为多工具共用，仅扫描。重启或刷新技能后生效。', docsUrl: 'https://github.com/openai/codex/blob/main/codex-rs/ext/skills/src/host_roots.rs' },
+      { tool: 'claude-code', name: 'Claude Code', directory: claude, scanDirectories: [claude], canDeploy: true, sharedWith: [], note: '写入 CLAUDE_CONFIG_DIR/skills（默认 ~/.claude/skills）。仅部署技能文件；权限、执行及联网由 Claude Code 控制。', docsUrl: 'https://code.claude.com/docs/en/skills' },
       { tool: 'opencode', name: 'OpenCode', directory: openCode, scanDirectories: [openCode, join(home, '.claude', 'skills'), agents], canDeploy: true, sharedWith: [], note: '写入 OpenCode 全局 skills 目录。现有项目级和权限规则可能改变实际可用技能。', docsUrl: 'https://opencode.ai/docs/skills/' },
       { tool: 'dsh', name: 'DSH', directory: dsh, scanDirectories: [dsh, agents], canDeploy: true, sharedWith: [], note: '适用于官方 dsh-skill-filesystem 插件的用户目录；需已启用 skill registry、filesystem 和 tool-skill。自定义 profile 覆盖目录时使用导出。', docsUrl: 'https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/skill/skill-filesystem/README.md' },
       { tool: 'vscode', name: 'VS Code', directory: copilot, scanDirectories: [copilot, join(home, '.claude', 'skills'), agents], canDeploy: true, sharedWith: ['copilot'], note: 'VS Code Copilot 与 Copilot app/CLI 共用 .copilot/skills；两列部署开关同步。', docsUrl: 'https://code.visualstudio.com/docs/agent-customization/agent-skills' },

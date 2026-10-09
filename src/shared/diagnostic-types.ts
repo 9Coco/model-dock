@@ -62,7 +62,7 @@ export interface DiagnosticContext extends DiagnosticErrorDescription {
   modelCount?: number;
   providerId?: string;
   modelId?: string;
-  toolId?: 'codex' | 'opencode' | 'dsh' | 'vscode' | 'copilot';
+  toolId?: 'codex' | 'opencode' | 'dsh' | 'vscode' | 'copilot' | 'claude-code';
   statusCode?: number;
   durationMs?: number;
   outcome?: DiagnosticOutcome;
@@ -71,7 +71,7 @@ export interface DiagnosticContext extends DiagnosticErrorDescription {
   port?: number;
   autoStart?: boolean;
   exitCode?: number;
-  wireApi?: 'chat-completions' | 'responses' | 'anthropic-messages';
+  wireApi?: 'chat-completions' | 'responses' | 'anthropic-messages' | 'messages';
   responseStatus?: 'completed' | 'incomplete' | 'failed' | 'in_progress' | 'unknown';
   incompleteReason?: 'max_output_tokens' | 'content_filter' | 'missing' | 'unknown';
   contentType?: 'json' | 'sse' | 'html' | 'other' | 'unknown';

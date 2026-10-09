@@ -8,8 +8,8 @@ import type { DiscoveryResult, ModelSelection, AddModelsResult } from './catalog
 import type { ConnectionResult, ConnectionTestInput } from './connection-types';
 export type { ConnectionResult, ConnectionTestInput } from './connection-types';
 export type ProviderKind = 'openai-compatible' | 'codex' | 'grok' | 'copilot';
-export type ToolId = 'codex' | 'opencode' | 'dsh' | 'vscode' | 'copilot';
-export type WireApi = 'chat-completions' | 'responses';
+export type ToolId = 'codex' | 'opencode' | 'dsh' | 'vscode' | 'copilot' | 'claude-code';
+export type WireApi = 'chat-completions' | 'responses' | 'messages';
 export type ToolMode = 'direct' | 'aggregate' | 'auto';
 /** Thinking levels recognized by client tools (VS Code picker labels these; unknown levels are not written to client configs). */
 export const REASONING_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
@@ -24,7 +24,7 @@ export function sanitizeReasoningEfforts(value: unknown): ReasoningEffort[] {
   for (const entry of value) if (isReasoningEffort(entry) && !levels.includes(entry)) levels.push(entry);
   return levels;
 }
-export type ProviderPresetId = 'custom' | 'deepseek' | 'volcengine-agent' | 'volcengine-token' | 'qwen-token' | 'codex-subscription' | 'grok-build' | 'copilot-subscription';
+export type ProviderPresetId = 'custom' | 'anthropic' | 'deepseek' | 'volcengine-agent' | 'volcengine-token' | 'qwen-token' | 'codex-subscription' | 'grok-build' | 'copilot-subscription';
 export interface ProviderPreset {
   id: ProviderPresetId;
   name: string;
@@ -58,6 +58,10 @@ export interface Provider {
   hasSecret: boolean;
   authStatus: 'ready' | 'missing' | 'signing-in' | 'error';
   note: string;
+  /** 修改点：Messages 的鉴权方式与 Claude Code 配置及推理测试保持一致。 */
+  messagesAuth?: 'api-key' | 'bearer';
+  /** Claude 专属 Messages 基址；留空时使用官方套餐映射或本机协议桥。 */
+  claudeBaseUrl?: string;
   /** Renderer-safe account reference; never a GitHub or Copilot token. */
   copilotAccountId?: string;
 }
@@ -70,6 +74,8 @@ export interface ProviderInput {
   enabled: boolean;
   apiKey?: string;
   note?: string;
+  messagesAuth?: 'api-key' | 'bearer';
+  claudeBaseUrl?: string;
   /** Explicitly choose an already authorized GitHub account, or leave empty to log in later. */
   copilotAccountId?: string;
 }
@@ -107,6 +113,8 @@ export interface ToolBinding {
   copilotSyncScope?: 'managed' | 'selected';
   /** DSH model sources only; platform account authorization is preserved. */
   dshSyncScope?: 'managed' | 'selected';
+  /** 修改点：Claude Code 默认关闭遥测和非必要联网；仅在用户同步时写入。 */
+  claudeDisableTelemetry?: boolean;
 }
 export interface GatewayStatus {
   running: boolean;

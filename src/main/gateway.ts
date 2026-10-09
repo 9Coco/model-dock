@@ -11,6 +11,7 @@ import type { TokenUsage } from '../shared/usage-types';
 import { DEFAULT_SETTINGS } from '../shared/settings-types';
 import type { DiagnosticContext, DiagnosticEvent, DiagnosticLevel } from '../shared/diagnostic-types';
 import { describeError } from './diagnostic-log';
+import { AnthropicBridgeError, parseAnthropicRequest, toAnthropicResponse, createAnthropicStream, collectAnthropicStream, anthropicMessageToSse } from './anthropic-bridge';
 
 type Json = Record<string, unknown>;
 export interface PreparedRequest { url: string; headers: Record<string, string>; body: Json }
@@ -23,7 +24,7 @@ export interface GatewayOptions {
   runWithDiagnostics?: (context: DiagnosticContext, action: () => Promise<void>) => Promise<void>;
 }
 const BODY_LIMIT = 8 * 1024 * 1024;
-const toolIds = new Set(['codex', 'opencode', 'dsh', 'vscode', 'copilot']);
+const toolIds = new Set(['codex', 'opencode', 'dsh', 'vscode', 'copilot', 'claude-code']);
 const upstreamHeaderNames = new Set(['authorization', 'content-type', 'accept', 'user-agent', 'originator', 'version', 'chatgpt-account-id', 'openai-beta', 'openai-organization', 'openai-project', 'session_id', 'conversation_id', 'x-request-id', 'x-grok-cli-version', 'x-grok-client-version', 'x-grok-client-identifier', 'x-grok-client-mode', 'x-xai-token-auth', 'x-authenticateresponse', 'x-grok-conv-id', 'copilot-integration-id', 'editor-version', 'editor-plugin-version', 'x-github-api-version', 'x-initiator']);
 const responseHeaderNames = new Set(['content-type', 'x-request-id', 'retry-after']);
 class GatewayError extends Error { constructor(readonly status: number, message: string) { super(message); } }
@@ -141,14 +142,19 @@ class ResponsesCollector {
   }
 }
 
-async function write(response: ServerResponse, data: string | Uint8Array): Promise<void> {
+async function write(response: ServerResponse, data: string | Uint8Array, signal?: AbortSignal): Promise<void> {
   if (response.destroyed) throw new GatewayError(499, '客户端已断开。');
+  if (signal?.aborted) throw new GatewayError(504, '请求已取消或超时。');
   if (response.write(data)) return;
   await new Promise<void>((resolve, reject) => {
-    const cleanup = () => { response.removeListener('drain', onDrain); response.removeListener('close', onClose); response.removeListener('error', onClose); };
+    const cleanup = () => { response.removeListener('drain', onDrain); response.removeListener('close', onClose); response.removeListener('error', onClose); signal?.removeEventListener('abort', onAbort); };
     const onDrain = () => { cleanup(); resolve(); };
     const onClose = () => { cleanup(); reject(new GatewayError(499, '客户端已断开。')); };
+    // 修改点：客户端暂停读取时也必须响应超时，不能永远等待 drain。
+    const onAbort = () => { cleanup(); reject(new GatewayError(response.destroyed ? 499 : 504, '请求已取消或超时。')); };
     response.once('drain', onDrain); response.once('close', onClose); response.once('error', onClose);
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) onAbort();
   });
 }
 async function limitedText(response: Response, max = 32 * 1024 * 1024): Promise<string> {
@@ -242,7 +248,7 @@ export class Gateway {
   }
   private available(model: Model): boolean {
     const provider = this.store.getProvider(model.providerId);
-    if (!model.enabled || !provider?.enabled || !provider.hasSecret || provider.authStatus !== 'ready' || !provider.baseUrl.trim()) return false;
+    if (model.wireApi === 'messages' || !model.enabled || !provider?.enabled || !provider.hasSecret || provider.authStatus !== 'ready' || !provider.baseUrl.trim()) return false;
     try { validateUpstreamUrl(provider.baseUrl, this.state.port); return true; } catch { return false; }
   }
   private allowedModels(tool?: ToolId): Model[] {
@@ -283,19 +289,24 @@ export class Gateway {
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const began = Date.now(); let alias = ''; let providerName = ''; let endpoint = '/'; let logStatus = 200;
     let tool: ToolId | undefined, providerId: string | undefined, modelId: string | undefined;
-    let usage: TokenUsage | undefined, upstreamFailed = false;
+    let usage: TokenUsage | undefined, upstreamFailed = false, anthropic = false;
     let diagnosticEndpoint: string | undefined;
     let diagnosticError: Pick<DiagnosticContext, 'errorName' | 'networkCode' | 'projectFrames'> | undefined;
     const observe = (value: unknown) => {
       usage = reportedUsage(value) ?? usage;
-      if (isObject(value) && ['error', 'response.failed', 'response.incomplete'].includes(String(value.type ?? ''))) upstreamFailed = true;
+      if (isObject(value) && ['error', 'response.failed', 'response.incomplete'].includes(String(value.type ?? ''))) {
+        // 修改点：合法预算截断会映射为 Messages max_tokens，不能把成功回复记录成 502。
+        const details = isObject(value.response) && isObject(value.response.incomplete_details) ? value.response.incomplete_details : undefined;
+        if (!(anthropic && value.type === 'response.incomplete' && details?.reason === 'max_output_tokens')) upstreamFailed = true;
+      }
     };
     this.state.requests++;
     try {
       endpoint = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
+      anthropic = endpoint.endsWith('/v1/messages');
       // Unknown paths and query parameters can contain secrets; only known route names are retained.
-      const knownRoute = endpoint.replace(/^\/tool\/(?:codex|opencode|dsh|vscode|copilot)/, '');
-      if (['/v1/models', '/v1/chat/completions', '/v1/responses'].includes(knownRoute)) diagnosticEndpoint = knownRoute;
+      const knownRoute = endpoint.replace(/^\/tool\/(?:codex|opencode|dsh|vscode|copilot|claude-code)/, '');
+      if (['/v1/models', '/v1/chat/completions', '/v1/responses', '/v1/messages'].includes(knownRoute)) diagnosticEndpoint = knownRoute;
       if (!this.authenticated(request)) throw new GatewayError(401, '需要有效的 ModelDock API Key。');
       const route = this.route(endpoint);
       tool = route.tool;
@@ -306,7 +317,8 @@ export class Gateway {
         });
         jsonResponse(response, 200, { object: 'list', data }); return;
       }
-      if (request.method !== 'POST' || !['/v1/chat/completions', '/v1/responses'].includes(route.endpoint)) throw new GatewayError(404, '接口不存在。');
+      if (request.method !== 'POST' || !['/v1/chat/completions', '/v1/responses', '/v1/messages'].includes(route.endpoint)) throw new GatewayError(404, '接口不存在。');
+      if (anthropic && route.tool && route.tool !== 'claude-code' || route.tool === 'claude-code' && !anthropic) throw new GatewayError(404, '此工具不使用该协议入口。');
       const body = await readBody(request);
       if (body.stream !== undefined && typeof body.stream !== 'boolean') throw new GatewayError(400, 'stream 必须是布尔值。');
       const binding = route.tool ? this.store.listBindings().find(item => item.id === route.tool) : undefined;
@@ -322,7 +334,8 @@ export class Gateway {
       modelId = model.id;
       if (selectedModels && !selectedModels.some(item => item.id === model.id)) throw new GatewayError(403, '此模型未授权给该工具。');
       const expectedWire = route.endpoint === '/v1/responses' ? 'responses' : 'chat-completions';
-      if (model.wireApi !== expectedWire) throw new GatewayError(400, '该模型使用不同协议，请选择对应的接口；本版本不进行跨协议转换。');
+      if (!anthropic && model.wireApi !== expectedWire) throw new GatewayError(400, '该模型使用不同协议，请选择对应的接口；本版本不进行跨协议转换。');
+      if (anthropic && model.wireApi === 'messages') throw new GatewayError(400, '原生 Messages 模型请使用供应商直连配置。');
       const provider = this.store.getProvider(model.providerId);
       if (provider && provider.kind !== 'openai-compatible' && ('previous_response_id' in body || 'conversation' in body)) {
         throw new GatewayError(400, '订阅来源不支持服务端会话续接；请移除 previous_response_id / conversation，并在 input 中发送完整会话历史。');
@@ -330,14 +343,20 @@ export class Gateway {
       if (!provider || !this.available(model)) throw new GatewayError(503, '供应商未启用或凭据尚未就绪。');
       providerName = provider.name;
       providerId = provider.id;
-      await this.forward(request, response, provider, model, route.endpoint, { ...body, model: model.upstreamId }, observe);
+      // 修改点：Claude Messages 在本机转换成来源原生协议，订阅凭据继续由主进程续期。
+      const upstreamBody = anthropic ? { ...parseAnthropicRequest(body, model.wireApi), model: model.upstreamId } : { ...body, model: model.upstreamId };
+      const upstreamPath = anthropic ? model.wireApi === 'responses' ? '/v1/responses' : '/v1/chat/completions' : route.endpoint;
+      await this.forward(request, response, provider, model, upstreamPath, upstreamBody, observe, anthropic ? { stream: body.stream === true } : undefined);
       logStatus = upstreamFailed ? 502 : response.statusCode;
     } catch (error) {
       diagnosticError = describeError(error);
-      logStatus = error instanceof GatewayError ? error.status : 502;
-      const message = error instanceof GatewayError ? error.message : '上游请求失败，请检查连接和供应商状态。';
+      logStatus = error instanceof GatewayError || error instanceof AnthropicBridgeError ? error.status : 502;
+      const message = error instanceof GatewayError || error instanceof AnthropicBridgeError ? error.message : '上游请求失败，请检查连接和供应商状态。';
       if (logStatus !== 499) this.state.lastError = message;
-      if (!response.destroyed && !response.headersSent) errorResponse(response, logStatus === 499 ? 400 : logStatus, message);
+      if (!response.destroyed && !response.headersSent) {
+        if (anthropic) jsonResponse(response, logStatus === 499 ? 400 : logStatus, { type: 'error', error: { type: logStatus === 401 ? 'authentication_error' : logStatus >= 500 ? 'api_error' : 'invalid_request_error', message } });
+        else errorResponse(response, logStatus === 499 ? 400 : logStatus, message);
+      }
       else if (!response.writableEnded) response.destroy();
     } finally {
       const successful = logStatus >= 200 && logStatus < 300;
@@ -353,7 +372,7 @@ export class Gateway {
       }
     }
   }
-  private async forward(request: IncomingMessage, response: ServerResponse, provider: Provider, model: Model, path: string, body: Json, observe: (value: unknown) => void): Promise<void> {
+  private async forward(request: IncomingMessage, response: ServerResponse, provider: Provider, model: Model, path: string, body: Json, observe: (value: unknown) => void, bridge?: { stream: boolean }): Promise<void> {
     const secret = this.store.getSecret(provider.id);
     if (!secret) throw new GatewayError(503, '供应商缺少凭据。');
     const stream = body.stream === true;
@@ -376,6 +395,12 @@ export class Gateway {
       upstream = await (this.options.fetch ?? fetch)(prepared.url, { method: 'POST', headers, body: JSON.stringify(prepared.body), signal: controller.signal, redirect: 'manual' });
       const secrets = [secret.apiKey, secret.accessToken, secret.refreshToken, headers.get('authorization')?.replace(/^Bearer /i, '')].filter((item): item is string => Boolean(item));
       if (!upstream.ok) {
+        if (bridge) {
+          if (upstream.body) await upstream.body.cancel();
+          const retry = upstream.headers.get('retry-after'); if (retry) response.setHeader('retry-after', retry);
+          jsonResponse(response, upstream.status, { type: 'error', error: { type: upstream.status === 401 ? 'authentication_error' : upstream.status === 429 ? 'rate_limit_error' : 'api_error', message: `上游拒绝模型请求（HTTP ${upstream.status}）。` } });
+          return;
+        }
         response.statusCode = upstream.status;
         for (const name of responseHeaderNames) { const value = upstream.headers.get(name); if (value) response.setHeader(name, value); }
         response.setHeader('cache-control', 'no-store');
@@ -391,7 +416,29 @@ export class Gateway {
         return;
       }
       const sse = upstream.headers.get('content-type')?.includes('text/event-stream');
-      if (sse && !stream) {
+      if (bridge) {
+        if (sse && !upstream.body) throw new GatewayError(502, '上游流式响应为空。');
+        if (bridge.stream && sse) {
+          response.statusCode = upstream.status;
+          response.setHeader('content-type', 'text/event-stream; charset=utf-8'); response.setHeader('cache-control', 'no-cache'); response.setHeader('x-accel-buffering', 'no');
+          response.flushHeaders();
+          reader = upstream.body!.pipeThrough(createAnthropicStream(model.wireApi, model.alias, { onUpstreamEvent: observe }), { signal: controller.signal }).getReader();
+          while (true) { const item = await reader.read(); if (item.value) await write(response, item.value, controller.signal); if (item.done) break; }
+          response.end();
+        } else {
+          let message: Json;
+          if (sse) message = await collectAnthropicStream(upstream.body!, model.wireApi, model.alias, { onUpstreamEvent: observe, signal: controller.signal });
+          else {
+            const raw = await limitedText(upstream);
+            let value: unknown; try { value = JSON.parse(raw); } catch { throw new GatewayError(502, '上游成功响应不是有效 JSON。'); }
+            observe(value); message = toAnthropicResponse(value, model.wireApi, model.alias);
+          }
+          if (bridge.stream) {
+            response.statusCode = upstream.status; response.setHeader('content-type', 'text/event-stream; charset=utf-8'); response.setHeader('cache-control', 'no-cache');
+            response.end(anthropicMessageToSse(message));
+          } else jsonResponse(response, upstream.status, message);
+        }
+      } else if (sse && !stream) {
         if (model.wireApi !== 'responses') throw new GatewayError(502, '上游返回流式 Chat 响应，无法作为非流式结果返回。');
         if (!upstream.body) throw new GatewayError(502, '上游流式响应为空。');
         reader = upstream.body.getReader();
@@ -408,8 +455,8 @@ export class Gateway {
           reader = upstream.body.getReader(); const frames = new SseFrames();
           while (true) {
             const item = await reader.read();
-            if (sse) for (const frame of frames.feed(item.value ?? new Uint8Array(), item.done)) { try { observe(sseData(frame)); } catch { /* invalid frames still pass through unchanged */ } await write(response, mappedSse(frame, model.alias)); }
-            else if (item.value) await write(response, item.value);
+            if (sse) for (const frame of frames.feed(item.value ?? new Uint8Array(), item.done)) { try { observe(sseData(frame)); } catch { /* invalid frames still pass through unchanged */ } await write(response, mappedSse(frame, model.alias), controller.signal); }
+            else if (item.value) await write(response, item.value, controller.signal);
             if (item.done) break;
           }
         }

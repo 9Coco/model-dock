@@ -1,5 +1,6 @@
 import type { AuthFailureCategory, AuthProgress, AuthStage, Provider, ProviderSecret } from '../shared/types';
 import { normalizeApiKey } from './credentials';
+import { anthropicEndpoint } from './anthropic-endpoint';
 import { version as appVersion } from '../../package.json';
 import { safeNetworkErrorCode } from './network-diagnostic';
 import type { AuthNetworkErrorCode } from '../shared/network-types';
@@ -111,6 +112,7 @@ export function upstreamEndpoint(baseUrl: string, path: string): string {
 
 /** Preserve the configured route while adding the native Codex catalog contract. */
 export function modelCatalogEndpoint(provider: Provider): string {
+  if (provider.kind === 'openai-compatible' && provider.presetId === 'anthropic') return anthropicEndpoint(provider.baseUrl, '/models');
   const url = new URL(upstreamEndpoint(provider.baseUrl, '/models'));
   if (provider.kind === 'codex') url.searchParams.set('client_version', CODEX_CATALOG_CLIENT_VERSION);
   return url.toString();
@@ -175,6 +177,14 @@ export function prepareUpstream(provider: Provider, secret: ProviderSecret, path
   const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: body.stream ? 'text/event-stream' : 'application/json' };
   if (provider.kind === 'openai-compatible') {
     if (!secret.apiKey) throw new Error('该来源还没有配置 API Key');
+    // 修改点：原生 Messages 不经 OpenAI 协议转换，使用独立路径和鉴权头。
+    if (route === '/messages' || route === '/models' && (provider.presetId === 'anthropic' || path === '/v1/models')) {
+      // 修改点：测试和 Claude 配置使用相同的鉴权方式，不用双头请求掩盖兼容错误。
+      if (provider.messagesAuth === 'api-key') headers['x-api-key'] = normalizeApiKey(secret.apiKey);
+      else headers.Authorization = `Bearer ${normalizeApiKey(secret.apiKey)}`;
+      headers['anthropic-version'] = '2023-06-01';
+      return { url: anthropicEndpoint(provider.baseUrl, route), headers, body };
+    }
     headers.Authorization = `Bearer ${normalizeApiKey(secret.apiKey)}`;
     return { url: upstreamEndpoint(provider.baseUrl, route), headers, body };
   }

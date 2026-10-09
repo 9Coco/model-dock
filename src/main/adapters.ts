@@ -10,6 +10,7 @@ import { modelDisplayLabel, modelLocalAlias } from '../shared/model-names';
 import type { CopilotDesktopPlan } from './copilot-desktop';
 import { dshPatchPreview, type DshPlan, type DshProviderProfile } from './dsh-config';
 import { openCodeConfigDirectory } from './opencode-paths';
+import { applyClaudeConfig, buildClaudeConfig } from './claude-config';
 
 const PLACEHOLDER = '__MODELDOCK_LOCAL_KEY__';
 // These are client request budgets, not inferred upstream model specifications.
@@ -239,6 +240,8 @@ export function buildDshPlan(store: AdapterStore, port: number, revealKey = fals
   return { syncScope, providers, credentials, ...(defaultModel ? { defaultModel } : {}), ...(mappings.length ? { legacyDispatch: { version: 1 as const, mappings } } : {}) };
 }
 export function buildConfig(store: AdapterStore, tool: ToolId, port: number, revealKey = false): ConfigPreview {
+  // 修改点：Claude Code 按原生 Messages 入口或本机协议桥生成配置，不能落入其他工具适配分支。
+  if (tool === 'claude-code') return buildClaudeConfig(store, revealKey, port);
   const selection = selected(store, tool, true);
   const { binding } = selection;
   if (binding.vscodeSyncScope !== undefined && !['managed', 'selected'].includes(binding.vscodeSyncScope)) throw new Error('VS Code 同步范围无效。');
@@ -301,7 +304,8 @@ export function buildConfig(store: AdapterStore, tool: ToolId, port: number, rev
       + (responses.some(model => model.contextWindow === 0) ? '上下文未知的模型省略可选上下文字段；可在模型编辑中填写实际上下文后重新生成配置。' : ''),
   };
 }
-export function applyConfig(store: AdapterStore, tool: ToolId, port: number, appData: string, backups: string, homeDirectory = homedir(), options: { codexHome?: string; configHome?: string } = {}): string {
+export function applyConfig(store: AdapterStore, tool: ToolId, port: number, appData: string, backups: string, homeDirectory = homedir(), options: { codexHome?: string; configHome?: string; claudeConfigDir?: string } = {}): string {
+  if (tool === 'claude-code') return applyClaudeConfig(store, backups, homeDirectory, { claudeConfigDir: options.claudeConfigDir, port });
   if (tool === 'copilot') throw new Error('Copilot 桌面配置需要通过运行中的原生接口同步。');
   if (tool === 'dsh') throw new Error('DSH 配置需要通过原生插件与凭据同步入口应用。');
   const config = buildConfig(store, tool, port, true);

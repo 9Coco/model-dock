@@ -15,10 +15,10 @@ ModelDock 是跨平台本地模型管理台：全局维护模型来源与别名�
 - 授权生命周期对照 CC Switch 的设备码实现：xAI 校验 OIDC issuer，续期显式携带原权限 scope；ID Token 只保存在主进程加密凭据中，界面取得账号元数据。临时续期网络失败保留原授权状态；明确拒绝或过期停止轮询。导入凭据前取消旧登录、刷新和额度查询，提交刷新前检查原凭据，防止晚回复覆盖新授权。
 - 模型：填写 API Key 后从供应商获取真实模型列表，搜索、勾选并批量添加。不同供应商可用相同模型简称及显示名称，列表和工具中按「套餐名 - 模型名」展示；系统维护唯一的聚合接口 ID。支持真实上游 ID、协议、上下文、工具、视觉与思考强度能力。默认来源未授权、模型列表为空，能力由实际配置确定。
 - Codex 兼容模型目录带独立的 `client_version` 和对应版本请求头，使用原生 `slug` 作为上游 ID，解析显示名称、上下文和明确的能力字段。默认候选隐藏 `hide / none` 条目，已保存和手动添加的模型保留；目录可见性不代表实际模型权限。API / Grok 来源不携带 Codex 目录版本参数。
-- 工具：Codex、OpenCode、DSH、VS Code Copilot Chat、Copilot app；工具页直接勾选供应商并选择模型偏好。五种工具会自动保存并同步勾选、取消及模型偏好变更；Copilot app 需运行。Codex 支持单供应商直连和逐模型选择的聚合接口，其他工具可同时直连多家供应商。各工具均可还原官方配置。模型或来源参数改动后可点击「重新同步」。DSH 的模型与密钥一同同步，无需再次手工配置。
+- 工具：Codex、Claude Code、OpenCode、DSH、VS Code Copilot Chat、Copilot app；工具页直接勾选供应商并选择模型偏好。六种工具会自动保存并同步勾选、取消及模型偏好变更；Copilot app 需运行。Codex 支持单供应商直连和逐模型选择的聚合接口；Claude Code 一次使用一个 API 或订阅来源，官方 API 优先直连，订阅通过本机服务连接；其余工具可同时直连多家供应商。各工具均可还原官方配置。模型或来源参数改动后可点击「重新同步」。DSH 的模型与密钥一同同步，无需再次手工配置。
 - 本地网关：固定监听 `127.0.0.1`，默认 `18181`；本地 Key 鉴权、标准模型目录、Chat Completions/Responses、流式转发、请求日志。
 - SQLite：保存来源、模型、绑定与日志；敏感凭据由主进程加密，预览和快照不包含上游密钥。
-- 配置接入：五类工具均支持预览 / 导出，并在用户修改勾选或模型偏好后自动同步，写入前备份。VS Code 默认只保留所选自定义供应商，可关闭此选项来保留原有自定义来源；其他 vendor 与 JSONC 注释保留。OpenCode 保留其他供应商、MCP 和非受管 JSONC 注释；Codex 的 TOML 重写保留配置字段，但不保证原注释。Copilot app 通过运行实例的原生接口同步来源、模型和凭据，预览是同步计划参考，不需要再手工导入。DSH 写入 home 插件覆盖与凭据 refs，同步前保存加密恢复记录，清空后恢复原覆盖。
+- 配置接入：六类工具均支持预览 / 导出，并在用户修改勾选或模型偏好后自动同步，写入前备份。VS Code 默认只保留所选自定义供应商，可关闭此选项来保留原有自定义来源；其他 vendor 与 JSONC 注释保留。OpenCode 保留其他供应商、MCP 和非受管 JSONC 注释；Codex 的 TOML 重写保留配置字段，但不保证原注释。Copilot app 通过运行实例的原生接口同步来源、模型和凭据，预览是同步计划参考，不需要再手工导入。DSH 写入 home 插件覆盖与凭据 refs，同步前保存加密恢复记录，清空后恢复原覆盖。
 - 托盘：关闭主窗口可留在后台运行；退出应用会停止网关。
 
 ## 授权、MCP、Skills 和用量
@@ -44,13 +44,13 @@ GitHub 账号身份查询使用公共 REST 请求头，Copilot 额度查询使�
 左下功能区提供四个管理页面。工具与供应商列表共享剩余高度并分别滚动；窗口缩小时两组列表都可独立滚动，标题保持可见，底部功能入口和工作空间信息保持固定。
 
 - **授权中心**：统一管理现有 Codex / Grok Build 订阅来源，一个来源对应一个账号。可新增、登录、重新授权、注销 ModelDock 本地授权、删除来源，或明确点击从本机客户端的 `auth.json` 只读导入。额度查询复用续期机制，只向对应官方域名发送凭据；未查询或格式不支持显示未知，网络失败时注明上次成功结果。访问凭据到期不代表套餐到期。GitHub Copilot 目前仍是接入工具，尚未新增为 ModelDock 的订阅来源。
-- **MCP 管理**：全局目录支持 stdio、HTTP、SSE；勾选仅保存工具选择。先预览，再明确应用到工具，保留无关设置并备份原文件。Codex 支持 stdio / Streamable HTTP，SSE 会明确拒绝；OpenCode 使用 remote 协商；VS Code 与 Copilot CLI 使用各自用户配置。DSH 暂无已核实的统一 MCP 文件入口，只导出片段。目录、预览和导出隐藏环境变量、Headers、敏感参数及 URL 查询凭据；应用由主进程取出真实值。已被用户修改的受管项及非受管同名项会提示冲突，不会覆盖或删除。删除目录记录后，须再次预览 / 应用才清理客户端中未改过的受管项。
-- **Skills 管理**：支持导入本地目录、GitHub 仓库或已有工具技能，查看技能文件，并按工具部署或停用。导入只复制到管理库，勾选才实际部署；使用文件清单和哈希保护用户修改，保留备份，不执行技能脚本。Codex 使用仍兼容的 `CODEX_HOME/skills`，OpenCode 使用全局 `skills`，DSH 对应官方文件系统技能插件。VS Code 与 Copilot 共享 `~/.copilot/skills`，两列同步。现有外部同名技能只读导入后不会自动接管；内容完全一致时，可点击「接管」并确认，仅登记管理关系。不同内容、用户修改、链接或额外 Git 元数据会拒绝接管。更新仓库技能前需显式管理原库项，尚无自动更新。
+- **MCP 管理**：全局目录支持 stdio、HTTP、SSE；勾选仅保存工具选择。先预览，再明确应用到工具，保留无关设置并备份原文件。Codex 支持 stdio / Streamable HTTP，SSE 会明确拒绝；OpenCode 使用 remote 协商；VS Code 与 Copilot CLI 使用各自用户配置。DSH 暂无已核实的统一 MCP 文件入口，只导出片段。Claude Code MCP 导入、预览和应用暂不支持，须在 Claude Code 中独立配置，不会复用其他客户端文件。目录、预览和导出隐藏环境变量、Headers、敏感参数及 URL 查询凭据；应用由主进程取出真实值。已被用户修改的受管项及非受管同名项会提示冲突，不会覆盖或删除。删除目录记录后，须再次预览 / 应用才清理客户端中未改过的受管项。
+- **Skills 管理**：支持导入本地目录、GitHub 仓库或已有工具技能，查看技能文件，并按工具部署或停用。导入只复制到管理库，勾选才实际部署；使用文件清单和哈希保护用户修改，保留备份，不执行技能脚本。Codex 使用仍兼容的 `CODEX_HOME/skills`，Claude Code 使用 `CLAUDE_CONFIG_DIR/skills`（默认 `~/.claude/skills`），OpenCode 使用全局 `skills`，DSH 对应官方文件系统技能插件。VS Code 与 Copilot 共享 `~/.copilot/skills`，两列同步。现有外部同名技能只读导入后不会自动接管；内容完全一致时，可点击「接管」并确认，仅登记管理关系。不同内容、用户修改、链接或额外 Git 元数据会拒绝接管。更新仓库技能前需显式管理原库项，尚无自动更新。
 - **用量统计**：提供「按供应商」「按工具」「按模型」三个视图，支持点击排行下钻及时间、工具、供应商、模型交叉筛选；总览、排行、每日趋势和 CSV / JSON 导出使用同一范围。展示请求数、成功率、输入 / 输出 / 缓存 Token、用量覆盖及估算费用，可按请求、Token、费用排序。默认今天，可选最近 7 / 30 / 90 / 365 天或最多 366 个香港自然日；没有记录的日期补 0。历史和已移除的来源仍可筛选；无法识别工具的调用单列为通用接口，不按当前绑定猜测归属。解析 Chat / Responses 的 JSON 与 SSE 实际 `usage`，缓存不会重复计价，推理 Token 不会重复计入输出。没返回计数的请求保持未知，手填模型 USD 单价后才估算费用；只覆盖部分记录时显示「部分估算」，不代表实际账单或订阅费。日志轮转不删除用量历史。
 
 用量页默认查询今天的客户端会话，提供工具快捷筛选、立即同步、30 秒自动刷新（可关闭或改成 15 / 60 / 300 秒）、数据来源、四项总览、小时/每日趋势和分页明细。日志、供应商、模型和定价分别在页签中查看，来源和状态码可进一步筛选。仅在用量页面进入或刷新时同步，不在应用启动时导入外部客户端资料；隐藏窗口时暂停自动刷新。
 
-本地会话目前支持 **Codex 和 OpenCode**。Codex 支持 `sessions` / `archived_sessions`、累计快照、重复额度事件、分支回放、截断文件和重复同步；OpenCode 支持 V1 / V2 SQLite，在内存中合并校验通过的已提交 WAL。读取不修改原数据库、WAL、SHM 或日志文件，只保存时间、模型和 Token 元数据。DSH、VS Code 和 Copilot 的原生历史暂未接入稳定可验证的格式，会在数据来源中明确说明；经过 ModelDock 网关的请求仍可统计。
+本地会话目前支持 **Codex 和 OpenCode**。Codex 支持 `sessions` / `archived_sessions`、累计快照、重复额度事件、分支回放、截断文件和重复同步；OpenCode 支持 V1 / V2 SQLite，在内存中合并校验通过的已提交 WAL。读取不修改原数据库、WAL、SHM 或日志文件，只保存时间、模型和 Token 元数据。DSH、VS Code 和 Copilot 的原生历史暂未接入稳定可验证的格式，会在数据来源中明确说明；经过 ModelDock 网关的请求仍可统计。Claude Code 的原生用量解析暂未实现，本版不读取或导入其会话记录；通过 ModelDock 本机服务的请求会记录网关用量，官方 API 直连用量请查看供应商账单。
 
 总 Token 为总输入加输出，缓存读取和写入不重复相加；新输入排除缓存读取/写入，缓存命中率按输入量加权。模型定价支持已配置模型和实际观察到的历史模型；缓存写入单价缺失且记录含写入时，该条费用保持未知。费用按当前设置的 USD 单价估算，不代表订阅账单，也不猜测未设置的参考价格。客户端事件的 HTTP 状态和速率保持未知；网关速率由已报告输出和完整请求耗时计算，包含等待及网络时间。
 
@@ -241,8 +241,14 @@ API 来源按名称、类型和规范化地址防重复：添加预设时复用�
 - ModelDock 独立于 OpenAI、GitHub、xAI 和各工具厂商。兼容接入使用现有公开客户端标识和已观察到的授权/额度/本机接口，不是 ModelDock 自注册的官方 OAuth 应用，也不代表官方背书。公开客户端 ID 不是秘密；不要删除它们来代替协议审查。提供账号访问、模型目录或额度数据不等于服务承诺稳定私有接口或授予每个模型的推理权限。使用这些服务仍须满足上游账号、权限和服务条款。
 - GPT 登录目前是兼容 Codex 公开客户端的设备码流程，不是为 ModelDock 动态注册的新 SIWC 应用。授权、实际账号额度和模型权限需用户登录后验证。
 - 授权错误按申请设备码、等待授权、兑换凭据和续期步骤显示安全诊断，区分地区限制、设备码未启用、明确拒绝、过期和网络超时。Codex 专属设备授权轮询中的 JSON 403 / 404、`deviceauth_authorization_pending` 均可表示尚未输入验证码，会保持等待、保留验证码和复制按钮，并提供官方授权页面链接；这些状态不表示已完成授权。HTML 拦截、明确拒绝及过期会停止轮询。已有有效账号再次登录失败时保留原授权。设备码的账号 / 工作空间权限条件及本机授权缓存方法参见 [OpenAI 官方授权说明](https://learn.chatgpt.com/docs/auth)；登录失败页可前往授权中心显式导入已登录客户端，导入按钮才读取本机授权文件。
-- 原生订阅仅支持 Responses；Chat Completions 与 Responses 按模型配置严格区分，不做未验证的跨协议转换。DSH/VS Code/Copilot 配置可以指定对应协议。
+- 原生上游按来源与模型已有的 Chat Completions / Responses 协议调用；现有其他工具会过滤 Messages 模型。Claude Code 可通过本机服务把 Messages 转换为来源已有协议，或连接官方 Anthropic 兼容入口；无需复制现有模型。跨协议转换的测试与真实供应商验收分别记录。
 - 订阅路径使用 `store:false`，需要发送完整会话历史；不能依赖 `previous_response_id` 或服务端持久化对话。原生 WebSocket 续接尚未实现。千问 Token Plan 的 Responses 支持也需按具体模型选择，不能以套餐名称一概认定。
+- Claude Code 终端接入写入 `CLAUDE_CONFIG_DIR/settings.json`（默认 `~/.claude/settings.json`），一次使用一个现有 API 或账号订阅来源。官方 API 的 Claude 兼容入口使用同一 API Key；ChatGPT/Codex、GitHub Copilot、Grok Build 订阅通过 ModelDock 本机 Messages 服务调用其已有上游协议，OAuth 访问和刷新令牌留在主进程，客户端配置只使用本机 Key。需要本机入口时同步会按需启动服务；使用期间须保持 ModelDock 运行。
+- API 表单的「Claude Code 接口地址」留空时按已知官方地址映射，未识别的 OpenAI 兼容来源可通过本机服务转换；填写时须是支持 Anthropic Messages 的服务地址。此字段不替换已有 OpenAI 地址。Messages 鉴权可选择 `API Key（x-api-key）` 或 `Bearer Token（Authorization）`；Anthropic 新模板默认 API Key，自定义及未设置此字段的历史来源默认 Bearer，仅影响原生 Messages 接口。
+- Claude Code 原生直连的默认模型及 Haiku / Sonnet / Opus / 子代理角色使用所选默认模型的真实上游 ID；通过本机服务时使用 ModelDock 模型别名。仅同步所选默认模型及其角色映射，不将供应商全部模型写入 Claude Code 选择器。已有无关设置保留，预览脱敏，应用前备份；应用或还原后重启 Claude Code 终端。VS Code Claude Code 扩展需另配其运行环境，本版不把终端配置同步视为扩展验收。源码与界面使用原创字母 C 标识，不使用 Claude 官方品牌图形。
+- Claude Code 本机入口为 `http://127.0.0.1:18181/tool/claude-code`，客户端调用其 `/v1/messages`（端口随 ModelDock 服务设置）。桥接支持文本、图片、工具调用、工具结果及流式响应；Messages 的 `thinking` 输入当前不支持，客户端配置省略/关闭该协议功能，不代表上游模型不会自行思考。复杂视觉及模型特有扩展须另行验证。转换路径以 mock 上游核对为准，不代表真实 ChatGPT/Copilot/Grok 账号或供应商已经验收。
+- 官方 API Claude 入口：DeepSeek `https://api.deepseek.com/anthropic`；火山 Agent Plan `https://ark.cn-beijing.volces.com/api/plan`；火山 Coding Plan `https://ark.cn-beijing.volces.com/api/coding`；国内千问 Token Plan `https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic`，国际 Token Plan 为 `https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic`。千问 Coding Plan 国内/国际分别为 `https://coding.dashscope.aliyuncs.com/apps/anthropic` / `https://coding-intl.dashscope.aliyuncs.com/apps/anthropic`。只匹配已知预设与完整官方地址，不会凭名称改写用户自定义来源；API Key 必须与对应地域及计费入口配套。阿里云 Anthropic 入口不提供 `/v1/models`，可复用现有模型或手工添加，目录 404 不代表推理失败。参考 [阿里云国内接入表](https://help.aliyun.com/zh/model-studio/more-tools)、[阿里云国际接入表](https://www.alibabacloud.com/help/en/model-studio/more-tools)、[Claude Code 配置](https://help.aliyun.com/zh/model-studio/claude-code)。
+- Claude Code 默认开启「关闭遥测和非必要联网」，保存并同步后关闭遥测、错误报告及自动更新，模型请求继续使用所选 API 或订阅来源。WebFetch 仍可能进行安全检查；这不是本地文件或网络隔离，也不控制 MCP、插件和 hook 的网络行为。关闭自动更新后需用户自行更新 Claude Code。参考 [官方数据使用说明](https://code.claude.com/docs/en/data-usage)、[设置说明](https://code.claude.com/docs/en/settings)；配置序列化与模拟请求通过不代表真实供应商或客户端隐私行为已验收。
 - Codex 的导出与目录只发布 Responses 模型。生成的目录含客户端要求的基本字段，但复杂工具、推理档位、视觉行为仍需逐模型验证。
 - DSH 应用目标是 `DSH_HOME`（未设置时 `~/.dsh`）的 `cordis.patch.yml` 与 `.credentials.yaml`，适配已验证的 CLI 0.1.7-rc.2 / Desktop 0.2.0-rc.2 原生插件格式。默认开启「仅显示所选供应商」：发布所选 pi-ai 路由，停用原生 DeepSeek API / 账号模型适配器及其他已识别模型来源；保留独立平台账号授权服务、凭据和会话。全部取消仍保持模型来源为空；关闭此选项才恢复原模型适配器的启用标记，原配置来源可与 ModelDock 来源共存。不同接口拆分路由，默认模型用于新会话。同步前通过隐藏的只读进程解析实际 profile / 运行时，识别嵌套及改名适配器；解析不完整或缺少标准核心插件时明确拒绝写入。原 profile 文件不改写；两文件先加密备份，失败恢复，外部并发修改冲突时保留恢复记录并拒绝覆盖。配置写入不主动切换已有会话。
 - DSH 旧 DeepSeek 会话仍可能引用 `deepseek-official` / `deepseek-account`。独占模式选择官方 DeepSeek API 来源时，ModelDock 会安装无凭据的受管同模型兼容插件，让这些旧引用调用所选来源中的同一上游模型；聊天日志、模型选择及原请求对象不改写。相似显示名、其他套餐、不同模型或无法确定的重复来源不自动映射。兼容路由没有可配置目录和模型枚举，模型设置页与新会话选择器仍只展示所选来源。插件源、配置及凭据一同纳入加密备份与失败恢复；关闭独占或清空选择会撤销插件，静态无凭据代码文件留在本地作为非活动文件。未包含旧模型时，请在 DSH 切换模型或新建会话。

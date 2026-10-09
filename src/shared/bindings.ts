@@ -1,4 +1,5 @@
 import type { Model, Provider, ToolBinding } from './types';
+import { claudeConnectionKind, claudeModelsForProvider } from './claude';
 
 export interface BindingConnectionGroup {
   /** Direct API groups contain exactly one provider, hence one credential. */
@@ -16,8 +17,12 @@ export interface BindingConnectionPolicy {
 export function resolveBindingModels(binding: ToolBinding, models: Model[], providers?: Provider[]): Model[] {
   if (!binding.enabled) return [];
   const providerIds = binding.providerIds;
-  const singleSource = binding.mode === 'direct' && binding.id === 'codex';
-  let result = models.filter(model => model.enabled && (!providers || providers.some(p => p.id === model.providerId && p.enabled)));
+  const claude = binding.id === 'claude-code';
+  const singleSource = claude || binding.mode === 'direct' && binding.id === 'codex';
+  // 修改点：Claude 使用官方 Messages 入口或本机协议桥，其他适配器仍不消费 Messages。
+  const claudeIds = claude && providers ? new Set(providers.filter(provider => provider.enabled).flatMap(provider => claudeModelsForProvider(provider, models).map(model => model.id))) : undefined;
+  let result = models.filter(model => model.enabled && (claude ? !claudeIds || claudeIds.has(model.id) : model.wireApi !== 'messages')
+    && (!providers || providers.some(p => p.id === model.providerId && p.enabled)));
   if (providerIds !== undefined) {
     const allowed = singleSource ? providerIds.slice(0, 1) : providerIds;
     result = result.filter(model => allowed.includes(model.providerId));
@@ -33,6 +38,13 @@ export function resolveBindingModels(binding: ToolBinding, models: Model[], prov
  * Existing explicit modes and model-scoped filters retain their meaning. */
 export function bindingConnectionPolicy(binding: ToolBinding, models: Model[], providers?: Provider[]): BindingConnectionPolicy {
   const resolved = resolveBindingModels(binding, models, providers);
+  if (binding.id === 'claude-code') {
+    const providerIds = [...new Set((binding.providerIds ?? resolved.map(model => model.providerId)))];
+    if (!binding.enabled || !providerIds.length) return { kind: 'direct', groups: [] };
+    if (binding.mode === 'aggregate' || providerIds.length !== 1) throw new Error('Claude Code 目前一次只支持一个供应商或订阅来源。');
+    const provider = providers?.find(item => item.id === providerIds[0]);
+    return { kind: 'direct', groups: [{ connection: provider ? claudeConnectionKind(provider, resolved) : 'local-managed', providerIds, modelIds: resolved.map(model => model.id) }] };
+  }
   const direct = binding.mode === 'direct';
   const auto = binding.mode === 'auto';
   const modeKind = direct ? 'direct' : auto && binding.id !== 'codex' ? 'native' : 'aggregate';

@@ -20,6 +20,14 @@ function setup() {
 }
 const sum = (rows: Map<string, UsageRecord>, key: 'inputTokens' | 'outputTokens' | 'cachedInputTokens') => [...rows.values()].reduce((total, row) => total + (row.usage?.[key] ?? 0), 0);
 describe('read-only Codex client usage import', () => {
+  it('reports Claude Code as unsupported without importing a different tool session', async () => {
+    const { file, store, options, records } = setup();
+    file('unrelated', [meta('unrelated'), context(), token(counters(100, 10), undefined, 2)]);
+    const result = await importToolUsage('claude-code', store, options);
+    expect(result).toMatchObject({ tool: 'claude-code', status: 'unsupported', scannedFiles: 0, imported: 0, skipped: 0 });
+    expect(result.unsupported).toContain('不读取');
+    expect(records.size).toBe(0);
+  });
   it('prefers exact per-request counters and never adds both cumulative and last counts', async () => {
     const { file, store, options, records } = setup(); const path = file('s1', [meta('s1'), context(), token(counters(1000, 100, 900), counters(100, 10, 90), 2), token(counters(2500, 500, 1500), counters(200, 20, 500), 3)]); const before = readFileSync(path, 'utf8');
     const result = await importToolUsage('codex', store, options); expect(result.imported).toBe(2); expect(sum(records, 'inputTokens')).toBe(300); expect(sum(records, 'outputTokens')).toBe(30); expect(sum(records, 'cachedInputTokens')).toBe(290);
@@ -73,7 +81,7 @@ describe('read-only Codex client usage import', () => {
     expect((await importToolUsage('codex', batched, options)).imported).toBe(2); expect((await importToolUsage('codex', batched, options)).imported).toBe(0); expect(records.size).toBe(2); expect(batches).toBe(2);
   });
   it('explicitly reports unsupported tools and does not invent unverified schemas', async () => {
-    const { store, options } = setup(); for (const tool of ['dsh', 'vscode', 'copilot'] as const) { const result = await importToolUsage(tool, store, options); expect(result.unsupported).toBeTruthy(); expect(result.status).toBe('unsupported'); expect(result.scannedFiles).toBe(0); expect(result.imported).toBe(0); }
+    const { store, options } = setup(); for (const tool of ['claude-code', 'dsh', 'vscode', 'copilot'] as const) { const result = await importToolUsage(tool, store, options); expect(result.unsupported).toBeTruthy(); expect(result.status).toBe('unsupported'); expect(result.scannedFiles).toBe(0); expect(result.imported).toBe(0); }
     expect((await importToolUsage('opencode', store, options)).status).toBe('missing');
   });
   it('uses metadata checkpoints to avoid recounting cumulative history after file truncation and reorder', async () => {

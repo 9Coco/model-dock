@@ -42,6 +42,7 @@ import { CopilotDesktopClient } from './copilot-desktop';
 import { applyCopilotDesktop } from './copilot-sync';
 import { removeProviderAndSync } from './provider-removal';
 import { restoreOfficialConfig } from './tool-restore';
+import { verifyClaudeConfiguration } from './claude-config-smoke';
 import { restoreToolBinding } from './tool-restore-binding';
 import { applyNetworkProxy } from './network-proxy';
 import { inspectAuthNetwork } from './network-diagnostic';
@@ -124,7 +125,7 @@ if (runtimeConfig.dataDir) {
   app.setPath('userData', runtimeConfig.dataDir);
   app.setPath('sessionData', runtimeConfig.dataDir);
 }
-const toolIds = new Set(['codex', 'opencode', 'dsh', 'vscode', 'copilot']);
+const toolIds = new Set(['codex', 'opencode', 'dsh', 'vscode', 'copilot', 'claude-code']);
 function toolId(value: unknown): ToolId {
   if (typeof value !== 'string' || !toolIds.has(value)) throw new Error('无法识别的工具。');
   return value as ToolId;
@@ -202,7 +203,9 @@ async function createWindow(forceShow = false) {
         writeFileSync(join(outputDir, 'electron-smoke.json'), JSON.stringify({ ...result, dataDir, windowSize: window!.getSize(), contentSize: window!.getContentSize() }, null, 2));
         writeFileSync(join(outputDir, 'electron-smoke.png'), await captureUi());
         await verifyToolIcons(window!, outputDir, captureUi);
-        if (process.env.MODELDOCK_SMOKE_METADATA_ONLY === '1') {
+        if (process.env.MODELDOCK_SMOKE_CLAUDE_ONLY === '1') {
+          await verifyClaudeConfiguration(window!, store, outputDir, captureUi);
+        } else if (process.env.MODELDOCK_SMOKE_METADATA_ONLY === '1') {
           await verifyModelMetadata(window!, outputDir, captureUi);
         } else if (process.env.MODELDOCK_SMOKE_SIDEBAR_ONLY === '1') {
           await verifySidebarScroll(window!, store, outputDir, captureUi);
@@ -550,6 +553,7 @@ function registerIpc() {
     return applyConfig(store, id, gateway.status().port, appData, join(dataDir, 'backups'), featureHome, {
       codexHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome!, '.codex') : process.env.CODEX_HOME?.trim() ? resolve(process.env.CODEX_HOME.trim()) : undefined,
       configHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome!, '.config') : process.env.XDG_CONFIG_HOME,
+      claudeConfigDir: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome!, '.claude') : process.env.CLAUDE_CONFIG_DIR,
     });
     } finally { toolConfigPending.delete(id); }
   }
@@ -698,6 +702,7 @@ function registerIpc() {
       return await restoreToolBinding(store, id, () => restoreOfficialConfig(store, id, appData, join(dataDir, 'backups'), featureHome, {
         codexHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.codex') : process.env.CODEX_HOME?.trim() ? resolve(process.env.CODEX_HOME.trim()) : join(featureHome, '.codex'),
         configHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.config') : process.env.XDG_CONFIG_HOME,
+        claudeConfigDir: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.claude') : process.env.CLAUDE_CONFIG_DIR,
         dshHome, dshOptions, copilotHome: target.home, copilotOptions: { openClient: target.openClient },
       }));
     } finally { toolRestorePending = false; }
@@ -891,7 +896,7 @@ else {
     const openCodeConfigHome = __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.config') : process.env.XDG_CONFIG_HOME;
     const openCodeDataDir = openCodeDataDirectory(__MODELDOCK_SMOKE_BUILD__ ? featureHome : undefined);
     mcp = new McpManager(store, { homeDir: featureHome, appDataDir: featureAppData, backupDir: join(dataDir, 'backups', 'mcp'), configHome: openCodeConfigHome, codexHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.codex') : process.env.CODEX_HOME });
-    skills = new SkillManager(store, { homeDir: featureHome, appDataDir: featureAppData, libraryDir: join(dataDir, 'skill-library'), backupDir: join(dataDir, 'backups', 'skills'), configHome: openCodeConfigHome, ...(!__MODELDOCK_SMOKE_BUILD__ ? { codexHome: process.env.CODEX_HOME, dshHome: process.env.DSH_HOME } : {}) });
+    skills = new SkillManager(store, { homeDir: featureHome, appDataDir: featureAppData, libraryDir: join(dataDir, 'skill-library'), backupDir: join(dataDir, 'backups', 'skills'), configHome: openCodeConfigHome, claudeConfigDir: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.claude') : process.env.CLAUDE_CONFIG_DIR, ...(!__MODELDOCK_SMOKE_BUILD__ ? { codexHome: process.env.CODEX_HOME, dshHome: process.env.DSH_HOME } : {}) });
     usage = new UsageManager(store);
     usageSync = new UsageSyncService(store, {
       homeDir: featureHome,

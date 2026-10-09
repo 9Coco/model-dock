@@ -57,7 +57,7 @@ describe('API provider identity and repeat-save protection', () => {
     const result = store.saveProvider({ name: ' deepseek ', kind: 'openai-compatible', presetId: 'deepseek', baseUrl: 'https://API.DEEPSEEK.com:443/', enabled: true, apiKey: 'Bearer synthetic-deepseek', note: 'configured' });
     expect(result.id).toBe(original.id);
     expect(result.hasSecret).toBe(true);
-    expect(store.listProviders()).toHaveLength(6);
+    expect(store.listProviders()).toHaveLength(7);
     expect(store.getSecret(result.id)?.apiKey).toBe('synthetic-deepseek');
   });
 
@@ -71,14 +71,14 @@ describe('API provider identity and repeat-save protection', () => {
     expect(result).toEqual(original);
     expect(store.listBindings()).toEqual(beforeBindings);
     expect(store.listModels()).toEqual(beforeModels);
-    expect(store.listProviders()).toHaveLength(7);
+    expect(store.listProviders()).toHaveLength(8);
   });
 
   it('a repeated no-key submission preserves the existing credential, enabled status and notes', async () => {
     const { store } = await setup(); const original = source(store);
     expect(store.saveProvider({ name: original.name, kind: original.kind, baseUrl: original.baseUrl, enabled: false, note: 'changed' })).toEqual(original);
     expect(store.getSecret(original.id)?.apiKey).toBe('synthetic-key');
-    expect(store.listProviders()).toHaveLength(7);
+    expect(store.listProviders()).toHaveLength(8);
   });
 
   it('rejects a different key instead of silently adding or replacing an account', async () => {
@@ -156,7 +156,7 @@ describe('explicit legacy duplicate preview and safe merge', () => {
     expect(store.listModels()).toEqual(beforeModels.map(value => value.providerId === first.id ? { ...value, providerId: second.id } : value));
     expect(store.listBindings().map(binding => resolveBindingModels(binding, store.listModels(), store.listProviders()).map(value => value.id).sort())).toEqual(beforeScopes);
     expect(store.listBindings().map(binding => binding.defaultModelId)).toEqual(beforeBindings.map(binding => binding.defaultModelId));
-    expect(store.listBindings().map(binding => binding.modelIds)).toEqual([[a.id], [], [a.id, d.id], [b.id], []]);
+    expect(store.listBindings().map(binding => binding.modelIds)).toEqual([[a.id], [], [a.id, d.id], [b.id], [], []]);
     expect(store.getProvider(second.id)?.note).toBe('second note\n\noriginal note');
     expect(store.logs()).toEqual(beforeLogs);
     expect(store.usageRecords('2000-01-01T00:00:00Z', '2100-01-01T00:00:00Z')[0]).toMatchObject({ providerId: second.id, modelId: a.id, usage: { inputTokens: 7, outputTokens: 3, cachedInputTokens: 2 } });

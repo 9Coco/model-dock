@@ -7,6 +7,7 @@ import { modelLocalAlias, suggestModelAlias } from '../shared/model-names';
 import { lookupModelMetadata } from '../shared/model-metadata';
 import type { PreparedUpstream } from './oauth';
 import { modelCatalogEndpoint } from './oauth';
+import { anthropicEndpoint } from './anthropic-endpoint';
 
 export interface CatalogStore {
   getProvider(id: string): Provider | undefined;
@@ -36,7 +37,7 @@ function object(value: unknown): RecordValue {
 function safeText(value: unknown, max = 200): string {
   return typeof value === 'string' && value.trim().length <= max && !/[\x00-\x1f\x7f]/.test(value) ? value.trim() : '';
 }
-function fingerprint(provider: Provider): string { return JSON.stringify([provider.id, provider.kind, provider.baseUrl, provider.presetId, provider.hasSecret, provider.copilotAccountId]); }
+function fingerprint(provider: Provider): string { return JSON.stringify([provider.id, provider.kind, provider.baseUrl, provider.presetId, provider.hasSecret, provider.copilotAccountId, provider.messagesAuth]); }
 function positiveContext(...values: unknown[]): number | undefined {
   return values.find((value): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value > 0);
 }
@@ -61,7 +62,7 @@ function discoveryAlias(base: string, providerId: string, models: Pick<Model, 'i
     catch { /* Distinct upstream IDs can sanitize to the same local name. Suggest a free local name. */ }
   }
 }
-function parseModel(entry: unknown, provider: Provider): Omit<DiscoveredModel, 'alias'> | undefined {
+function parseModel(entry: unknown, provider: Provider, messagesCatalog = false): Omit<DiscoveredModel, 'alias'> | undefined {
   const data = object(entry);
   const idFields = provider.kind === 'codex' ? [data.slug, data.id, data.model, data.model_id, data.name] : [data.id, data.slug, data.model_id, data.name];
   const upstreamId = typeof entry === 'string' ? safeText(entry) : idFields.map(value => safeText(value)).find(Boolean) ?? '';
@@ -69,13 +70,13 @@ function parseModel(entry: unknown, provider: Provider): Omit<DiscoveredModel, '
   const capabilities = object(data.capabilities);
   const modalities = inputModalities(data.input_modalities, capabilities.input_modalities, object(data.architecture).input_modalities);
   const limits = object(capabilities.limits), supports = object(capabilities.supports);
-  const upstreamContext = positiveContext(data.context_window, data.contextWindow, data.context_length, data.max_context_length, limits.max_context_window_tokens);
+  const upstreamContext = positiveContext(data.context_window, data.contextWindow, data.context_length, data.max_context_length, limits.max_context_window_tokens, messagesCatalog ? data.max_input_tokens : undefined);
   // A negative parallel-calls flag does not mean that ordinary tools are
   // unsupported. Only the affirmative native flag supplies this capability.
   const declaredTools = data.tools ?? data.supports_tools ?? data.supports_tool_calls ?? capabilities.tools ?? capabilities.tool_calling
     ?? (provider.kind === 'copilot' ? supports.tool_calls : undefined)
     ?? (provider.kind === 'codex' && data.supports_parallel_tool_calls === true ? true : undefined);
-  const declaredVision = booleanValue(data.vision, data.supports_vision, capabilities.vision, provider.kind === 'copilot' ? supports.vision : undefined);
+  const declaredVision = booleanValue(data.vision, data.supports_vision, capabilities.vision, provider.kind === 'copilot' ? supports.vision : undefined, messagesCatalog ? object(capabilities.image_input).supported : undefined);
   const upstreamVision = declaredVision ?? (modalities.length ? modalities.includes('image') : undefined);
   const knownMetadata = lookupModelMetadata(upstreamId);
   const metadataInferred: NonNullable<DiscoveredModel['metadataInferred']> = [];
@@ -104,7 +105,7 @@ function parseModel(entry: unknown, provider: Provider): Omit<DiscoveredModel, '
   const endpoints = data.supported_endpoints ?? capabilities.supported_endpoints;
   if (provider.kind === 'copilot' && Array.isArray(endpoints) && !endpoints.some(endpoint => endpoint === 'responses' || endpoint === '/responses' || endpoint === 'chat_completions' || endpoint === 'chat-completions' || endpoint === '/chat/completions')) return undefined;
   const wireApi: WireApi = provider.kind === 'copilot' ? Array.isArray(endpoints) && (endpoints.includes('responses') || endpoints.includes('/responses')) ? 'responses' : 'chat-completions'
-    : provider.kind === 'openai-compatible' ? presetById(provider.presetId)?.defaultWireApi ?? 'chat-completions' : 'responses';
+    : provider.kind === 'openai-compatible' ? messagesCatalog ? 'messages' : presetById(provider.presetId)?.defaultWireApi ?? 'chat-completions' : 'responses';
   return { upstreamId, displayName: safeText(data.display_name ?? data.displayName ?? data.name) || upstreamId,
     wireApi, contextWindow, tools: declaredTools === true, vision, metadataSource, metadataDefaults,
     ...(metadataInferred.length && knownMetadata ? { metadataInferred, metadataReference: { sourceUrl: knownMetadata.sourceUrl, verifiedAt: knownMetadata.verifiedAt } } : {}),
@@ -169,7 +170,7 @@ function modelEntries(payload: unknown, provider: Provider): unknown[] {
   if (array) return array;
   throw new CatalogFailure('invalid-response', '上游返回的内容不包含模型列表，请核对 API 地址。');
 }
-function nextPage(payload: unknown, current: string, initial: string, provider: Provider): string | undefined {
+function nextPage(payload: unknown, current: string, initial: string, provider: Provider, messagesCatalog = false): string | undefined {
   const data = object(payload);
   const links = object(data.links);
   const next = data.next ?? data.next_page ?? data.nextPage ?? links.next;
@@ -182,12 +183,12 @@ function nextPage(payload: unknown, current: string, initial: string, provider: 
   } else if (data.has_more === true) {
     const cursor = safeText(data.next_cursor ?? data.last_id, 1000);
     if (!cursor) throw new CatalogFailure('invalid-response', '模型目录声明仍有下一页，但没有提供分页信息。');
-    target = new URL(current); target.searchParams.set(data.next_cursor ? 'cursor' : 'after', cursor);
+    target = new URL(current); target.searchParams.set(data.next_cursor ? 'cursor' : messagesCatalog ? 'after_id' : 'after', cursor);
   }
   if (!target) return undefined;
   const base = new URL(initial);
   const isCodex = provider.kind === 'codex';
-  const allowedKeys = isCodex ? new Set([...queryKeys, 'client_version']) : queryKeys;
+  const allowedKeys = isCodex ? new Set([...queryKeys, 'client_version']) : messagesCatalog ? new Set([...queryKeys, 'after_id', 'before_id']) : queryKeys;
   const initialVersions = base.searchParams.getAll('client_version');
   const nextVersions = target.searchParams.getAll('client_version');
   const invalidVersion = isCodex && (initialVersions.length !== 1 || nextVersions.length !== 1 || nextVersions[0] !== initialVersions[0]);
@@ -215,12 +216,23 @@ export class ModelCatalog {
     try {
       if (!provider) throw new CatalogFailure('invalid-provider', '供应商不存在。');
       if (!provider.hasSecret) throw new CatalogFailure('missing-credentials', provider.kind === 'openai-compatible' ? '请先保存 API Key，再获取模型列表。' : '请先完成订阅授权，再获取模型列表。');
+      const messagesCatalog = provider.kind === 'openai-compatible' && (presetById(provider.presetId)?.defaultWireApi === 'messages'
+        || this.store.listModels().some(model => model.providerId === providerId && model.wireApi === 'messages'));
       // Preparing the request also refreshes native subscription credentials.
-      const expected = modelCatalogEndpoint(provider);
+      const expected = messagesCatalog ? anthropicEndpoint(provider.baseUrl, '/models') : modelCatalogEndpoint(provider);
       let request: PreparedUpstream;
-      try { request = await this.oauth.prepareRequest(provider, '/models', {}); }
+      try { request = await this.oauth.prepareRequest(provider, messagesCatalog ? '/v1/models' : '/models', {}); }
       catch { throw new CatalogFailure('authentication', provider.kind === 'openai-compatible' ? '无法准备 API 凭据，请重新保存 API Key。' : '无法准备订阅授权，请在授权中心检查账号或重新登录。'); }
       if (provider.kind === 'copilot' ? !isCopilotUpstream(request.url, '/models') : request.url !== expected) throw new CatalogFailure('invalid-provider', '模型目录请求地址与当前供应商不一致。');
+      if (messagesCatalog) {
+        // 修改点：custom 来源已明确选择 Messages 时使用 Anthropic 目录合同。
+        // 凭据只由主进程授权器提供，所选鉴权方式必须与 Claude 实际配置一致。
+        const headers = new Headers(request.headers);
+        const validAuth = provider.messagesAuth === 'api-key'
+          ? /^\S+$/.test(headers.get('x-api-key') || '') && !headers.has('authorization')
+          : /^Bearer \S+$/.test(headers.get('authorization') || '') && !headers.has('x-api-key');
+        if (!validAuth || headers.get('anthropic-version') !== '2023-06-01') throw new CatalogFailure('authentication', 'Messages 模型目录鉴权方式与供应商配置不一致，请检查 API Key 和鉴权设置。');
+      }
       const signal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
       let next: string | undefined = request.url;
       let totalBytes = 0;
@@ -239,12 +251,12 @@ export class ModelCatalog {
         if (rawEntries.length > MAX_MODELS) throw new CatalogFailure('invalid-response', '模型目录条目过多，已停止读取。');
         const entries = rawEntries.filter(entry => !hiddenModel(entry, provider));
         for (const entry of entries) {
-          const model = parseModel(entry, provider);
+          const model = parseModel(entry, provider, messagesCatalog);
           if (model && !models.has(model.upstreamId)) models.set(model.upstreamId, model);
           if (models.size > MAX_MODELS) throw new CatalogFailure('invalid-response', '模型目录条目过多，已停止读取。');
         }
         if (entries.length > 0 && models.size === 0) throw new CatalogFailure('invalid-response', '模型目录没有有效的模型 ID。');
-        next = nextPage(result.data, next, request.url, provider);
+        next = nextPage(result.data, next, request.url, provider, messagesCatalog);
       }
       const currentProvider = this.store.getProvider(providerId);
       if (!currentProvider || this.revisions.get(providerId) !== revision || fingerprint(currentProvider) !== fingerprint(provider)) {
@@ -300,7 +312,8 @@ export class ModelCatalog {
       const displayName = selection.displayName === undefined ? found.displayName : safeText(selection.displayName);
       if (!displayName) throw new Error('模型显示名称无效。');
       const wireApi = selection.wireApi ?? found.wireApi;
-      if (!['chat-completions', 'responses'].includes(wireApi) || (provider.kind === 'codex' || provider.kind === 'grok') && wireApi !== 'responses') throw new Error('模型协议无效；Codex 和 Grok 订阅仅支持原生 Responses。');
+      if (!['chat-completions', 'responses', 'messages'].includes(wireApi) || (provider.kind === 'codex' || provider.kind === 'grok') && wireApi !== 'responses'
+        || provider.kind === 'copilot' && wireApi === 'messages') throw new Error('模型协议无效；Codex 和 Grok 订阅仅支持原生 Responses，Copilot 不支持 Messages。');
       const contextWindow = selection.contextWindow ?? found.contextWindow;
       const tools = selection.tools ?? found.tools;
       const vision = selection.vision ?? found.vision;
