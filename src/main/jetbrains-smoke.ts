@@ -21,7 +21,7 @@ export async function verifyJetBrainsConnections(window: BrowserWindow, store: S
   for (const tool of JETBRAINS_TOOL_IDS) {
     const selector = `${JETBRAINS_TOOLS[tool].selectorPrefix}2026.2`, options = join(root, selector, 'options');
     mkdirSync(options, { recursive: true, mode: 0o700 }); mkdirSync(join(cache, selector), { recursive: true, mode: 0o700 });
-    writeFileSync(join(cache, selector, '.pid'), '99999999', { mode: 0o600 });
+    writeFileSync(join(cache, selector, '.pid'), String(process.pid), { mode: 0o600 });
     const files = {
       'llm.provider.openai.like.xml': '<application><!-- keep provider comment --><component name="OpenAILikeLlmProviderSettings"><option name="baseUrl" value="http://127.0.0.1:8317/v1"/><option name="httpClientVersion" value="HTTP_2"/><option name="toolEnabled" value="false"/><option name="otherSetting" value="keep"/></component></application>',
       'llm.custom.models.xml': '<application><component name="LlmCustomModelsSettings"><option name="smart_model_id" value="OpenAIAPI/old-core"/><option name="quick_model_id" value="OpenAIAPI/old-quick"/><option name="editor_model_id" value="keep-completion"/></component></application>',
@@ -29,11 +29,12 @@ export async function verifyJetBrainsConnections(window: BrowserWindow, store: S
     };
     for (const [name, content] of Object.entries(files)) writeFileSync(join(options, name), content, { mode: 0o600 });
     writeFileSync(join(root, selector, 'c.kdbx'), 'SYNTHETIC_PASSWORD_STORE_BYTES', { mode: 0o600 }); originals.set(tool, files);
+    store.saveBinding({ id: tool, name: JETBRAINS_TOOLS[tool].name, mode: 'aggregate', providerIds: [], modelSelection: 'selected', modelIds: [], enabled: false, defaultModelId: '', note: 'Synthetic automatic-sync fixture' });
   }
   const evaluate = <T>(source: string): Promise<T> => window.webContents.executeJavaScript(source) as Promise<T>;
   const pause = (ms: number) => new Promise<void>(done => setTimeout(done, ms));
   async function waitFor(source: string): Promise<void> {
-    const deadline = Date.now() + 10000;
+    const deadline = Date.now() + 22000;
     while (Date.now() < deadline) { if (await evaluate<boolean>(source)) return; await pause(30); }
     writeFileSync(join(outputDir, 'jetbrains-timeout.png'), await captureUi()); throw new Error('JetBrains 页面验证等待超时');
   }
@@ -46,7 +47,7 @@ export async function verifyJetBrainsConnections(window: BrowserWindow, store: S
   const results: unknown[] = [], layouts: unknown[] = [];
   for (const [index, tool] of JETBRAINS_TOOL_IDS.entries()) {
     await click(`[data-page="tools"][data-tool-id="${tool}"]`);
-    await waitFor(`!!document.querySelector('[data-jetbrains-connection="${tool}"]')&&!document.querySelector('[data-action="apply-tool-config"]').disabled`);
+    await waitFor(`!!document.querySelector('[data-jetbrains-connection="${tool}"]')&&document.querySelector('[data-jetbrains-running]').dataset.jetbrainsRunning==='running'`);
     const selector = `${JETBRAINS_TOOLS[tool].selectorPrefix}2026.2`, profile = join(root, selector), options = join(profile, 'options');
     await click(`article[data-provider-id="${native.id}"] input[data-action="select-tool-provider"]`);
     await waitFor(`(async()=>{const binding=(await window.modelDock.snapshot()).bindings.find(b=>b.id===${JSON.stringify(tool)});return binding.providerIds.includes(${JSON.stringify(native.id)})&&!document.querySelector('[data-action="tool-default-model"]').disabled;})()`);
@@ -55,10 +56,11 @@ export async function verifyJetBrainsConnections(window: BrowserWindow, store: S
     const model = index % 2 ? responseModel : chat;
     await evaluate(`(()=>{const select=document.querySelector('[data-action="tool-default-model"]');Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(select,${JSON.stringify(model.id)});select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
     await waitFor(`(async()=>{const binding=(await window.modelDock.snapshot()).bindings.find(b=>b.id===${JSON.stringify(tool)});return binding.defaultModelId===${JSON.stringify(model.id)}&&!document.querySelector('[data-action="tool-default-model"]').disabled;})()`);
-    for (const [name, original] of Object.entries(originals.get(tool)!)) assert.equal(readFileSync(join(options, name), 'utf8'), original, 'Selecting a source must not write IDE settings');
+    for (const [name, original] of Object.entries(originals.get(tool)!)) assert.equal(readFileSync(join(options, name), 'utf8'), original, 'Running IDE choices must stay queued without writing settings');
     const preview = await evaluate<any>(`window.modelDock.previewConfig(${JSON.stringify(tool)})`);
     assert.equal(preview.content.includes('synthetic-only'), false); assert.equal(preview.content.includes(store.gatewayKey()), false);
-    await click('[data-action="apply-tool-config"]');
+    // 修改点：用户选择只在 IDE 已退出时自动落盘；等待期间保留最新默认模型，密码库仍不触碰。
+    writeFileSync(join(cache, selector, '.pid'), '99999999', { mode: 0o600 });
     await waitFor(`document.querySelector('[data-tool-application-status]').dataset.toolApplicationState==='synced'&&!document.querySelector('[data-action="apply-tool-config"]').disabled`);
     const providerXml = readFileSync(join(options, 'llm.provider.openai.like.xml'), 'utf8'), modelsXml = readFileSync(join(options, 'llm.custom.models.xml'), 'utf8');
     assert.ok(providerXml.includes(`http://127.0.0.1:${gateway.port}/tool/${tool}/v1`)); assert.ok(providerXml.includes('HTTP_1_1')); assert.ok(providerXml.includes('keep provider comment')); assert.ok(providerXml.includes('otherSetting'));
@@ -87,7 +89,7 @@ export async function verifyJetBrainsConnections(window: BrowserWindow, store: S
       await waitFor(`document.querySelector('[data-jetbrains-running]').dataset.jetbrainsRunning==='unknown'`); assert.equal(await evaluate<boolean>('document.querySelector("[data-action=apply-tool-config]").disabled'), true);
       writeFileSync(pid, '99999999', { mode: 0o600 }); await click('[data-action="jetbrains-refresh-status"]'); await waitFor(`!document.querySelector('[data-action="apply-tool-config"]').disabled`);
     }
-    results.push({ tool, modelAlias: model.alias, nativeProtocol: model.wireApi, independentEndpoint: true, selectionDidNotWrite: true, profileSettingsSynced: true, passwordSafeUntouched: true, mockReply: 'OK' });
+    results.push({ tool, modelAlias: model.alias, nativeProtocol: model.wireApi, independentEndpoint: true, runningSelectionQueued: true, autoSyncedAfterExit: true, profileSettingsSynced: true, passwordSafeUntouched: true, mockReply: 'OK' });
   }
   await click('[data-action="restore-official-tool-config"]'); await click('[data-action="confirm-tool-restore"]');
   await waitFor(`document.querySelector('[data-tool-application-status]').dataset.toolApplicationState==='official'`);

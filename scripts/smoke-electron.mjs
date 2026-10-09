@@ -48,7 +48,7 @@ const upstream = createServer((req,res) => {
       const auth=native&&side==='a'?req.headers['x-api-key']===`synthetic-${side}`:req.headers.authorization===`Bearer synthetic-${side}`;
       const ok=auth&&body.model==='shared-model';aggregateRequests.push({path:req.url,model:body.model,ok});res.writeHead(ok?200:400,{'content-type':'application/json'});
       const text=`MOCK_${side.toUpperCase()}`;
-      res.end(JSON.stringify(!ok?{error:{message:'Synthetic aggregation contract failed'}}:native?{id:'msg_aggregate',type:'message',role:'assistant',model:body.model,content:[{type:'text',text}],stop_reason:'end_turn',usage:{input_tokens:7,output_tokens:2}}:responses?{id:'resp_aggregate',object:'response',status:'completed',model:body.model,output:[{id:'msg_aggregate',type:'message',role:'assistant',content:[{type:'output_text',text}]}],usage:{input_tokens:7,output_tokens:2}}:{id:'chat_aggregate',object:'chat.completion',model:body.model,choices:[{message:{role:'assistant',content:text},finish_reason:'stop'}],usage:{prompt_tokens:7,completion_tokens:2}}));
+      res.end(JSON.stringify(!ok?{error:{message:'Synthetic aggregation contract failed'}}:native?{id:'msg_aggregate',type:'message',role:'assistant',model:body.model,content:[{type:'text',text}],stop_reason:'end_turn',usage:{input_tokens:7,output_tokens:2}}:responses?{id:'resp_aggregate',object:'response',status:'completed',model:body.model,output:[{id:'msg_aggregate',type:'message',role:'assistant',content:[{type:'output_text',text}]}],usage:{input_tokens:7,output_tokens:2}}:{id:'chat_aggregate',object:'chat.completion',model:body.model,choices:[{index:0,message:{role:'assistant',content:text},finish_reason:'stop'}],usage:{prompt_tokens:7,completion_tokens:2}}));
     });return;
   }
 
@@ -58,7 +58,7 @@ const upstream = createServer((req,res) => {
       const responses = req.url.endsWith('/responses');
       const ok = req.headers.authorization === 'Bearer synthetic-only' && body.model === (responses ? 'jb-responses-native' : 'jb-chat-native') && Array.isArray(responses ? body.input : body.messages);
       jetBrainsRequests.push({path:req.url,model:body.model,ok}); res.writeHead(ok ? 200 : 400, {'content-type':'application/json'});
-      res.end(JSON.stringify(!ok ? {error:{message:'Synthetic JetBrains contract failed'}} : responses ? { id:'resp_jb',object:'response',status:'completed',model:body.model,output:[{id:'msg_jb',type:'message',role:'assistant',content:[{type:'output_text',text:'OK'}]}],usage:{input_tokens:8,output_tokens:2} } : { id:'chat_jb',object:'chat.completion',model:body.model,choices:[{message:{role:'assistant',content:'OK'},finish_reason:'stop'}],usage:{prompt_tokens:8,completion_tokens:2} }));
+      res.end(JSON.stringify(!ok ? {error:{message:'Synthetic JetBrains contract failed'}} : responses ? { id:'resp_jb',object:'response',status:'completed',model:body.model,output:[{id:'msg_jb',type:'message',role:'assistant',content:[{type:'output_text',text:'OK'}]}],usage:{input_tokens:8,output_tokens:2} } : { id:'chat_jb',object:'chat.completion',model:body.model,choices:[{index:0,message:{role:'assistant',content:'OK'},finish_reason:'stop'}],usage:{prompt_tokens:8,completion_tokens:2} }));
     }); return;
   }
 
