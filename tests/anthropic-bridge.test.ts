@@ -88,6 +88,77 @@ describe('Anthropic request and final response conversion', () => {
     expect(final).toMatchObject({ stop_reason: 'end_turn', model: 'friendly', content: [{ type: 'text', text: 'OK' }], usage: { input_tokens: 6, output_tokens: 3, cache_read_input_tokens: 4 } });
     expect(seen).toHaveLength(2); expect(JSON.stringify(final)).not.toContain('PRIVATE_UPSTREAM');
   });
+  it.each(['chat-completions', 'responses'] as const)('keeps newly appended instructions in place across two local %s tool turns', async api => {
+    const seen: any[] = [];
+    const server = createServer((req, res) => {
+      let raw = ''; req.on('data', bytes => { raw += bytes; }); req.on('end', () => {
+        const body = JSON.parse(raw), history = api === 'responses' ? body.input : body.messages;
+        seen.push(body); res.setHeader('content-type', 'application/json');
+        const returned = history.some((item: any) => api === 'responses' ? item.type === 'function_call_output' : item.role === 'tool');
+        // 修改点：合成上游按实际会话顺序验收，工具结果之后追加的指令也必须留在原位。
+        // 若转换把指令挪到开头，上游直接拒绝推理，不能只靠序列化断言通过。
+        const order = history.map((item: any) => item.role ?? item.type);
+        const expected = api === 'responses' ? ['user', 'system', 'developer', ...(returned ? ['function_call', 'function_call_output', 'system'] : [])]
+          : ['system', 'user', 'system', 'developer', ...(returned ? ['assistant', 'tool', 'system'] : [])];
+        const offset = api === 'responses' ? 0 : 1;
+        const top = api === 'responses' ? body.instructions : history[0].content;
+        const output = history.find((item: any) => api === 'responses' ? item.type === 'function_call_output' : item.role === 'tool');
+        const toolCall = history.find((item: any) => api === 'responses' ? item.type === 'function_call' : item.role === 'assistant');
+        const valid = JSON.stringify(order) === JSON.stringify(expected) && top === 'GLOBAL_RULES'
+          && history[offset + 1].content === 'RULES_AFTER_USER\nKeep the history order.' && history[offset + 2].content === 'COMPATIBLE_DEVELOPER_RULES'
+          && (!returned || history.at(-1).content === 'RULES_AFTER_TOOL' && (api === 'responses'
+            ? output.call_id === 'call_synthetic' && output.output === 'SYNTHETIC_FILE_CONTENT' && toolCall.call_id === 'call_synthetic'
+            : output.tool_call_id === 'call_synthetic' && output.content === 'SYNTHETIC_FILE_CONTENT' && toolCall.tool_calls[0].id === 'call_synthetic'));
+        if (!valid) { res.statusCode = 400; res.end(JSON.stringify({ error: { message: 'Synthetic instruction or tool history changed.' } })); return; }
+        res.end(JSON.stringify(api === 'responses' ? responses(returned ? undefined : [responseCall]) : chat(returned ? 'OK' : '', returned ? [] : [call])));
+      });
+    }); servers.push(server); await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    const initial = { ...request, system: 'GLOBAL_RULES', messages: [...request.messages,
+      { role: 'system', content: [{ type: 'text', text: 'RULES_AFTER_USER', cache_control: { type: 'ephemeral' } }, { type: 'text', text: 'Keep the history order.' }] },
+      { role: 'developer', content: 'COMPATIBLE_DEVELOPER_RULES' }] };
+    const invoke = async (value: unknown) => {
+      const response = await fetch(url, { method: 'POST', body: JSON.stringify(parseAnthropicRequest(value, api)) });
+      expect(response.status).toBe(200);
+      return toAnthropicResponse(await response.json(), api, 'friendly');
+    };
+    const first = await invoke(initial);
+    expect(first).toMatchObject({ stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'call_synthetic', name: 'read_file' }] });
+    const final = await invoke({ ...initial, messages: [...initial.messages, { role: 'assistant', content: first.content },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_synthetic', content: 'SYNTHETIC_FILE_CONTENT' }] },
+      { role: 'system', content: 'RULES_AFTER_TOOL' }] });
+    expect(final).toMatchObject({ stop_reason: 'end_turn', content: [{ type: 'text', text: 'OK' }] });
+    expect(seen).toHaveLength(2);
+    expect(JSON.stringify(seen[1])).not.toContain('cache_control');
+  });
+  it.each(['chat-completions', 'responses'] as const)('expires only turn-scoped system instructions after the next user in %s', api => {
+    const value = parseAnthropicRequest({ ...request, messages: [
+      { role: 'user', content: 'Begin' }, { role: 'system', clear_at: 'never', content: 'PERSISTENT_RULES' },
+      { role: 'system', clear_at: 'next_user_message', content: 'EXPIRED_RULES' },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'call_synthetic', name: 'read_file', input: { path: 'a.ts' } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_synthetic', content: 'FILE_CONTENT' }] },
+      { role: 'system', clear_at: 'next_user_message', content: 'CURRENT_TURN_RULES' },
+    ] }, api);
+    const history = (api === 'responses' ? value.input : value.messages) as any[];
+    expect(history.filter(item => item.role === 'system').map(item => item.content)).toEqual(['PERSISTENT_RULES', 'CURRENT_TURN_RULES']);
+    expect(history.map(item => item.role ?? item.type)).toEqual(api === 'responses'
+      ? ['user', 'system', 'function_call', 'function_call_output', 'system'] : ['user', 'system', 'assistant', 'tool', 'system']);
+    expect(JSON.stringify(value)).not.toMatch(/EXPIRED_RULES|clear_at/);
+  });
+  it.each(['chat-completions', 'responses'] as const)('rejects unknown roles and instruction-only features that cannot be mapped to %s', api => {
+    const invalidMessages = [
+      { role: 'tool', content: 'PRIVATE_HISTORY' }, { role: 'unknown', content: 'PRIVATE_HISTORY' }, { role: null, content: 'PRIVATE_HISTORY' },
+      { role: 'system', clear_at: 'unknown', content: 'PRIVATE_HISTORY' }, { role: 'developer', clear_at: 'next_user_message', content: 'PRIVATE_HISTORY' },
+      { role: 'user', clear_at: 'never', content: 'PRIVATE_HISTORY' }, { role: 'system', output_config: { effort: 'low' }, content: 'PRIVATE_HISTORY' },
+      { role: 'system', content: [{ type: 'tool_addition', tool: { type: 'tool_reference', name: 'PRIVATE_HISTORY' } }] },
+      { role: 'developer', content: [{ type: 'tool_use', id: 'private_call', name: 'PRIVATE_HISTORY', input: {} }] },
+    ];
+    for (const message of invalidMessages) {
+      let error: unknown; try { parseAnthropicRequest({ ...request, messages: [...request.messages, message] }, api); } catch (caught) { error = caught; }
+      expect(error).toBeInstanceOf(AnthropicBridgeError); expect(error).toMatchObject({ status: 400 });
+      expect(String(error)).not.toContain('PRIVATE_HISTORY');
+    }
+  });
   it('rejects unsupported semantics and mismatched tool results with fixed errors', () => {
     const rejected = [
       { ...request, thinking: { type: 'enabled', budget_tokens: 1024 } }, { ...request, thinking: { type: 'adaptive' } },

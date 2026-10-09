@@ -26,7 +26,7 @@ async function fixture(wireApi: WireApi, handler: (request: IncomingMessage, res
   await gateway.start(0); cleanups.push(() => gateway.stop().then(() => undefined));
   const url = gateway.status().baseUrl.replace(/\/v1$/, '') + '/tool/claude-code/v1/messages';
   const post = (body: unknown, key = store.gatewayKey()) => fetch(url, { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'content-type': 'application/json' }, body: JSON.stringify(body) });
-  return { store, post, model, provider };
+  return { store, post, model, provider, gateway };
 }
 const input = (stream = false) => ({ model: 'local-model', max_tokens: 512, stream, system: 'Synthetic system', messages: [{ role: 'user', content: 'Check the fixture.' }], tools: [{ name: 'read_fixture', description: 'Read a synthetic fixture', input_schema: { type: 'object', properties: { path: { type: 'string' } } } }] });
 
@@ -105,5 +105,20 @@ describe('Claude local gateway integration', () => {
     let calls = 0; const f = await fixture('chat-completions', async (_request, response) => { calls++; response.end('{}'); });
     const auth = await f.post(input(), 'wrong-key'); expect(auth.status).toBe(401); expect(await auth.json()).toMatchObject({ type: 'error', error: { type: 'authentication_error' } });
     const thinking = await f.post({ ...input(), thinking: { type: 'enabled', budget_tokens: 1000 } }); expect(thinking.status).toBe(400); expect(await thinking.json()).toMatchObject({ type: 'error' }); expect(calls).toBe(0);
+  });
+  it.each(['chat-completions', 'responses'] as const)('rejects invalid %s history over HTTP without echoing request content or credentials', async wireApi => {
+    let calls = 0; const f = await fixture(wireApi, async (_request, response) => { calls++; response.end('{}'); });
+    const key = f.store.gatewayKey();
+    const response = await f.post({ ...input(), system: 'PRIVATE_SYSTEM_MARKER',
+      messages: [{ role: 'invalid', content: `PRIVATE_HISTORY_MARKER ${key} SYNTHETIC_API_KEY` }], metadata: { user_id: 'PRIVATE_METADATA_MARKER' } });
+    expect(response.status).toBe(400);
+    const error = await response.json();
+    expect(error).toMatchObject({ type: 'error', error: { type: 'invalid_request_error', message: expect.stringContaining('历史消息角色') } });
+    expect(calls).toBe(0);
+    // 修改点：HTTP 错误正文、网关状态和日志都只携带固定错误，不回显输入或连接凭据。
+    const observable = JSON.stringify([error, f.gateway.status(), f.store.logs()]);
+    for (const privateValue of ['PRIVATE_SYSTEM_MARKER', 'PRIVATE_HISTORY_MARKER', 'PRIVATE_METADATA_MARKER', 'SYNTHETIC_API_KEY', key])
+      expect(observable).not.toContain(privateValue);
+    expect(f.store.logs()[0]).toMatchObject({ status: 400 });
   });
 });

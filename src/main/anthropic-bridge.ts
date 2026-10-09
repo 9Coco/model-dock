@@ -21,6 +21,11 @@ function blocks(value: unknown): Json[] {
   if (!Array.isArray(value) || value.some(item => !isObject(item))) return invalid('Messages 内容必须是文本或内容块数组。');
   return value as Json[];
 }
+function instructionText(value: unknown): string {
+  const content = blocks(value);
+  if (content.some(block => block.type !== 'text' || typeof block.text !== 'string')) return invalid('system / developer 指令只支持文本内容；工具增删等语义暂不支持跨协议转换。');
+  return content.map(block => block.text).join('\n');
+}
 function image(block: Json, api: BridgeWire): Json {
   const source = object(block.source);
   let url: string;
@@ -85,14 +90,27 @@ export function parseAnthropicRequest(value: unknown, modelWireApi: WireApi): Js
   }
   const messages: Json[] = [], calls = new Set<string>(), outputs = new Set<string>();
   if (body.system !== undefined) {
-    const system = blocks(body.system);
-    if (system.some(block => block.type !== 'text' || typeof block.text !== 'string')) return invalid('system 只支持文本内容。');
-    const text = system.map(block => block.text).join('\n');
+    const text = instructionText(body.system);
     if (api === 'responses') result.instructions = text;
     else messages.push({ role: 'system', content: text });
   }
-  for (const raw of body.messages) {
-    if (!isObject(raw) || !['user', 'assistant'].includes(String(raw.role))) return invalid('历史消息角色只允许 user 或 assistant。');
+  for (const [index, raw] of body.messages.entries()) {
+    if (!isObject(raw) || typeof raw.role !== 'string' || !['user', 'assistant', 'system', 'developer'].includes(raw.role)) return invalid('历史消息角色只允许 user、assistant、system 或 developer。');
+    if (raw.role === 'system' || raw.role === 'developer') {
+      // 修改点：新版 Claude 会在会话中追加 system；保留指令权限和原始位置，
+      // 不能降为 user 或合并到开头，否则压缩后/工具后的指令生效顺序会变化。
+      // developer 是兼容客户端的指令角色，按 Chat / Responses 原角色传递。
+      const text = instructionText(raw.content);
+      if (raw.output_config !== undefined) return invalid('会话中修改 output_config 暂不支持跨协议转换。');
+      if (raw.clear_at !== undefined && (raw.role !== 'system' || !['never', 'next_user_message'].includes(String(raw.clear_at))))
+        return invalid('system clear_at 只支持 never 或 next_user_message。');
+      // Claude 的 turn-scoped system 在后续任意 user（包括工具结果）后不再渲染。
+      // 只移除已到期的该条指令，其他历史与工具调用仍按原顺序转换。
+      if (raw.clear_at === 'next_user_message' && body.messages.slice(index + 1).some(message => object(message).role === 'user')) continue;
+      messages.push({ role: raw.role, content: text });
+      continue;
+    }
+    if (raw.clear_at !== undefined || raw.output_config !== undefined) return invalid('clear_at / 消息级 output_config 只能用于受支持的 system 指令。');
     const role = raw.role as 'user' | 'assistant', parts = blocks(raw.content);
     let content: Json[] = [], toolCalls: Json[] = [];
     const toolImages: Json[] = [];
