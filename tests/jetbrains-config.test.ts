@@ -2,11 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { applyConfig, buildConfig } from '../src/main/adapters';
+import { applyConfig, buildConfig, connectionKey } from '../src/main/adapters';
 import { applyJetBrainsConfig, buildJetBrainsConfig, jetBrainsHistoryKey, jetBrainsStatus, restoreJetBrainsConfig, type JetBrainsConfigOptions } from '../src/main/jetbrains-config';
 import { restoreOfficialConfig } from '../src/main/tool-restore';
 import { JETBRAINS_TOOLS, type JetBrainsToolId } from '../src/shared/jetbrains';
-import type { Model, Provider, ToolBinding } from '../src/shared/types';
+import type { Model, Provider, ProviderSecret, ToolBinding } from '../src/shared/types';
 
 const roots: string[] = [];
 afterEach(() => { vi.restoreAllMocks(); for (const root of roots.splice(0)) rmSync(root, { force: true, recursive: true }); });
@@ -23,7 +23,8 @@ function fixture(tool: JetBrainsToolId = 'webstorm') {
     { id: 'chat', providerId: provider.id, upstreamId: 'upstream-chat', alias: 'local-chat', displayName: 'Chat fixture', wireApi: 'chat-completions', contextWindow: 32768, tools: false, vision: false, enabled: true },
   ];
   const binding: ToolBinding = { id: tool, name: JETBRAINS_TOOLS[tool].name, note: '', enabled: true, mode: 'aggregate', providerIds: [provider.id], modelSelection: 'all', modelIds: [], defaultModelId: 'core' };
-  const store = { listModels: () => models, listBindings: () => [binding], listProviders: () => [provider], gatewayKey: vi.fn(() => 'SYNTHETIC_LOCAL_KEY'), getSecret: vi.fn(() => { throw new Error('Upstream key must never be read'); }),
+  const providers = [provider];
+  const store = { listModels: () => models, listBindings: () => [binding], listProviders: () => providers, gatewayKey: vi.fn(() => 'SYNTHETIC_LOCAL_KEY'), getSecret: vi.fn((): ProviderSecret => { throw new Error('Upstream key must never be read'); }),
     getManagedState: <T>(key: string, fallback: T): T => structuredClone(states.has(key) ? states.get(key) as T : fallback),
     setManagedState: vi.fn((key: string, value: unknown) => { states.set(key, structuredClone(value)); }),
     createManagedBackup: vi.fn((_kind: string, value: unknown) => { journals.push(structuredClone(value)); return 'synthetic-encrypted-backup.enc'; }),
@@ -40,7 +41,7 @@ function fixture(tool: JetBrainsToolId = 'webstorm') {
     `<application><component name="LLMThirdPartyAIProvidersSettings"><option name="enabledThirdPartyAIProviders">\n<!-- keep Google --> <option value="Google" />\n</option></component></application>`,
   ];
   const seed = () => originals.forEach((text, index) => write(file(index), text));
-  return { root, tool, profileRoot, cacheRoot, selector, target, backups, store, states, journals, provider, models, binding, options, write, file, read, apply, restore, key, seed, originals };
+  return { root, tool, profileRoot, cacheRoot, selector, target, backups, store, states, journals, provider, providers, models, binding, options, write, file, read, apply, restore, key, seed, originals };
 }
 
 describe('JetBrains AI Assistant explicit offline configuration', () => {
@@ -127,11 +128,55 @@ describe('JetBrains AI Assistant explicit offline configuration', () => {
     expect(jetBrainsStatus(f.tool, f.root, f.options).version).toBe('2025.3'); expect(() => f.apply()).toThrow('尚未验证');
     mkdirSync(f.target); expect(jetBrainsStatus(f.tool, f.root, f.options).message).toContain('多个版本');
   });
-  it('requires local aggregate mode, compatible models, valid default and port', () => {
-    const f = fixture(); f.binding.mode = 'direct'; expect(() => f.apply()).toThrow('聚合'); f.binding.mode = 'aggregate';
+  it('requires compatible models, valid default and port', () => {
+    const f = fixture();
     f.models.forEach(model => model.wireApi = 'messages'); expect(() => f.apply()).toThrow('Chat Completions'); f.models[0].wireApi = 'responses';
     f.binding.defaultModelId = 'missing'; expect(() => f.apply()).toThrow('默认模型'); f.binding.defaultModelId = 'core';
     expect(() => f.apply({ port: 65536 })).toThrow('端口'); f.models[0].alias = 'bad\nmodel'; expect(() => f.apply()).toThrow('别名'); expect(f.states.size).toBe(0);
+  });
+  it.each(Object.keys(JETBRAINS_TOOLS) as JetBrainsToolId[])('connects %s directly to one selected Chat API and writes upstream IDs without reading or writing the API Key during sync', tool => {
+    const f = fixture(tool); f.binding.mode = 'direct'; f.binding.modelSelection = 'selected'; f.binding.modelIds = ['chat']; f.binding.defaultModelId = 'chat';
+    f.store.getSecret.mockReturnValue({ apiKey: 'SYNTHETIC_PROVIDER_KEY' }); f.seed();
+    const preview = buildJetBrainsConfig(f.store, tool, 19876, false, f.root, f.options), value = JSON.parse(preview.content);
+    expect(value.baseUrl).toBe(f.provider.baseUrl); expect(value.apiKey).toBe('__PROVIDER_API_KEY__');
+    expect(value.models).toEqual([{ id: 'upstream-chat', name: 'Chat fixture', wireApi: 'chat-completions' }]); expect(value.modelAssignment.core).toBe('OpenAIAPI/upstream-chat');
+    expect(preview.instructions).toContain('直接连接'); expect(f.store.getSecret).not.toHaveBeenCalled();
+    f.apply(); expect(f.read(0)).toContain(f.provider.baseUrl); expect(f.read(1)).toContain('OpenAIAPI/upstream-chat'); expect(f.store.getSecret).not.toHaveBeenCalled();
+    expect(JSON.stringify(f.journals)).not.toContain('SYNTHETIC_PROVIDER_KEY'); expect(f.store.gatewayKey).not.toHaveBeenCalled();
+    expect(JSON.parse(buildJetBrainsConfig(f.store, tool, 19876, true, f.root, f.options).content).apiKey).toBe('SYNTHETIC_PROVIDER_KEY'); expect(connectionKey(f.store, tool)).toBe('SYNTHETIC_PROVIDER_KEY');
+    f.restore(); f.originals.forEach((text, index) => expect(f.read(index)).toBe(text));
+  });
+  it.each(['openai-compatible', 'codex', 'copilot', 'grok'] as const)('uses one local Chat bridge for direct %s Responses or subscription sources without exporting upstream credentials', kind => {
+    const f = fixture(); f.binding.mode = 'direct'; f.provider.kind = kind;
+    const value = JSON.parse(buildJetBrainsConfig(f.store, f.tool, 19876, true, f.root, f.options).content);
+    expect(value.baseUrl).toBe('http://127.0.0.1:19876/tool/webstorm/v1'); expect(value.apiKey).toBe('SYNTHETIC_LOCAL_KEY'); expect(value.modelAssignment.core).toBe('OpenAIAPI/local-core');
+    expect(value.models.every((model: any) => model.wireApi === 'chat-completions')).toBe(true); expect(connectionKey(f.store, f.tool)).toBe('SYNTHETIC_LOCAL_KEY');
+    f.apply(); expect(f.read(1)).toContain('OpenAIAPI/local-core'); expect(f.store.getSecret).not.toHaveBeenCalled();
+  });
+  it('switches one direct API to multiple aggregate sources and back while retaining the original XML restore baseline', () => {
+    const f = fixture(); f.seed(); f.binding.mode = 'direct'; f.models[0].wireApi = 'chat-completions'; f.apply(); expect(f.read(1)).toContain('OpenAIAPI/upstream-core');
+    const subscription: Provider = { ...f.provider, id: 'subscription-source', kind: 'codex' }; f.providers.push(subscription);
+    f.models.push({ ...f.models[0], id: 'subscription-model', providerId: subscription.id, upstreamId: 'subscription-upstream', alias: 'subscription-alias', wireApi: 'responses' });
+    f.binding.mode = 'aggregate'; f.binding.providerIds!.push(subscription.id); f.binding.defaultModelId = 'subscription-model'; f.apply();
+    expect(f.read(0)).toContain('http://127.0.0.1:19876/tool/webstorm/v1'); expect(f.read(1)).toContain('OpenAIAPI/subscription-alias');
+    const value = JSON.parse(buildJetBrainsConfig(f.store, f.tool, 19876, true, f.root, f.options).content); expect(value.models.map((model: any) => model.id)).toEqual(['local-core', 'local-chat', 'subscription-alias']);
+    expect(value.apiKey).toBe('SYNTHETIC_LOCAL_KEY'); expect(f.store.getSecret).not.toHaveBeenCalled();
+    f.binding.mode = 'direct'; f.binding.providerIds = [f.provider.id]; f.binding.defaultModelId = 'core'; f.apply(); expect(f.read(1)).toContain('OpenAIAPI/upstream-core');
+    f.restore(); f.originals.forEach((text, index) => expect(f.read(index)).toBe(text));
+  });
+  it('keeps legacy auto endpoints local, rejects multi-source direct configuration, and requires an API key only when explicitly revealing it', () => {
+    const f = fixture(); f.models[0].wireApi = 'chat-completions'; f.binding.mode = 'auto';
+    expect(JSON.parse(buildJetBrainsConfig(f.store, f.tool, 19876).content).baseUrl).toContain('127.0.0.1');
+    f.binding.mode = 'direct'; f.binding.providerIds!.push('extra'); expect(() => f.apply()).toThrow('恰好一个');
+    f.binding.providerIds = [f.provider.id]; f.store.getSecret.mockReturnValue({ apiKey: '' });
+    expect(() => buildJetBrainsConfig(f.store, f.tool, 19876)).not.toThrow(); expect(() => buildJetBrainsConfig(f.store, f.tool, 19876, true)).toThrow('API Key');
+    expect(() => f.apply()).not.toThrow(); expect(f.store.getSecret).toHaveBeenCalledTimes(1);
+  });
+  it('keeps native direct export compatible with stores that expose only getProvider', () => {
+    const f = fixture(); f.binding.mode = 'direct'; f.models[0].wireApi = 'chat-completions'; f.store.getSecret.mockReturnValue({ apiKey: 'SYNTHETIC_PROVIDER_KEY' });
+    const store = { ...f.store, listProviders: undefined, getProvider: (id: string) => f.providers.find(provider => provider.id === id) };
+    const value = JSON.parse(buildJetBrainsConfig(store, f.tool, 19876, true).content);
+    expect(value.baseUrl).toBe(f.provider.baseUrl); expect(value.apiKey).toBe('SYNTHETIC_PROVIDER_KEY'); expect(value.modelAssignment.core).toBe('OpenAIAPI/upstream-core');
   });
   it('escapes model aliases while preserving their original semantic identifier', () => {
     const f = fixture(); f.models[0].alias = 'fixture<&"\'model'; f.apply(); expect(f.read(1)).toContain('OpenAIAPI/fixture&lt;&amp;&quot;&apos;model'); f.restore(); expect(existsSync(f.file(1))).toBe(false);

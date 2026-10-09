@@ -91,7 +91,13 @@ export class Store {
       }
       db.run('INSERT INTO settings(key,value) VALUES(?,?)', ['initialized', '1']);
     }
-    for (const [tool, name] of Object.entries(TOOL_NAMES)) db.run('INSERT OR IGNORE INTO bindings(id,name,enabled,model_ids,default_model_id,note,mode,provider_ids,vscode_sync_scope,copilot_sync_scope,dsh_sync_scope) VALUES(?,?,?,?,?,?,?,?,?,?,?)', [tool, name, 0, '[]', '', '', tool === 'claude-code' ? 'direct' : isJetBrainsTool(tool) ? 'aggregate' : 'auto', '[]', tool === 'vscode' ? 'selected' : 'managed', tool === 'copilot' ? 'selected' : 'managed', tool === 'dsh' ? 'selected' : 'managed']);
+    // 修改点：旧版其他工具允许 direct 多入口，转为等价的 auto 元数据；不改外部配置或所选来源。
+    for (const row of store.rows("SELECT id,provider_ids FROM bindings WHERE mode='direct'")) {
+      if (!Object.hasOwn(TOOL_NAMES, String(row.id)) || row.id === 'codex' || row.id === 'claude-code') continue;
+      const ids = row.provider_ids === null ? [] : JSON.parse(String(row.provider_ids));
+      if (Array.isArray(ids) && ids.length > 1) db.run("UPDATE bindings SET mode='auto' WHERE id=?", [String(row.id)]);
+    }
+    for (const [tool, name] of Object.entries(TOOL_NAMES)) db.run('INSERT OR IGNORE INTO bindings(id,name,enabled,model_ids,default_model_id,note,mode,provider_ids,vscode_sync_scope,copilot_sync_scope,dsh_sync_scope) VALUES(?,?,?,?,?,?,?,?,?,?,?)', [tool, name, 0, '[]', '', '', isJetBrainsTool(tool) ? 'aggregate' : 'direct', '[]', tool === 'vscode' ? 'selected' : 'managed', tool === 'copilot' ? 'selected' : 'managed', tool === 'dsh' ? 'selected' : 'managed']);
     if (!store.one("SELECT value FROM settings WHERE key='gateway_key'")) db.run('INSERT INTO settings(key,value) VALUES(?,?)', ['gateway_key', codec.encrypt(store.newKey())]);
     store.persist();
     return store;
@@ -567,12 +573,12 @@ export class Store {
     const providerIds = binding.providerIds === undefined ? [...new Set(allModels.filter(model => modelIds.includes(model.id)).map(model => model.providerId))] : [...new Set(binding.providerIds)];
     const providers = this.listProviders();
     if (providerIds.some(providerId => typeof providerId !== 'string' || !providers.some(provider => provider.id === providerId))) throw new Error('工具绑定引用了不存在的来源。');
-    if (mode === 'direct' && binding.id === 'codex' && (providerIds.length > 1 || binding.enabled && providerIds.length !== 1)) throw new Error('Codex 直连模式必须选择恰好一个来源。');
+    if (mode === 'direct' && (providerIds.length > 1 || binding.enabled && providerIds.length !== 1)) throw new Error('单供应商模式必须选择恰好一个来源。');
     if (binding.claudeDisableTelemetry !== undefined && (binding.id !== 'claude-code' || typeof binding.claudeDisableTelemetry !== 'boolean')) throw new Error('Claude Code 隐私选项无效。');
     const previousClaudePrivacy = this.one('SELECT claude_disable_telemetry FROM bindings WHERE id=?', [binding.id])?.claude_disable_telemetry;
     const claudePrivacy = binding.id === 'claude-code' ? binding.claudeDisableTelemetry ?? previousClaudePrivacy !== 0 : true;
     if (binding.id === 'claude-code') {
-      if (mode === 'aggregate' || providerIds.length > 1 || binding.enabled && providerIds.length !== 1) throw new Error('Claude Code 目前必须选择单个供应商或订阅来源。');
+      if (mode !== 'aggregate' && (providerIds.length > 1 || binding.enabled && providerIds.length !== 1)) throw new Error('Claude Code 单供应商模式必须选择一个来源；多个来源请使用聚合接口。');
     }
     if (binding.enabled && !providerIds.length) throw new Error('工具配置至少需要选择一个来源。');
     if (modelIds.some(modelId => !providerIds.includes(allModels.find(model => model.id === modelId)!.providerId))) throw new Error('模型过滤必须属于所选来源。');
@@ -588,7 +594,7 @@ export class Store {
     for (const binding of this.allBindings()) {
       const providerIds = (binding.providerIds ?? []).filter(providerId => providers.some(provider => provider.id === providerId));
       const modelIds = binding.modelIds.filter(modelId => existing.has(modelId) && providerIds.includes(models.find(model => model.id === modelId)!.providerId));
-      const enabled = binding.enabled && providerIds.length > 0 && (binding.mode !== 'direct' || binding.id !== 'codex' || providerIds.length === 1) && (binding.modelSelection !== undefined || !binding.modelIds.length || modelIds.length > 0);
+      const enabled = binding.enabled && providerIds.length > 0 && (binding.mode !== 'direct' || providerIds.length === 1) && (binding.modelSelection !== undefined || !binding.modelIds.length || modelIds.length > 0);
       const candidate = { ...binding, enabled, providerIds, modelIds };
       const defaultId = resolveBindingModels({ ...candidate, enabled: true }, models, providers).some(model => model.id === binding.defaultModelId) ? binding.defaultModelId : '';
       this.db.run('UPDATE bindings SET enabled=?,provider_ids=?,model_ids=?,default_model_id=? WHERE id=?', [Number(enabled), JSON.stringify(providerIds), JSON.stringify(modelIds), defaultId, binding.id]);

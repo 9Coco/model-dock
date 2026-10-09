@@ -40,9 +40,9 @@ describe('tool adapters', () => {
     expect(parseJsonc(readFileSync(target, 'utf8')).provider.modeldock).toBeDefined();
     expect(readFileSync(defaultTarget, 'utf8')).toBe('{"keep":"default"}');
   });
-  it('allows multiple direct API providers for native multi-source clients while Codex remains a single active direct endpoint', () => {
+  it('preserves legacy auto multi-entry clients while Codex remains a single active direct endpoint', () => {
     const native = nativeFixture(['provider-a', 'provider-b']);
-    const direct = { ...native, listBindings: () => native.listBindings().map(binding => ({ ...binding, mode: 'direct' as const })) };
+    const direct = { ...native, listBindings: () => native.listBindings().map(binding => ({ ...binding, mode: binding.id === 'codex' ? 'direct' as const : 'auto' as const })) };
     const vscode = JSON.parse(buildConfig(direct, 'vscode', 19191, true).content);
     expect(vscode.map((row: any) => row.apiKey)).toEqual(['SYNTHETIC_KEY_provider-a', 'SYNTHETIC_KEY_provider-b']);
     expect(vscode.map((row: any) => row.models[0].url)).toEqual(['https://api-a.test/v1/responses', 'https://api-b.test/coding/v3/responses']);

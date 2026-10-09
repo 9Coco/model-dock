@@ -46,6 +46,7 @@ import { jetBrainsStatus, type JetBrainsConfigOptions } from './jetbrains-config
 import { isJetBrainsTool } from '../shared/jetbrains';
 import { verifyClaudeConfiguration } from './claude-config-smoke';
 import { verifyJetBrainsConnections } from './jetbrains-smoke';
+import { verifyAggregateModes } from './aggregate-modes-smoke';
 import { restoreToolBinding } from './tool-restore-binding';
 import { applyNetworkProxy } from './network-proxy';
 import { inspectAuthNetwork } from './network-diagnostic';
@@ -206,7 +207,9 @@ async function createWindow(forceShow = false) {
         writeFileSync(join(outputDir, 'electron-smoke.json'), JSON.stringify({ ...result, dataDir, windowSize: window!.getSize(), contentSize: window!.getContentSize() }, null, 2));
         writeFileSync(join(outputDir, 'electron-smoke.png'), await captureUi());
         await verifyToolIcons(window!, outputDir, captureUi);
-        if (process.env.MODELDOCK_SMOKE_JETBRAINS_ONLY === '1') {
+        if (process.env.MODELDOCK_SMOKE_AGGREGATE_ONLY === '1') {
+          await verifyAggregateModes(window!, store, outputDir, captureUi);
+        } else if (process.env.MODELDOCK_SMOKE_JETBRAINS_ONLY === '1') {
           await verifyJetBrainsConnections(window!, store, outputDir, captureUi);
         } else if (process.env.MODELDOCK_SMOKE_CLAUDE_ONLY === '1') {
           await verifyClaudeConfiguration(window!, store, outputDir, captureUi);

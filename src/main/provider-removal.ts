@@ -2,7 +2,7 @@ import type { Store, ProviderRemovalCheckpoint } from './store';
 import type { ToolId } from '../shared/types';
 
 type RemovalStore = Pick<Store, 'beginProviderRemoval' | 'restoreProviderRemoval' | 'finishProviderRemoval'>;
-const automaticTools = new Set<ToolId>(['vscode', 'opencode', 'codex', 'copilot', 'dsh']);
+const automaticTools = new Set<ToolId>(['vscode', 'opencode', 'codex', 'copilot', 'dsh', 'claude-code']);
 const active = new WeakSet<object>();
 const messages = {
   busy: '供应商正在删除，请等待本次操作完成。',
