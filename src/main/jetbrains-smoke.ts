@@ -65,6 +65,12 @@ export async function verifyJetBrainsConnections(window: BrowserWindow, store: S
     const providerXml = readFileSync(join(options, 'llm.provider.openai.like.xml'), 'utf8'), modelsXml = readFileSync(join(options, 'llm.custom.models.xml'), 'utf8');
     assert.ok(providerXml.includes(`http://127.0.0.1:${gateway.port}/tool/${tool}/v1`)); assert.ok(providerXml.includes('HTTP_1_1')); assert.ok(providerXml.includes('keep provider comment')); assert.ok(providerXml.includes('otherSetting'));
     assert.ok(modelsXml.includes(`OpenAIAPI/${model.alias}`)); assert.ok(modelsXml.includes('keep-completion'));
+    const completionXml = readFileSync(join(options, 'llm.next.edit.providers.xml'), 'utf8');
+    const completionState = JSON.parse(completionXml.match(/<!\[CDATA\[([\s\S]*?)\]\]>/)![1]);
+    assert.equal(completionState.openAiCompatible.baseUrl, `http://127.0.0.1:${gateway.port}/tool/${tool}/v1`);
+    assert.equal(completionState.openAiCompatible.model, model.alias);
+    assert.equal(completionState.openAiCompatible.schemaId, 'fim.generic');
+    assert.equal(completionState.selectedProvider.kind, 'NONE'); // 合成来源未声明 FIM，更新参数也不伪装成可用。
     assert.equal(readFileSync(join(profile, 'c.kdbx'), 'utf8'), 'SYNTHETIC_PASSWORD_STORE_BYTES');
     assert.ok(![providerXml, modelsXml].some(text => text.includes(store.gatewayKey()) || text.includes('synthetic-only')));
     const base = `http://127.0.0.1:${gateway.port}/tool/${tool}/v1`;
@@ -95,6 +101,7 @@ export async function verifyJetBrainsConnections(window: BrowserWindow, store: S
   await waitFor(`document.querySelector('[data-tool-application-status]').dataset.toolApplicationState==='official'`);
   const last = JETBRAINS_TOOL_IDS.at(-1)!, lastOptions = join(root, `${JETBRAINS_TOOLS[last].selectorPrefix}2026.2`, 'options');
   for (const [name, original] of Object.entries(originals.get(last)!)) assert.equal(readFileSync(join(lastOptions, name), 'utf8').replace(/>\s+</g, '><'), original.replace(/>\s+</g, '><'));
+  assert.equal(existsSync(join(lastOptions, 'llm.next.edit.providers.xml')), false);
   assert.ok(readdirSync(join(store.dataDir, 'backups')).length > 0);
   writeFileSync(join(outputDir, 'jetbrains-ui-validation.json'), JSON.stringify({ ok: true, products: results, layouts, stoppedOnlySync: true, runningAndUnknownBlocked: true, restoredOriginalXmlValues: true, credentialsNeverWrittenToXml: true, rendererKeyRedacted: true }, null, 2));
 }

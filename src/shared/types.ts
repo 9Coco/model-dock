@@ -97,8 +97,8 @@ export interface Model {
 }
 export type ModelInput = Omit<Model, 'id'> & { id?: string };
 export interface ToolConnectionChoices {
-  direct?: { providerId: string; defaultModelId: string };
-  aggregate?: { providerIds: string[]; modelIds: string[]; defaultModelId: string; modelSelection?: 'all' | 'selected' };
+  direct?: { providerId: string; defaultModelId: string; completionModelId?: string };
+  aggregate?: { providerIds: string[]; modelIds: string[]; defaultModelId: string; modelSelection?: 'all' | 'selected'; completionModelId?: string };
 }
 export interface ToolBinding {
   /** Independent drafts for strict single-entry clients; no credentials. */

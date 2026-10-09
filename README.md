@@ -26,7 +26,7 @@ ModelDock 是跨平台本地模型管理台：全局维护模型来源与别名�
 WebStorm、IntelliJ IDEA、Rider、PyCharm 使用同一套 AI Assistant 设置格式，当前文件同步适配已核实的 2026.2 / build 262 profile。供应商直连只使用一家原生 Chat API，写入供应商 URL、真实模型 ID，并在 IDE 填写该供应商 API Key。官方 DeepSeek、火山及已确认千问入口可复用现有 Responses 模型条目进行原生 Chat 调用，不会更改全局模型协议或影响 Codex。仅支持 Responses 的未知自定义服务不能假设支持原生 Chat，应通过兼容的聚合入口使用。聚合模式只配置 `/tool/<工具 ID>/v1` 一个本机入口，使用固定本机 Key，供应商与映射模型在聚合接口内部管理。轮换 OAuth 凭据留在 ModelDock。
 
 1. 在工具页选择供应商直连，使用单个供应商下拉和模型选项；或开启「使用聚合接口」，进入聚合接口内部配置，选择内部来源和精确映射模型。用户变更后在确认 IDE 已退出且 profile 兼容时自动备份同步；运行或状态未知时保留最新待办，每 15 秒检查。启动、导航不写文件。直连与聚合草稿独立保存，聚合全部停用保持精确空映射，切换不会重新启用未勾选模型。
-2. 退出 IDE 后会自动同步本次交互的最新待办，也可点击接入参数顶部的「同步 IDE 设置」重新应用，可一次写入 URL、HTTP/1.1 和核心 / 轻量模型，同步前自动备份。「准备本机连接」只启动 ModelDock 本地服务。无法同步时，在 IDE 的「设置 → 工具 → AI Assistant → 提供商与 API 密钥」选择「兼容 OpenAI」，复制页面参数手工填写；工具调用与上下文建议须以套餐实际能力和限制为准。
+2. 退出 IDE 后会自动同步本次交互的最新待办，也可点击接入参数顶部的「同步 IDE 设置」重新应用，可一次写入 聊天 URL、HTTP/1.1、核心 / 轻量模型，以及独立 AI 补全的地址、模型和提示架构，同步前自动备份。「准备本机连接」只启动 ModelDock 本地服务。无法同步时，在 IDE 的「设置 → 工具 → AI Assistant → 提供商与 API 密钥」选择「兼容 OpenAI」，复制页面参数手工填写；工具调用与上下文建议须以套餐实际能力和限制为准。
 3. API Key 首次接入时需在每个 IDE 中手工粘贴一次；切换连接方式或来源后请更新密钥。ModelDock 不读取或写入 JetBrains PasswordSafe。点击 IDE 的「测试连接」后，再发送实际聊天 / 工具请求确认推理可用；模型目录返回成功不能代替推理验证。
 4. 同步只处理已发现的配置 profile，备份后更新 AI Assistant 地址、HTTP 版本、工具调用及核心 / 轻量模型字段，保留其他设置。IDE 运行中、运行状态未知或未找到兼容 profile 时不写文件，待办期间继续检查，也可手工填写接入参数。同步写入失败时停止自动重试并显示原因，处理后可手动重新同步。关闭 ModelDock 会丢弃尚未应用的待办；下次打开保留本机选择，但不会自动重放写入。重新打开 IDE 后确认 API Key；「设置文件已同步」不表示登录或真实账号调用已通过。
 5. 「还原同步前设置」同样要求 IDE 退出，恢复本次受管字段；IDE 凭据存储中的 Key 请在 IDE 内自行确认或更换。「导出参考参数」生成手工填写用 JSON，不能直接导入 IDE。
@@ -37,7 +37,17 @@ Koog 会将显示用的 `assistant.reasoning_content` 回传下一轮。Response
 
 配置流程参考 JetBrains 官方 [自定义模型](https://www.jetbrains.com/help/ai-assistant/use-custom-models.html)及[提供商与 API 密钥设置](https://www.jetbrains.com/help/ai-assistant/settings-reference-providers-and-api-keys.html)。
 
-此接入管理 AI Assistant 聊天及模型核心功能。Junie、Claude Agent、Codex、Gemini CLI、代码补全及各自独立的账号 / 模型配置由 IDE 管理。ModelDock 本次不导入或部署 JetBrains MCP / Skills，也不读取 IDE 聊天记录；经过本机网关的请求用量按四个工具独立统计。协议转换、配置文件和隔离 Electron 验证，与真实 IDE 界面和上游账号调用分别记录。
+此接入管理 AI Assistant 聊天、核心 / 轻量模型与独立 AI 补全参数。Junie、Claude Agent、Codex、Gemini CLI 及各自独立的账号 / 模型配置仍由 IDE 管理。ModelDock 本次不导入或部署 JetBrains MCP / Skills，也不读取 IDE 聊天记录；经过本机网关的请求用量按四个工具独立统计。协议转换、配置文件和隔离 Electron 验证，与真实 IDE 界面和上游账号调用分别记录。
+
+### 独立 AI 补全
+
+AI 补全使用独立的 `NextEditProviderSettings` 配置和独立 Key，不与聊天提供商共用设置槽。每次同步会更新补全地址、模型、明确的 `(fim) Generic` 提示架构，并清除指向旧聊天模型的关联。直连 DeepSeek Flash / Pro 使用 `https://api.deepseek.com/beta`；聚合补全使用同一个本机工具入口的 `/completions`，只路由已映射且确认支持原生补全的模型。两种模式分别记住补全模型，默认跟随聊天模型，也可在软件中选择当前范围内的兼容补全模型。
+
+切换其他供应商也会更新补全地址和模型；尚未确认补全协议的来源会明确提示，并保持补全停用，不保留上一家的地址，也不把聊天接口伪装成文本补全接口。目前自动确认的原生补全为官方 DeepSeek `deepseek-flash` / `deepseek-v4-pro`。
+
+补全 Key 使用固定独立凭据槽。为避免换地址后自动携带上一家的 Key，地址、供应商账号或连接方式改变时，同步新参数并设为合法停用状态。重新打开 IDE 后，在 AI 补全区选择「兼容 OpenAI」、粘贴此模式对应的 Key，再启用。只改模型且已确认的补全地址/账号一致时，可保留启用状态。ModelDock 不读取或写入 PasswordSafe，也不伪造 Key 已确认标记。
+
+保留现有补全上下文与其他参数，只有超过原生接口已确认限制的输出预算才降到 `4096`；原生设置中的预算以字符串保存。聊天及补全四文件统一备份和回滚，兼容升级前只有三文件的恢复记录。`(fim) Generic` 当前客户端使用前缀补全，不发送后缀；这里不宣称已验证完整 FIM 或下一处编辑预测。真实编辑器补全与供应商调用需另行确认。
 
 ## 授权、MCP、Skills 和用量
 

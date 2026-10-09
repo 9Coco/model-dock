@@ -560,10 +560,10 @@ export class Store {
     if (!choices || typeof choices !== 'object' || Array.isArray(choices) || Object.keys(choices).some(key => !['direct', 'aggregate'].includes(key))) throw new Error('连接草稿无效。');
     const providerExists = (value: unknown) => typeof value === 'string' && (!value || providers.some(provider => provider.id === value));
     const validDefault = (value: unknown, providerIds: string[]) => typeof value === 'string' && (!value || models.some(model => model.id === value && providerIds.includes(model.providerId)));
-    if (choices.direct && (typeof choices.direct !== 'object' || Object.keys(choices.direct).some(key => !['providerId', 'defaultModelId'].includes(key)) || !providerExists(choices.direct.providerId) || !validDefault(choices.direct.defaultModelId, [choices.direct.providerId]))) throw new Error('直连草稿引用了不存在的来源或模型。');
+    if (choices.direct && (typeof choices.direct !== 'object' || Object.keys(choices.direct).some(key => !['providerId', 'defaultModelId', 'completionModelId'].includes(key)) || !providerExists(choices.direct.providerId) || !validDefault(choices.direct.defaultModelId, [choices.direct.providerId]) || choices.direct.completionModelId !== undefined && !validDefault(choices.direct.completionModelId, [choices.direct.providerId]))) throw new Error('直连草稿引用了不存在的来源或模型。');
     if (choices.aggregate) {
       const choice = choices.aggregate;
-      if (Object.keys(choice).some(key => !['providerIds', 'modelIds', 'defaultModelId', 'modelSelection'].includes(key)) || !Array.isArray(choice.providerIds) || choice.providerIds.some(value => !providerExists(value) || !value) || !Array.isArray(choice.modelIds) || choice.modelIds.some(value => !models.some(model => model.id === value && choice.providerIds.includes(model.providerId))) || !validDefault(choice.defaultModelId, choice.providerIds) || choice.modelSelection !== undefined && !['all', 'selected'].includes(choice.modelSelection)) throw new Error('聚合草稿引用了不存在的来源或模型。');
+      if (Object.keys(choice).some(key => !['providerIds', 'modelIds', 'defaultModelId', 'modelSelection', 'completionModelId'].includes(key)) || !Array.isArray(choice.providerIds) || choice.providerIds.some(value => !providerExists(value) || !value) || !Array.isArray(choice.modelIds) || choice.modelIds.some(value => !models.some(model => model.id === value && choice.providerIds.includes(model.providerId))) || !validDefault(choice.defaultModelId, choice.providerIds) || choice.completionModelId !== undefined && !validDefault(choice.completionModelId, choice.providerIds) || choice.modelSelection !== undefined && !['all', 'selected'].includes(choice.modelSelection)) throw new Error('聚合草稿引用了不存在的来源或模型。');
     }
   }
   /** Internal migration only; no client files, credentials or provider protocols change. */
@@ -644,11 +644,13 @@ export class Store {
       if (choices?.direct) {
         if (!providers.some(provider => provider.id === choices.direct!.providerId)) choices.direct = { providerId: '', defaultModelId: '' };
         else if (!models.some(model => model.id === choices.direct!.defaultModelId && model.providerId === choices.direct!.providerId)) choices.direct.defaultModelId = '';
+        if (choices.direct.completionModelId && !models.some(model => model.id === choices.direct!.completionModelId && model.providerId === choices.direct!.providerId)) delete choices.direct.completionModelId;
       }
       if (choices?.aggregate) {
         const draft = choices.aggregate;
         draft.providerIds = draft.providerIds.filter(providerId => providers.some(provider => provider.id === providerId));
         draft.modelIds = draft.modelIds.filter(modelId => models.some(model => model.id === modelId && draft.providerIds.includes(model.providerId)));
+        if (draft.completionModelId && !models.some(model => model.id === draft.completionModelId && draft.providerIds.includes(model.providerId))) delete draft.completionModelId;
         if (!models.some(model => model.id === draft.defaultModelId && draft.providerIds.includes(model.providerId))) draft.defaultModelId = '';
       }
       const updated = isSingleEntryTool(binding.id) ? updateSingleEntryBinding({ ...candidate, defaultModelId: defaultId, connectionChoices: choices }, {}, models, providers) : candidate;

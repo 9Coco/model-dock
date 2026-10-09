@@ -18,6 +18,8 @@ import { isSingleEntryTool } from '../shared/single-entry';
 import { JetBrainsChatError, createJetBrainsChatStream, normalizeJetBrainsChatResponse, jetBrainsResponsesHistory } from './jetbrains-chat-stream';
 import { nativeClaudeBaseUrl } from '../shared/claude';
 import { NativeMessagesError, prepareNativeMessagesRequest, toNativeMessagesResponse, createNativeMessagesStream, collectNativeMessagesStream, nativeMessagesToSse } from './native-messages';
+import { nativeJetBrainsCompletion } from '../shared/jetbrains-completion';
+import { JetBrainsCompletionError, parseJetBrainsCompletionRequest, normalizeJetBrainsCompletionResponse, createJetBrainsCompletionStream, jetBrainsCompletionToSse } from './jetbrains-completion';
 
 type Json = Record<string, unknown>;
 export interface PreparedRequest { url: string; headers: Record<string, string>; body: Json }
@@ -325,7 +327,7 @@ export class Gateway {
       anthropic = endpoint.endsWith('/v1/messages');
       // Unknown paths and query parameters can contain secrets; only known route names are retained.
       const knownRoute = endpoint.replace(/^\/tool\/(?:codex|opencode|dsh|vscode|copilot|claude-code|webstorm|intellij-idea|rider|pycharm)/, '');
-      if (['/v1/models', '/v1/chat/completions', '/v1/responses', '/v1/messages'].includes(knownRoute)) diagnosticEndpoint = knownRoute;
+      if (['/v1/models', '/v1/chat/completions', '/v1/responses', '/v1/messages', '/v1/completions'].includes(knownRoute)) diagnosticEndpoint = knownRoute;
       if (!this.authenticated(request)) throw new GatewayError(401, '需要有效的 ModelDock API Key。');
       const route = this.route(endpoint);
       tool = route.tool;
@@ -341,7 +343,9 @@ export class Gateway {
         });
         jsonResponse(response, 200, { object: 'list', data }); return;
       }
-      if (request.method !== 'POST' || !['/v1/chat/completions', '/v1/responses', '/v1/messages'].includes(route.endpoint)) throw new GatewayError(404, '接口不存在。');
+      const completion = route.endpoint === '/v1/completions';
+      if (request.method !== 'POST' || !['/v1/chat/completions', '/v1/responses', '/v1/messages', '/v1/completions'].includes(route.endpoint)
+        || completion && !isJetBrainsTool(route.tool)) throw new GatewayError(404, '接口不存在。');
       if (anthropic && route.tool && route.tool !== 'claude-code' || route.tool === 'claude-code' && !anthropic) throw new GatewayError(404, '此工具不使用该协议入口。');
       const body = await readBody(request);
       if (body.stream !== undefined && typeof body.stream !== 'boolean') throw new GatewayError(400, 'stream 必须是布尔值。');
@@ -360,8 +364,10 @@ export class Gateway {
       const expectedWire = route.endpoint === '/v1/responses' ? 'responses' : 'chat-completions';
       // 修改点：JetBrains AI Assistant 使用 Chat，Responses 来源在本机显式转换。
       chatResponses = isJetBrainsTool(route.tool) && route.endpoint === '/v1/chat/completions' && model.wireApi === 'responses';
-      if (!anthropic && !chatResponses && model.wireApi !== expectedWire) throw new GatewayError(400, '该模型使用不同协议，请选择对应的接口；本版本不进行跨协议转换。');
+      if (!anthropic && !chatResponses && !completion && model.wireApi !== expectedWire) throw new GatewayError(400, '该模型使用不同协议，请选择对应的接口；本版本不进行跨协议转换。');
       const provider = this.store.getProvider(model.providerId);
+      const nativeCompletion = completion && provider ? nativeJetBrainsCompletion(model, provider) : undefined;
+      if (completion && !nativeCompletion) throw new GatewayError(400, '此模型尚未确认原生 FIM 补全能力；请为 AI 补全选择兼容模型，不使用聊天协议代替。');
       const nativeMessages = anthropic && provider?.kind === 'openai-compatible' && (model.wireApi === 'messages' || Boolean(nativeClaudeBaseUrl(provider)));
       if (provider && provider.kind !== 'openai-compatible' && ('previous_response_id' in body || 'conversation' in body)) {
         throw new GatewayError(400, '订阅来源不支持服务端会话续接；请移除 previous_response_id / conversation，并在 input 中发送完整会话历史。');
@@ -370,14 +376,14 @@ export class Gateway {
       providerName = provider.name;
       providerId = provider.id;
       // 修改点：Claude Messages 在本机转换成来源原生协议，订阅凭据继续由主进程续期。
-      const upstreamBody = nativeMessages ? { ...body, model: model.upstreamId } : anthropic ? { ...parseAnthropicRequest(body, model.wireApi), model: model.upstreamId } : chatResponses ? { ...parseChatResponsesRequest(jetBrainsResponsesHistory(body)), model: model.upstreamId } : { ...body, model: model.upstreamId };
-      const upstreamPath = nativeMessages ? '/v1/messages' : chatResponses ? '/v1/responses' : anthropic ? model.wireApi === 'responses' ? '/v1/responses' : '/v1/chat/completions' : route.endpoint;
-      await this.forward(request, response, provider, model, upstreamPath, upstreamBody, observe, anthropic || chatResponses ? { stream: body.stream === true, kind: nativeMessages ? 'native-messages' : chatResponses ? 'chat-responses' : 'anthropic' } : undefined, isJetBrainsTool(route.tool));
+      const upstreamBody = completion ? parseJetBrainsCompletionRequest(body, model.upstreamId, nativeCompletion?.maxOutputTokens) : nativeMessages ? { ...body, model: model.upstreamId } : anthropic ? { ...parseAnthropicRequest(body, model.wireApi), model: model.upstreamId } : chatResponses ? { ...parseChatResponsesRequest(jetBrainsResponsesHistory(body)), model: model.upstreamId } : { ...body, model: model.upstreamId };
+      const upstreamPath = completion ? '/v1/completions' : nativeMessages ? '/v1/messages' : chatResponses ? '/v1/responses' : anthropic ? model.wireApi === 'responses' ? '/v1/responses' : '/v1/chat/completions' : route.endpoint;
+      await this.forward(request, response, provider, model, upstreamPath, upstreamBody, observe, anthropic || chatResponses ? { stream: body.stream === true, kind: nativeMessages ? 'native-messages' : chatResponses ? 'chat-responses' : 'anthropic' } : undefined, isJetBrainsTool(route.tool), nativeCompletion?.baseUrl);
       logStatus = upstreamFailed ? 502 : response.statusCode;
     } catch (error) {
       diagnosticError = describeError(error);
-      logStatus = error instanceof GatewayError || error instanceof AnthropicBridgeError || error instanceof ChatResponsesBridgeError || error instanceof NativeMessagesError || error instanceof JetBrainsChatError ? error.status : 502;
-      const message = error instanceof GatewayError || error instanceof AnthropicBridgeError || error instanceof ChatResponsesBridgeError || error instanceof NativeMessagesError || error instanceof JetBrainsChatError ? error.message : '上游请求失败，请检查连接和供应商状态。';
+      logStatus = error instanceof GatewayError || error instanceof AnthropicBridgeError || error instanceof ChatResponsesBridgeError || error instanceof NativeMessagesError || error instanceof JetBrainsChatError || error instanceof JetBrainsCompletionError ? error.status : 502;
+      const message = error instanceof GatewayError || error instanceof AnthropicBridgeError || error instanceof ChatResponsesBridgeError || error instanceof NativeMessagesError || error instanceof JetBrainsChatError || error instanceof JetBrainsCompletionError ? error.message : '上游请求失败，请检查连接和供应商状态。';
       if (logStatus !== 499) this.state.lastError = message;
       if (!response.destroyed && !response.headersSent) {
         if (anthropic) jsonResponse(response, logStatus === 499 ? 400 : logStatus, { type: 'error', error: { type: logStatus === 401 ? 'authentication_error' : logStatus >= 500 ? 'api_error' : 'invalid_request_error', message } });
@@ -398,7 +404,7 @@ export class Gateway {
       }
     }
   }
-  private async forward(request: IncomingMessage, response: ServerResponse, provider: Provider, model: Model, path: string, body: Json, observe: (value: unknown) => void, bridge?: { stream: boolean; kind: 'anthropic' | 'chat-responses' | 'native-messages' }, jetBrains = false): Promise<void> {
+  private async forward(request: IncomingMessage, response: ServerResponse, provider: Provider, model: Model, path: string, body: Json, observe: (value: unknown) => void, bridge?: { stream: boolean; kind: 'anthropic' | 'chat-responses' | 'native-messages' }, jetBrains = false, completionBaseUrl?: string): Promise<void> {
     const secret = this.store.getSecret(provider.id);
     if (!secret) throw new GatewayError(503, '供应商缺少凭据。');
     const stream = body.stream === true;
@@ -411,7 +417,7 @@ export class Gateway {
     let upstream: Response | undefined;
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     try {
-      const prepared = bridge?.kind === 'native-messages' ? prepareNativeMessagesRequest(provider, secret, body, { anthropicVersion: typeof request.headers['anthropic-version'] === 'string' ? request.headers['anthropic-version'] : undefined, anthropicBeta: typeof request.headers['anthropic-beta'] === 'string' ? request.headers['anthropic-beta'] : undefined }) : this.options.prepareRequest ? await this.options.prepareRequest(provider, secret, path, body) : this.prepareApiKey(provider, secret, path, body);
+      const prepared = completionBaseUrl ? this.prepareApiKey({ ...provider, baseUrl: completionBaseUrl }, secret, path, body) : bridge?.kind === 'native-messages' ? prepareNativeMessagesRequest(provider, secret, body, { anthropicVersion: typeof request.headers['anthropic-version'] === 'string' ? request.headers['anthropic-version'] : undefined, anthropicBeta: typeof request.headers['anthropic-beta'] === 'string' ? request.headers['anthropic-beta'] : undefined }) : this.options.prepareRequest ? await this.options.prepareRequest(provider, secret, path, body) : this.prepareApiKey(provider, secret, path, body);
       if (controller.signal.aborted) throw new GatewayError(response.destroyed ? 499 : 504, '请求已取消或超时。');
       validateUpstreamUrl(prepared.url, this.state.port);
       if (provider.kind === 'copilot' && !isCopilotUpstream(prepared.url, path.replace(/^\/v1/, ''))) throw new GatewayError(502, 'Copilot 请求只能发送到官方模型服务。');
@@ -421,6 +427,11 @@ export class Gateway {
       upstream = await (this.options.fetch ?? fetch)(prepared.url, { method: 'POST', headers, body: JSON.stringify(prepared.body), signal: controller.signal, redirect: 'manual' });
       const secrets = [secret.apiKey, secret.accessToken, secret.refreshToken, headers.get('authorization')?.replace(/^Bearer /i, ''), headers.get('x-api-key')].filter((item): item is string => Boolean(item));
       if (!upstream.ok) {
+        if (completionBaseUrl) {
+          if (upstream.body) await upstream.body.cancel();
+          const retry = upstream.headers.get('retry-after'); if (retry) response.setHeader('retry-after', retry);
+          errorResponse(response, upstream.status, `上游拒绝 AI 补全请求（HTTP ${upstream.status}）。`); return;
+        }
         if (bridge?.kind === 'native-messages') {
           // 修改点：Claude 根据原生错误文案恢复 thinking/effort 等能力；保留受控错误消息并脱敏，不返回 debug、请求正文或任意附加字段。
           let message = `上游拒绝模型请求（HTTP ${upstream.status}）。`, type = upstream.status === 401 ? 'authentication_error' : upstream.status === 429 ? 'rate_limit_error' : 'api_error';
@@ -457,7 +468,23 @@ export class Gateway {
         return;
       }
       const sse = upstream.headers.get('content-type')?.includes('text/event-stream');
-      if (bridge) {
+      if (completionBaseUrl) {
+        if (sse && !stream) throw new JetBrainsCompletionError(502, 'AI 补全上游忽略了非流式请求；请使用兼容的原生 FIM 接口。');
+        if (stream && sse) {
+          if (!upstream.body) throw new JetBrainsCompletionError(502);
+          reader = upstream.body.pipeThrough(createJetBrainsCompletionStream(model.alias, observe), { signal: controller.signal }).getReader();
+          const complete = await completeJetBrainsStream(reader);
+          response.statusCode = upstream.status; response.setHeader('content-type', 'text/event-stream; charset=utf-8');
+          response.setHeader('cache-control', 'no-cache'); response.setHeader('x-accel-buffering', 'no'); response.flushHeaders();
+          for (const chunk of complete) await write(response, chunk, controller.signal);
+          response.end();
+        } else {
+          let value: unknown; try { value = JSON.parse(await limitedText(upstream)); } catch { throw new JetBrainsCompletionError(502); }
+          observe(value); const message = normalizeJetBrainsCompletionResponse(value, model.alias);
+          if (stream) { response.statusCode = upstream.status; response.setHeader('content-type', 'text/event-stream; charset=utf-8'); response.setHeader('cache-control', 'no-cache'); response.end(jetBrainsCompletionToSse(message)); }
+          else jsonResponse(response, upstream.status, message);
+        }
+      } else if (bridge) {
         if (sse && !upstream.body) throw new GatewayError(502, '上游流式响应为空。');
         if (bridge.stream && sse) {
           const transform = bridge.kind === 'native-messages' ? createNativeMessagesStream(model.alias, { onUpstreamEvent: observe, signal: controller.signal }) : bridge.kind === 'chat-responses' ? createResponsesChatStream(model.alias, { onUpstreamEvent: observe, signal: controller.signal }) : createAnthropicStream(model.wireApi, model.alias, { onUpstreamEvent: observe });
