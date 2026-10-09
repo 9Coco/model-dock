@@ -75,8 +75,8 @@ describe('provider selections and preserved model-scoped bindings', () => {
 });
 
 describe('automatic client connection topology without credentials', () => {
-  it.each(['opencode', 'vscode', 'dsh', 'copilot'] as const)('%s direct mode connects each selected provider separately', tool => {
-    const selected = binding(tool, { mode: 'direct', modelSelection: 'selected', modelIds: ['a-one', 'b-one', 'codex-one', 'grok-one'] });
+  it.each(['opencode', 'vscode', 'dsh', 'copilot'] as const)('%s legacy auto mode connects each selected provider separately', tool => {
+    const selected = binding(tool, { mode: 'auto', modelSelection: 'selected', modelIds: ['a-one', 'b-one', 'codex-one', 'grok-one'] });
     expect(resolveBindingModels(selected, models, providers).map(item => item.id)).toEqual(['a-one', 'b-one', 'codex-one', 'grok-one']);
     expect(bindingConnectionPolicy(selected, models, providers)).toEqual({ kind: 'native', groups: [
       { connection: 'direct-api', providerIds: ['api-a'], modelIds: ['a-one'] },

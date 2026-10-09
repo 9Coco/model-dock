@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { applyConfig, buildConfig } from '../src/main/adapters';
+import { applyConfig, buildConfig, connectionKey } from '../src/main/adapters';
 import { applyClaudeConfig, buildClaudeConfig, claudeHistoryKey, restoreClaudeOfficialConfig, type ClaudeConfigStore } from '../src/main/claude-config';
 import { restoreOfficialConfig, type ToolRestoreStore } from '../src/main/tool-restore';
 import type { Model, Provider, ToolBinding } from '../src/shared/types';
@@ -197,17 +197,80 @@ describe('Claude Code native BYOK configuration', () => {
     f.apply(); restoreClaudeOfficialConfig(f.store, f.backups, f.root);
     expect(readFileSync(f.target, 'utf8')).toBe(original); expect(existsSync(f.backups)).toBe(false);
   });
-  it('refuses aggregate mode, multiple sources, disabled providers and incompatible defaults', () => {
-    const f = fixture(); f.binding.mode = 'aggregate'; expect(() => f.apply()).toThrow('聚合');
-    f.binding.mode = 'direct'; f.binding.providerIds!.push('second'); expect(() => f.apply()).toThrow('恰好一个');
+  it('rejects multiple direct sources, disabled providers and incompatible defaults', () => {
+    const f = fixture(); f.binding.providerIds!.push('second'); expect(() => f.apply()).toThrow('恰好一个');
     f.binding.providerIds = [f.provider.id]; f.provider.enabled = false; expect(() => f.apply()).toThrow('已启用');
     f.provider.enabled = true; f.binding.defaultModelId = 'missing'; expect(() => f.apply()).toThrow('默认模型');
     expect(existsSync(f.target)).toBe(false); expect(f.states.size).toBe(0);
+  });
+  it('publishes selected native and subscription aggregate aliases in one picker with only a local credential', () => {
+    const f = fixture(); f.binding.mode = 'aggregate';
+    const second: Provider = { ...f.provider, id: 'subscription-source', name: 'Fixture subscription', kind: 'codex' };
+    f.providers.push(second); f.binding.providerIds!.push(second.id);
+    f.models.push({ ...f.model, id: 'second-model', providerId: second.id, upstreamId: 'subscription-upstream', alias: 'second-local', wireApi: 'responses' });
+    f.models.push({ ...f.model, id: 'excluded-model', alias: 'excluded-alias' });
+    f.binding.modelSelection = 'selected'; f.binding.modelIds = [f.model.id, 'second-model']; f.binding.defaultModelId = 'second-model';
+    f.store.getSecret = vi.fn(() => { throw new Error('No upstream credential may be exported.'); });
+    const preview = buildClaudeConfig(f.store, false, 19876), value = JSON.parse(preview.content);
+    expect(value.env.ANTHROPIC_BASE_URL).toBe('http://127.0.0.1:19876/tool/claude-code'); expect(value.env.ANTHROPIC_AUTH_TOKEN).toBe('__MODELDOCK_LOCAL_KEY__');
+    expect(value.model).toBe('second-local'); expect(value.availableModels).toEqual([f.model.alias, 'second-local']);
+    expect(value.modelPicker).toEqual({ options: [{ model: f.model.alias, label: 'Fixture Messages - Fixture model' }, { model: 'second-local', label: 'Fixture subscription - Fixture model' }], replaceBuiltInOptions: true });
+    expect(value.env.CLAUDE_CODE_DISABLE_THINKING).toBe('1'); expect(preview.instructions).toContain('v2.1.242');
+    f.apply({ port: 19876 }); expect(f.read().env.ANTHROPIC_AUTH_TOKEN).toBe('SYNTHETIC_GATEWAY_KEY'); expect(connectionKey(f.store, 'claude-code')).toBe('SYNTHETIC_GATEWAY_KEY');
+    expect(f.store.getSecret).not.toHaveBeenCalled(); expect(JSON.stringify(f.read())).not.toMatch(/subscription-upstream|excluded-alias|SYNTHETIC_SECRET/);
+  });
+  it('preserves thinking for all-native Messages aggregation and restores picker baselines when returning to direct mode', () => {
+    const f = fixture(); f.binding.mode = 'aggregate';
+    const original = { modelPicker: { options: [{ model: 'manual-model', label: 'Manual' }], replaceBuiltInOptions: false }, availableModels: ['manual-model'], env: { MAX_THINKING_TOKENS: '8192' } };
+    f.write(f.target, original); f.apply();
+    expect(f.read().env.MAX_THINKING_TOKENS).toBe('8192'); expect(f.read().env).not.toHaveProperty('CLAUDE_CODE_DISABLE_THINKING'); expect(f.read().modelPicker.replaceBuiltInOptions).toBe(true);
+    f.model.alias = 'updated-aggregate'; f.apply(); expect(f.read().availableModels).toEqual(['updated-aggregate']);
+    f.binding.mode = 'direct'; f.apply();
+    expect(f.read().availableModels).toEqual(original.availableModels); expect(f.read().modelPicker).toEqual(original.modelPicker); expect(f.read().env.MAX_THINKING_TOKENS).toBe('8192');
+    expect(f.store.getManagedState<any>(claudeHistoryKey(f.target), null).fields).not.toHaveProperty('modelPicker');
+    expect(connectionKey(f.store, 'claude-code')).toBe('SYNTHETIC_SECRET_API_KEY');
+  });
+  it('excludes a disabled aggregate source while keeping the remaining models usable and still refuses disabled direct sources', () => {
+    const f = fixture(); f.binding.mode = 'aggregate';
+    const disabled: Provider = { ...f.provider, id: 'disabled-source', enabled: false, hasSecret: false, authStatus: 'missing' };
+    f.providers.push(disabled); f.binding.providerIds!.push(disabled.id); f.models.push({ ...f.model, id: 'disabled-model', providerId: disabled.id, alias: 'disabled-alias' });
+    const value = JSON.parse(buildClaudeConfig(f.store, true, 19876).content);
+    expect(value.availableModels).toEqual([f.model.alias]); expect(value.env.ANTHROPIC_AUTH_TOKEN).toBe('SYNTHETIC_GATEWAY_KEY');
+    f.apply(); expect(f.read().modelPicker.options.map((item: any) => item.model)).toEqual([f.model.alias]);
+    f.binding.mode = 'direct'; f.binding.providerIds = [disabled.id]; expect(() => f.apply()).toThrow('已启用');
+  });
+  it('ignores missing credentials and Messages auth on aggregate sources outside the exact selected model scope', () => {
+    const f = fixture(); f.binding.mode = 'aggregate'; f.binding.modelSelection = 'selected'; f.binding.modelIds = [f.model.id];
+    const excluded: Provider = { ...f.provider, id: 'excluded-source', kind: 'codex', hasSecret: false, authStatus: 'missing', messagesAuth: 'invalid' as Provider['messagesAuth'] };
+    f.providers.push(excluded); f.binding.providerIds!.push(excluded.id); f.models.push({ ...f.model, id: 'excluded-model', providerId: excluded.id, alias: 'excluded-alias', wireApi: 'responses' });
+    const value = JSON.parse(buildClaudeConfig(f.store, true, 19876).content);
+    expect(value.availableModels).toEqual([f.model.alias]); expect(value.env).not.toHaveProperty('CLAUDE_CODE_DISABLE_THINKING');
+    f.apply(); expect(f.read().env.ANTHROPIC_AUTH_TOKEN).toBe('SYNTHETIC_GATEWAY_KEY'); expect(f.read().availableModels).toEqual([f.model.alias]);
+  });
+  it('restores original aggregate picker objects on cancellation but preserves later manual edits', () => {
+    const f = fixture(); f.binding.mode = 'aggregate';
+    const original = { availableModels: ['original'], modelPicker: { options: [{ model: 'original', description: 'Keep original description' }] } };
+    f.write(f.target, original); f.apply(); f.apply();
+    f.binding.enabled = false; f.apply(); expect(f.read()).toMatchObject(original);
+    f.binding.enabled = true; f.apply();
+    const manual = f.read(); manual.availableModels = ['manual']; manual.modelPicker.options[0].label = 'Manual'; f.write(f.target, manual);
+    restoreClaudeOfficialConfig(f.store, f.backups, f.root);
+    expect(f.read().availableModels).toEqual(['manual']); expect(f.read().modelPicker).toEqual(manual.modelPicker);
+  });
+  it('rejects corrupt non-string environment ownership values before writing aggregate configuration', () => {
+    const f = fixture(); f.binding.mode = 'aggregate'; f.apply();
+    const saved = f.store.getManagedState<any>(claudeHistoryKey(f.target), null); saved.fields['env.ANTHROPIC_MODEL'].applied.value = ['malformed']; f.states.set(claudeHistoryKey(f.target), saved);
+    const original = readFileSync(f.target, 'utf8'); expect(() => f.apply()).toThrow('恢复记录'); expect(readFileSync(f.target, 'utf8')).toBe(original);
   });
   it('requires a real key for explicit export/apply while keeping preview usable', () => {
     const f = fixture(); f.store.getSecret = () => ({ apiKey: '' });
     expect(() => buildClaudeConfig(f.store)).not.toThrow(); expect(() => buildClaudeConfig(f.store, true)).toThrow('API Key'); expect(() => f.apply()).toThrow('API Key');
     expect(existsSync(f.target)).toBe(false);
+  });
+  it('keeps native direct export compatible with stores that expose only getProvider', () => {
+    const f = fixture(), store = { ...f.store, listProviders: undefined };
+    expect(JSON.parse(buildClaudeConfig(store, true).content).env.ANTHROPIC_AUTH_TOKEN).toBe('SYNTHETIC_SECRET_API_KEY');
+    expect(JSON.parse(buildClaudeConfig(store).content).model).toBe(f.model.upstreamId);
   });
   it.each(['{invalid', '[]', '{"env":[]}', '{"env":{"KEY":42}}', '{"apiKeyHelper":{}}'])('refuses invalid JSON/settings without modifying original %s', original => {
     const f = fixture(); f.write(f.target, original);

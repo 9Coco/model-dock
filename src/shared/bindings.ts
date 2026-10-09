@@ -19,9 +19,11 @@ export function resolveBindingModels(binding: ToolBinding, models: Model[], prov
   if (!binding.enabled) return [];
   const providerIds = binding.providerIds;
   const claude = binding.id === 'claude-code';
-  const singleSource = claude || binding.mode === 'direct' && binding.id === 'codex';
+  const singleSource = binding.mode === 'direct' || claude && binding.mode !== 'aggregate';
   // 修改点：Claude 使用官方 Messages 入口或本机协议桥，其他适配器仍不消费 Messages。
-  const claudeIds = claude && providers ? new Set(providers.filter(provider => provider.enabled).flatMap(provider => claudeModelsForProvider(provider, models).map(model => model.id))) : undefined;
+  const claudeIds = claude && providers ? new Set(providers.filter(provider => provider.enabled).flatMap(provider => binding.mode === 'aggregate'
+    ? models.filter(model => model.providerId === provider.id && model.enabled)
+    : claudeModelsForProvider(provider, models)).map(model => model.id)) : undefined;
   let result = models.filter(model => model.enabled && (claude ? !claudeIds || claudeIds.has(model.id) : model.wireApi !== 'messages')
     && (!providers || providers.some(p => p.id === model.providerId && p.enabled)));
   if (providerIds !== undefined) {
@@ -39,6 +41,20 @@ export function resolveBindingModels(binding: ToolBinding, models: Model[], prov
  * Existing explicit modes and model-scoped filters retain their meaning. */
 export function bindingConnectionPolicy(binding: ToolBinding, models: Model[], providers?: Provider[]): BindingConnectionPolicy {
   const resolved = resolveBindingModels(binding, models, providers);
+  const requestedIds = [...new Set(binding.providerIds ?? resolved.map(model => model.providerId))];
+  const selectedIds = requestedIds.filter(providerId => !providers || providers.some(provider => provider.id === providerId && provider.enabled));
+  const localGroup = (): BindingConnectionGroup => ({ connection: 'local-managed', providerIds: selectedIds, modelIds: resolved.map(model => model.id) });
+  // 修改点：所有工具的显式聚合模式共用一个本机入口，凭据不写到客户端。
+  if (binding.mode === 'aggregate') return { kind: 'aggregate', groups: binding.enabled && selectedIds.length ? [localGroup()] : [] };
+  if (binding.mode === 'direct') {
+    if (!binding.enabled || !requestedIds.length) return { kind: 'direct', groups: [] };
+    if (requestedIds.length !== 1) throw new Error('单供应商模式必须只选择一个来源。');
+    if (!selectedIds.length) return { kind: 'direct', groups: [] };
+    const provider = providers?.find(item => item.id === selectedIds[0]);
+    const native = provider?.kind === 'openai-compatible' && (binding.id === 'claude-code' ? claudeConnectionKind(provider, resolved) === 'direct-api'
+      : isJetBrainsTool(binding.id) ? resolved.length > 0 && resolved.every(model => model.wireApi === 'chat-completions') : true);
+    return { kind: 'direct', groups: [{ connection: native ? 'direct-api' : 'local-managed', providerIds: selectedIds, modelIds: resolved.map(model => model.id) }] };
+  }
   if (isJetBrainsTool(binding.id)) {
     const providerIds = [...new Set(binding.providerIds ?? resolved.map(model => model.providerId))].filter(providerId => !providers || providers.some(provider => provider.id === providerId && provider.enabled));
     return { kind: 'aggregate', groups: binding.enabled && providerIds.length ? [{ connection: 'local-managed', providerIds, modelIds: resolved.map(model => model.id) }] : [] };
@@ -46,28 +62,17 @@ export function bindingConnectionPolicy(binding: ToolBinding, models: Model[], p
   if (binding.id === 'claude-code') {
     const providerIds = [...new Set((binding.providerIds ?? resolved.map(model => model.providerId)))];
     if (!binding.enabled || !providerIds.length) return { kind: 'direct', groups: [] };
-    if (binding.mode === 'aggregate' || providerIds.length !== 1) throw new Error('Claude Code 目前一次只支持一个供应商或订阅来源。');
+    if (providerIds.length !== 1) throw new Error('Claude Code 旧连接一次只使用一个来源，请选择聚合模式连接多家。');
     const provider = providers?.find(item => item.id === providerIds[0]);
     return { kind: 'direct', groups: [{ connection: provider ? claudeConnectionKind(provider, resolved) : 'local-managed', providerIds, modelIds: resolved.map(model => model.id) }] };
   }
-  const direct = binding.mode === 'direct';
+  // 旧 auto 模式保持原先的原生多入口行为，直到用户明确切换。
   const auto = binding.mode === 'auto';
-  const modeKind = direct ? 'direct' : auto && binding.id !== 'codex' ? 'native' : 'aggregate';
-  if (!binding.enabled) return { kind: modeKind, groups: [] };
-  const selectedIds = binding.providerIds === undefined
-    ? [...new Set(resolved.map(model => model.providerId))]
-    : [...new Set((direct && binding.id === 'codex' ? binding.providerIds.slice(0, 1) : binding.providerIds).filter(providerId => !providers || providers.some(provider => provider.id === providerId && provider.enabled)))];
-  if (!selectedIds.length) return { kind: modeKind, groups: [] };
+  const modeKind = auto && binding.id !== 'codex' ? 'native' : 'aggregate';
+  if (!binding.enabled || !selectedIds.length) return { kind: modeKind, groups: [] };
   const singleApi = selectedIds.length === 1 && providers?.find(provider => provider.id === selectedIds[0])?.kind === 'openai-compatible';
-  const localGroup = (): BindingConnectionGroup => ({ connection: 'local-managed', providerIds: selectedIds, modelIds: resolved.map(model => model.id) });
-  if (direct && selectedIds.length === 1 || auto && binding.id === 'codex' && singleApi) {
-    return { kind: 'direct', groups: [{ connection: singleApi ? 'direct-api' : 'local-managed', providerIds: selectedIds, modelIds: resolved.map(model => model.id) }] };
-  }
-  // Codex selects one active endpoint. Multiple sources and subscriptions stay
-  // behind the gateway. Explicit legacy aggregate bindings retain that route.
-  if (!auto && !direct || binding.id === 'codex') return { kind: 'aggregate', groups: [localGroup()] };
-  // The other clients support multiple endpoints. Each API provider gets its
-  // own credential group; subscriptions keep their rotating tokens local.
+  if (auto && binding.id === 'codex' && singleApi) return { kind: 'direct', groups: [{ connection: 'direct-api', providerIds: selectedIds, modelIds: resolved.map(model => model.id) }] };
+  if (!auto || binding.id === 'codex') return { kind: 'aggregate', groups: [localGroup()] };
   return { kind: 'native', groups: selectedIds.map(providerId => ({
     connection: providers?.find(provider => provider.id === providerId)?.kind === 'openai-compatible' ? 'direct-api' : 'local-managed',
     providerIds: [providerId], modelIds: resolved.filter(model => model.providerId === providerId).map(model => model.id),

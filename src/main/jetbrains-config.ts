@@ -3,13 +3,14 @@ import { createHash, randomUUID } from 'node:crypto';
 import { isUtf8 } from 'node:buffer';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import type { ConfigPreview, Model, Provider, ToolBinding } from '../shared/types';
-import { resolveBindingModels } from '../shared/bindings';
+import type { ConfigPreview, Model, Provider, ProviderSecret, ToolBinding } from '../shared/types';
+import { bindingConnectionPolicy, resolveBindingModels } from '../shared/bindings';
 import { JETBRAINS_TOOLS, type JetBrainsToolId, type JetBrainsStatus } from '../shared/jetbrains';
 export type { JetBrainsToolId } from '../shared/jetbrains';
 
 export interface JetBrainsConfigStore {
   listModels(): Model[]; listBindings(): ToolBinding[]; listProviders?(): Provider[]; gatewayKey(): string;
+  getProvider?(id: string): Provider | undefined; getSecret?(id: string): ProviderSecret | undefined;
   getManagedState?<T>(key: string, fallback: T): T; setManagedState?(key: string, value: unknown): void;
   createManagedBackup?(kind: string, value: unknown): string;
 }
@@ -94,26 +95,36 @@ function selection(store: JetBrainsConfigStore, tool: JetBrainsToolId, port: num
   const binding = store.listBindings().find(row => row.id === tool);
   if (!binding) fail('缺少工具配置');
   if (!binding.enabled) return null;
-  if (binding.mode !== 'aggregate') fail('工具须使用本机聚合模式');
-  const models = resolveBindingModels(binding, store.listModels(), store.listProviders?.()).filter(model => model.wireApi === 'chat-completions' || model.wireApi === 'responses');
+  const allModels = store.listModels();
+  const providers = store.listProviders?.() ?? (store.getProvider ? [...new Set(binding.providerIds ?? allModels.map(model => model.providerId))].flatMap(id => { const provider = store.getProvider!(id); return provider ? [provider] : []; }) : undefined);
+  const models = resolveBindingModels(binding, allModels, providers).filter(model => model.wireApi === 'chat-completions' || model.wireApi === 'responses');
   if (!models.length) fail('请先选择可用的 Chat Completions 或 Responses 模型');
   const core = binding.defaultModelId ? models.find(model => model.id === binding.defaultModelId) : models[0];
   if (!core) fail('默认模型不在所选可用模型中');
-  if (models.some(model => !model.alias.trim() || /[\x00-\x1f\x7f]/.test(model.alias))) fail('模型别名无效');
-  const key = reveal ? store.gatewayKey() : '__MODELDOCK_LOCAL_KEY__';
-  if (!key || typeof key !== 'string') fail('本机入口密钥无效');
-  return { models, core, key, baseUrl: `http://127.0.0.1:${port}/tool/${tool}/v1` };
+  const selectedIds = [...new Set(binding.providerIds ?? models.map(model => model.providerId))];
+  if (binding.mode === 'direct' && selectedIds.length !== 1) fail('单一来源模式必须选择恰好一个供应商或订阅来源');
+  const policy = bindingConnectionPolicy(binding, allModels, providers), directApi = policy.groups[0]?.connection === 'direct-api';
+  const provider = store.getProvider?.(selectedIds[0]) ?? providers?.find(item => item.id === selectedIds[0]);
+  if (directApi && (!provider || !provider.enabled || provider.kind !== 'openai-compatible' || models.some(model => model.wireApi !== 'chat-completions'))) fail('直连来源不支持所选模型的 Chat Completions 协议');
+  const modelId = (model: Model) => directApi ? model.upstreamId : model.alias;
+  if (models.some(model => !modelId(model).trim() || /[\x00-\x1f\x7f]/.test(modelId(model)))) fail(directApi ? '模型标识无效' : '模型别名无效');
+  const key = directApi ? reveal ? store.getSecret?.(provider!.id)?.apiKey : '__PROVIDER_API_KEY__' : reveal ? store.gatewayKey() : '__MODELDOCK_LOCAL_KEY__';
+  if (!key || typeof key !== 'string') fail(directApi ? '直连供应商尚未填写 API Key' : '本机入口密钥无效');
+  const baseUrl = directApi ? provider!.baseUrl.replace(/\/+$/, '') : `http://127.0.0.1:${port}/tool/${tool}/v1`;
+  if (!baseUrl) fail('直连供应商地址为空');
+  return { models, core, key, baseUrl, directApi, coreId: modelId(core), modelId };
 }
 export function buildJetBrainsConfig(store: JetBrainsConfigStore, tool: JetBrainsToolId, port: number, revealKey = false, homeDirectory = homedir(), options: JetBrainsConfigOptions = {}): ConfigPreview {
   const selected = selection(store, tool, port, revealKey), status = jetBrainsStatus(tool, homeDirectory, options);
   return { filename: `modeldock-${tool}-connection-guide.json`, canApply: status.canApply,
     content: JSON.stringify(selected ? { tool: products[tool].name, provider: 'OpenAI-compatible', baseUrl: selected.baseUrl, apiKey: selected.key, httpVersion: 'HTTP/1.1', toolCalling: selected.core.tools,
-      models: selected.models.map(model => ({ id: model.alias, name: model.displayName || model.alias, wireApi: model.wireApi })), modelAssignment: { core: `OpenAIAPI/${selected.core.alias}`, lightweight: `OpenAIAPI/${selected.core.alias}` },
+      models: selected.models.map(model => ({ id: selected.modelId(model), name: model.displayName || selected.modelId(model), wireApi: selected.directApi ? model.wireApi : 'chat-completions' })), modelAssignment: { core: `OpenAIAPI/${selected.coreId}`, lightweight: `OpenAIAPI/${selected.coreId}` },
     } : {}, null, 2),
-    instructions: '此 JSON 是接入参数说明，不能作为 IDE 原生配置导入。打开 设置 → 工具 → AI Assistant → 提供商与 API 密钥，选择兼容 OpenAI，填写 URL 与本机 API Key，使用 HTTP/1.1，然后测试连接并在模型指定中选择核心功能和即时助手。'
+    instructions: '此 JSON 是接入参数说明，不能作为 IDE 原生配置导入。打开 设置 → 工具 → AI Assistant → 提供商与 API 密钥，选择兼容 OpenAI，填写 URL 与' + (selected?.directApi ? '供应商 API Key' : '本机 API Key') + '，使用 HTTP/1.1，然后测试连接并在模型指定中选择核心功能和即时助手。'
       + '模型聊天在 IDE 的模型选择器中切换。工具调用只在模型支持时勾选；JetBrains 订阅、Junie、Claude Agent、Codex 和 Gemini CLI 的授权使用各自入口。'
       + '离线同步仅调整本产品已验证的地址、HTTP 版本、核心功能与即时助手模型、工具调用开关，并启用 OpenAIAPI；保留其他模型、提供商和设置。API Key 由 IDE 的 PasswordSafe 管理，必须在 IDE 中手动粘贴一次，本软件不写密码库或 OAuth 凭据。'
-      + '使用时保持 ModelDock 本机入口运行；协议桥与模型清单不代表真实 IDE 或上游推理验收。' + status.message,
+      + (selected?.directApi ? '当前直接连接所选单一 API 来源，模型使用真实上游 ID；预览隐藏 API Key，显式复制或导出接入参数才读取该供应商密钥。' : '当前通过 ModelDock 本机入口使用所选模型；单一来源模式只路由到一家，聚合模式允许从多家切换。Responses 模型和订阅由本机桥转换为 IDE 使用的 Chat Completions 协议；只把固定本机密钥交给 IDE，OAuth 凭据留在主进程。使用时保持 ModelDock 本机入口运行。')
+      + '协议桥与模型清单不代表真实 IDE 或上游推理验收。' + status.message,
   };
 }
 
@@ -355,7 +366,7 @@ export function applyJetBrainsConfig(store: JetBrainsConfigStore, tool: JetBrain
     const original = readConfig(join(target, 'options', spec.file)); let content = original ?? '<application>\n</application>\n';
     const prior = history?.files[index], fields: Record<string, FieldHistory> = {};
     const desired: Record<string, Value> = index === 0 ? { baseUrl: { present: true, value: selected.baseUrl }, httpClientVersion: { present: true, value: 'HTTP_1_1' }, toolEnabled: { present: true, value: String(selected.core.tools) } }
-      : index === 1 ? { smart_model_id: { present: true, value: `OpenAIAPI/${selected.core.alias}` }, quick_model_id: { present: true, value: `OpenAIAPI/${selected.core.alias}` } }
+      : index === 1 ? { smart_model_id: { present: true, value: `OpenAIAPI/${selected.coreId}` }, quick_model_id: { present: true, value: `OpenAIAPI/${selected.coreId}` } }
         : { OpenAIAPI: { present: true, value: 'true' } };
     for (const [name, applied] of Object.entries(desired)) {
       const current = fieldValue(parseXml(content), spec, name), previous = prior?.fields[name];

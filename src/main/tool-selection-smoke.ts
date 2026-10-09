@@ -336,8 +336,8 @@ wire_api = "responses"
 command = "synthetic-mcp-fixture"
 `, { mode: 0o600 });
   await resetBinding('codex');
-  await click('[data-action="codex-aggregate-mode"]');
-  await waitFor(`document.querySelector('[data-tool-binding="codex"]')?.dataset.connectionMode==='aggregate'&&!document.querySelector('[data-action="codex-aggregate-mode"]').disabled`, 'explicit Codex aggregate mode persisted');
+  await click('[data-action="tool-use-aggregate"]');
+  await waitFor(`document.querySelector('[data-tool-binding="codex"]')?.dataset.connectionMode==='aggregate'&&!document.querySelector('[data-action="tool-use-aggregate"]').disabled`, 'explicit Codex aggregate mode persisted');
   await selectProvider('codex', apiProviders[0].id, true); await selectProvider('codex', apiProviders[1].id, true); await selectProvider('codex', mockSubscription.id, true); await chooseDefault('codex', secondDefault.id);
   const codexPreview = parseToml(await preview('codex'));
   assert.equal(codexPreview.model_provider, 'modeldock'); assert.equal(codexPreview.model, secondDefault.alias);

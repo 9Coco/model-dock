@@ -40,7 +40,18 @@ let noCatalogModelRequests = 0, connectionTestPosts = 0, codexModelRequests = 0;
 const connectionRequests = [];
 let claudeMessagesRequests = 0;
 const jetBrainsRequests = [];
+const aggregateRequests = [];
 const upstream = createServer((req,res) => {
+  if (req.method === 'POST' && /^\/aggregate\/(?:a\/v1\/(?:responses|chat\/completions)|b\/v1\/(?:responses|chat\/completions)|native-[ab]\/v1\/messages)$/.test(req.url ?? '')) {
+    const parts=[];req.on('data',part=>parts.push(part));req.on('end',()=>{
+      const body=JSON.parse(Buffer.concat(parts).toString('utf8')),side=req.url.includes('/b/')||req.url.includes('native-b')?'b':'a',native=req.url.includes('native-'),responses=req.url.endsWith('/responses');
+      const auth=native&&side==='a'?req.headers['x-api-key']===`synthetic-${side}`:req.headers.authorization===`Bearer synthetic-${side}`;
+      const ok=auth&&body.model==='shared-model';aggregateRequests.push({path:req.url,model:body.model,ok});res.writeHead(ok?200:400,{'content-type':'application/json'});
+      const text=`MOCK_${side.toUpperCase()}`;
+      res.end(JSON.stringify(!ok?{error:{message:'Synthetic aggregation contract failed'}}:native?{id:'msg_aggregate',type:'message',role:'assistant',model:body.model,content:[{type:'text',text}],stop_reason:'end_turn',usage:{input_tokens:7,output_tokens:2}}:responses?{id:'resp_aggregate',object:'response',status:'completed',model:body.model,output:[{id:'msg_aggregate',type:'message',role:'assistant',content:[{type:'output_text',text}]}],usage:{input_tokens:7,output_tokens:2}}:{id:'chat_aggregate',object:'chat.completion',model:body.model,choices:[{message:{role:'assistant',content:text},finish_reason:'stop'}],usage:{prompt_tokens:7,completion_tokens:2}}));
+    });return;
+  }
+
   if (req.method === 'POST' && ['/jetbrains/v1/chat/completions', '/jetbrains/v1/responses'].includes(req.url)) {
     const parts = []; req.on('data', part => parts.push(part)); req.on('end', () => {
       const body = JSON.parse(Buffer.concat(parts).toString('utf8'));
@@ -136,6 +147,13 @@ child.on('exit', code => {
     if(existsSync(errorFile)) throw new Error(readFileSync(errorFile,'utf8'));
     const value = JSON.parse(readFileSync(resolve(output, 'electron-smoke.json'), 'utf8'));
     if (!value.bridge || !value.text.includes('ModelDock')) throw new Error('Renderer/preload bridge unavailable');
+    if (env.MODELDOCK_SMOKE_AGGREGATE_ONLY === '1') {
+      const result=JSON.parse(readFileSync(resolve(output,'aggregate-modes-validation.json'),'utf8'));
+      if(!result.ok||result.tools.length!==10||aggregateRequests.length!==20||aggregateRequests.some(request=>!request.ok))throw new Error('All-tool aggregation/UI routing verification failed');
+      writeFileSync(resolve(output,'aggregate-network-validation.json'),JSON.stringify({requests:aggregateRequests},null,2));
+      console.log(JSON.stringify({exitCode:code,bridge:value.bridge,tools:result.tools.length,layouts:result.layouts.length,mockRequests:aggregateRequests.length,output}));
+      process.exit(code||0);
+    }
     if (env.MODELDOCK_SMOKE_JETBRAINS_ONLY === '1') {
       const result = JSON.parse(readFileSync(resolve(output,'jetbrains-ui-validation.json'),'utf8'));
       if (!result.ok || result.products.length !== 4 || jetBrainsRequests.length !== 4 || jetBrainsRequests.some(request=>!request.ok)) throw new Error('JetBrains UI/native gateway contract failed');

@@ -55,11 +55,11 @@ describe('Claude Code binding boundaries', () => {
     expect(migrated.listBindings().filter(b => b.id !== 'claude-code')).toEqual(before);
     expect(migrated.listBindings().find(b => b.id === 'claude-code')).toMatchObject({ enabled: false, claudeDisableTelemetry: true });
   });
-  it('rejects multiple providers, subscriptions, aggregate mode, and incompatible defaults', async () => {
+  it('rejects multiple direct providers, unavailable sources and incompatible direct defaults', async () => {
     const f = await fixture();
     const another = f.store.saveProvider({ name: 'Other API', kind: 'openai-compatible', baseUrl: 'https://other.example.test', enabled: true, apiKey: 'synthetic-only' });
     const subscription = f.store.saveProvider({ name: 'Subscription', kind: 'codex', baseUrl: 'https://chatgpt.com/backend-api/codex', enabled: true });
-    for (const binding of [{ ...f.binding, mode: 'aggregate' as const }, { ...f.binding, providerIds: [f.provider.id, another.id] }, { ...f.binding, providerIds: [subscription.id] }, { ...f.binding, defaultModelId: f.chat.id }, { ...f.binding, modelIds: [f.chat.id] }]) expect(() => f.store.saveBinding(binding)).toThrow();
+    for (const binding of [{ ...f.binding, providerIds: [f.provider.id, another.id] }, { ...f.binding, providerIds: [subscription.id] }, { ...f.binding, defaultModelId: f.chat.id }, { ...f.binding, modelIds: [f.chat.id] }]) expect(() => f.store.saveBinding(binding)).toThrow();
     expect(() => f.store.saveBinding({ ...f.binding, id: 'opencode', defaultModelId: f.chat.id, claudeDisableTelemetry: true })).toThrow('隐私选项');
     expect(() => f.store.saveModel({ ...f.model, id: undefined, providerId: subscription.id, alias: 'subscription-messages' })).toThrow('API');
   });
@@ -69,6 +69,6 @@ describe('Claude Code binding boundaries', () => {
       expect(resolveBindingModels({ ...f.binding, id: tool, mode: 'auto' }, f.store.listModels(), f.store.listProviders())).toEqual([f.chat]);
     }
     expect(bindingConnectionPolicy(f.binding, f.store.listModels(), f.store.listProviders())).toEqual({ kind: 'direct', groups: [{ connection: 'direct-api', providerIds: [f.provider.id], modelIds: [f.model.id] }] });
-    expect(() => bindingConnectionPolicy({ ...f.binding, mode: 'aggregate' }, f.store.listModels(), f.store.listProviders())).toThrow();
+    expect(bindingConnectionPolicy({ ...f.binding, mode: 'aggregate' }, f.store.listModels(), f.store.listProviders()).groups[0]).toMatchObject({ connection: 'local-managed', modelIds: [f.model.id, f.chat.id] });
   });
 });

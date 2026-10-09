@@ -92,6 +92,13 @@
 .connection-mode-controls strong { display: block; font-size: 12px; }
 .connection-mode-controls small { display: block; color: var(--muted); font-size: 10px; line-height: 1.7; margin-top: 4px; }
 .connection-mode-controls > .legacy-connection-note { flex-basis: 100%; margin-top: 0; color: var(--warning); }
+/* 修改点：所有工具共用明确的聚合入口选项，旧连接模式仅显示说明。 */
+.tool-aggregate-option { display: block; margin: 4px 0 16px; }
+.tool-aggregate-option > label { display: flex; align-items: center; gap: 9px; font-size: 12px; color: var(--ink); cursor: pointer; }
+.tool-aggregate-option input { width: 15px; height: 15px; margin: 0; accent-color: var(--accent); }
+.tool-aggregate-option > small { padding-left: 24px; }
+.tool-aggregate-option > .legacy-connection-note { margin-top: 6px; }
+.tool-aggregate-option:has(input:disabled) > label { cursor: not-allowed; }
 .codex-aggregate-models { padding: 16px; margin: 0 0 18px; }
 .codex-aggregate-models > .section-heading { flex-wrap: wrap; gap: 10px; margin-bottom: 9px; }
 .codex-aggregate-models > .section-heading > .tool-source-batch-actions { margin-left: auto; }

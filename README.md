@@ -15,7 +15,7 @@ ModelDock 是跨平台本地模型管理台：全局维护模型来源与别名�
 - 授权生命周期对照 CC Switch 的设备码实现：xAI 校验 OIDC issuer，续期显式携带原权限 scope；ID Token 只保存在主进程加密凭据中，界面取得账号元数据。临时续期网络失败保留原授权状态；明确拒绝或过期停止轮询。导入凭据前取消旧登录、刷新和额度查询，提交刷新前检查原凭据，防止晚回复覆盖新授权。
 - 模型：填写 API Key 后从供应商获取真实模型列表，搜索、勾选并批量添加。不同供应商可用相同模型简称及显示名称，列表和工具中按「套餐名 - 模型名」展示；系统维护唯一的聚合接口 ID。支持真实上游 ID、协议、上下文、工具、视觉与思考强度能力。默认来源未授权、模型列表为空，能力由实际配置确定。
 - Codex 兼容模型目录带独立的 `client_version` 和对应版本请求头，使用原生 `slug` 作为上游 ID，解析显示名称、上下文和明确的能力字段。默认候选隐藏 `hide / none` 条目，已保存和手动添加的模型保留；目录可见性不代表实际模型权限。API / Grok 来源不携带 Codex 目录版本参数。
-- 工具：Codex、Claude Code、OpenCode、DSH、VS Code Copilot Chat、Copilot app，以及 WebStorm、IntelliJ IDEA、Rider、PyCharm 的 AI Assistant；工具页直接勾选供应商并选择模型偏好。前六种工具会自动保存并同步勾选、取消及模型偏好变更；四个 JetBrains IDE 的选择只保存本机绑定，配置文件同步是独立的显式操作；Copilot app 需运行。Codex 支持单供应商直连和逐模型选择的聚合接口；Claude Code 一次使用一个 API 或订阅来源，官方 API 优先直连，订阅通过本机服务连接；其余工具可同时直连多家供应商。原有工具可还原官方配置；JetBrains 可恢复 ModelDock 同步前的设置。模型或来源参数改动后可点击「重新同步」。DSH 的模型与密钥一同同步，无需再次手工配置。
+- 工具：Codex、Claude Code、OpenCode、DSH、VS Code Copilot Chat、Copilot app，以及 WebStorm、IntelliJ IDEA、Rider、PyCharm 的 AI Assistant；工具页直接勾选供应商并选择模型偏好。前六种工具会自动保存并同步勾选、取消及模型偏好变更；四个 JetBrains IDE 的选择只保存本机绑定，配置文件同步是独立的显式操作；Copilot app 需运行。十个工具均有「使用聚合接口」选项：关闭时单独连接一家来源，勾选另一家会替换当前来源；开启时使用一个本机入口，选择多家来源并逐个启用模型。API 优先使用客户端支持的原生协议直连，订阅及需协议转换的来源通过本机服务连接。旧版本的多入口及自动连接方式保留到用户明确切换。原有工具可还原官方配置；JetBrains 可恢复 ModelDock 同步前的设置。模型或来源参数改动后可点击「重新同步」。DSH 的模型与密钥一同同步，无需再次手工配置。
 - 本地网关：固定监听 `127.0.0.1`，默认 `18181`；本地 Key 鉴权、标准模型目录、Chat Completions/Responses、流式转发、请求日志。
 - SQLite：保存来源、模型、绑定与日志；敏感凭据由主进程加密，预览和快照不包含上游密钥。
 - 配置接入：原有六类工具均支持预览 / 导出，并在用户修改勾选或模型偏好后自动同步，写入前备份。VS Code 默认只保留所选自定义供应商，可关闭此选项来保留原有自定义来源；其他 vendor 与 JSONC 注释保留。OpenCode 保留其他供应商、MCP 和非受管 JSONC 注释；Codex 的 TOML 重写保留配置字段，但不保证原注释。Copilot app 通过运行实例的原生接口同步来源、模型和凭据，预览是同步计划参考，不需要再手工导入。DSH 写入 home 插件覆盖与凭据 refs，同步前保存加密恢复记录，清空后恢复原覆盖。
@@ -23,11 +23,11 @@ ModelDock 是跨平台本地模型管理台：全局维护模型来源与别名�
 
 ## JetBrains AI Assistant 模型接入
 
-WebStorm、IntelliJ IDEA、Rider、PyCharm 使用同一套 AI Assistant 设置格式。当前文件同步适配本机已核实的 2026.2 IDE / build 262 插件，各自有独立的供应商选择、默认模型和 `/tool/<工具 ID>/v1` 入口。现有千问、火山、DeepSeek API 及已授权的 ChatGPT/Copilot/Grok 来源可复用；客户端只使用固定本机 Key，上游 API Key 与轮换 OAuth 凭据留在 ModelDock。
+WebStorm、IntelliJ IDEA、Rider、PyCharm 使用同一套 AI Assistant 设置格式。当前文件同步适配本机已核实的 2026.2 IDE / build 262 插件，各自有独立的供应商选择、默认模型和「使用聚合接口」选项。聚合模式统一连接 `/tool/<工具 ID>/v1`，客户端使用固定本机 Key；关闭聚合时只使用一家来源，单 API 的 Chat Completions 模型可直连上游，使用该来源的 Key 和真实模型 ID，Responses 与订阅通过本机协议桥连接。现有千问、火山、DeepSeek API 及已授权的 ChatGPT/Copilot/Grok 来源可复用，轮换 OAuth 凭据始终留在 ModelDock。
 
 1. 在对应 IDE 的工具页勾选来源并选择「核心与轻量功能模型」。这只保存当前 IDE 的本机绑定，不修改 IDE 文件。Chat Completions 模型原生转发，Responses 模型经本机转换；Messages 模型不在此接入范围。
 2. 点击「准备本机连接」，在 IDE 的「设置 → 工具 → AI Assistant → 提供商与 API 密钥」选择「兼容 OpenAI」，复制该工具 URL 和本机 Key，选择 HTTP/1.1。模型指定使用页面显示的完整模型 ID（别名）；核心和轻量 / 快速功能默认使用同一所选模型。工具调用与上下文建议来自模型目录，须以套餐实际能力和限制为准。
-3. API Key 需要在 IDE 中粘贴一次。ModelDock 不读取或写入 JetBrains PasswordSafe。点击 IDE 的「测试连接」后，再发送实际聊天 / 工具请求确认推理可用；模型目录返回成功不能代替推理验证。
+3. API Key 需要在 IDE 中手工粘贴；切换连接方式或来源后请更新密钥。ModelDock 不读取或写入 JetBrains PasswordSafe。点击 IDE 的「测试连接」后，再发送实际聊天 / 工具请求确认推理可用；模型目录返回成功不能代替推理验证。
 4. 也可先退出 IDE，再显式点击「同步 IDE 设置」。只处理已发现的配置 profile，备份后更新 AI Assistant 地址、HTTP 版本、工具调用及核心 / 轻量模型字段，保留其他设置。IDE 运行中、运行状态未知或未找到兼容 profile 时禁用同步与还原，仍可手工填写接入参数。重新打开 IDE 后确认 API Key；「设置文件已同步」不表示登录或真实账号调用已通过。
 5. 「还原同步前设置」同样要求 IDE 退出，恢复本次受管字段；IDE 凭据存储中的 Key 请在 IDE 内自行确认或更换。「导出参考参数」生成手工填写用 JSON，不能直接导入 IDE。
 
@@ -172,17 +172,23 @@ npx electron-builder --dir --config.electronDist=node_modules/electron/dist --co
 
 若 npm 提示可信构建依赖的安装脚本被拦截，请先查看 `npm install-scripts ls`，按本机策略允许所需依赖。不要全局关闭检查。
 
-## 直连与 Codex 聚合接口
+## 单来源与聚合接口
 
-| 工具与来源 | 接入方式 |
+十个工具页均提供「使用聚合接口」复选框。不同工具分别保存连接方式、来源与模型范围，开启后不会自动加入其他供应商或扩大已有的精确模型列表。
+
+| 选项与来源 | 接入方式 |
 | --- | --- |
-| VS Code、OpenCode、DSH、Copilot app，选择一个或多个来源 | 每个 API 来源使用独立的上游地址、Key 和真实模型 ID；每个订阅来源经本机入口管理授权。不同 API 的凭据不会混在同一分组。 |
-| Codex，选择「直连供应商」 | 一次选择一家来源；选择另一家会替换当前来源。API 直接使用上游地址和真实模型 ID，订阅授权由本机入口管理。 |
-| Codex，选择「聚合接口」 | 选择多家来源，并逐个勾选允许使用的 Responses 模型；统一连接 `http://127.0.0.1:<端口>/tool/codex/v1`，按唯一模型别名路由。 |
+| 关闭「使用聚合接口」 | 一次选择一家来源，勾选另一家会替换当前来源。API 优先使用客户端兼容的原生地址、Key 和真实模型 ID；订阅及需要协议转换的 API 经本机入口管理。 |
+| 开启「使用聚合接口」 | 选择多家来源，并逐个勾选允许使用的模型。客户端使用一个 `http://127.0.0.1:<端口>/tool/<工具 ID>/v1` 入口、固定本机 Key 和唯一模型别名；未启用模型不开放。Claude Code 的基地址不含 `/v1`，客户端调用其 `/v1/messages`。 |
+| Codex 聚合模型 | 仅提供 Responses 模型。 |
+| Claude Code 聚合模型 | 提供 Messages 入口，复用所选 API / 订阅的已有模型；原生 Messages 来源按对应鉴权转发，Chat / Responses 来源通过协议桥调用。 |
+| JetBrains 单来源 | 所选单 API 模型均使用 Chat Completions 时直连上游；Responses 或账号订阅使用仅包含该来源的本机入口。切换后须在 IDE 更新 URL、Key 与模型。 |
 
-API 直连不依赖本地网关。预览隐藏 API Key；在支持自动同步的工具中，用户勾选来源、取消来源或改变默认模型会触发配置写入，其余工具通过明确导出取得所需配置。订阅的访问令牌和刷新令牌始终留在主进程，由本机入口续期；工具配置只使用本地连接密钥。需要本地入口时，自动同步会按需启动网关。
+关闭聚合时保留默认模型所在供应商；没有对应来源时保留首个已选来源。开启聚合时保留已有来源、默认模型及精确模型范围。聚合模型列表明确保存，新增模型不会自动加入已有选择。全部停用保持空列表，网关拒绝调用未启用模型，显式同步会清理对应客户端入口；JetBrains 设置仍需用户单独同步。
 
-旧绑定加载时保留原直连 / 聚合 / 自动模式和部分模型范围，不会在启动或切换导航时同步客户端。可以先点击「重新同步」应用原有选择；其他工具修改供应商勾选后采用多供应商直连，Codex 可明确选择直连或聚合。聚合模型列表按已勾选模型保存；新增模型不会自动加入已有的选择。取消最后一个模型会保持空列表并清理 Codex 的托管模型入口，网关也拒绝调用未勾选模型。DSH 同时写入模型与对应凭据；Copilot app 通过自身原生接口更新，不由 ModelDock 直接改写其数据库。
+API 原生直连不依赖本地网关。预览隐藏 API Key；前六种工具在用户修改来源、默认模型或聚合选项后自动保存并同步，已有配置先备份。JetBrains 的变更只保存本机绑定，通过复制参数手工配置或退出 IDE 后显式同步文件。订阅访问及刷新令牌始终留在主进程，由本机入口续期；使用本机入口期间须保持 ModelDock 运行，自动同步会按需启动网关。
+
+旧绑定加载时保留原直连 / 聚合 / 自动连接及部分模型范围，不会在启动或切换导航时同步客户端。旧的多供应商直连绑定保留来源与模型范围，并迁移为等价的自动连接元数据（`mode: "auto"`），外部配置保持原样，界面显示沿用已有连接；修改默认模型或来源不会自动迁移连接方式。明确切换聚合选项后采用新的单来源或聚合方式。DSH 同时写入模型与对应凭据；Copilot app 通过自身原生接口更新，不由 ModelDock 直接改写其数据库。
 
 取消来源后，OpenCode 会清理对应 ModelDock 分组；全部取消时清空托管分组，保留其他供应商、MCP 和非受管注释。VS Code 按下面的同步范围处理自定义来源。Codex 全部取消时移除 ModelDock 供应商，恢复首次接入前的模型、供应商和模型目录；旧版本没有恢复记录时回到原生默认选择。已经自行切换到其他供应商的配置保持当前选择，只清理受管内容。生成的 ModelDock 模型目录在确认属于应用且不再使用时删除，原目录保留。
 
@@ -208,7 +214,7 @@ VS Code 工具页的「仅保留所选供应商」默认开启。同步会先备
 
 ## Copilot app 原生同步
 
-先启动 GitHub Copilot 桌面应用，再在 ModelDock 勾选来源或改变「ModelDock 首选模型」，会自动同步供应商与模型，无需退出或重启 Copilot。API 来源独立直连上游，使用对应 API Key 和真实模型 ID；订阅来源只写入本地连接密钥和模型别名，OAuth 凭据留在 ModelDock。不同来源可注册相同模型 ID，每条模型独立配置 Chat Completions / Responses；稳定 UUID 用于识别本资料目录下的托管项。
+先启动 GitHub Copilot 桌面应用，再在 ModelDock 勾选来源或改变「ModelDock 首选模型」，会自动同步供应商与模型，无需退出或重启 Copilot。关闭聚合时只使用一家来源，API 直连上游并使用对应 API Key 和真实模型 ID；开启聚合时所有来源注册为一个本机供应商分组，使用本地连接密钥和模型别名。订阅授权经本机入口管理，OAuth 凭据留在 ModelDock。不同来源可注册相同模型 ID，每条模型独立配置 Chat Completions / Responses；稳定 UUID 用于识别本资料目录下的托管项。
 
 Copilot 默认开启「仅保留所选供应商」，同步会先备份，再清理未选中的自定义来源，包括此前手工添加的套餐；全部清空会清理所有自定义来源。关闭这个选项则只更新 ModelDock 托管项，保留其他自定义来源。GitHub 内置模型、账号和 MCP 不删除；聊天正文保留，被删除来源与旧会话的关联可能由 Copilot 解除。首选模型是 ModelDock 的配置偏好，不主动切换已打开聊天；同步后请在 Copilot app 的模型选择器中选择。
 
@@ -216,15 +222,15 @@ Copilot 默认开启「仅保留所选供应商」，同步会先备份，再清
 
 每次写入前将原配置、凭据备份和恢复计划加密保存到 ModelDock 的管理记录与私有备份。部分写入失败会尝试恢复；恢复未完成时保留待恢复记录，下次同步先恢复再执行新计划。无法安全备份时先拒绝修改。同步串行发送写入，不盲目重试写请求；读取遇到原生凭据工作队列繁忙时有限退避，减少重复的全供应商凭据查询。Copilot 未运行时选择仍保存，打开应用后可重新同步。
 
-工具页提供「全选可用」与「清空选择」，覆盖搜索结果之外的来源，批量操作只保存并同步一次。未授权、停用或没有兼容模型的来源不加入全选。每张供应商卡片均提供删除入口：删除会影响全局供应商及模型，并同步关联的自动接入工具；失败会恢复本地记录并尝试修复工具配置。删除前保存加密备份，历史用量保留。
+聚合及旧版多来源连接的工具页提供「全选可用」，所有工具均有「清空选择」，覆盖搜索结果之外的来源，批量操作只保存并同步一次。未授权、停用或没有兼容模型的来源不加入全选。每张供应商卡片均提供删除入口：删除会影响全局供应商及模型，并同步关联的自动接入工具；失败会恢复本地记录并尝试修复工具配置。删除前保存加密备份，历史用量保留。
 
 ## 使用流程
 
-界面按工具、供应商、功能三个区域组织：左侧上方选择五款工具，中间第一项是「聚合供应商」，其下是全局来源；下方进入模型目录和服务日志。右侧直接显示所选对象的配置与模型，供应商使用紧凑列表。切换导航不会修改已有工具绑定。
+界面按工具、供应商、功能三个区域组织：左侧上方选择十款工具，中间第一项是「聚合供应商」，其下是全局来源；下方进入模型目录和服务日志。右侧直接显示所选对象的配置与模型，供应商使用紧凑列表。切换导航不会修改已有工具绑定。
 
 1. 在左侧「模型供应商」标题下点击「添加 API」或「添加订阅」，填写地址和密钥，或点击 GPT/Grok 来源的登录按钮。API 密钥留空表示保留原凭据。保存来源不强制读取模型列表；供应商未提供目录接口时，可直接手动添加模型再测试连接。
 2. 已有来源可在供应商详情点击「获取模型列表」，搜索并勾选模型，按需修改简称及显示名称，再批量加入目录。已添加的模型保持原接口 ID 并自动跳过；简称仅需在当前供应商内区分，跨供应商可重复。上游不提供模型目录时会显示具体错误，可改用「手动添加」。获取成功仅表示目录可读，模型是否可用须实际请求确认。
-3. 在左侧选择工具，在供应商行左侧勾选需要的来源，并在顶部选择模型偏好（VS Code / Copilot app 显示为「ModelDock 首选模型」）。VS Code、OpenCode、Codex 和已运行的 Copilot app 会自动同步，状态显示「本次选择已同步」；取消勾选也会更新配置。VS Code 和 Copilot app 默认开启「仅保留所选供应商」，会先备份再清理未选中的历史自定义来源；如需保留，请关闭此项。同步失败时选择仍保存，可处理后点击「重新同步」。
+3. 在左侧选择工具，先选择是否「使用聚合接口」，在供应商行左侧勾选需要的来源，聚合时按需启用模型，并在顶部选择模型偏好（VS Code / Copilot app 显示为「ModelDock 首选模型」）。VS Code、OpenCode、Codex 和已运行的 Copilot app 会自动同步，状态显示「本次选择已同步」；取消勾选也会更新配置。VS Code 和 Copilot app 默认开启「仅保留所选供应商」，会先备份再清理未选中的历史自定义来源；如需保留，请关闭此项。同步失败时选择仍保存，可处理后点击「重新同步」。
 4. 已有绑定可先点击「重新同步」应用现有选择，也可随时预览。修改来源地址、Key 或模型参数后，请再次同步；使用文件配置的工具可能需要重新加载。VS Code 默认写入 `Code/User/chatLanguageModels.json`，其他 profile 需要手工合并。Copilot app 使用正在运行的实例，不需要 JSON 导入。DSH 的原生热更新启用时会自动读取修改；未启用时重启 DSH。默认模型用于新会话，已有会话需切换模型或新建。
 5. 在工具中选择模型并发出请求。VS Code / Copilot app 同步后还需在自己的模型选择器选择模型；ModelDock 的首选模型不会切换已打开聊天的当前模型。经过本地入口的请求可在服务日志查看状态、耗时和实际来源；API 直连请求不经过网关。
 
@@ -257,9 +263,9 @@ API 来源按名称、类型和规范化地址防重复：添加预设时复用�
 - 授权错误按申请设备码、等待授权、兑换凭据和续期步骤显示安全诊断，区分地区限制、设备码未启用、明确拒绝、过期和网络超时。Codex 专属设备授权轮询中的 JSON 403 / 404、`deviceauth_authorization_pending` 均可表示尚未输入验证码，会保持等待、保留验证码和复制按钮，并提供官方授权页面链接；这些状态不表示已完成授权。HTML 拦截、明确拒绝及过期会停止轮询。已有有效账号再次登录失败时保留原授权。设备码的账号 / 工作空间权限条件及本机授权缓存方法参见 [OpenAI 官方授权说明](https://learn.chatgpt.com/docs/auth)；登录失败页可前往授权中心显式导入已登录客户端，导入按钮才读取本机授权文件。
 - 原生上游按来源与模型已有的 Chat Completions / Responses 协议调用；现有其他工具会过滤 Messages 模型。四个 JetBrains IDE 的 Chat Completions 入口可转换到 Responses 来源；原生 Chat 模型保持原协议。Claude Code 可通过本机服务把 Messages 转换为来源已有协议，或连接官方 Anthropic 兼容入口；无需复制现有模型。跨协议转换的测试与真实供应商验收分别记录。
 - 订阅路径使用 `store:false`，需要发送完整会话历史；不能依赖 `previous_response_id` 或服务端持久化对话。原生 WebSocket 续接尚未实现。千问 Token Plan 的 Responses 支持也需按具体模型选择，不能以套餐名称一概认定。
-- Claude Code 终端接入写入 `CLAUDE_CONFIG_DIR/settings.json`（默认 `~/.claude/settings.json`），一次使用一个现有 API 或账号订阅来源。官方 API 的 Claude 兼容入口使用同一 API Key；ChatGPT/Codex、GitHub Copilot、Grok Build 订阅通过 ModelDock 本机 Messages 服务调用其已有上游协议，OAuth 访问和刷新令牌留在主进程，客户端配置只使用本机 Key。需要本机入口时同步会按需启动服务；使用期间须保持 ModelDock 运行。
+- Claude Code 终端接入写入 `CLAUDE_CONFIG_DIR/settings.json`（默认 `~/.claude/settings.json`），关闭聚合时一次使用一个现有 API 或账号订阅来源，开启聚合时将多家已选模型发布到一个本机 Messages 入口。官方 API 单来源直连的 Claude 兼容入口使用同一 API Key；ChatGPT/Codex、GitHub Copilot、Grok Build 订阅通过 ModelDock 本机 Messages 服务调用其已有上游协议，OAuth 访问和刷新令牌留在主进程，客户端配置只使用本机 Key。需要本机入口时同步会按需启动服务；使用期间须保持 ModelDock 运行。
 - API 表单的「Claude Code 接口地址」留空时按已知官方地址映射，未识别的 OpenAI 兼容来源可通过本机服务转换；填写时须是支持 Anthropic Messages 的服务地址。此字段不替换已有 OpenAI 地址。Messages 鉴权可选择 `API Key（x-api-key）` 或 `Bearer Token（Authorization）`；Anthropic 新模板默认 API Key，自定义及未设置此字段的历史来源默认 Bearer，仅影响原生 Messages 接口。
-- Claude Code 原生直连的默认模型及 Haiku / Sonnet / Opus / 子代理角色使用所选默认模型的真实上游 ID；通过本机服务时使用 ModelDock 模型别名。仅同步所选默认模型及其角色映射，不将供应商全部模型写入 Claude Code 选择器。已有无关设置保留，预览脱敏，应用前备份；应用或还原后重启 Claude Code 终端。VS Code Claude Code 扩展需另配其运行环境，本版不把终端配置同步视为扩展验收。源码与界面使用原创字母 C 标识，不使用 Claude 官方品牌图形。
+- Claude Code 原生直连的默认模型及 Haiku / Sonnet / Opus / 子代理角色使用所选默认模型的真实上游 ID；通过本机服务时使用 ModelDock 模型别名。单来源模式同步默认模型及角色映射；聚合模式还同步已启用模型列表及别名，可在 Claude Code 中切换。已有无关设置保留，预览脱敏，应用前备份；应用或还原后重启 Claude Code 终端。VS Code Claude Code 扩展需另配其运行环境，本版不把终端配置同步视为扩展验收。源码与界面使用原创字母 C 标识，不使用 Claude 官方品牌图形。
 - Claude Code 本机入口为 `http://127.0.0.1:18181/tool/claude-code`，客户端调用其 `/v1/messages`（端口随 ModelDock 服务设置）。桥接支持文本、图片、工具调用、工具结果及流式响应；Messages 的 `thinking` 输入当前不支持，客户端配置省略/关闭该协议功能，不代表上游模型不会自行思考。复杂视觉及模型特有扩展须另行验证。转换路径以 mock 上游核对为准，不代表真实 ChatGPT/Copilot/Grok 账号或供应商已经验收。
 - 官方 API Claude 入口：DeepSeek `https://api.deepseek.com/anthropic`；火山 Agent Plan `https://ark.cn-beijing.volces.com/api/plan`；火山 Coding Plan `https://ark.cn-beijing.volces.com/api/coding`；国内千问 Token Plan `https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic`，国际 Token Plan 为 `https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic`。千问 Coding Plan 国内/国际分别为 `https://coding.dashscope.aliyuncs.com/apps/anthropic` / `https://coding-intl.dashscope.aliyuncs.com/apps/anthropic`。只匹配已知预设与完整官方地址，不会凭名称改写用户自定义来源；API Key 必须与对应地域及计费入口配套。阿里云 Anthropic 入口不提供 `/v1/models`，可复用现有模型或手工添加，目录 404 不代表推理失败。参考 [阿里云国内接入表](https://help.aliyun.com/zh/model-studio/more-tools)、[阿里云国际接入表](https://www.alibabacloud.com/help/en/model-studio/more-tools)、[Claude Code 配置](https://help.aliyun.com/zh/model-studio/claude-code)。
 - Claude Code 默认开启「关闭遥测和非必要联网」，保存并同步后关闭遥测、错误报告及自动更新，模型请求继续使用所选 API 或订阅来源。WebFetch 仍可能进行安全检查；这不是本地文件或网络隔离，也不控制 MCP、插件和 hook 的网络行为。关闭自动更新后需用户自行更新 Claude Code。参考 [官方数据使用说明](https://code.claude.com/docs/en/data-usage)、[设置说明](https://code.claude.com/docs/en/settings)；配置序列化与模拟请求通过不代表真实供应商或客户端隐私行为已验收。

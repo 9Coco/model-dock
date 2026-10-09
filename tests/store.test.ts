@@ -284,13 +284,13 @@ describe('real SQLite storage', () => {
     const remainingAggregate = store.listBindings().find(binding => binding.id === 'opencode')!;
     expect(remainingAggregate.providerIds).toEqual([b.id]); expect(remainingAggregate.enabled).toBe(true); expect(remainingAggregate.defaultModelId).toBe('');
   });
-  it.each(['opencode', 'dsh', 'vscode', 'copilot'] as const)('allows multiple direct providers for %s and preserves the remaining source on removal', async tool => {
+  it.each(['opencode', 'dsh', 'vscode', 'copilot'] as const)('preserves legacy auto multi-entry providers for %s on removal', async tool => {
     const { store } = await setup();
     const a = store.saveProvider({ name: 'Direct A', kind: 'openai-compatible', baseUrl: 'https://a.example.test/v1', enabled: true });
     const b = store.saveProvider({ name: 'Direct B', kind: 'openai-compatible', baseUrl: 'https://b.example.test/v1', enabled: true });
     const am = store.saveModel(model(a.id, 'direct-a')), bm = store.saveModel(model(b.id, 'direct-b'));
     const binding = store.listBindings().find(binding => binding.id === tool)!;
-    store.saveBinding({ ...binding, mode: 'direct', enabled: true, providerIds: [a.id, b.id], modelSelection: 'selected', modelIds: [am.id, bm.id], defaultModelId: am.id });
+    store.saveBinding({ ...binding, mode: 'auto', enabled: true, providerIds: [a.id, b.id], modelSelection: 'selected', modelIds: [am.id, bm.id], defaultModelId: am.id });
     const saved = store.listBindings().find(binding => binding.id === tool)!;
     expect(resolveBindingModels(saved, store.listModels(), store.listProviders()).map(model => model.id)).toEqual([am.id, bm.id]);
     store.deleteProvider(a.id);
@@ -380,7 +380,7 @@ describe('real SQLite storage', () => {
     const b = store.saveProvider({ name: 'Auto B', kind: 'openai-compatible', baseUrl: 'https://b.example.test/v1', enabled: true });
     const am = store.saveModel(model(a.id, 'auto-a')), bm = store.saveModel(model(b.id, 'auto-b'));
     const binding = store.listBindings().find(binding => binding.id === 'vscode')!;
-    expect(binding.mode).toBe('auto');
+    expect(binding.mode).toBe('direct');
     store.saveBinding({ ...binding, mode: 'auto', providerIds: [a.id, b.id], modelIds: [], defaultModelId: bm.id, enabled: true });
     const reopened = await Store.create(dir, codec); stores.push(reopened);
     expect(reopened.listBindings().find(binding => binding.id === 'vscode')).toMatchObject({ mode: 'auto', providerIds: [a.id, b.id], modelIds: [], defaultModelId: bm.id });
@@ -510,7 +510,7 @@ describe('real SQLite storage', () => {
     const other = store.saveProvider({ name: 'B', kind: 'openai-compatible', baseUrl: 'https://b.example.test', enabled: true });
     const a = store.saveModel(model(source.id, 'checkpoint-a')), b = store.saveModel(model(other.id, 'checkpoint-b'));
     const current = store.listBindings().find(binding => binding.id === 'vscode')!;
-    store.saveBinding({ ...current, enabled: true, providerIds: [source.id, other.id], defaultModelId: a.id });
+    store.saveBinding({ ...current, mode: 'auto', enabled: true, providerIds: [source.id, other.id], defaultModelId: a.id });
     const checkpoint = store.beginProviderRemoval(source.id), changed = { ...store.listBindings().find(binding => binding.id === 'vscode')!, defaultModelId: b.id, note: 'new user choice' };
     store.saveBinding(changed);
     expect(() => store.restoreProviderRemoval(checkpoint)).toThrow('工具的选择已变化');
