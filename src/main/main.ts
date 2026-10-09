@@ -42,7 +42,10 @@ import { CopilotDesktopClient } from './copilot-desktop';
 import { applyCopilotDesktop } from './copilot-sync';
 import { removeProviderAndSync } from './provider-removal';
 import { restoreOfficialConfig } from './tool-restore';
+import { jetBrainsStatus, type JetBrainsConfigOptions } from './jetbrains-config';
+import { isJetBrainsTool } from '../shared/jetbrains';
 import { verifyClaudeConfiguration } from './claude-config-smoke';
+import { verifyJetBrainsConnections } from './jetbrains-smoke';
 import { restoreToolBinding } from './tool-restore-binding';
 import { applyNetworkProxy } from './network-proxy';
 import { inspectAuthNetwork } from './network-diagnostic';
@@ -125,7 +128,7 @@ if (runtimeConfig.dataDir) {
   app.setPath('userData', runtimeConfig.dataDir);
   app.setPath('sessionData', runtimeConfig.dataDir);
 }
-const toolIds = new Set(['codex', 'opencode', 'dsh', 'vscode', 'copilot', 'claude-code']);
+const toolIds = new Set(['codex', 'opencode', 'dsh', 'vscode', 'copilot', 'claude-code', 'webstorm', 'intellij-idea', 'rider', 'pycharm']);
 function toolId(value: unknown): ToolId {
   if (typeof value !== 'string' || !toolIds.has(value)) throw new Error('无法识别的工具。');
   return value as ToolId;
@@ -203,7 +206,9 @@ async function createWindow(forceShow = false) {
         writeFileSync(join(outputDir, 'electron-smoke.json'), JSON.stringify({ ...result, dataDir, windowSize: window!.getSize(), contentSize: window!.getContentSize() }, null, 2));
         writeFileSync(join(outputDir, 'electron-smoke.png'), await captureUi());
         await verifyToolIcons(window!, outputDir, captureUi);
-        if (process.env.MODELDOCK_SMOKE_CLAUDE_ONLY === '1') {
+        if (process.env.MODELDOCK_SMOKE_JETBRAINS_ONLY === '1') {
+          await verifyJetBrainsConnections(window!, store, outputDir, captureUi);
+        } else if (process.env.MODELDOCK_SMOKE_CLAUDE_ONLY === '1') {
           await verifyClaudeConfiguration(window!, store, outputDir, captureUi);
         } else if (process.env.MODELDOCK_SMOKE_METADATA_ONLY === '1') {
           await verifyModelMetadata(window!, outputDir, captureUi);
@@ -512,6 +517,18 @@ function copilotTarget() {
   return { home: process.env.COPILOT_HOME ? resolve(process.env.COPILOT_HOME) : join(app.getPath('home'), '.copilot'), openClient: undefined };
 }
 
+// 修改点：IDE 文件状态只读查询；测试使用隔离目录和受控进程探针。
+function jetBrainsOptions(): JetBrainsConfigOptions {
+  if (__MODELDOCK_SMOKE_BUILD__) {
+    const home = join(dataDir, 'feature-home');
+    return { profileRoot: join(home, '.config', 'JetBrains'), cacheRoot: join(home, '.cache', 'JetBrains'), platform: 'linux', processProbe: pid => pid === process.pid ? 'running' : 'stopped' };
+  }
+  return process.platform === 'linux' ? {
+    profileRoot: join(process.env.XDG_CONFIG_HOME?.trim() || join(app.getPath('home'), '.config'), 'JetBrains'),
+    cacheRoot: join(process.env.XDG_CACHE_HOME?.trim() || join(app.getPath('home'), '.cache'), 'JetBrains'),
+  } : {};
+}
+
 function registerIpc() {
   let providerRemovalPending = false;
   let toolRestorePending = false;
@@ -526,7 +543,7 @@ function registerIpc() {
     toolConfigPending.add(id);
     try {
     const binding = store.listBindings().find(item => item.id === id);
-    const preview = buildConfig(store, id, gateway.status().port, true);
+    const preview = buildConfig(store, id, gateway.status().port, true, __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home') : app.getPath('home'), { jetBrainsOptions: jetBrainsOptions() });
     if (!preview.canApply) throw new Error('此工具使用导出配置入口。');
     const usesGateway = binding && bindingConnectionPolicy(binding, store.listModels(), store.listProviders()).groups.some(group => group.connection === 'local-managed' && group.modelIds.length > 0);
     if (usesGateway && !gateway.status().running) {
@@ -554,6 +571,7 @@ function registerIpc() {
       codexHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome!, '.codex') : process.env.CODEX_HOME?.trim() ? resolve(process.env.CODEX_HOME.trim()) : undefined,
       configHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome!, '.config') : process.env.XDG_CONFIG_HOME,
       claudeConfigDir: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome!, '.claude') : process.env.CLAUDE_CONFIG_DIR,
+      jetBrainsOptions: jetBrainsOptions(),
     });
     } finally { toolConfigPending.delete(id); }
   }
@@ -676,9 +694,14 @@ function registerIpc() {
   handle('copyText', (value: unknown) => writeClipboardText(value, text => clipboard.writeText(text)));
   handle('copyGatewayKey', () => writeClipboardText(store.gatewayKey(), text => clipboard.writeText(text)));
   handle('copyConnectionKey', (tool: ToolId) => writeClipboardText(connectionKey(store, toolId(tool)), text => clipboard.writeText(text)));
-  handle('previewConfig', (tool: ToolId) => buildConfig(store, toolId(tool), gateway.status().port));
+  handle('jetBrainsStatus', (value: unknown) => {
+    if (!isJetBrainsTool(value)) throw new Error('不是支持的 JetBrains 工具。');
+    const home = __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home') : app.getPath('home');
+    return jetBrainsStatus(value, home, jetBrainsOptions());
+  });
+  handle('previewConfig', (tool: ToolId) => buildConfig(store, toolId(tool), gateway.status().port, false, __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home') : app.getPath('home'), { jetBrainsOptions: jetBrainsOptions() }));
   handle('exportConfig', async (tool: ToolId) => {
-    const config = buildConfig(store, toolId(tool), gateway.status().port, true);
+    const config = buildConfig(store, toolId(tool), gateway.status().port, true, __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home') : app.getPath('home'), { jetBrainsOptions: jetBrainsOptions() });
     const result = await dialog.showSaveDialog(window!, { defaultPath: config.filename });
     if (result.canceled || !result.filePath) return null;
     writeFileSync(result.filePath, config.content, { mode: 0o600 }); return result.filePath;
@@ -703,6 +726,7 @@ function registerIpc() {
         codexHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.codex') : process.env.CODEX_HOME?.trim() ? resolve(process.env.CODEX_HOME.trim()) : join(featureHome, '.codex'),
         configHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.config') : process.env.XDG_CONFIG_HOME,
         claudeConfigDir: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.claude') : process.env.CLAUDE_CONFIG_DIR,
+        jetBrainsOptions: jetBrainsOptions(),
         dshHome, dshOptions, copilotHome: target.home, copilotOptions: { openClient: target.openClient },
       }));
     } finally { toolRestorePending = false; }

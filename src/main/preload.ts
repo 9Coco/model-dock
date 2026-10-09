@@ -3,6 +3,7 @@ import type { ModelDockApi } from '../shared/types';
 const call = (method: string, ...args: unknown[]) => ipcRenderer.invoke('modeldock:' + method, ...args);
 const rendererErrorNames = new Set(['Error', 'TypeError', 'ReferenceError', 'SyntaxError', 'RangeError', 'URIError', 'EvalError', 'AggregateError', 'AbortError', 'TimeoutError']);
 const api: ModelDockApi = {
+  jetBrainsStatus: tool => call('jetBrainsStatus', tool),
   reportRendererError: async input => {
     if (!input || (input.kind !== 'error' && input.kind !== 'unhandled-rejection')) return;
     ipcRenderer.send('modeldock:renderer-diagnostic', { kind: input.kind, errorName: typeof input.errorName === 'string' && rendererErrorNames.has(input.errorName) ? input.errorName : 'Error' });

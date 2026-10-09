@@ -39,7 +39,18 @@ delete env.MODELDOCK_DEV_URL;
 let noCatalogModelRequests = 0, connectionTestPosts = 0, codexModelRequests = 0;
 const connectionRequests = [];
 let claudeMessagesRequests = 0;
+const jetBrainsRequests = [];
 const upstream = createServer((req,res) => {
+  if (req.method === 'POST' && ['/jetbrains/v1/chat/completions', '/jetbrains/v1/responses'].includes(req.url)) {
+    const parts = []; req.on('data', part => parts.push(part)); req.on('end', () => {
+      const body = JSON.parse(Buffer.concat(parts).toString('utf8'));
+      const responses = req.url.endsWith('/responses');
+      const ok = req.headers.authorization === 'Bearer synthetic-only' && body.model === (responses ? 'jb-responses-native' : 'jb-chat-native') && Array.isArray(responses ? body.input : body.messages);
+      jetBrainsRequests.push({path:req.url,model:body.model,ok}); res.writeHead(ok ? 200 : 400, {'content-type':'application/json'});
+      res.end(JSON.stringify(!ok ? {error:{message:'Synthetic JetBrains contract failed'}} : responses ? { id:'resp_jb',object:'response',status:'completed',model:body.model,output:[{id:'msg_jb',type:'message',role:'assistant',content:[{type:'output_text',text:'OK'}]}],usage:{input_tokens:8,output_tokens:2} } : { id:'chat_jb',object:'chat.completion',model:body.model,choices:[{message:{role:'assistant',content:'OK'},finish_reason:'stop'}],usage:{prompt_tokens:8,completion_tokens:2} }));
+    }); return;
+  }
+
   if (req.url === '/claude/v1/messages' && req.method === 'POST') {
     const parts = []; req.on('data', part => parts.push(part));
     req.on('end', () => {
@@ -125,6 +136,13 @@ child.on('exit', code => {
     if(existsSync(errorFile)) throw new Error(readFileSync(errorFile,'utf8'));
     const value = JSON.parse(readFileSync(resolve(output, 'electron-smoke.json'), 'utf8'));
     if (!value.bridge || !value.text.includes('ModelDock')) throw new Error('Renderer/preload bridge unavailable');
+    if (env.MODELDOCK_SMOKE_JETBRAINS_ONLY === '1') {
+      const result = JSON.parse(readFileSync(resolve(output,'jetbrains-ui-validation.json'),'utf8'));
+      if (!result.ok || result.products.length !== 4 || jetBrainsRequests.length !== 4 || jetBrainsRequests.some(request=>!request.ok)) throw new Error('JetBrains UI/native gateway contract failed');
+      writeFileSync(resolve(output,'jetbrains-network-validation.json'),JSON.stringify({requests:jetBrainsRequests},null,2));
+      console.log(JSON.stringify({exitCode:code,bridge:value.bridge,jetBrains:result,requests:jetBrainsRequests,output}));
+      process.exit(code || 0);
+    }
     if (env.MODELDOCK_SMOKE_CLAUDE_ONLY === '1') {
       const result = JSON.parse(readFileSync(resolve(output,'claude-ui-validation.json'),'utf8'));
       if (!result.ok || claudeMessagesRequests !== 1) throw new Error('Claude configuration UI or Messages contract failed');

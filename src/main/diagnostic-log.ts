@@ -185,7 +185,7 @@ function sanitizeContext(value: unknown): DiagnosticContext {
   const enums: Record<string, readonly string[]> = {
     operation: DIAGNOSTIC_OPERATIONS, outcome: OUTCOMES, stage: STAGES,
     platform: ['linux', 'win32', 'darwin'], runtimeMode: ['production', 'development', 'smoke'],
-    toolId: ['codex', 'opencode', 'dsh', 'vscode', 'copilot', 'claude-code'], errorName: ERROR_NAMES, networkCode: NETWORK_CODES,
+    toolId: ['codex', 'opencode', 'dsh', 'vscode', 'copilot', 'claude-code', 'webstorm', 'intellij-idea', 'rider', 'pycharm'], errorName: ERROR_NAMES, networkCode: NETWORK_CODES,
     wireApi: ['chat-completions', 'responses', 'anthropic-messages', 'messages'],
     responseStatus: ['completed', 'incomplete', 'failed', 'in_progress', 'unknown'],
     incompleteReason: ['max_output_tokens', 'content_filter', 'missing', 'unknown'],

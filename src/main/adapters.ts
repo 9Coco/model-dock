@@ -11,6 +11,8 @@ import type { CopilotDesktopPlan } from './copilot-desktop';
 import { dshPatchPreview, type DshPlan, type DshProviderProfile } from './dsh-config';
 import { openCodeConfigDirectory } from './opencode-paths';
 import { applyClaudeConfig, buildClaudeConfig } from './claude-config';
+import { isJetBrainsTool } from '../shared/jetbrains';
+import { applyJetBrainsConfig, buildJetBrainsConfig, type JetBrainsConfigOptions } from './jetbrains-config';
 
 const PLACEHOLDER = '__MODELDOCK_LOCAL_KEY__';
 // These are client request budgets, not inferred upstream model specifications.
@@ -30,7 +32,7 @@ interface AdapterStore {
   dataDir?: string;
   listModels(): Model[]; listBindings(): ToolBinding[]; gatewayKey(): string;
   listProviders?(): Provider[]; getProvider?(id: string): Provider | undefined; getSecret?(id: string): ProviderSecret | undefined;
-  getManagedState?<T>(key: string, fallback: T): T; setManagedState?(key: string, value: unknown): void;
+  getManagedState?<T>(key: string, fallback: T): T; setManagedState?(key: string, value: unknown): void; createManagedBackup?(kind: string, value: unknown): string;
 }
 const selectionFields = ['model', 'model_provider', 'model_catalog_json'] as const;
 type CodexSelectionFields = Partial<Record<typeof selectionFields[number], string>>;
@@ -239,7 +241,8 @@ export function buildDshPlan(store: AdapterStore, port: number, revealKey = fals
   }
   return { syncScope, providers, credentials, ...(defaultModel ? { defaultModel } : {}), ...(mappings.length ? { legacyDispatch: { version: 1 as const, mappings } } : {}) };
 }
-export function buildConfig(store: AdapterStore, tool: ToolId, port: number, revealKey = false): ConfigPreview {
+export function buildConfig(store: AdapterStore, tool: ToolId, port: number, revealKey = false, homeDirectory = homedir(), options: { jetBrainsOptions?: JetBrainsConfigOptions } = {}): ConfigPreview {
+  if (isJetBrainsTool(tool)) return buildJetBrainsConfig(store, tool, port, revealKey, homeDirectory, options.jetBrainsOptions);
   // 修改点：Claude Code 按原生 Messages 入口或本机协议桥生成配置，不能落入其他工具适配分支。
   if (tool === 'claude-code') return buildClaudeConfig(store, revealKey, port);
   const selection = selected(store, tool, true);
@@ -304,7 +307,8 @@ export function buildConfig(store: AdapterStore, tool: ToolId, port: number, rev
       + (responses.some(model => model.contextWindow === 0) ? '上下文未知的模型省略可选上下文字段；可在模型编辑中填写实际上下文后重新生成配置。' : ''),
   };
 }
-export function applyConfig(store: AdapterStore, tool: ToolId, port: number, appData: string, backups: string, homeDirectory = homedir(), options: { codexHome?: string; configHome?: string; claudeConfigDir?: string } = {}): string {
+export function applyConfig(store: AdapterStore, tool: ToolId, port: number, appData: string, backups: string, homeDirectory = homedir(), options: { codexHome?: string; configHome?: string; claudeConfigDir?: string; jetBrainsOptions?: JetBrainsConfigOptions } = {}): string {
+  if (isJetBrainsTool(tool)) return applyJetBrainsConfig(store, tool, backups, homeDirectory, { ...options.jetBrainsOptions, port });
   if (tool === 'claude-code') return applyClaudeConfig(store, backups, homeDirectory, { claudeConfigDir: options.claudeConfigDir, port });
   if (tool === 'copilot') throw new Error('Copilot 桌面配置需要通过运行中的原生接口同步。');
   if (tool === 'dsh') throw new Error('DSH 配置需要通过原生插件与凭据同步入口应用。');

@@ -6,7 +6,12 @@ import vscode from './assets/tool-icons/vscode.svg?no-inline';
 import copilot from './assets/tool-icons/copilot.svg?no-inline';
 import claudeCode from './assets/tool-icons/claude-code.svg?no-inline';
 
-const icons: Record<ToolId, string> = { codex, opencode, dsh, vscode, copilot, 'claude-code': claudeCode };
+import webstorm from './assets/tool-icons/webstorm.svg?no-inline';
+import intellijIdea from './assets/tool-icons/intellij-idea.svg?no-inline';
+import rider from './assets/tool-icons/rider.svg?no-inline';
+import pycharm from './assets/tool-icons/pycharm.svg?no-inline';
+
+const icons: Record<ToolId, string> = { codex, opencode, dsh, vscode, copilot, 'claude-code': claudeCode, webstorm, 'intellij-idea': intellijIdea, rider, pycharm };
 
 /** Decorative tool identity; the adjacent tool name supplies the accessible label. */
 export function ToolIcon({ tool }: { tool: ToolId }) {

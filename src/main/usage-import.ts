@@ -3,6 +3,7 @@ import { lstat, open, readdir, realpath } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve } from 'node:path';
+import { isJetBrainsTool } from '../shared/jetbrains';
 import type { ToolId } from '../shared/types';
 import type { TokenUsage, UsageRecord } from '../shared/usage-types';
 import type { ToolUsageImportResult } from '../shared/usage-import-types';
@@ -157,8 +158,9 @@ async function parseSession(filename: string, root: string, maxLineBytes: number
  * File paths, prompts, replies and tool output are never stored or returned.
  */
 export async function importToolUsage(tool: ToolId, store: ClientUsageStore, options: UsageImportOptions = {}): Promise<ToolUsageImportResult> {
-  if (!['codex', 'claude-code', 'opencode', 'dsh', 'vscode', 'copilot'].includes(tool)) throw new Error('未知工具。');
+  if (!isJetBrainsTool(tool) && !['codex', 'claude-code', 'opencode', 'dsh', 'vscode', 'copilot'].includes(tool)) throw new Error('未知工具。');
   const result: ToolUsageImportResult = { tool, scannedFiles: 0, imported: 0, skipped: 0, deferredFiles: 0, warnings: [], status: 'ready' };
+  if (isJetBrainsTool(tool)) { result.unsupported = 'JetBrains AI Assistant 原生用量导入暂不支持；不读取 IDE 会话，通过 ModelDock 本机入口的请求可统计。'; result.status = 'unsupported'; return result; }
   if (tool === 'opencode') return importOpenCodeUsage(openCodeDataDirectory(options.homeDir, options.opencodeDataDir), store, limits(options));
   if (tool !== 'codex') { result.unsupported = unsupported[tool]; result.status = 'unsupported'; return result; }
   const cap = limits(options);

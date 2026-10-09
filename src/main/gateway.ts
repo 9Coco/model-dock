@@ -12,6 +12,8 @@ import { DEFAULT_SETTINGS } from '../shared/settings-types';
 import type { DiagnosticContext, DiagnosticEvent, DiagnosticLevel } from '../shared/diagnostic-types';
 import { describeError } from './diagnostic-log';
 import { AnthropicBridgeError, parseAnthropicRequest, toAnthropicResponse, createAnthropicStream, collectAnthropicStream, anthropicMessageToSse } from './anthropic-bridge';
+import { ChatResponsesBridgeError, parseChatResponsesRequest, responsesToChat, createResponsesChatStream, collectResponsesChatStream, chatResponseToSse } from './chat-responses-bridge';
+import { isJetBrainsTool } from '../shared/jetbrains';
 
 type Json = Record<string, unknown>;
 export interface PreparedRequest { url: string; headers: Record<string, string>; body: Json }
@@ -24,7 +26,7 @@ export interface GatewayOptions {
   runWithDiagnostics?: (context: DiagnosticContext, action: () => Promise<void>) => Promise<void>;
 }
 const BODY_LIMIT = 8 * 1024 * 1024;
-const toolIds = new Set(['codex', 'opencode', 'dsh', 'vscode', 'copilot', 'claude-code']);
+const toolIds = new Set(['codex', 'opencode', 'dsh', 'vscode', 'copilot', 'claude-code', 'webstorm', 'intellij-idea', 'rider', 'pycharm']);
 const upstreamHeaderNames = new Set(['authorization', 'content-type', 'accept', 'user-agent', 'originator', 'version', 'chatgpt-account-id', 'openai-beta', 'openai-organization', 'openai-project', 'session_id', 'conversation_id', 'x-request-id', 'x-grok-cli-version', 'x-grok-client-version', 'x-grok-client-identifier', 'x-grok-client-mode', 'x-xai-token-auth', 'x-authenticateresponse', 'x-grok-conv-id', 'copilot-integration-id', 'editor-version', 'editor-plugin-version', 'x-github-api-version', 'x-initiator']);
 const responseHeaderNames = new Set(['content-type', 'x-request-id', 'retry-after']);
 class GatewayError extends Error { constructor(readonly status: number, message: string) { super(message); } }
@@ -289,7 +291,7 @@ export class Gateway {
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const began = Date.now(); let alias = ''; let providerName = ''; let endpoint = '/'; let logStatus = 200;
     let tool: ToolId | undefined, providerId: string | undefined, modelId: string | undefined;
-    let usage: TokenUsage | undefined, upstreamFailed = false, anthropic = false;
+    let usage: TokenUsage | undefined, upstreamFailed = false, anthropic = false, chatResponses = false;
     let diagnosticEndpoint: string | undefined;
     let diagnosticError: Pick<DiagnosticContext, 'errorName' | 'networkCode' | 'projectFrames'> | undefined;
     const observe = (value: unknown) => {
@@ -297,7 +299,7 @@ export class Gateway {
       if (isObject(value) && ['error', 'response.failed', 'response.incomplete'].includes(String(value.type ?? ''))) {
         // 修改点：合法预算截断会映射为 Messages max_tokens，不能把成功回复记录成 502。
         const details = isObject(value.response) && isObject(value.response.incomplete_details) ? value.response.incomplete_details : undefined;
-        if (!(anthropic && value.type === 'response.incomplete' && details?.reason === 'max_output_tokens')) upstreamFailed = true;
+        if (!((anthropic || chatResponses) && value.type === 'response.incomplete' && details?.reason === 'max_output_tokens')) upstreamFailed = true;
       }
     };
     this.state.requests++;
@@ -305,7 +307,7 @@ export class Gateway {
       endpoint = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
       anthropic = endpoint.endsWith('/v1/messages');
       // Unknown paths and query parameters can contain secrets; only known route names are retained.
-      const knownRoute = endpoint.replace(/^\/tool\/(?:codex|opencode|dsh|vscode|copilot|claude-code)/, '');
+      const knownRoute = endpoint.replace(/^\/tool\/(?:codex|opencode|dsh|vscode|copilot|claude-code|webstorm|intellij-idea|rider|pycharm)/, '');
       if (['/v1/models', '/v1/chat/completions', '/v1/responses', '/v1/messages'].includes(knownRoute)) diagnosticEndpoint = knownRoute;
       if (!this.authenticated(request)) throw new GatewayError(401, '需要有效的 ModelDock API Key。');
       const route = this.route(endpoint);
@@ -334,7 +336,9 @@ export class Gateway {
       modelId = model.id;
       if (selectedModels && !selectedModels.some(item => item.id === model.id)) throw new GatewayError(403, '此模型未授权给该工具。');
       const expectedWire = route.endpoint === '/v1/responses' ? 'responses' : 'chat-completions';
-      if (!anthropic && model.wireApi !== expectedWire) throw new GatewayError(400, '该模型使用不同协议，请选择对应的接口；本版本不进行跨协议转换。');
+      // 修改点：JetBrains AI Assistant 使用 Chat，Responses 来源在本机显式转换。
+      chatResponses = isJetBrainsTool(route.tool) && route.endpoint === '/v1/chat/completions' && model.wireApi === 'responses';
+      if (!anthropic && !chatResponses && model.wireApi !== expectedWire) throw new GatewayError(400, '该模型使用不同协议，请选择对应的接口；本版本不进行跨协议转换。');
       if (anthropic && model.wireApi === 'messages') throw new GatewayError(400, '原生 Messages 模型请使用供应商直连配置。');
       const provider = this.store.getProvider(model.providerId);
       if (provider && provider.kind !== 'openai-compatible' && ('previous_response_id' in body || 'conversation' in body)) {
@@ -344,14 +348,14 @@ export class Gateway {
       providerName = provider.name;
       providerId = provider.id;
       // 修改点：Claude Messages 在本机转换成来源原生协议，订阅凭据继续由主进程续期。
-      const upstreamBody = anthropic ? { ...parseAnthropicRequest(body, model.wireApi), model: model.upstreamId } : { ...body, model: model.upstreamId };
-      const upstreamPath = anthropic ? model.wireApi === 'responses' ? '/v1/responses' : '/v1/chat/completions' : route.endpoint;
-      await this.forward(request, response, provider, model, upstreamPath, upstreamBody, observe, anthropic ? { stream: body.stream === true } : undefined);
+      const upstreamBody = anthropic ? { ...parseAnthropicRequest(body, model.wireApi), model: model.upstreamId } : chatResponses ? { ...parseChatResponsesRequest(body), model: model.upstreamId } : { ...body, model: model.upstreamId };
+      const upstreamPath = chatResponses ? '/v1/responses' : anthropic ? model.wireApi === 'responses' ? '/v1/responses' : '/v1/chat/completions' : route.endpoint;
+      await this.forward(request, response, provider, model, upstreamPath, upstreamBody, observe, anthropic || chatResponses ? { stream: body.stream === true, kind: chatResponses ? 'chat-responses' : 'anthropic' } : undefined);
       logStatus = upstreamFailed ? 502 : response.statusCode;
     } catch (error) {
       diagnosticError = describeError(error);
-      logStatus = error instanceof GatewayError || error instanceof AnthropicBridgeError ? error.status : 502;
-      const message = error instanceof GatewayError || error instanceof AnthropicBridgeError ? error.message : '上游请求失败，请检查连接和供应商状态。';
+      logStatus = error instanceof GatewayError || error instanceof AnthropicBridgeError || error instanceof ChatResponsesBridgeError ? error.status : 502;
+      const message = error instanceof GatewayError || error instanceof AnthropicBridgeError || error instanceof ChatResponsesBridgeError ? error.message : '上游请求失败，请检查连接和供应商状态。';
       if (logStatus !== 499) this.state.lastError = message;
       if (!response.destroyed && !response.headersSent) {
         if (anthropic) jsonResponse(response, logStatus === 499 ? 400 : logStatus, { type: 'error', error: { type: logStatus === 401 ? 'authentication_error' : logStatus >= 500 ? 'api_error' : 'invalid_request_error', message } });
@@ -372,7 +376,7 @@ export class Gateway {
       }
     }
   }
-  private async forward(request: IncomingMessage, response: ServerResponse, provider: Provider, model: Model, path: string, body: Json, observe: (value: unknown) => void, bridge?: { stream: boolean }): Promise<void> {
+  private async forward(request: IncomingMessage, response: ServerResponse, provider: Provider, model: Model, path: string, body: Json, observe: (value: unknown) => void, bridge?: { stream: boolean; kind: 'anthropic' | 'chat-responses' }): Promise<void> {
     const secret = this.store.getSecret(provider.id);
     if (!secret) throw new GatewayError(503, '供应商缺少凭据。');
     const stream = body.stream === true;
@@ -398,7 +402,7 @@ export class Gateway {
         if (bridge) {
           if (upstream.body) await upstream.body.cancel();
           const retry = upstream.headers.get('retry-after'); if (retry) response.setHeader('retry-after', retry);
-          jsonResponse(response, upstream.status, { type: 'error', error: { type: upstream.status === 401 ? 'authentication_error' : upstream.status === 429 ? 'rate_limit_error' : 'api_error', message: `上游拒绝模型请求（HTTP ${upstream.status}）。` } });
+          jsonResponse(response, upstream.status, { ...(bridge.kind === 'anthropic' ? { type: 'error' } : {}), error: { type: upstream.status === 401 ? 'authentication_error' : upstream.status === 429 ? 'rate_limit_error' : 'api_error', message: `上游拒绝模型请求（HTTP ${upstream.status}）。` } });
           return;
         }
         response.statusCode = upstream.status;
@@ -422,20 +426,21 @@ export class Gateway {
           response.statusCode = upstream.status;
           response.setHeader('content-type', 'text/event-stream; charset=utf-8'); response.setHeader('cache-control', 'no-cache'); response.setHeader('x-accel-buffering', 'no');
           response.flushHeaders();
-          reader = upstream.body!.pipeThrough(createAnthropicStream(model.wireApi, model.alias, { onUpstreamEvent: observe }), { signal: controller.signal }).getReader();
+          const transform = bridge.kind === 'chat-responses' ? createResponsesChatStream(model.alias, { onUpstreamEvent: observe, signal: controller.signal }) : createAnthropicStream(model.wireApi, model.alias, { onUpstreamEvent: observe });
+          reader = upstream.body!.pipeThrough(transform, { signal: controller.signal }).getReader();
           while (true) { const item = await reader.read(); if (item.value) await write(response, item.value, controller.signal); if (item.done) break; }
           response.end();
         } else {
           let message: Json;
-          if (sse) message = await collectAnthropicStream(upstream.body!, model.wireApi, model.alias, { onUpstreamEvent: observe, signal: controller.signal });
+          if (sse) message = bridge.kind === 'chat-responses' ? await collectResponsesChatStream(upstream.body!, model.alias, { onUpstreamEvent: observe, signal: controller.signal }) : await collectAnthropicStream(upstream.body!, model.wireApi, model.alias, { onUpstreamEvent: observe, signal: controller.signal });
           else {
             const raw = await limitedText(upstream);
             let value: unknown; try { value = JSON.parse(raw); } catch { throw new GatewayError(502, '上游成功响应不是有效 JSON。'); }
-            observe(value); message = toAnthropicResponse(value, model.wireApi, model.alias);
+            observe(value); message = bridge.kind === 'chat-responses' ? responsesToChat(value, model.alias) : toAnthropicResponse(value, model.wireApi, model.alias);
           }
           if (bridge.stream) {
             response.statusCode = upstream.status; response.setHeader('content-type', 'text/event-stream; charset=utf-8'); response.setHeader('cache-control', 'no-cache');
-            response.end(anthropicMessageToSse(message));
+            response.end(bridge.kind === 'chat-responses' ? chatResponseToSse(message) : anthropicMessageToSse(message));
           } else jsonResponse(response, upstream.status, message);
         }
       } else if (sse && !stream) {

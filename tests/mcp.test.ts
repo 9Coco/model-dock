@@ -20,6 +20,17 @@ function local(manager: McpManager, enabledTools: ('codex' | 'opencode' | 'vscod
   return manager.save({ name: 'test-server', transport: 'stdio', command: 'npx', args: ['-y', 'example-mcp'], enabledTools });
 }
 describe('MCP management', () => {
+  it.each(['webstorm', 'intellij-idea', 'rider', 'pycharm'] as const)('rejects %s MCP entry points without touching any client files', tool => {
+    const { root, manager } = setup(); const saved = local(manager, ['codex']);
+    const before = readdirSync(root);
+    expect(() => manager.importFromTool(tool)).toThrow('JetBrains MCP');
+    expect(() => manager.preview(tool)).toThrow('JetBrains MCP');
+    expect(() => manager.apply(tool)).toThrow('JetBrains MCP');
+    expect(() => manager.setToolEnabled(saved.id, tool, true)).toThrow('JetBrains MCP');
+    expect(() => manager.save({ ...saved, enabledTools: [tool] })).toThrow('JetBrains MCP');
+    expect(readdirSync(root)).toEqual(before); expect(manager.list()[0].enabledTools).toEqual(['codex']);
+  });
+
   it('rejects every Claude Code MCP entry point before reading or writing other client files', () => {
     const { root, manager } = setup();
     const saved = local(manager, ['copilot']);

@@ -21,6 +21,16 @@ function add(store: Store, entry: Partial<RequestLog> & { id: string }) {
   store.addLog({ time: '2026-10-05T12:00:00Z', alias: 'shared-model', providerName: 'History', endpoint: '/v1/responses', status: 200, durationMs: 100, ...entry });
 }
 describe('measured usage and durable totals', () => {
+  it('attributes each JetBrains gateway request to its independent IDE', async () => {
+    const f = await fixture();
+    const tools = ['webstorm', 'intellij-idea', 'rider', 'pycharm'] as const;
+    tools.forEach((tool, index) => add(f.store, { id: `jetbrains-${index}`, tool, endpoint: `/tool/${tool}/v1/chat/completions`, modelId: f.model.id, providerId: f.model.providerId, usage: { inputTokens: 10 + index, outputTokens: 2, cachedInputTokens: 0 } }));
+    const result = f.usage.query(f.query);
+    expect(result.byTool.map(group => group.label).sort()).toEqual(['WebStorm', 'IntelliJ IDEA', 'Rider', 'PyCharm'].sort());
+    for (const [index, tool] of tools.entries()) expect(f.usage.query({ ...f.query, tool })).toMatchObject({ requests: 1, inputTokens: 10 + index, outputTokens: 2 });
+    expect(result.collection.unscopedRecords).toBe(0);
+  });
+
   it('reads Chat and Responses counters without adding reasoning or counting cache twice', () => {
     expect(reportedUsage({ usage: { prompt_tokens: 100, completion_tokens: 30, prompt_tokens_details: { cached_tokens: 40 }, completion_tokens_details: { reasoning_tokens: 20 } } })).toEqual({ inputTokens: 100, outputTokens: 30, cachedInputTokens: 40 });
     expect(reportedUsage({ type: 'response.completed', response: { usage: { input_tokens: 12, output_tokens: 0, input_tokens_details: { cached_tokens: 200 } } } })).toEqual({ inputTokens: 12, outputTokens: 0, cachedInputTokens: 12 });

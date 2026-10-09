@@ -81,7 +81,7 @@ describe('read-only Codex client usage import', () => {
     expect((await importToolUsage('codex', batched, options)).imported).toBe(2); expect((await importToolUsage('codex', batched, options)).imported).toBe(0); expect(records.size).toBe(2); expect(batches).toBe(2);
   });
   it('explicitly reports unsupported tools and does not invent unverified schemas', async () => {
-    const { store, options } = setup(); for (const tool of ['claude-code', 'dsh', 'vscode', 'copilot'] as const) { const result = await importToolUsage(tool, store, options); expect(result.unsupported).toBeTruthy(); expect(result.status).toBe('unsupported'); expect(result.scannedFiles).toBe(0); expect(result.imported).toBe(0); }
+    const { store, options } = setup(); for (const tool of ['claude-code', 'dsh', 'vscode', 'copilot', 'webstorm', 'intellij-idea', 'rider', 'pycharm'] as const) { const result = await importToolUsage(tool, store, options); expect(result.unsupported).toBeTruthy(); expect(result.status).toBe('unsupported'); expect(result.scannedFiles).toBe(0); expect(result.imported).toBe(0); }
     expect((await importToolUsage('opencode', store, options)).status).toBe('missing');
   });
   it('uses metadata checkpoints to avoid recounting cumulative history after file truncation and reorder', async () => {

@@ -32,16 +32,17 @@ describe('native usage synchronization and data sources', () => {
   });
   it('inspects sources and persisted timestamps without importing at construction or source reads', async () => {
     const f = fixture(); session(f.root); const sources = await f.service.sources();
-    expect(sources.sources).toHaveLength(7); expect(f.records.size).toBe(0); expect(f.state.size).toBe(0);
+    expect(sources.sources).toHaveLength(11); expect(f.records.size).toBe(0); expect(f.state.size).toBe(0);
     expect(sources.sources.find(row => row.tool === 'codex')).toMatchObject({ status: 'ready', supported: true, paths: [join(f.root, '.codex', 'sessions'), join(f.root, '.codex', 'archived_sessions')] });
     expect(sources.sources.find(row => row.tool === 'opencode')?.status).toBe('missing');
-    expect(sources.sources.filter(row => !row.supported).map(row => row.tool)).toEqual(['claude-code', 'dsh', 'vscode', 'copilot']); expect(sources.privacy).toContain('不保存提示词');
+    expect(sources.sources.filter(row => !row.supported).map(row => row.tool)).toEqual(['webstorm', 'intellij-idea', 'rider', 'pycharm', 'claude-code', 'dsh', 'vscode', 'copilot']); expect(sources.privacy).toContain('不保存提示词');
+    for (const tool of ['webstorm', 'intellij-idea', 'rider', 'pycharm']) expect(sources.sources.find(row => row.tool === tool)).toMatchObject({ status: 'unsupported', supported: false, paths: [] });
     expect(sources.sources.find(row => row.tool === 'claude-code')).toMatchObject({ status: 'unsupported', supported: false, paths: [] });
   });
   it('coalesces overlap and reports each tool with real import counts and unsupported boundaries', async () => {
     const f = fixture(); session(f.root); const first = f.service.sync(), concurrent = f.service.sync(); expect(first).toBe(concurrent);
     const result = await first; expect(result).toMatchObject({ imported: 1, scannedFiles: 1, deferredFiles: 0, startedAt: '2026-10-07T12:00:00.000Z', completedAt: '2026-10-07T12:00:00.000Z' });
-    expect(result.results.map(row => row.tool)).toEqual(['codex', 'claude-code', 'opencode', 'dsh', 'vscode', 'copilot']);
+    expect(result.results.map(row => row.tool)).toEqual(['codex', 'claude-code', 'opencode', 'dsh', 'vscode', 'copilot', 'webstorm', 'intellij-idea', 'rider', 'pycharm']);
     expect(result.results.find(row => row.tool === 'opencode')?.status).toBe('missing'); expect(result.results.find(row => row.tool === 'copilot')?.unsupported).toContain('临时事件');
     const later = await f.service.sync(); expect(later.imported).toBe(0); expect(f.records.size).toBe(1);
     const sources = await f.service.sources(); expect(sources.lastSync?.imported).toBe(0); expect(sources.sources.find(row => row.tool === 'codex')?.lastResult?.skipped).toBe(1);
