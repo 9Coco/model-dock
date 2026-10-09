@@ -8,6 +8,7 @@ import type { Provider, ProviderInput, ProviderSecret, Model, ModelInput, ToolBi
 import { isReasoningEffort, sanitizeReasoningEfforts } from '../shared/types';
 import { providerPresets, presetById } from '../shared/presets';
 import { resolveBindingModels } from '../shared/bindings';
+import { directModelsForProvider, isSingleEntryTool, updateSingleEntryBinding } from '../shared/single-entry';
 import { isJetBrainsTool } from '../shared/jetbrains';
 import type { UsageRecord } from '../shared/usage-types';
 import { normalizeApiKey } from './credentials';
@@ -76,7 +77,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS providers(id TEXT PRIMARY KEY,name TEXT NOT NULL,kind TEXT NOT NULL,base_url TEXT NOT NULL,enabled INTEGER NOT NULL,auth_status TEXT NOT NULL,note TEXT NOT NULL,preset_id TEXT NOT NULL DEFAULT 'custom',messages_auth TEXT NOT NULL DEFAULT 'bearer',claude_base_url TEXT NOT NULL DEFAULT '');
       CREATE TABLE IF NOT EXISTS secrets(provider_id TEXT PRIMARY KEY REFERENCES providers(id) ON DELETE CASCADE,ciphertext TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS models(id TEXT PRIMARY KEY,provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,upstream_id TEXT NOT NULL,alias TEXT NOT NULL UNIQUE,display_name TEXT NOT NULL,wire_api TEXT NOT NULL,context_window INTEGER NOT NULL,tools INTEGER NOT NULL,vision INTEGER NOT NULL,enabled INTEGER NOT NULL,reasoning_efforts TEXT NOT NULL DEFAULT '[]',default_reasoning_effort TEXT);
-      CREATE TABLE IF NOT EXISTS bindings(id TEXT PRIMARY KEY,name TEXT NOT NULL,enabled INTEGER NOT NULL,model_ids TEXT NOT NULL,default_model_id TEXT NOT NULL,note TEXT NOT NULL,mode TEXT NOT NULL DEFAULT 'aggregate',provider_ids TEXT,model_selection TEXT,vscode_sync_scope TEXT NOT NULL DEFAULT 'managed',copilot_sync_scope TEXT NOT NULL DEFAULT 'managed',dsh_sync_scope TEXT NOT NULL DEFAULT 'managed',claude_disable_telemetry INTEGER NOT NULL DEFAULT 1);
+      CREATE TABLE IF NOT EXISTS bindings(id TEXT PRIMARY KEY,name TEXT NOT NULL,enabled INTEGER NOT NULL,model_ids TEXT NOT NULL,default_model_id TEXT NOT NULL,note TEXT NOT NULL,mode TEXT NOT NULL DEFAULT 'aggregate',provider_ids TEXT,model_selection TEXT,vscode_sync_scope TEXT NOT NULL DEFAULT 'managed',copilot_sync_scope TEXT NOT NULL DEFAULT 'managed',dsh_sync_scope TEXT NOT NULL DEFAULT 'managed',claude_disable_telemetry INTEGER NOT NULL DEFAULT 1,connection_choices TEXT);
       CREATE TABLE IF NOT EXISTS logs(id TEXT PRIMARY KEY,time TEXT NOT NULL,alias TEXT NOT NULL,provider_name TEXT NOT NULL,endpoint TEXT NOT NULL,status INTEGER NOT NULL,duration_ms INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS usage_events(id TEXT PRIMARY KEY,time TEXT NOT NULL,alias TEXT NOT NULL,provider_name TEXT NOT NULL,endpoint TEXT NOT NULL,status INTEGER NOT NULL,duration_ms INTEGER NOT NULL,tool TEXT,provider_id TEXT,model_id TEXT,input_tokens INTEGER,output_tokens INTEGER,cached_input_tokens INTEGER,cache_creation_input_tokens INTEGER,source TEXT NOT NULL DEFAULT 'gateway');
       CREATE INDEX IF NOT EXISTS usage_time_idx ON usage_events(time);
@@ -98,6 +99,7 @@ export class Store {
       if (Array.isArray(ids) && ids.length > 1) db.run("UPDATE bindings SET mode='auto' WHERE id=?", [String(row.id)]);
     }
     for (const [tool, name] of Object.entries(TOOL_NAMES)) db.run('INSERT OR IGNORE INTO bindings(id,name,enabled,model_ids,default_model_id,note,mode,provider_ids,vscode_sync_scope,copilot_sync_scope,dsh_sync_scope) VALUES(?,?,?,?,?,?,?,?,?,?,?)', [tool, name, 0, '[]', '', '', isJetBrainsTool(tool) ? 'aggregate' : 'direct', '[]', tool === 'vscode' ? 'selected' : 'managed', tool === 'copilot' ? 'selected' : 'managed', tool === 'dsh' ? 'selected' : 'managed']);
+    store.migrateSingleEntryBindings();
     if (!store.one("SELECT value FROM settings WHERE key='gateway_key'")) db.run('INSERT INTO settings(key,value) VALUES(?,?)', ['gateway_key', codec.encrypt(store.newKey())]);
     store.persist();
     return store;
@@ -127,6 +129,7 @@ export class Store {
       }
       if (!providerColumns.includes('messages_auth')) this.db.run("ALTER TABLE providers ADD COLUMN messages_auth TEXT NOT NULL DEFAULT 'bearer'");
       if (!providerColumns.includes('claude_base_url')) this.db.run("ALTER TABLE providers ADD COLUMN claude_base_url TEXT NOT NULL DEFAULT ''");
+      if (!bindingColumns.includes('connection_choices')) this.db.run('ALTER TABLE bindings ADD COLUMN connection_choices TEXT');
       if (!bindingColumns.includes('mode')) this.db.run("ALTER TABLE bindings ADD COLUMN mode TEXT NOT NULL DEFAULT 'aggregate'");
       // 修改点：只迁移 ModelDock 内部选项，启动时不写入 Claude Code 配置。
       if (!bindingColumns.includes('claude_disable_telemetry')) this.db.run('ALTER TABLE bindings ADD COLUMN claude_disable_telemetry INTEGER NOT NULL DEFAULT 1');
@@ -318,7 +321,16 @@ export class Store {
     const group = new Set(providerIds), models = this.listModels();
     const updatedModels = models.map(model => group.has(model.providerId) ? { ...model, providerId: targetProviderId } : model);
     return this.allBindings().map(binding => {
-      if (!(binding.providerIds ?? []).some(providerId => group.has(providerId))) return binding;
+      const choices = binding.connectionChoices ? structuredClone(binding.connectionChoices) : undefined;
+      if (choices?.direct && group.has(choices.direct.providerId)) choices.direct.providerId = targetProviderId;
+      if (choices?.aggregate && choices.aggregate.providerIds.some(providerId => group.has(providerId))) {
+        const draft = choices.aggregate;
+        const before = models.filter(model => draft.providerIds.includes(model.providerId) && (draft.modelSelection === 'all' || draft.modelSelection === undefined && !draft.modelIds.length || draft.modelIds.includes(model.id)));
+        draft.providerIds = [...new Set(draft.providerIds.map(providerId => group.has(providerId) ? targetProviderId : providerId))];
+        const after = updatedModels.filter(model => draft.providerIds.includes(model.providerId));
+        if ((draft.modelSelection === 'all' || draft.modelSelection === undefined && !draft.modelIds.length) && after.some(model => !before.some(candidate => candidate.id === model.id))) { draft.modelSelection = 'selected'; draft.modelIds = before.map(model => model.id); }
+      }
+      if (!(binding.providerIds ?? []).some(providerId => group.has(providerId))) return { ...binding, ...(choices ? { connectionChoices: choices } : {}) };
       const selectedProviderIds = [...new Set((binding.providerIds ?? []).map(providerId => group.has(providerId) ? targetProviderId : providerId))];
       const selectedModels = resolveBindingModels({ ...binding, enabled: true }, models.map(model => ({ ...model, enabled: true })));
       const allAfter = resolveBindingModels({ ...binding, enabled: true, providerIds: selectedProviderIds }, updatedModels.map(model => ({ ...model, enabled: true })));
@@ -329,7 +341,7 @@ export class Store {
       const freezeSelection = expandsSelection && (binding.modelSelection === 'all' || binding.modelSelection === undefined && !binding.modelIds.length);
       const modelIds = freezeSelection ? selectedModels.map(model => model.id) : binding.modelIds;
       const modelSelection = freezeSelection ? 'selected' as const : binding.modelSelection;
-      return { ...binding, providerIds: selectedProviderIds, modelIds, modelSelection, enabled: binding.enabled && !(expandsSelection && modelIds.length === 0) };
+      return { ...binding, ...(choices ? { connectionChoices: choices } : {}), providerIds: selectedProviderIds, modelIds, modelSelection, enabled: binding.enabled && !(expandsSelection && modelIds.length === 0) };
     });
   }
   listProviderDuplicates(): ProviderDuplicateGroup[] {
@@ -355,7 +367,7 @@ export class Store {
       } catch (error) { canMerge = false; message = error instanceof Error ? error.message : '当前重复供应商无法安全合并。'; }
       const proposed = this.mergedBindings(providerIds, target.id);
       const updatedModels = models.map(model => providerIds.includes(model.providerId) ? { ...model, providerId: target.id } : model);
-      const affectedTools = bindings.flatMap((binding, index) => (binding.providerIds ?? []).some(providerId => providerIds.includes(providerId)) ? [{ id: binding.id, name: binding.name, beforeModels: resolveBindingModels(binding, models, providers).length, afterModels: resolveBindingModels(proposed[index], updatedModels, providers).length }] : []);
+      const affectedTools = bindings.flatMap((binding, index) => [...(binding.providerIds ?? []), ...(binding.connectionChoices?.aggregate?.providerIds ?? []), binding.connectionChoices?.direct?.providerId ?? ''].some(providerId => providerIds.includes(providerId)) ? [{ id: binding.id, name: binding.name, beforeModels: resolveBindingModels(binding, models, providers).length, afterModels: resolveBindingModels(proposed[index], updatedModels, providers).length }] : []);
       return { name: target.name, baseUrl: target.baseUrl, providerIds, targetProviderId: target.id, totalModels: group.reduce((count, provider) => count + this.providerModelCount(provider.id), 0), providers: group.map(provider => ({ id: provider.id, name: provider.name, hasSecret: provider.hasSecret, modelCount: this.providerModelCount(provider.id), enabled: provider.enabled })), canMerge, message, fingerprint: this.duplicateFingerprint(providerIds), affectedTools };
     });
   }
@@ -398,7 +410,7 @@ export class Store {
         this.db.run('UPDATE models SET provider_id=? WHERE provider_id=?', [keptProviderId, providerId]);
         this.db.run('UPDATE usage_events SET provider_id=? WHERE provider_id=?', [keptProviderId, providerId]);
       }
-      for (const binding of bindings) this.db.run('UPDATE bindings SET enabled=?,provider_ids=?,model_ids=?,model_selection=?,default_model_id=? WHERE id=?', [Number(binding.enabled), binding.providerIds === undefined ? null : JSON.stringify(binding.providerIds), JSON.stringify(binding.modelIds), binding.modelSelection ?? null, binding.defaultModelId, binding.id]);
+      for (const binding of bindings) this.db.run('UPDATE bindings SET enabled=?,provider_ids=?,model_ids=?,model_selection=?,default_model_id=?,connection_choices=? WHERE id=?', [Number(binding.enabled), binding.providerIds === undefined ? null : JSON.stringify(binding.providerIds), JSON.stringify(binding.modelIds), binding.modelSelection ?? null, binding.defaultModelId, binding.connectionChoices ? JSON.stringify(binding.connectionChoices) : null, binding.id]);
       for (const providerId of removedProviderIds) {
         this.db.run('DELETE FROM secrets WHERE provider_id=?', [providerId]);
         this.db.run('DELETE FROM providers WHERE id=?', [providerId]);
@@ -544,7 +556,32 @@ export class Store {
     this.db.run('INSERT INTO models(id,provider_id,upstream_id,alias,display_name,wire_api,context_window,tools,vision,enabled,reasoning_efforts,default_reasoning_effort) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET provider_id=excluded.provider_id,upstream_id=excluded.upstream_id,alias=excluded.alias,display_name=excluded.display_name,wire_api=excluded.wire_api,context_window=excluded.context_window,tools=excluded.tools,vision=excluded.vision,enabled=excluded.enabled,reasoning_efforts=excluded.reasoning_efforts,default_reasoning_effort=excluded.default_reasoning_effort', [modelId, model.providerId, model.upstreamId, alias, model.displayName, model.wireApi, model.contextWindow, Number(model.tools), Number(model.vision), Number(model.enabled), JSON.stringify(reasoningEfforts), defaultReasoningEffort ?? null]); return model;
   }
   deleteModel(modelId: string): void { this.mutate(() => { this.db.run('DELETE FROM models WHERE id=?', [modelId]); this.pruneBindings(); }); }
-  private allBindings(): ToolBinding[] { return this.rows('SELECT * FROM bindings ORDER BY rowid').map(row => ({ id: row.id as ToolId, name: String(row.name), enabled: Boolean(row.enabled), mode: row.mode === 'direct' ? 'direct' : row.mode === 'auto' ? 'auto' : 'aggregate', providerIds: row.provider_ids === null ? undefined : JSON.parse(String(row.provider_ids)), modelIds: JSON.parse(String(row.model_ids)), ...(row.model_selection === 'selected' || row.model_selection === 'all' ? { modelSelection: row.model_selection } : {}), defaultModelId: String(row.default_model_id), note: String(row.note), ...(row.id === 'vscode' ? { vscodeSyncScope: row.vscode_sync_scope === 'managed' ? 'managed' as const : 'selected' as const } : {}), ...(row.id === 'copilot' ? { copilotSyncScope: row.copilot_sync_scope === 'managed' ? 'managed' as const : 'selected' as const } : {}), ...(row.id === 'dsh' ? { dshSyncScope: row.dsh_sync_scope === 'managed' ? 'managed' as const : 'selected' as const } : {}), ...(row.id === 'claude-code' ? { claudeDisableTelemetry: row.claude_disable_telemetry !== 0 } : {}) })); }
+  private validateConnectionChoices(choices: ToolBinding['connectionChoices'], models: Model[], providers: Provider[]): void {
+    if (!choices || typeof choices !== 'object' || Array.isArray(choices) || Object.keys(choices).some(key => !['direct', 'aggregate'].includes(key))) throw new Error('连接草稿无效。');
+    const providerExists = (value: unknown) => typeof value === 'string' && (!value || providers.some(provider => provider.id === value));
+    const validDefault = (value: unknown, providerIds: string[]) => typeof value === 'string' && (!value || models.some(model => model.id === value && providerIds.includes(model.providerId)));
+    if (choices.direct && (typeof choices.direct !== 'object' || Object.keys(choices.direct).some(key => !['providerId', 'defaultModelId'].includes(key)) || !providerExists(choices.direct.providerId) || !validDefault(choices.direct.defaultModelId, [choices.direct.providerId]))) throw new Error('直连草稿引用了不存在的来源或模型。');
+    if (choices.aggregate) {
+      const choice = choices.aggregate;
+      if (Object.keys(choice).some(key => !['providerIds', 'modelIds', 'defaultModelId', 'modelSelection'].includes(key)) || !Array.isArray(choice.providerIds) || choice.providerIds.some(value => !providerExists(value) || !value) || !Array.isArray(choice.modelIds) || choice.modelIds.some(value => !models.some(model => model.id === value && choice.providerIds.includes(model.providerId))) || !validDefault(choice.defaultModelId, choice.providerIds) || choice.modelSelection !== undefined && !['all', 'selected'].includes(choice.modelSelection)) throw new Error('聚合草稿引用了不存在的来源或模型。');
+    }
+  }
+  /** Internal migration only; no client files, credentials or provider protocols change. */
+  private migrateSingleEntryBindings(): void {
+    const models = this.listModels(), providers = this.listProviders();
+    for (const binding of this.allBindings()) {
+      if (!isSingleEntryTool(binding.id) || binding.connectionChoices) continue;
+      const ids = binding.providerIds ?? [];
+      const provider = providers.find(provider => provider.id === ids[0]);
+      const scoped = resolveBindingModels({ ...binding, mode: 'aggregate', enabled: true }, models, providers);
+      const eligible = provider ? directModelsForProvider(binding.id, { ...provider, enabled: true }, models.map(model => ({ ...model, enabled: true }))) : [];
+      const canDirect = ids.length === 1 && !!provider && provider.kind === 'openai-compatible' && scoped.length > 0 && scoped.every(model => eligible.some(candidate => candidate.id === model.id));
+      const mode = binding.mode === 'aggregate' ? 'aggregate' : canDirect || !ids.length ? 'direct' : 'aggregate';
+      const updated = updateSingleEntryBinding({ ...binding, mode }, {}, models, providers);
+      this.db.run('UPDATE bindings SET mode=?,connection_choices=? WHERE id=?', [mode, JSON.stringify(updated.connectionChoices), binding.id]);
+    }
+  }
+  private allBindings(): ToolBinding[] { return this.rows('SELECT * FROM bindings ORDER BY rowid').map(row => ({ id: row.id as ToolId, name: String(row.name), enabled: Boolean(row.enabled), mode: row.mode === 'direct' ? 'direct' : row.mode === 'auto' ? 'auto' : 'aggregate', providerIds: row.provider_ids === null ? undefined : JSON.parse(String(row.provider_ids)), modelIds: JSON.parse(String(row.model_ids)), ...(row.model_selection === 'selected' || row.model_selection === 'all' ? { modelSelection: row.model_selection } : {}), defaultModelId: String(row.default_model_id), ...(row.connection_choices ? { connectionChoices: JSON.parse(String(row.connection_choices)) } : {}), note: String(row.note), ...(row.id === 'vscode' ? { vscodeSyncScope: row.vscode_sync_scope === 'managed' ? 'managed' as const : 'selected' as const } : {}), ...(row.id === 'copilot' ? { copilotSyncScope: row.copilot_sync_scope === 'managed' ? 'managed' as const : 'selected' as const } : {}), ...(row.id === 'dsh' ? { dshSyncScope: row.dsh_sync_scope === 'managed' ? 'managed' as const : 'selected' as const } : {}), ...(row.id === 'claude-code' ? { claudeDisableTelemetry: row.claude_disable_telemetry !== 0 } : {}) })); }
   listBindings(): ToolBinding[] { const bindings = this.allBindings(); return Object.keys(TOOL_NAMES).flatMap(tool => bindings.filter(binding => binding.id === tool)); }
   saveBinding(binding: ToolBinding): void {
     if (!Object.hasOwn(TOOL_NAMES, binding.id) || typeof binding.enabled !== 'boolean' || !Array.isArray(binding.modelIds) || typeof binding.defaultModelId !== 'string') throw new Error('工具绑定无效。');
@@ -568,6 +605,7 @@ export class Store {
     const modelIds = [...new Set(binding.modelIds)];
     if (modelIds.some(modelId => typeof modelId !== 'string' || !models.has(modelId))) throw new Error('工具绑定引用了不存在的模型。');
     const mode = binding.mode ?? (binding.id === 'claude-code' ? 'direct' : 'aggregate');
+    if (isSingleEntryTool(binding.id) && mode === 'auto') throw new Error('此工具只支持直连或聚合接口。');
     if (!['direct', 'aggregate', 'auto'].includes(mode)) throw new Error('工具模式无效。');
     if (binding.providerIds !== undefined && !Array.isArray(binding.providerIds)) throw new Error('来源选择无效。');
     const providerIds = binding.providerIds === undefined ? [...new Set(allModels.filter(model => modelIds.includes(model.id)).map(model => model.providerId))] : [...new Set(binding.providerIds)];
@@ -583,9 +621,14 @@ export class Store {
     if (binding.enabled && !providerIds.length) throw new Error('工具配置至少需要选择一个来源。');
     if (modelIds.some(modelId => !providerIds.includes(allModels.find(model => model.id === modelId)!.providerId))) throw new Error('模型过滤必须属于所选来源。');
     const candidate = { ...binding, mode, providerIds, modelIds, modelSelection, enabled: true };
-    if (binding.id === 'claude-code' && binding.enabled && !resolveBindingModels(candidate, allModels, providers).length) throw new Error('Claude Code 需要所选来源的可用模型。');
-    if (binding.defaultModelId && !resolveBindingModels(candidate, allModels, providers).some(model => model.id === binding.defaultModelId)) throw new Error('默认模型必须属于工具可用模型。');
-    this.mutate(() => this.db.run('UPDATE bindings SET name=?,enabled=?,model_ids=?,default_model_id=?,note=?,mode=?,provider_ids=?,model_selection=?,vscode_sync_scope=?,copilot_sync_scope=?,dsh_sync_scope=?,claude_disable_telemetry=? WHERE id=?', [TOOL_NAMES[binding.id], Number(binding.enabled), JSON.stringify(modelIds), binding.defaultModelId, typeof binding.note === 'string' ? binding.note.slice(0, 1000) : '', mode, JSON.stringify(providerIds), modelSelection ?? null, syncScope, copilotScope, dshScope, Number(claudePrivacy), binding.id]));
+    const defaultModels = binding.enabled ? resolveBindingModels(candidate, allModels, providers) : allModels.filter(model => providerIds.includes(model.providerId) && (modelSelection === 'all' || modelSelection === undefined && !modelIds.length || modelIds.includes(model.id)));
+    if (binding.defaultModelId && !defaultModels.some(model => model.id === binding.defaultModelId)) throw new Error('默认模型必须属于工具可用模型。');
+    if (isSingleEntryTool(binding.id) && binding.enabled && mode === 'direct' && !resolveBindingModels(candidate, allModels, providers).length) throw new Error(mode === 'direct' ? '直连需要所选供应商的原生 API 模型；订阅和其他协议请使用聚合接口。' : '需要所选来源的可用模型。');
+    const previous = this.allBindings().find(row => row.id === binding.id);
+    const previousChoices = !(Object.hasOwn(binding, 'connectionChoices') && binding.connectionChoices === undefined) && previous && isSingleEntryTool(binding.id) ? updateSingleEntryBinding(previous, {}, allModels, providers).connectionChoices : undefined;
+    const withChoices = updateSingleEntryBinding(candidate, { connectionChoices: { ...previousChoices, ...binding.connectionChoices } }, allModels, providers);
+    if (isSingleEntryTool(binding.id)) this.validateConnectionChoices(withChoices.connectionChoices, allModels, providers);
+    this.mutate(() => this.db.run('UPDATE bindings SET name=?,enabled=?,model_ids=?,default_model_id=?,note=?,mode=?,provider_ids=?,model_selection=?,vscode_sync_scope=?,copilot_sync_scope=?,dsh_sync_scope=?,claude_disable_telemetry=?,connection_choices=? WHERE id=?', [TOOL_NAMES[binding.id], Number(binding.enabled), JSON.stringify(modelIds), binding.defaultModelId, typeof binding.note === 'string' ? binding.note.slice(0, 1000) : '', mode, JSON.stringify(providerIds), modelSelection ?? null, syncScope, copilotScope, dshScope, Number(claudePrivacy), isSingleEntryTool(binding.id) ? JSON.stringify(withChoices.connectionChoices) : null, binding.id]));
   }
   private pruneBindings(): void {
     const models = this.listModels();
@@ -597,7 +640,19 @@ export class Store {
       const enabled = binding.enabled && providerIds.length > 0 && (binding.mode !== 'direct' || providerIds.length === 1) && (binding.modelSelection !== undefined || !binding.modelIds.length || modelIds.length > 0);
       const candidate = { ...binding, enabled, providerIds, modelIds };
       const defaultId = resolveBindingModels({ ...candidate, enabled: true }, models, providers).some(model => model.id === binding.defaultModelId) ? binding.defaultModelId : '';
-      this.db.run('UPDATE bindings SET enabled=?,provider_ids=?,model_ids=?,default_model_id=? WHERE id=?', [Number(enabled), JSON.stringify(providerIds), JSON.stringify(modelIds), defaultId, binding.id]);
+      const choices = binding.connectionChoices ? structuredClone(binding.connectionChoices) : undefined;
+      if (choices?.direct) {
+        if (!providers.some(provider => provider.id === choices.direct!.providerId)) choices.direct = { providerId: '', defaultModelId: '' };
+        else if (!models.some(model => model.id === choices.direct!.defaultModelId && model.providerId === choices.direct!.providerId)) choices.direct.defaultModelId = '';
+      }
+      if (choices?.aggregate) {
+        const draft = choices.aggregate;
+        draft.providerIds = draft.providerIds.filter(providerId => providers.some(provider => provider.id === providerId));
+        draft.modelIds = draft.modelIds.filter(modelId => models.some(model => model.id === modelId && draft.providerIds.includes(model.providerId)));
+        if (!models.some(model => model.id === draft.defaultModelId && draft.providerIds.includes(model.providerId))) draft.defaultModelId = '';
+      }
+      const updated = isSingleEntryTool(binding.id) ? updateSingleEntryBinding({ ...candidate, defaultModelId: defaultId, connectionChoices: choices }, {}, models, providers) : candidate;
+      this.db.run('UPDATE bindings SET enabled=?,provider_ids=?,model_ids=?,default_model_id=?,connection_choices=? WHERE id=?', [Number(enabled), JSON.stringify(providerIds), JSON.stringify(modelIds), defaultId, updated.connectionChoices ? JSON.stringify(updated.connectionChoices) : null, binding.id]);
     }
   }
   addLog(log: Omit<RequestLog, 'id' | 'time'> & Partial<Pick<RequestLog, 'id' | 'time'>>): void {

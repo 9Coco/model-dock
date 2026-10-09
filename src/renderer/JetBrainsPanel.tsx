@@ -8,6 +8,7 @@ import './jetbrains.css';
 
 interface Props {
   tool: ToolId;
+  aggregate: boolean;
   api?: ModelDockApi;
   models: Model[];
   defaultModel?: Model;
@@ -25,13 +26,13 @@ interface Props {
 }
 
 /** 修改点：IDE 密钥始终经主进程复制到剪贴板，不进入 renderer 或 XML。 */
-export function JetBrainsPanel({ tool, api, models, defaultModel, gateway, connection, status, autoSync, busy, notify, onRefresh, onStatusRefresh, onPreview, onExport, onApply }: Props) {
+export function JetBrainsPanel({ tool, aggregate, api, models, defaultModel, gateway, connection, status, autoSync, busy, notify, onRefresh, onStatusRefresh, onPreview, onExport, onApply }: Props) {
   const [action, setAction] = useState('');
   if (!isJetBrainsTool(tool)) return null;
-  const direct = connection?.kind === 'direct-api';
-  const url = connection?.baseUrl ?? `http://127.0.0.1:${gateway.port}/tool/${tool}/v1`;
+  const direct = !aggregate;
+  const url = connection?.baseUrl || (direct ? '' : `http://127.0.0.1:${gateway.port}/tool/${tool}/v1`);
   const modelId = connection?.modelId || defaultModel?.alias || '先选择来源和默认模型';
-  const ready = !!api && !!models.length && !!defaultModel;
+  const ready = !!api && !!models.length && !!defaultModel && (!direct || connection?.kind === 'direct-api');
   const disabled = busy || !!action;
   const run = async (name: string, operation: () => Promise<void>) => {
     if (action || busy) return;
@@ -42,13 +43,13 @@ export function JetBrainsPanel({ tool, api, models, defaultModel, gateway, conne
   };
   const copy = (value: string, label: string) => run(`copy-${label}`, async () => { await api!.copyText(value); notify(`${label}已复制。`); });
   const parameter = (label: string, value: string, buttonLabel?: string) => <div className="jetbrains-parameter"><dt>{label}</dt><dd><code>{value}</code>{buttonLabel && <button className="text-button" disabled={!api || disabled || !ready} onClick={() => void copy(value, label)} aria-label={buttonLabel}><Copy size={14} />复制</button>}</dd></div>;
-  return <section className="panel jetbrains-connection" data-jetbrains-connection={tool} data-jetbrains-connection-kind={connection?.kind}>
+  return <section className="panel jetbrains-connection" data-jetbrains-connection={tool} data-jetbrains-connection-kind={direct ? 'direct-api' : 'local-managed'} data-jetbrains-entry-count={ready ? 1 : 0}>
     <div className="section-heading"><h2>{JETBRAINS_TOOLS[tool].name} 接入参数</h2><div className="jetbrains-top-actions"><button className="button small primary" data-action="apply-tool-config" disabled={!api || disabled || !status?.canApply} title={status?.message ?? '正在确认 IDE 配置和运行状态'} onClick={() => void onApply()}><CheckCheck size={14} />同步 IDE 设置</button><button className="button small secondary" data-action="jetbrains-refresh-status" disabled={!api || disabled} onClick={() => void run('status', async () => { await onStatusRefresh(); })}><BusyIcon active={action === 'status'}><RefreshCw size={14} /></BusyIcon>检查 IDE 状态</button></div></div>
-    <p className="jetbrains-intro">更改来源、连接方式或模型后，会自动备份并更新 URL、HTTP 版本和核心 / 轻量模型。IDE 运行时先保存最新选择，退出后自动同步；也可点击「同步 IDE 设置」重新应用。API Key 首次接入或切换来源时仍需在 IDE 手工更新。{direct ? '当前 API 直连所选供应商，使用该来源的 API Key 和真实模型 ID。' : '当前连接使用本机入口和模型别名，使用时保持 ModelDock 运行。「准备本机连接」只启动本地服务。'}</p>
+    <p className="jetbrains-intro">更改来源、连接方式或模型后，会自动备份并更新 URL、HTTP 版本和核心 / 轻量模型。IDE 运行时先保存最新选择，退出后自动同步；也可点击「同步 IDE 设置」重新应用。API Key 首次接入或切换来源时仍需在 IDE 手工更新。{direct ? '当前 API 直连所选供应商，使用该来源的 API Key 和真实模型 ID。' : '当前使用一个 ModelDock 聚合入口和映射模型别名，使用时保持 ModelDock 运行。「准备本机连接」只启动本地服务。'}</p>
     {autoSync && <p role="status" className="jetbrains-key-note" data-jetbrains-auto-sync={autoSync.phase}>{autoSync.message}</p>}
     <dl className="jetbrains-parameters">
       {parameter('提供商', '兼容 OpenAI / OpenAI-compatible')}
-      {parameter('URL', url, '复制 JetBrains URL')}
+      {parameter('URL', url || '请先选择直连供应商', '复制 JetBrains URL')}
       <div className="jetbrains-parameter"><dt>API Key</dt><dd><span>{direct ? '所选供应商的 API Key' : '固定本机连接密钥'}</span><button className="text-button" data-action="jetbrains-copy-key" disabled={!ready || disabled} onClick={() => void run('key', async () => { await api!.copyConnectionKey(tool); notify(`${direct ? '供应商 API Key' : '本机 Key'}已复制，请在 IDE 的 API 密钥栏粘贴并确认。`); })}><KeyRound size={14} />复制 Key</button></dd></div>
       {parameter('HTTP 版本', 'HTTP/1.1')}
       {parameter('核心功能模型 ID', modelId, '复制核心模型 ID')}

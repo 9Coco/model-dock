@@ -1255,3 +1255,22 @@ td { padding: 12px; color: #5b7152; }
   .tool-workspace.with-model-sidebar .provider-row-actions { flex-basis: 100%; }
   .tool-workspace.with-model-sidebar .tool-source-heading > .tool-source-batch-actions { flex-wrap: wrap; }
 }
+
+/* 修改点：单入口工具的供应商直连与聚合内部配置采用独立控件。 */
+.single-entry-direct-source { margin: 14px 0; }
+.single-entry-direct-source > label { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; }
+.single-entry-direct-source select { flex: 1; min-width: 0; color: var(--ink); background: var(--field); border: 1px solid var(--line); border-radius: 6px; min-height: 34px; padding: 6px 10px; }
+.single-entry-direct-source > p { color: var(--muted); font-size: 11px; line-height: 1.7; margin: 8px 0 0; }
+.single-entry-target { display: flex; flex-wrap: wrap; align-items: baseline; gap: 5px 10px; margin: 14px 0 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--field); }
+.single-entry-target > span { color: var(--muted); font-size: 11px; }
+.single-entry-target > code { font-size: 11px; color: var(--accent); overflow-wrap: anywhere; min-width: 0; }
+.single-entry-aggregate-config { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 16px; }
+.aggregate-config-heading { margin-bottom: 16px; }
+.aggregate-config-heading h2 { margin: 0 0 6px; font-size: 14px; font-weight: 600; }
+.aggregate-config-heading p { margin: 0; font-size: 11px; line-height: 1.7; color: var(--muted); }
+.single-entry-aggregate-config .tool-primary-column { min-width: 0; }
+.single-entry-aggregate-config .tool-model-sidebar { height: min(620px, calc(100dvh - 112px)); max-height: calc(100dvh - 112px); }
+.single-entry-aggregate-config .tool-provider-selection { min-width: 0; }
+.single-entry-workspace .tool-inline-summary > .tool-aggregate-option,
+.single-entry-workspace .tool-inline-summary > .single-entry-direct-source { flex: 0 0 auto; margin: 0; }
+.single-entry-workspace .tool-inline-summary > .single-entry-target { margin: 0; }

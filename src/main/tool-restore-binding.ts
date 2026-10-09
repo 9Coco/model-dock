@@ -12,7 +12,7 @@ export async function restoreToolBinding(store: RestoreBindingStore, tool: ToolI
   const previous = store.listBindings().find(binding => binding.id === tool);
   if (!previous) throw new Error('找不到此工具的配置。');
   store.createManagedBackup('tool-official-restore', { version: 1, tool, binding: previous });
-  store.saveBinding({ ...previous, enabled: false, mode: 'direct', providerIds: [], modelIds: [], defaultModelId: '' });
+  store.saveBinding({ ...previous, connectionChoices: undefined, enabled: false, mode: 'direct', providerIds: [], modelIds: [], defaultModelId: '' });
   try { return await restoreNative(); }
   catch (error) {
     try { store.saveBinding(previous); }

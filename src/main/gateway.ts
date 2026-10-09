@@ -14,6 +14,7 @@ import { describeError } from './diagnostic-log';
 import { AnthropicBridgeError, parseAnthropicRequest, toAnthropicResponse, createAnthropicStream, collectAnthropicStream, anthropicMessageToSse } from './anthropic-bridge';
 import { ChatResponsesBridgeError, parseChatResponsesRequest, responsesToChat, createResponsesChatStream, collectResponsesChatStream, chatResponseToSse } from './chat-responses-bridge';
 import { isJetBrainsTool } from '../shared/jetbrains';
+import { isSingleEntryTool } from '../shared/single-entry';
 import { JetBrainsChatError, createJetBrainsChatStream, normalizeJetBrainsChatResponse, jetBrainsResponsesHistory } from './jetbrains-chat-stream';
 import { nativeClaudeBaseUrl } from '../shared/claude';
 import { NativeMessagesError, prepareNativeMessagesRequest, toNativeMessagesResponse, createNativeMessagesStream, collectNativeMessagesStream, nativeMessagesToSse } from './native-messages';
@@ -328,6 +329,11 @@ export class Gateway {
       if (!this.authenticated(request)) throw new GatewayError(401, '需要有效的 ModelDock API Key。');
       const route = this.route(endpoint);
       tool = route.tool;
+      // 修改点：单入口工具关闭聚合后，旧本地地址也不能隐式继续充当单家协议桥。
+      if (route.tool && isSingleEntryTool(route.tool)) {
+        const binding = this.store.listBindings().find(item => item.id === route.tool);
+        if (binding?.enabled && binding.mode !== 'aggregate') throw new GatewayError(403, '此工具使用供应商直连，请使用供应商地址；本机入口仅在使用聚合接口时开放。');
+      }
       if (request.method === 'GET' && route.endpoint === '/v1/models') {
         const data = this.allowedModels(route.tool).map(model => {
           const provider = this.store.getProvider(model.providerId)!;

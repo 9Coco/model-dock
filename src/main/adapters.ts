@@ -69,6 +69,7 @@ function selected(store: AdapterStore, id: ToolId, allowEmpty = false) {
   const binding = store.listBindings().find(b => b.id === id);
   if (!binding || !binding.enabled && !allowEmpty) throw new Error('请先启用此工具并保存模型选择。');
   const models = resolveBindingModels(binding, store.listModels(), store.listProviders?.());
+  if (id === 'codex' && binding.mode === 'direct' && binding.enabled && !models.length) throw new Error('Codex 直连需要原生 Responses API；订阅或其他协议请使用聚合接口。');
   if (!models.length && !allowEmpty) throw new Error('请至少选择一个模型。');
   return { binding, models };
 }
@@ -250,6 +251,7 @@ export function buildConfig(store: AdapterStore, tool: ToolId, port: number, rev
   if (binding.vscodeSyncScope !== undefined && !['managed', 'selected'].includes(binding.vscodeSyncScope)) throw new Error('VS Code 同步范围无效。');
   if (tool === 'codex' && selection.models.length && binding.mode === 'direct' && binding.providerIds?.length !== 1) throw new Error('Codex 直连模式请只选择一家供应商。');
   const groups = connectionGroups(store, tool, binding, port, revealKey);
+  if (tool === 'codex' && binding.mode === 'direct' && binding.enabled && (!groups.length || groups.some(group => !group.directApi))) throw new Error('Codex 直连需要原生 Responses API；订阅或其他协议请使用聚合接口。');
   const models = groups.flatMap(group => group.models);
   const first = groups[0];
   const connection = !groups.length ? '没有选择供应商：应用将清理本工具中由 ModelDock 管理的分组，保留其他配置。'

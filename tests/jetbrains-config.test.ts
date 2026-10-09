@@ -146,8 +146,8 @@ describe('JetBrains AI Assistant explicit offline configuration', () => {
     expect(JSON.parse(buildJetBrainsConfig(f.store, tool, 19876, true, f.root, f.options).content).apiKey).toBe('SYNTHETIC_PROVIDER_KEY'); expect(connectionKey(f.store, tool)).toBe('SYNTHETIC_PROVIDER_KEY');
     f.restore(); f.originals.forEach((text, index) => expect(f.read(index)).toBe(text));
   });
-  it.each(['openai-compatible', 'codex', 'copilot', 'grok'] as const)('uses one local Chat bridge for direct %s Responses or subscription sources without exporting upstream credentials', kind => {
-    const f = fixture(); f.binding.mode = 'direct'; f.provider.kind = kind;
+  it.each(['openai-compatible', 'codex', 'copilot', 'grok'] as const)('uses one aggregate Chat bridge for %s Responses or subscription sources without exporting upstream credentials', kind => {
+    const f = fixture(); f.binding.mode = 'aggregate'; f.provider.kind = kind;
     const value = JSON.parse(buildJetBrainsConfig(f.store, f.tool, 19876, true, f.root, f.options).content);
     expect(value.baseUrl).toBe('http://127.0.0.1:19876/tool/webstorm/v1'); expect(value.apiKey).toBe('SYNTHETIC_LOCAL_KEY'); expect(value.modelAssignment.core).toBe('OpenAIAPI/local-core');
     expect(value.models.every((model: any) => model.wireApi === 'chat-completions')).toBe(true); expect(connectionKey(f.store, f.tool)).toBe('SYNTHETIC_LOCAL_KEY');

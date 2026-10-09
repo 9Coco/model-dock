@@ -90,7 +90,7 @@ describe('Claude Code native BYOK configuration', () => {
     expect(f.provider.baseUrl).toBe(baseUrl); expect(f.model.wireApi).toBe('responses'); expect(f.models).toHaveLength(1);
   });
   it.each(['codex', 'grok', 'copilot'] as const)('uses only a fixed local key and model alias for the %s subscription bridge, then safely restores user settings', kind => {
-    const f = fixture(); f.provider.kind = kind; f.model.wireApi = 'responses'; f.provider.messagesAuth = 'api-key';
+    const f = fixture(); f.binding.mode = 'aggregate'; f.provider.kind = kind; f.model.wireApi = 'responses'; f.provider.messagesAuth = 'api-key';
     f.store.getSecret = vi.fn(() => { throw new Error('Subscription credentials must stay in the main process.'); });
     const preview = buildConfig(f.store, 'claude-code', 19876), value = JSON.parse(preview.content);
     expect(value.env.ANTHROPIC_BASE_URL).toBe('http://127.0.0.1:19876/tool/claude-code'); expect(value.env.ANTHROPIC_AUTH_TOKEN).toBe('__MODELDOCK_LOCAL_KEY__'); expect(value.env).not.toHaveProperty('ANTHROPIC_API_KEY');
@@ -103,10 +103,10 @@ describe('Claude Code native BYOK configuration', () => {
     expect(f.read()).toEqual({ ...original, env: { ...original.env, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' } });
   });
   it('bridges a custom OpenAI API without exporting its upstream key and restores thinking settings when switched to an official native endpoint', () => {
-    const f = fixture(); f.model.wireApi = 'chat-completions';
+    const f = fixture(); f.binding.mode = 'aggregate'; f.model.wireApi = 'chat-completions';
     const original = { env: { MAX_THINKING_TOKENS: '4096', CLAUDE_CODE_DISABLE_THINKING: '0' } }; f.write(f.target, original);
     f.apply(); expect(f.read().env.ANTHROPIC_AUTH_TOKEN).toBe('SYNTHETIC_GATEWAY_KEY'); expect(f.read().model).toBe(f.model.alias); expect(f.read().env.MAX_THINKING_TOKENS).toBe('0');
-    f.provider.presetId = 'deepseek'; f.provider.baseUrl = 'https://api.deepseek.com'; f.apply();
+    f.binding.mode = 'direct'; f.provider.presetId = 'deepseek'; f.provider.baseUrl = 'https://api.deepseek.com'; f.apply();
     expect(f.read().env.ANTHROPIC_BASE_URL).toBe('https://api.deepseek.com/anthropic'); expect(f.read().env.ANTHROPIC_AUTH_TOKEN).toBe('SYNTHETIC_SECRET_API_KEY'); expect(f.read().model).toBe(f.model.upstreamId);
     expect(f.read().env.MAX_THINKING_TOKENS).toBe('4096'); expect(f.read().env.CLAUDE_CODE_DISABLE_THINKING).toBe('0'); expect(f.read().env).not.toHaveProperty('CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING');
     expect(f.store.getManagedState<any>(claudeHistoryKey(f.target), null).fields).not.toHaveProperty('env.MAX_THINKING_TOKENS');
@@ -117,15 +117,15 @@ describe('Claude Code native BYOK configuration', () => {
     expect(f.provider.baseUrl).toBe('https://messages.fixture/anthropic/v1/');
   });
   it('refuses an invalid local gateway port before exporting or applying credentials', () => {
-    const f = fixture(); f.model.wireApi = 'responses';
+    const f = fixture(); f.binding.mode = 'aggregate'; f.model.wireApi = 'responses';
     expect(() => buildConfig(f.store, 'claude-code', 0)).toThrow('端口'); expect(() => f.apply({ port: 65536 })).toThrow('端口'); expect(existsSync(f.target)).toBe(false);
   });
   it.each(['missing', 'signing-in', 'error'] as const)('does not publish a bridge for a source whose auth is %s', authStatus => {
-    const f = fixture(); f.provider.kind = 'codex'; f.model.wireApi = 'responses'; f.provider.authStatus = authStatus;
+    const f = fixture(); f.binding.mode = 'aggregate'; f.provider.kind = 'codex'; f.model.wireApi = 'responses'; f.provider.authStatus = authStatus;
     expect(() => buildClaudeConfig(f.store)).toThrow('尚未就绪'); expect(() => f.apply()).toThrow('尚未就绪'); expect(existsSync(f.target)).toBe(false);
   });
   it('does not publish a bridge for a provider with no stored credentials', () => {
-    const f = fixture(); f.model.wireApi = 'chat-completions'; f.provider.hasSecret = false;
+    const f = fixture(); f.binding.mode = 'aggregate'; f.model.wireApi = 'chat-completions'; f.provider.hasSecret = false;
     expect(() => f.apply()).toThrow('尚未就绪'); expect(existsSync(f.target)).toBe(false);
   });
   it('rejects invalid Messages auth configuration before changing settings', () => {

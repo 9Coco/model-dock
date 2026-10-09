@@ -38,7 +38,8 @@ export async function verifyClaudeConfiguration(window: BrowserWindow, store: St
   await waitFor(`!!document.querySelector('[data-tool-binding="claude-code"]')`);
   assert.equal(await evaluate<boolean>(`document.querySelector('[data-action="claude-disable-telemetry"]').checked`), true);
   assert.equal(await evaluate<boolean>(`!!document.querySelector('[data-action="select-all-tool-providers"]')`), false);
-  await click(`article[data-provider-id="${provider.id}"] input[data-action="select-tool-provider"]`);
+  await waitFor(`!!document.querySelector('[data-action="single-entry-direct-provider"]')&&!document.querySelector('[data-action="single-entry-direct-provider"]').disabled`);
+  await evaluate(`(()=>{const select=document.querySelector('[data-action="single-entry-direct-provider"]');Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(select,${JSON.stringify(provider.id)});select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
   await waitFor(`document.querySelector('[data-tool-application-status]')?.dataset.toolApplicationState==='synced'&&!document.querySelector('[data-action="apply-tool-config"]')?.disabled`);
   assert.equal(config().env.ANTHROPIC_MODEL, first.upstreamId);
   assert.equal(config().env.ANTHROPIC_BASE_URL, upstream.href.replace(/\/$/, ''));
@@ -80,6 +81,9 @@ export async function verifyClaudeConfiguration(window: BrowserWindow, store: St
   const gateway = await evaluate<any>('window.modelDock.startGateway(0)');
   assert.equal(gateway.running, true);
   await click('[aria-label="刷新本机配置"]');
+  await click('[data-action="tool-use-aggregate"]');
+  await waitFor(`!!document.querySelector('[data-aggregate-internal="claude-code"]')&&!document.querySelector('[data-action="tool-use-aggregate"]').disabled`);
+  if (await evaluate<boolean>(`document.querySelector('article[data-provider-id="${provider.id}"] input[data-action="select-tool-provider"]')?.checked===true`)) await click(`article[data-provider-id="${provider.id}"] input[data-action="select-tool-provider"]`);
   await click(`article[data-provider-id="${subscription.id}"] input[data-action="select-tool-provider"]`);
   await waitFor(`(async()=>{const binding=(await window.modelDock.snapshot()).bindings.find(b=>b.id==='claude-code');return binding.providerIds.length===1&&binding.providerIds[0]===${JSON.stringify(subscription.id)}&&!document.querySelector('[data-action="apply-tool-config"]')?.disabled;})()`);
   assert.equal(config().env.ANTHROPIC_MODEL, subscriptionModel.alias);

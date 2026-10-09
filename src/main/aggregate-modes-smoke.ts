@@ -6,6 +6,7 @@ import type { Store } from './store';
 import type { Model, ToolBinding, ToolId } from '../shared/types';
 import { bindingConnectionPolicy } from '../shared/bindings';
 import { isJetBrainsTool } from '../shared/jetbrains';
+import { isSingleEntryTool } from '../shared/single-entry';
 
 const tools: ToolId[] = ['codex', 'claude-code', 'opencode', 'dsh', 'vscode', 'copilot', 'webstorm', 'intellij-idea', 'rider', 'pycharm'];
 /** 修改点：验证真实React切换与IPC保存，外部客户端写入仅限隔离的假home。 */
@@ -83,12 +84,24 @@ export async function verifyAggregateModes(window: BrowserWindow, store: Store, 
       if (['claude-code', 'webstorm', 'opencode', 'codex'].includes(tool)) writeFileSync(join(outputDir, `${tool}-aggregate-${theme}-${width}.png`), await captureUi());
     }
     await click('[data-action="tool-use-aggregate"]');
+    if (isSingleEntryTool(tool)) {
+      await waitFor(`!!document.querySelector('[data-action="single-entry-direct-provider"]')&&!document.querySelector('[data-action="single-entry-direct-provider"]').disabled`, `${tool} native supplier picker`);
+      await evaluate(`(()=>{const select=document.querySelector('[data-action="single-entry-direct-provider"]');Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(select,${JSON.stringify(providers[1].id)});select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+      await idle(tool);
+      await evaluate(`(()=>{const select=document.querySelector('[data-action="tool-default-model"]');Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(select,${JSON.stringify(chosen[1].id)});select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    }
     await waitFor(`(async()=>{const binding=(await window.modelDock.snapshot()).bindings.find(b=>b.id===${JSON.stringify(tool)});return binding.mode==='direct'&&binding.providerIds.length===1&&!document.querySelector('[data-action="tool-use-aggregate"]').disabled;})()`, `${tool} direct mode`);
     assert.deepEqual(stored(tool).providerIds, [providers[1].id]); assert.equal(stored(tool).defaultModelId, chosen[1].id);
     const direct = await evaluate<any>(`window.modelDock.previewConfig(${JSON.stringify(tool)})`);
     assert.ok(!direct.content.includes(`/tool/${tool}`));
     if (isJetBrainsTool(tool)) assert.equal(JSON.parse(direct.content).modelAssignment.core, `OpenAIAPI/${chosen[1].upstreamId}`);
     const singleRequest = await fetch(`http://127.0.0.1:${gateway.port}/tool/${tool}/v1/${path}`, { method: 'POST', headers, body: JSON.stringify(tool === 'codex' ? { model: chosen[0].alias, input: 'SYNTHETIC' } : { model: chosen[0].alias, max_tokens: 64, messages: [{ role: 'user', content: 'SYNTHETIC' }] }) }); assert.equal(singleRequest.status, 403);
+    if (isSingleEntryTool(tool)) {
+      assert.equal(await evaluate<number>(`document.querySelectorAll('[data-action="select-tool-provider"]').length`), 0);
+      await click('[data-action="tool-use-aggregate"]'); await idle(tool);
+      assert.deepEqual(new Set(stored(tool).providerIds), new Set(providers.map(provider => provider.id)));
+      assert.deepEqual(new Set(stored(tool).modelIds), new Set(chosen.map(model => model.id)));
+    }
     results.push({ tool, twoSourceAggregate: true, oneEndpoint: true, exactModels: true, routedAAndB: true, defaultProviderRetainedOnDirect: true, directUsesNativeApi: true, excludedSourceRejected: true, externalSync: tool === 'copilot' ? 'serialization-only-no-running-client' : isJetBrainsTool(tool) ? 'manual-offline-boundary' : 'isolated-fixture' });
   }
   writeFileSync(join(outputDir, 'aggregate-modes-validation.json'), JSON.stringify({ ok: true, tools: results, layouts, allTenToggles: true, mockInferenceRequests: 20, noActualClientProfiles: true }, null, 2));
