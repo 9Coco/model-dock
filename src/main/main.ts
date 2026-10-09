@@ -69,6 +69,7 @@ import type { ModelPrice, UsageQuery } from '../shared/usage-types';
 import type { AppSettings } from '../shared/settings-types';
 import type { ModelSelection } from '../shared/catalog-types';
 import type { ConnectionTestInput } from '../shared/connection-types';
+import { WindowPresentation } from './window-presentation';
 
 let window: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -85,8 +86,7 @@ let usageSync: UsageSyncService;
 let preferences: SettingsManager;
 let catalog: ModelCatalog;
 let connectionTester: ConnectionTester;
-let showWhenRendererReady = true;
-let rendererHasLoaded = false;
+let presentation: WindowPresentation | null = null;
 let explicitOpenRequested = false;
 let quitting = false;
 let dataDir = '';
@@ -139,20 +139,27 @@ function appIcon() {
 }
 function revealWindow() {
   explicitOpenRequested = true;
-  showWhenRendererReady = true;
-  if (!window || !rendererHasLoaded) return;
-  if (window.isMinimized()) window.restore();
-  window.show(); window.focus();
+  presentation?.requestOpen();
 }
 async function createWindow(forceShow = false) {
   const mark = appIcon();
-  rendererHasLoaded = false;
-  showWhenRendererReady = forceShow || explicitOpenRequested || !preferences.get().settings.startHidden;
   window = new BrowserWindow({ width: 1080, height: 720, minWidth: 980, minHeight: 680, show: false,
     title: 'ModelDock · 模型坞', backgroundColor: nativeTheme.shouldUseDarkColors ? '#19191c' : '#f8f9fb', icon: mark,
     webPreferences: { preload: join(__dirname, 'preload.cjs'), nodeIntegration: false,
       contextIsolation: true, sandbox: true, webSecurity: true, backgroundThrottling: !__MODELDOCK_SMOKE_BUILD__ },
   });
+  const currentWindow = window;
+  const currentPresentation = new WindowPresentation(
+    forceShow || explicitOpenRequested || !preferences.get().settings.startHidden,
+    focus => {
+      if (__MODELDOCK_SMOKE_BUILD__ || currentWindow.isDestroyed() || window !== currentWindow) return;
+      if (currentWindow.isMinimized()) currentWindow.restore();
+      currentWindow.show();
+      if (focus) currentWindow.focus();
+    }, forceShow || explicitOpenRequested,
+  );
+  presentation = currentPresentation;
+  currentWindow.once('ready-to-show', () => currentPresentation.windowDidPaint());
   window.webContents.setWindowOpenHandler(({ url }) => {
     try {
       const target = new URL(url);
@@ -177,7 +184,7 @@ async function createWindow(forceShow = false) {
     if (preferences.get().settings.closeToTray && tray) window?.hide();
     else { quitting = true; app.quit(); }
   });
-  window.on('closed', () => { window = null; });
+  window.on('closed', () => { if (window === currentWindow) { window = null; presentation = null; } });
   if (__MODELDOCK_RUNTIME_MODE__ === 'development' && devUrl) {
     const url = new URL(devUrl);
     if (url.hostname !== '127.0.0.1' || url.protocol !== 'http:') throw new Error('开发界面只允许本机地址。');
@@ -651,13 +658,7 @@ function registerIpc() {
   });
   handle('openTerminal', () => preferences.openTerminal(dataDir));
   handle('rendererReady', () => {
-    if (rendererHasLoaded) return;
-    rendererHasLoaded = true;
-    if (window && !__MODELDOCK_SMOKE_BUILD__ && showWhenRendererReady) {
-      if (window.isMinimized()) window.restore();
-      window.show();
-      if (explicitOpenRequested) window.focus();
-    }
+    presentation?.rendererDidPrepare();
   });
   handle('saveProvider', (input: ProviderInput) => {
     assertEditable();

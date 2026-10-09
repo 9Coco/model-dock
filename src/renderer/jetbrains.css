@@ -18,3 +18,14 @@
 .tool-logo.intellij-idea { color: #9872ba; }
 .tool-logo.rider { color: #a96992; }
 .tool-logo.pycharm { color: #65967a; }
+
+/* 修改点：两栏工具页中的 IDE 参数在左栏紧凑换行，模型栏始终留在右侧。 */
+.tool-workspace.with-model-sidebar .jetbrains-parameter { grid-template-columns: minmax(0, 1fr); gap: 5px; }
+.tool-workspace.with-model-sidebar .jetbrains-parameter dd { flex-wrap: wrap; gap: 6px 10px; }
+.tool-workspace.with-model-sidebar .jetbrains-parameter dd > code, .tool-workspace.with-model-sidebar .jetbrains-parameter dd > span { min-width: 0; overflow-wrap: anywhere; }
+.tool-workspace.with-model-sidebar .jetbrains-connection { padding: 15px; }
+
+/* 修改点：显式同步是接入参数的首要操作，运行状态限制仍由原 canApply 控制。 */
+.jetbrains-connection > .section-heading { flex-wrap: wrap; gap: 10px; }
+.jetbrains-top-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; min-width: 0; }
+.jetbrains-top-actions > .button { min-height: 32px; padding: 6px 10px; }

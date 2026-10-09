@@ -41,8 +41,8 @@ export function JetBrainsPanel({ tool, api, models, defaultModel, gateway, conne
   const copy = (value: string, label: string) => run(`copy-${label}`, async () => { await api!.copyText(value); notify(`${label}已复制。`); });
   const parameter = (label: string, value: string, buttonLabel?: string) => <div className="jetbrains-parameter"><dt>{label}</dt><dd><code>{value}</code>{buttonLabel && <button className="text-button" disabled={!api || disabled || !ready} onClick={() => void copy(value, label)} aria-label={buttonLabel}><Copy size={14} />复制</button>}</dd></div>;
   return <section className="panel jetbrains-connection" data-jetbrains-connection={tool} data-jetbrains-connection-kind={connection?.kind}>
-    <div className="section-heading"><h2>{JETBRAINS_TOOLS[tool].name} 接入参数</h2><button className="button small secondary" data-action="jetbrains-refresh-status" disabled={!api || disabled} onClick={() => void run('status', async () => { await onStatusRefresh(); })}><BusyIcon active={action === 'status'}><RefreshCw size={14} /></BusyIcon>检查 IDE 状态</button></div>
-    <p className="jetbrains-intro">在 IDE 设置的「工具 → AI Assistant → 提供商与 API 密钥」中填写下方参数。{direct ? '当前 API 直连所选供应商，使用该来源的 API Key 和真实模型 ID。' : '当前连接使用 ModelDock 本机入口和模型别名，保持 ModelDock 运行。'}</p>
+    <div className="section-heading"><h2>{JETBRAINS_TOOLS[tool].name} 接入参数</h2><div className="jetbrains-top-actions"><button className="button small primary" data-action="apply-tool-config" disabled={!api || disabled || !status?.canApply} title={status?.message ?? '正在确认 IDE 配置和运行状态'} onClick={() => void onApply()}><CheckCheck size={14} />同步 IDE 设置</button><button className="button small secondary" data-action="jetbrains-refresh-status" disabled={!api || disabled} onClick={() => void run('status', async () => { await onStatusRefresh(); })}><BusyIcon active={action === 'status'}><RefreshCw size={14} /></BusyIcon>检查 IDE 状态</button></div></div>
+    <p className="jetbrains-intro">退出 IDE 后，点击「同步 IDE 设置」可一次写入 URL、HTTP 版本和核心 / 轻量模型，同步前会自动备份。API Key 首次接入时需在每个 IDE 手工粘贴一次。{direct ? '当前 API 直连所选供应商，使用该来源的 API Key 和真实模型 ID。' : '「准备本机连接」只启动 ModelDock 本地服务，不会同步 IDE 设置；当前连接使用本机入口和模型别名，使用时保持 ModelDock 运行。'}</p>
     <dl className="jetbrains-parameters">
       {parameter('提供商', '兼容 OpenAI / OpenAI-compatible')}
       {parameter('URL', url, '复制 JetBrains URL')}
@@ -53,12 +53,11 @@ export function JetBrainsPanel({ tool, api, models, defaultModel, gateway, conne
       {parameter('工具调用', defaultModel?.tools ? '开启；仍需在 IDE 中测试实际模型支持' : '当前模型未声明工具支持，建议关闭')}
       {parameter('上下文', defaultModel?.contextWindow ? `${defaultModel.contextWindow.toLocaleString('zh-CN')} tokens；如 IDE 可设置，请以套餐实际限制为准` : '未设置；请查阅供应商规格后在模型目录填写')}
     </dl>
-    <p className="jetbrains-key-note">API Key 需要在 IDE 中手工粘贴；切换连接方式或来源后请更新密钥，ModelDock 不写入 IDE 的密码存储。点击 IDE 的「测试连接」后，再选择模型并发送一条消息确认推理可用。</p>
+    <p className="jetbrains-key-note">API Key 首次接入时需在每个 IDE 手工粘贴一次；切换连接方式或来源后请更新密钥，ModelDock 不写入 IDE 的密码存储。点击 IDE 的「测试连接」后，再选择模型并发送一条消息确认推理可用。</p>
     <div className="jetbrains-actions">
-      {!direct && <button className="button small primary" data-action="jetbrains-prepare-connection" disabled={!ready || disabled} onClick={() => void run('prepare', async () => { const result = await api!.startGateway(gateway.port); await onRefresh(); if (!result.running) throw new Error(result.lastError || '本机连接未能启动。'); notify('本机连接已准备好，请在 IDE 中确认 API Key 和模型。'); })}><BusyIcon active={action === 'prepare'}><Plug2 size={14} /></BusyIcon>准备本机连接</button>}
+      {!direct && <button className="button small secondary" data-action="jetbrains-prepare-connection" title="只启动本机服务；IDE 设置由上方同步按钮写入" disabled={!ready || disabled} onClick={() => void run('prepare', async () => { const result = await api!.startGateway(gateway.port); await onRefresh(); if (!result.running) throw new Error(result.lastError || '本机连接未能启动。'); notify('本机服务已启动；退出 IDE 后可同步设置，API Key 仍需在 IDE 中确认。'); })}><BusyIcon active={action === 'prepare'}><Plug2 size={14} /></BusyIcon>准备本机连接</button>}
       <button className="button small secondary" data-action="preview-tool-config" disabled={!api || disabled || !models.length} onClick={() => void onPreview()}><FileCode2 size={14} />预览接入参数</button>
       <button className="button small secondary" data-action="export-tool-config" disabled={!ready || disabled} onClick={() => void onExport()}><ArrowDownToLine size={14} />导出参考参数</button>
-      <button className="button small secondary" data-action="apply-tool-config" disabled={!api || disabled || !status?.canApply} title={status?.message ?? '正在确认 IDE 配置和运行状态'} onClick={() => void onApply()}><CheckCheck size={14} />同步 IDE 设置</button>
     </div>
     <div className="jetbrains-profile" data-jetbrains-running={status?.running ?? 'unknown'}>
       <strong>{status?.foundProfile ? `配置目录${status.version ? ` · ${status.version}` : ''}` : 'IDE 配置状态'}</strong>

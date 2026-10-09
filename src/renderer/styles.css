@@ -1213,3 +1213,45 @@ td { padding: 12px; color: #5b7152; }
 .discovery-success > svg { margin-top: 2px; }
 .discovery-footer > span { color: var(--muted); font-size: 11px; }
 .discovery-footer .button { white-space: nowrap; }
+
+/* 修改点：聚合模型固定在工具页右栏，连接摘要和供应商保留在左栏。 */
+.tool-workspace { min-width: 0; }
+.tool-workspace.with-model-sidebar { display: grid; grid-template-columns: minmax(0, 1fr) clamp(248px, 30%, 340px); align-items: start; gap: 18px; }
+.tool-primary-column { min-width: 0; }
+.tool-model-sidebar { position: sticky; top: 0; min-width: 0; height: calc(100dvh - 112px); max-height: calc(100dvh - 112px); }
+.tool-model-sidebar > .codex-aggregate-models { display: flex; flex-direction: column; height: 100%; min-height: 0; margin: 0; padding: 14px; }
+.tool-model-sidebar .section-heading { align-items: flex-start; gap: 9px; flex-shrink: 0; }
+.tool-model-sidebar .section-heading > h2 { flex-wrap: wrap; gap: 6px; min-width: 0; font-size: 12px; }
+.tool-model-sidebar .section-heading > .tool-source-batch-actions { margin-left: 0; flex: 0 0 100%; }
+.tool-model-sidebar .tool-source-batch-actions > .button { flex: 1; }
+.tool-model-sidebar .aggregate-model-note, .tool-model-sidebar .aggregate-model-endpoint { flex-shrink: 0; }
+.tool-model-sidebar .aggregate-model-list { grid-template-columns: minmax(0, 1fr); align-content: start; flex: 1; min-height: 0; max-height: none; padding-right: 3px; overflow-y: auto; overscroll-behavior-y: contain; }
+.tool-model-sidebar .aggregate-model-option { align-items: flex-start; gap: 8px; padding: 10px; }
+.tool-model-sidebar .aggregate-model-option input { margin-top: 2px; }
+.tool-workspace.with-model-sidebar .tool-inline-controls > label { min-width: 0; flex-basis: 100%; }
+.tool-workspace.with-model-sidebar .tool-inline-actions { margin-left: auto; }
+.tool-workspace.with-model-sidebar .tool-inline-heading { flex-wrap: wrap; }
+.tool-workspace.with-model-sidebar .tool-inline-heading > div { min-width: 150px; }
+.tool-workspace.with-model-sidebar .tool-inline-heading > .badge { max-width: 100%; white-space: normal; line-height: 1.6; }
+.tool-workspace.with-model-sidebar .tool-source-heading > .search-box { flex-basis: 100%; width: 100%; }
+.tool-workspace.with-model-sidebar .tool-source-selection-note { overflow-wrap: anywhere; }
+.tool-workspace.with-model-sidebar .tool-connection-heading { flex-wrap: wrap; }
+.tool-workspace.with-model-sidebar .tool-connection-heading > .button { margin-left: auto; }
+@media (max-width: 1120px) {
+  .tool-workspace.with-model-sidebar { gap: 14px; }
+  .tool-model-sidebar > .codex-aggregate-models { padding: 12px; }
+  .tool-workspace.with-model-sidebar .provider-row { display: grid; grid-template-columns: 22px 32px minmax(0, 1fr); gap: 6px 9px; align-items: center; }
+  .tool-workspace.with-model-sidebar .provider-monogram { width: 32px; height: 32px; }
+  .tool-workspace.with-model-sidebar .provider-row-side { grid-column: 3; display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 8px; max-width: none; min-width: 0; width: 100%; }
+  .tool-workspace.with-model-sidebar .provider-row-actions { flex-wrap: nowrap; }
+  .tool-workspace.with-model-sidebar .provider-test-default { min-width: 0; max-width: 180px; }
+  .tool-workspace.with-model-sidebar .provider-test-default > code { max-width: 140px; }
+}
+@media (max-width: 900px) {
+  .tool-workspace.with-model-sidebar { grid-template-columns: minmax(0, 1fr) 228px; gap: 10px; }
+  .tool-workspace.with-model-sidebar .tool-detail-summary { padding: 12px; }
+  .tool-workspace.with-model-sidebar .tool-inline-heading > div { min-width: 120px; }
+  .tool-workspace.with-model-sidebar .provider-row-side { flex-wrap: wrap; justify-content: flex-end; }
+  .tool-workspace.with-model-sidebar .provider-row-actions { flex-basis: 100%; }
+  .tool-workspace.with-model-sidebar .tool-source-heading > .tool-source-batch-actions { flex-wrap: wrap; }
+}
