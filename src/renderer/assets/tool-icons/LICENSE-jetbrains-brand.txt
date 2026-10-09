@@ -1,0 +1,23 @@
+JetBrains product icon attribution and brand guidance
+
+WebStorm, IntelliJ IDEA, JetBrains Rider and PyCharm product icons are
+copyright JetBrains s.r.o. Their names and logos are JetBrains trademarks.
+
+These four SVG assets were downloaded on 2026-10-09 from the official
+JetBrains Brand Guidelines page and its linked resources.jetbrains.com
+downloads. They are preserved unmodified, displayed in their original
+colors, and scaled proportionally to identify compatible IDE integrations.
+
+Authoritative brand guidance:
+https://www.jetbrains.com/company/brand/
+
+Official icon downloads:
+https://resources.jetbrains.com/storage/products/company/brand/logos/WebStorm_icon.svg
+https://resources.jetbrains.com/storage/products/company/brand/logos/IntelliJ_IDEA_icon.svg
+https://resources.jetbrains.com/storage/products/company/brand/logos/Rider_icon.svg
+https://resources.jetbrains.com/storage/products/company/brand/logos/PyCharm_icon.svg
+
+These brand assets are excluded from ModelDock's MIT artwork license.
+This attribution record does not replace JetBrains' brand guidelines or
+grant independent trademark rights. Their use here identifies compatible
+products and does not imply affiliation or endorsement by JetBrains.

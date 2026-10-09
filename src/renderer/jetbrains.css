@@ -14,11 +14,6 @@
 .jetbrains-scope-note { margin-bottom: 0; }
 @media (max-width: 800px) { .jetbrains-parameter { grid-template-columns: 1fr; gap: 5px; } }
 
-.tool-logo.webstorm { color: #498b9b; }
-.tool-logo.intellij-idea { color: #9872ba; }
-.tool-logo.rider { color: #a96992; }
-.tool-logo.pycharm { color: #65967a; }
-
 /* 修改点：两栏工具页中的 IDE 参数在左栏紧凑换行，模型栏始终留在右侧。 */
 .tool-workspace.with-model-sidebar .jetbrains-parameter { grid-template-columns: minmax(0, 1fr); gap: 5px; }
 .tool-workspace.with-model-sidebar .jetbrains-parameter dd { flex-wrap: wrap; gap: 6px 10px; }

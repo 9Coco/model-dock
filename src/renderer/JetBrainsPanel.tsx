@@ -38,6 +38,7 @@ export function JetBrainsPanel({ tool, aggregate, api, models, defaultModel, gat
   const url = connection?.baseUrl || (direct ? '' : `http://127.0.0.1:${gateway.port}/tool/${tool}/v1`);
   const modelId = connection?.modelId || defaultModel?.alias || '先选择来源和默认模型';
   const ready = !!api && !!models.length && !!defaultModel && (!direct || connection?.kind === 'direct-api');
+  const followingUnsupported = !completionSelection && completion.configured && !completion.supported;
   const disabled = busy || !!action;
   const run = async (name: string, operation: () => Promise<void>) => {
     if (action || busy) return;
@@ -64,17 +65,19 @@ export function JetBrainsPanel({ tool, aggregate, api, models, defaultModel, gat
     </dl>
     <div className="jetbrains-completion-config" data-jetbrains-completion={tool} data-completion-supported={completion.supported}>
       <h3>AI 补全配置</h3>
-      <label className="form-field">补全模型<select data-action="jetbrains-completion-model" value={completionSelection} disabled={!api || disabled || !ready} onChange={event => void run('completion-model', () => onCompletionModelSelect(event.target.value))}><option value="">跟随聊天默认模型</option>{completionModels.map(model => <option key={model.id} value={model.id}>{model.displayName || model.upstreamId} · {direct ? model.upstreamId : model.alias}</option>)}</select></label>
+      <p className="jetbrains-key-note" data-completion-candidates={completionModels.length}>聊天已{direct ? '配置' : '映射'} {models.length} 个模型，其中 {completionModels.length} 个已确认支持原生 FIM 补全。下拉框提供这些补全模型及「跟随聊天默认模型」；聊天模型加入聚合后仍需具备独立的补全接口。目前支持 DeepSeek Flash / Pro 的原生 FIM。</p>
+      <label className="form-field">补全模型<select data-action="jetbrains-completion-model" value={completionSelection} disabled={!api || disabled || !ready} onChange={event => void run('completion-model', () => onCompletionModelSelect(event.target.value))}><option value="">{followingUnsupported ? '跟随聊天默认模型（当前模型未确认原生补全支持）' : '跟随聊天默认模型'}</option>{completionModels.map(model => <option key={model.id} value={model.id}>{model.displayName || model.upstreamId} · {direct ? model.upstreamId : model.alias}</option>)}</select></label>
       <dl className="jetbrains-parameters">
+        {parameter('补全状态', completion.supported ? '已确认原生 FIM；需在 IDE 单独确认密钥和启用' : completion.configured ? '当前模型未确认原生补全支持；同步后保持停用' : '先选择来源和模型')}
         {parameter('补全提供商', '兼容 OpenAI / OpenAI-compatible')}
         {parameter('补全基础 URL', completion.baseUrl || '先选择来源和模型', completion.configured ? '复制 AI 补全 URL' : undefined)}
         {parameter('补全模型 ID', completion.model || '未设置', completion.configured ? '复制 AI 补全模型' : undefined)}
-        {parameter('提示架构', completion.schemaId ? '(fim) Generic · 原生文本补全' : '未设置')}
-        <div className="jetbrains-parameter"><dt>补全 API Key</dt><dd><span>{direct ? '所选供应商的 API Key，需在补全区单独粘贴' : '固定本机 Key，需在补全区单独粘贴'}</span><button className="text-button" data-action="jetbrains-copy-completion-key" disabled={!ready || disabled || !completion.configured} onClick={() => void run('completion-key', async () => { await api!.copyConnectionKey(tool); notify('Key 已复制，请在 IDE 的「AI 补全」区单独粘贴，再选择兼容 OpenAI 启用。'); })}><KeyRound size={14} />复制补全 Key</button></dd></div>
+        {parameter('提示架构', completion.schemaId ? completion.supported ? '(fim) Generic · 原生文本补全' : '(fim) Generic · 当前补全未启用' : '未设置')}
+        <div className="jetbrains-parameter"><dt>补全 API Key</dt><dd><span>{!completion.supported ? '选择支持补全的模型后，再单独配置密钥' : direct ? '所选供应商的 API Key，需在补全区单独粘贴' : '固定本机 Key，需在补全区单独粘贴'}</span><button className="text-button" data-action="jetbrains-copy-completion-key" disabled={!ready || disabled || !completion.supported} onClick={() => void run('completion-key', async () => { await api!.copyConnectionKey(tool); notify('Key 已复制，请在 IDE 的「AI 补全」区单独粘贴，再选择兼容 OpenAI 启用。'); })}><KeyRound size={14} />复制补全 Key</button></dd></div>
       </dl>
       <p role="status" className="jetbrains-key-note" data-completion-sync-note>{completion.configured ? completion.supported
         ? '同步会更新 AI 补全参数。地址或供应商改变时会暂时停用补全；请在 IDE 的 AI 补全区确认 Key，再选择「兼容 OpenAI」启用。当前通用架构使用前缀补全。'
-        : `地址和模型会跟随所选来源更新；${completion.reason} 补全保持未启用，不会继续使用上一家的地址。`
+        : `${followingUnsupported ? '当前聊天默认模型没有已确认的原生 FIM 能力，跟随它无法启用补全。' : ''}同步会更新地址和模型，并停用独立 AI 补全。${completion.reason} 选择支持 FIM 的模型后，再在 IDE 补全区确认 Key 和启用。`
         : '先选择来源和模型，再同步 AI 补全参数。'}</p>
     </div>
     <p className="jetbrains-key-note">API Key 首次接入时需在每个 IDE 手工粘贴一次；切换连接方式或来源后请更新密钥，ModelDock 不写入 IDE 的密码存储。点击 IDE 的「测试连接」后，再选择模型并发送一条消息确认推理可用。</p>

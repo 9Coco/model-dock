@@ -7,9 +7,10 @@ import { applyJetBrainsConfig, buildJetBrainsConfig, jetBrainsHistoryKey, jetBra
 import { restoreOfficialConfig } from '../src/main/tool-restore';
 import { JETBRAINS_TOOLS, type JetBrainsToolId } from '../src/shared/jetbrains';
 import type { Model, Provider, ProviderSecret, ToolBinding } from '../src/shared/types';
+import type { WindowsJetBrainsProcess, WindowsJetBrainsProcessSnapshot } from '../src/main/jetbrains-windows';
 
 const roots: string[] = [];
-afterEach(() => { vi.restoreAllMocks(); for (const root of roots.splice(0)) rmSync(root, { force: true, recursive: true }); });
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); for (const root of roots.splice(0)) rmSync(root, { force: true, recursive: true }); });
 const fileNames = ['llm.provider.openai.like.xml', 'llm.custom.models.xml', 'llm.third.party.ai.providers.xml'];
 function fixture(tool: JetBrainsToolId = 'webstorm') {
   const root = mkdtempSync(join(tmpdir(), 'modeldock-jetbrains-')); roots.push(root);
@@ -67,6 +68,109 @@ function readCompletion(f: ReturnType<typeof fixture>): any {
   const raw = readFileSync(completionFile(f), 'utf8').match(/<component name="NextEditProviderSettings">([^]*?)<\/component>/)?.[1] ?? '';
   return JSON.parse([...raw.matchAll(/<!\[CDATA\[([^]*?)\]\]>/g)].map(match => match[1]).join(''));
 }
+
+function windowsFixture(tool: JetBrainsToolId = 'rider') {
+  const f = fixture(tool), root = join(f.root, 'Programs', f.tool), name = { webstorm: 'webstorm64.exe', 'intellij-idea': 'idea64.exe', rider: 'rider64.exe', pycharm: 'pycharm64.exe' }[tool];
+  const product = { productCode: { webstorm: 'WS', 'intellij-idea': 'IU', rider: 'RD', pycharm: 'PY' }[tool], version: '2026.2.3.1', buildNumber: '262.10968.170', dataDirectoryName: f.selector,
+    launch: [{ os: 'Windows', launcherPath: `bin/${name}`, vmOptionsFilePath: `bin/${name}.vmoptions`, additionalJvmArguments: [`-Didea.paths.selector=${f.selector}`] }] };
+  f.write(join(root, 'product-info.json'), JSON.stringify(product)); f.write(join(root, 'bin', name), 'SYNTHETIC_LAUNCHER');
+  const snapshot: WindowsJetBrainsProcessSnapshot = { complete: true, processes: [] };
+  const probe = vi.fn(() => structuredClone(snapshot));
+  const options: JetBrainsConfigOptions = { ...f.options, platform: 'win32', processProbe: undefined, installationRoots: [root], windowsProcessSnapshot: probe };
+  const launcherProcess = (extra: Partial<WindowsJetBrainsProcess> = {}): WindowsJetBrainsProcess => ({ pid: 12345, name, executablePath: join(root, 'bin', name), startedAt: '2026-10-09T12:00:00Z', selector: null, customPaths: false, ideTool: null, isIdeJvm: false, commandReadable: true, ...extra });
+  return { ...f, installationRoot: root, product, snapshot, probe, launcherProcess, options,
+    status: (extra: JetBrainsConfigOptions = {}) => jetBrainsStatus(f.tool, f.root, { ...options, ...extra }),
+    apply: (extra: JetBrainsConfigOptions = {}) => applyJetBrainsConfig(f.store, f.tool, f.backups, f.root, { ...options, ...extra }),
+    restore: (extra: JetBrainsConfigOptions = {}) => restoreJetBrainsConfig(f.store, f.tool, f.backups, f.root, { ...options, ...extra }),
+  };
+}
+
+describe('Windows JetBrains installed profile and public process evidence', () => {
+  it.each(Object.keys(JETBRAINS_TOOLS) as JetBrainsToolId[])('uses %s product metadata with retained old profiles and does not touch the old profile', tool => {
+    const f = windowsFixture(tool), old = join(f.profileRoot, `${JETBRAINS_TOOLS[tool].selectorPrefix}2026.1`, 'options', fileNames[0]);
+    f.write(old, 'SYNTHETIC_OLD_PROFILE'); f.seed();
+    expect(f.status()).toMatchObject({ configDir: f.target, version: '2026.2', running: 'stopped', canApply: true });
+    f.apply(); expect(f.read(0)).toContain(`http://127.0.0.1:19876/tool/${tool}/v1`); expect(readFileSync(old, 'utf8')).toBe('SYNTHETIC_OLD_PROFILE');
+    f.restore(); f.originals.forEach((text, index) => expect(f.read(index)).toBe(text)); expect(readFileSync(old, 'utf8')).toBe('SYNTHETIC_OLD_PROFILE');
+  });
+  it('confirms shutdown with no PID file, or a stale PID reused by an unrelated app', () => {
+    const f = windowsFixture(); f.snapshot.processes = [f.launcherProcess({ pid: 2147483646, name: 'powershell.exe', executablePath: join(f.root, 'powershell.exe') })];
+    expect(f.status()).toMatchObject({ running: 'stopped', canApply: true }); rmSync(join(f.cacheRoot, f.selector, '.pid'));
+    expect(f.status()).toMatchObject({ running: 'stopped', canApply: true });
+  });
+  it('uses a cache .home pointer to identify the installed selector without choosing the newest folder', () => {
+    const f = windowsFixture(), old = `${JETBRAINS_TOOLS[f.tool].selectorPrefix}2026.1`;
+    mkdirSync(join(f.profileRoot, old), { recursive: true }); f.write(join(f.cacheRoot, old, '.home'), f.installationRoot); f.write(join(f.cacheRoot, f.selector, '.home'), f.installationRoot);
+    vi.stubEnv('ProgramFiles', join(f.root, 'NoProgramFiles')); vi.stubEnv('ProgramFiles(x86)', join(f.root, 'NoProgramFiles32'));
+    expect(f.status({ installationRoots: undefined })).toMatchObject({ configDir: f.target, canApply: true });
+  });
+  it.each(Object.keys(JETBRAINS_TOOLS) as JetBrainsToolId[])('blocks %s while its launcher is running, including a missing or stale PID file', tool => {
+    const f = windowsFixture(tool); f.seed(); f.snapshot.processes = [f.launcherProcess()]; rmSync(join(f.cacheRoot, f.selector, '.pid'));
+    expect(f.status()).toMatchObject({ running: 'running', canApply: false }); expect(() => f.apply()).toThrow('仍在运行'); expect(() => f.restore()).toThrow('仍在运行');
+    f.originals.forEach((text, index) => expect(f.read(index)).toBe(text)); expect(f.states.size).toBe(0);
+  });
+  it('does not block Rider for another IDE or Toolbox/backend service, but blocks its installation JBR', () => {
+    const f = windowsFixture(); f.snapshot.processes = [f.launcherProcess({ name: 'webstorm64.exe', executablePath: join(f.root, 'WebStorm', 'bin', 'webstorm64.exe') }),
+      f.launcherProcess({ pid: 12346, name: 'jetbrainsd.exe', executablePath: join(f.root, 'Toolbox', 'jetbrainsd.exe') })];
+    expect(f.status().canApply).toBe(true); f.snapshot.processes.push(f.launcherProcess({ pid: 12347, name: 'java.exe', executablePath: join(f.installationRoot, 'jbr', 'bin', 'java.exe'), isIdeJvm: true }));
+    expect(f.status()).toMatchObject({ running: 'running', canApply: false });
+  });
+  it.each([
+    { kind: 'readable Gradle/compiler daemon', isIdeJvm: false, commandReadable: true, running: 'stopped', canApply: true },
+    { kind: 'identified IDE JVM', isIdeJvm: true, commandReadable: true, running: 'running', canApply: false },
+    { kind: 'unreadable JBR process', isIdeJvm: false, commandReadable: false, running: 'unknown', canApply: false },
+  ] as const)('classifies an installation JBR used by a $kind without relying on its directory alone', scenario => {
+    const f = windowsFixture(); f.snapshot.processes = [f.launcherProcess({ name: 'java.exe', executablePath: join(f.installationRoot, 'jbr', 'bin', 'java.exe'),
+      isIdeJvm: scenario.isIdeJvm, commandReadable: scenario.commandReadable })];
+    expect(f.status()).toMatchObject({ running: scenario.running, canApply: scenario.canApply });
+  });
+  it.each(['denied', 'partial', 'invalid', 'hidden-java', 'unknown-ide-jvm', 'hidden-command'] as const)('fails closed when the process snapshot is %s', scenario => {
+    const f = windowsFixture(); f.seed();
+    if (scenario === 'denied') f.probe.mockImplementation(() => { throw new Error('Access denied'); });
+    if (scenario === 'partial') f.snapshot.complete = false;
+    if (scenario === 'invalid') f.snapshot.processes = [f.launcherProcess({ pid: -1 })];
+    if (scenario === 'hidden-java') f.snapshot.processes = [f.launcherProcess({ name: 'javaw.exe', executablePath: null, startedAt: null })];
+    if (scenario === 'unknown-ide-jvm') f.snapshot.processes = [f.launcherProcess({ name: 'javaw.exe', executablePath: join(f.root, 'custom-jbr', 'javaw.exe'), isIdeJvm: true })];
+    if (scenario === 'hidden-command') f.snapshot.processes = [f.launcherProcess({ name: 'java.exe', executablePath: join(f.root, 'custom-jbr', 'java.exe'), commandReadable: false })];
+    expect(f.status()).toMatchObject({ running: 'unknown', canApply: false }); expect(() => f.apply()).toThrow(); f.originals.forEach((text, index) => expect(f.read(index)).toBe(text));
+  });
+  it('blocks an independently launched Rider JVM identified by its public product prefix', () => {
+    const f = windowsFixture(); f.snapshot.processes = [f.launcherProcess({ name: 'java.exe', executablePath: join(f.root, 'standalone-jbr', 'java.exe'), ideTool: 'rider', isIdeJvm: true })];
+    expect(f.status()).toMatchObject({ running: 'running', canApply: false });
+  });
+  it.each(['profile-properties', 'user-vm-options', 'installation-properties', 'launcher-arguments'] as const)('refuses to guess overridden profile paths from %s', kind => {
+    const f = windowsFixture();
+    if (kind === 'profile-properties') f.write(join(f.target, 'idea.properties'), 'idea.config.path=C:/custom/profile');
+    if (kind === 'user-vm-options') f.write(join(f.target, 'rider64.exe.vmoptions'), '-Didea.system.path=C:/custom/system');
+    if (kind === 'installation-properties') f.write(join(f.installationRoot, 'bin', 'idea.properties'), 'idea.paths.selector: RiderCustom2026.2');
+    if (kind === 'launcher-arguments') { f.product.launch[0].additionalJvmArguments.push('-Didea.config.path=C:/custom/profile'); f.write(join(f.installationRoot, 'product-info.json'), JSON.stringify(f.product)); }
+    expect(f.status()).toMatchObject({ running: 'unknown', canApply: false }); expect(f.status().message).toContain('自定义'); expect(() => f.apply()).toThrow();
+  });
+  it('keeps supported default selector flags and comments from causing a false custom-path rejection', () => {
+    const f = windowsFixture(); f.write(join(f.target, 'rider64.exe.vmoptions'), `-Xmx2048m\n-Didea.paths.selector=${f.selector}\n`);
+    f.write(join(f.target, 'idea.properties'), '# idea.config.path=C:/comment-only\n! idea.system.path=C:/comment-only\n'); expect(f.status().canApply).toBe(true);
+  });
+  it.each(['RIDER_PROPERTIES', 'RIDER_VM_OPTIONS'])('does not guess the target when %s selects external startup settings', variable => {
+    const f = windowsFixture(); vi.stubEnv(variable, join(f.root, 'external-startup-file'));
+    expect(f.status()).toMatchObject({ running: 'unknown', canApply: false }); expect(f.status().message).toContain('自定义');
+  });
+  it.each(['unverified-build', 'different-product', 'launcher-traversal', 'multiple-selectors'] as const)('blocks unsafe installation identity: %s', kind => {
+    const f = windowsFixture();
+    if (kind === 'unverified-build') f.product.buildNumber = '263.1.2';
+    if (kind === 'different-product') f.product.productCode = 'WS';
+    if (kind === 'launcher-traversal') f.product.launch[0].launcherPath = '../rider64.exe';
+    if (kind === 'multiple-selectors') {
+      const second = join(f.root, 'other-rider'); f.write(join(second, 'product-info.json'), JSON.stringify({ ...f.product, version: '2026.1.3', buildNumber: '261.1.2', dataDirectoryName: 'Rider2026.1' }));
+      f.write(join(second, 'bin', 'rider64.exe'), 'SYNTHETIC_LAUNCHER'); f.options.installationRoots = [f.installationRoot, second];
+    }
+    f.write(join(f.installationRoot, 'product-info.json'), JSON.stringify(f.product)); expect(f.status().canApply).toBe(false); expect(() => f.apply()).toThrow(); expect(f.states.size).toBe(0);
+  });
+  it('rechecks process identity immediately before committing and never writes if the IDE opened meanwhile', () => {
+    const f = windowsFixture(); f.seed();
+    expect(() => f.apply({ beforeCommit: () => { f.snapshot.processes = [f.launcherProcess()]; } })).toThrow('仍在运行');
+    expect(f.probe).toHaveBeenCalledTimes(2); f.originals.forEach((text, index) => expect(f.read(index)).toBe(text)); expect(f.states.size).toBe(0);
+  });
+});
 
 describe('JetBrains AI Assistant explicit offline configuration', () => {
   it.each(Object.keys(JETBRAINS_TOOLS) as JetBrainsToolId[])('finds the verified %s profile and exports only the local credential', tool => {

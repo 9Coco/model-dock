@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { JetBrainsAutoSync, type JetBrainsAutoSyncState } from '../src/renderer/jetbrains-auto-sync';
+import { jetBrainsAutoSyncLabel, JetBrainsAutoSync, type JetBrainsAutoSyncState } from '../src/renderer/jetbrains-auto-sync';
 import type { JetBrainsStatus } from '../src/shared/jetbrains';
 
 const status = (running: JetBrainsStatus['running'] = 'stopped'): JetBrainsStatus => ({ tool: 'rider', configDir: '/synthetic/Rider2026.2', version: '2026.2', foundProfile: true, running, canApply: running === 'stopped', message: 'Synthetic status' });
@@ -21,7 +21,7 @@ describe('interaction-triggered JetBrains settings sync', () => {
   it.each(['running', 'unknown'] as const)('retains only the latest choice while IDE is %s and applies it after confirmed exit', async running => {
     const f = fixture(); f.running(running); f.coordinator.request('rider', 'aggregate-A'); await f.coordinator.attempt('rider');
     f.coordinator.request('rider', 'direct-B'); await f.coordinator.attempt('rider');
-    expect(f.applied).toEqual([]); expect(f.states.at(-1)?.phase).toBe('waiting');
+    expect(f.applied).toEqual([]); expect(f.states.at(-1)?.phase).toBe(running === 'running' ? 'waiting' : 'blocked');
     f.running('stopped'); await f.coordinator.attempt('rider');
     expect(f.applied).toEqual(['direct-B']); expect(f.coordinator.pending()).toEqual([]);
   });
@@ -31,6 +31,17 @@ describe('interaction-triggered JetBrains settings sync', () => {
     f.coordinator.request('rider', 'aggregate-A'); const pending = f.coordinator.attempt('rider');
     f.coordinator.request('rider', 'direct-B'); await f.coordinator.attempt('rider'); check.resolve(status()); await pending;
     expect(f.applied).toEqual(['direct-B']); expect(f.options.status).toHaveBeenCalledTimes(2);
+  });
+  it('distinguishes a blocked profile from an actually running IDE without asking a stopped IDE to quit', async () => {
+    const f = fixture();
+    f.options.status.mockResolvedValue({ ...status('stopped'), canApply: false, message: '发现多个版本的 IDE 配置，无法确认当前配置。' });
+    f.coordinator.request('rider', 'selected'); await f.coordinator.attempt('rider');
+    const current = f.states.at(-1)!;
+    expect(current.phase).toBe('blocked'); expect(current.message).toContain('发现多个版本');
+    expect(jetBrainsAutoSyncLabel(current)).toBe('选择已保存，需确认 IDE 配置');
+    expect(current.message).not.toContain('退出后'); expect(f.options.apply).not.toHaveBeenCalled();
+    f.options.status.mockResolvedValue(status()); await f.coordinator.attempt('rider');
+    expect(f.applied).toEqual(['selected']);
   });
   it('waits for existing save/apply/restore locks and serializes repeated poll attempts', async () => {
     const f = fixture(); f.available(false); f.coordinator.request('rider', 'latest'); await f.coordinator.attempt('rider');

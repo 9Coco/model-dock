@@ -46,6 +46,7 @@ import { jetBrainsStatus, type JetBrainsConfigOptions } from './jetbrains-config
 import { isJetBrainsTool } from '../shared/jetbrains';
 import { verifyClaudeConfiguration } from './claude-config-smoke';
 import { verifyJetBrainsConnections } from './jetbrains-smoke';
+import { jetBrainsWindowsSmokeOptions, verifyJetBrainsWindowsProfiles } from './jetbrains-windows-smoke';
 import { verifyAggregateModes } from './aggregate-modes-smoke';
 import { restoreToolBinding } from './tool-restore-binding';
 import { applyNetworkProxy } from './network-proxy';
@@ -208,8 +209,12 @@ async function createWindow(forceShow = false) {
         writeFileSync(join(outputDir, 'electron-smoke.json'), JSON.stringify({ ...result, dataDir, windowSize: window!.getSize(), contentSize: window!.getContentSize() }, null, 2));
         writeFileSync(join(outputDir, 'electron-smoke.png'), await captureUi());
         await verifyToolIcons(window!, outputDir, captureUi);
-        if (process.env.MODELDOCK_SMOKE_AGGREGATE_ONLY === '1') {
+        if (process.env.MODELDOCK_SMOKE_TOOL_ICONS_ONLY === '1') {
+          // Icon validation above uses navigation only and never applies tool configuration.
+        } else if (process.env.MODELDOCK_SMOKE_AGGREGATE_ONLY === '1') {
           await verifyAggregateModes(window!, store, outputDir, captureUi);
+        } else if (process.env.MODELDOCK_SMOKE_JETBRAINS_WINDOWS_ONLY === '1') {
+          await verifyJetBrainsWindowsProfiles(window!, store, outputDir, captureUi);
         } else if (process.env.MODELDOCK_SMOKE_JETBRAINS_ONLY === '1') {
           await verifyJetBrainsConnections(window!, store, outputDir, captureUi);
         } else if (process.env.MODELDOCK_SMOKE_TOOL_SYNC_ONLY === '1') {
@@ -505,6 +510,7 @@ function copilotTarget() {
 // 修改点：IDE 文件状态只读查询；测试使用隔离目录和受控进程探针。
 function jetBrainsOptions(): JetBrainsConfigOptions {
   if (__MODELDOCK_SMOKE_BUILD__) {
+    if (process.env.MODELDOCK_SMOKE_JETBRAINS_WINDOWS_ONLY === '1') return jetBrainsWindowsSmokeOptions(dataDir);
     const home = join(dataDir, 'feature-home');
     return { profileRoot: join(home, '.config', 'JetBrains'), cacheRoot: join(home, '.cache', 'JetBrains'), platform: 'linux', processProbe: pid => pid === process.pid ? 'running' : 'stopped' };
   }
@@ -720,10 +726,11 @@ function registerIpc() {
   handle('copyText', (value: unknown) => writeClipboardText(value, text => clipboard.writeText(text)));
   handle('copyGatewayKey', () => writeClipboardText(store.gatewayKey(), text => clipboard.writeText(text)));
   handle('copyConnectionKey', (tool: ToolId) => writeClipboardText(connectionKey(store, toolId(tool)), text => clipboard.writeText(text)));
-  handle('jetBrainsStatus', (value: unknown) => {
+  handle('jetBrainsStatus', (value: unknown, refresh?: unknown) => {
     if (!isJetBrainsTool(value)) throw new Error('不是支持的 JetBrains 工具。');
+    if (refresh !== undefined && typeof refresh !== 'boolean') throw new Error('IDE 状态刷新参数无效。');
     const home = __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home') : app.getPath('home');
-    return jetBrainsStatus(value, home, jetBrainsOptions());
+    return jetBrainsStatus(value, home, { ...jetBrainsOptions(), refreshProcessEvidence: refresh === true });
   });
   handle('previewConfig', (tool: ToolId) => buildConfig(store, toolId(tool), gateway.status().port, false, __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home') : app.getPath('home'), { jetBrainsOptions: jetBrainsOptions() }));
   handle('exportConfig', async (tool: ToolId) => {
