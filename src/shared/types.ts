@@ -165,7 +165,7 @@ export interface AuthProgress {
 }
 export type { DiagnosticEntry, DiagnosticQuery, DiagnosticSnapshot } from './diagnostic-types';
 export interface ModelDockApi {
-  jetBrainsStatus(tool: import('./jetbrains').JetBrainsToolId): Promise<import('./jetbrains').JetBrainsStatus>;
+  jetBrainsStatus(tool: import('./jetbrains').JetBrainsToolId, refresh?: boolean): Promise<import('./jetbrains').JetBrainsStatus>;
   /** Only a fixed failure kind/name can be reported; never arbitrary log text. */
   reportRendererError(input: { kind: 'error' | 'unhandled-rejection'; errorName?: string }): Promise<void>;
   queryDiagnostics(query?: import('./diagnostic-types').DiagnosticQuery): Promise<import('./diagnostic-types').DiagnosticSnapshot>;

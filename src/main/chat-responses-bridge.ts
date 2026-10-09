@@ -328,11 +328,14 @@ class Mapper {
   }
   private part(raw: unknown, output: unknown, index: unknown, final: boolean, rawReasoning = false): void {
     const part = object(raw);
+    // Ark may open a content/summary part with only its type. Only .added
+    // initializes absent text; explicit invalid values and .done stay strict.
+    const text = (key: string): unknown => part[key] === undefined && !final ? '' : part[key];
     if (part.type === 'reasoning_text' || part.type === 'output_text' && (rawReasoning || this.itemKinds.get(Number(output)) === 'reasoning')) {
-      this.itemKind(output, 'reasoning'); this.append(this.block(output, index, 'reasoning-text'), part.text, final);
-    } else if (part.type === 'output_text') this.append(this.block(output, index, 'text'), part.text, final);
-    else if (part.type === 'refusal') this.append(this.block(output, index, 'refusal'), part.refusal, final);
-    else if (part.type === 'summary_text') { this.itemKind(output, 'reasoning'); this.append(this.block(output, index, 'reasoning'), part.text, final); }
+      this.itemKind(output, 'reasoning'); this.append(this.block(output, index, 'reasoning-text'), text('text'), final);
+    } else if (part.type === 'output_text') this.append(this.block(output, index, 'text'), text('text'), final);
+    else if (part.type === 'refusal') this.append(this.block(output, index, 'refusal'), text('refusal'), final);
+    else if (part.type === 'summary_text') { this.itemKind(output, 'reasoning'); this.append(this.block(output, index, 'reasoning'), text('text'), final); }
     else return failed('上游流式内容类型暂不支持。');
   }
   add(value: unknown): void {

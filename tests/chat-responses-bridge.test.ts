@@ -67,6 +67,38 @@ function rawReasoningStream(output: unknown[] = responses().output): string {
     { type: 'response.completed', response: responses([thought, ...output]) },
   ].map(event).join('');
 }
+function sparsePartsEvents(): Record<string, any>[] {
+  const summary = { type: 'reasoning', summary: [{ type: 'summary_text', text: '摘要🙂' }] };
+  const thought = { type: 'reasoning', summary: [], content: [{ type: 'reasoning_text', text: '原始🙂' }] };
+  const message = { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '答🙂' }, { type: 'refusal', refusal: '拒绝🙂' }] };
+  return [
+    { type: 'response.created', response: { id: 'resp_synthetic', status: 'in_progress', created_at: 1760000000 } },
+    { type: 'response.output_item.added', output_index: 0, item: { type: 'reasoning', status: 'in_progress' } },
+    { type: 'response.reasoning_summary_part.added', output_index: 0, summary_index: 0, part: { type: 'summary_text' } },
+    { type: 'response.reasoning_summary_text.delta', output_index: 0, summary_index: 0, delta: '摘要' },
+    { type: 'response.reasoning_summary_text.delta', output_index: 0, summary_index: 0, delta: '🙂' },
+    { type: 'response.reasoning_summary_text.done', output_index: 0, summary_index: 0, text: '摘要🙂' },
+    { type: 'response.reasoning_summary_part.done', output_index: 0, summary_index: 0, part: summary.summary[0] },
+    { type: 'response.output_item.done', output_index: 0, item: summary },
+    { type: 'response.output_item.added', output_index: 1, item: { type: 'reasoning', summary: [], content: [] } },
+    { type: 'response.content_part.added', output_index: 1, content_index: 0, part: { type: 'reasoning_text' } },
+    { type: 'response.reasoning_raw_text.delta', output_index: 1, content_index: 0, delta: '原始🙂' },
+    { type: 'response.reasoning_raw_text.done', output_index: 1, content_index: 0, text: '原始🙂' },
+    { type: 'response.content_part.done', output_index: 1, content_index: 0, part: thought.content[0] },
+    { type: 'response.output_item.done', output_index: 1, item: thought },
+    { type: 'response.output_item.added', output_index: 2, item: { type: 'message', role: 'assistant', content: [] } },
+    { type: 'response.content_part.added', output_index: 2, content_index: 0, part: { type: 'output_text' } },
+    { type: 'response.output_text.delta', output_index: 2, content_index: 0, delta: '答🙂' },
+    { type: 'response.output_text.done', output_index: 2, content_index: 0, text: '答🙂' },
+    { type: 'response.content_part.done', output_index: 2, content_index: 0, part: message.content[0] },
+    { type: 'response.content_part.added', output_index: 2, content_index: 1, part: { type: 'refusal' } },
+    { type: 'response.refusal.delta', output_index: 2, content_index: 1, delta: '拒绝🙂' },
+    { type: 'response.refusal.done', output_index: 2, content_index: 1, refusal: '拒绝🙂' },
+    { type: 'response.content_part.done', output_index: 2, content_index: 1, part: message.content[1] },
+    { type: 'response.output_item.done', output_index: 2, item: message },
+    { type: 'response.completed', response: responses([summary, thought, message]) },
+  ];
+}
 function parsedSse(text: string): any[] {
   return text.split('\n\n').filter(Boolean).map(frame => { const data = frame.split('\n').find(line => line.startsWith('data: '))!.slice(6); return data === '[DONE]' ? data : JSON.parse(data); });
 }
@@ -170,6 +202,35 @@ describe('Responses to native Chat reply conversion', () => {
 });
 
 describe('Responses to Chat streaming bridge', () => {
+  it('initializes type-only Ark part.added events and preserves summary, raw reasoning, answer and refusal across byte-split UTF-8', async () => {
+    const raw = sparsePartsEvents().map(event).join('') + event('[DONE]');
+    const events = parsedSse(await new Response(source(raw, 1).pipeThrough(createResponsesChatStream('friendly'))).text());
+    expect(events.at(-1)).toBe('[DONE]'); expect(events.filter(item => item === '[DONE]')).toHaveLength(1);
+    const deltas = events.flatMap(item => item.choices ?? []).map(item => item.delta);
+    expect(deltas.map(item => item.reasoning_content ?? '').join('')).toBe('摘要🙂原始🙂');
+    expect(deltas.map(item => item.content ?? '').join('')).toBe('答🙂');
+    expect(deltas.map(item => item.refusal ?? '').join('')).toBe('拒绝🙂');
+    expect(events.find(item => item.choices?.some((choice: any) => choice.finish_reason != null)).choices[0].finish_reason).toBe('stop');
+    expect(await collectResponsesChatStream(source(raw, 1), 'friendly')).toMatchObject({ choices: [{ finish_reason: 'stop', message: { content: '答🙂', reasoning_content: '摘要🙂原始🙂', refusal: '拒绝🙂' } }] });
+  });
+  it.each(['summary_text', 'reasoning_text', 'output_text', 'refusal'])('still rejects explicit invalid %s added values and absent done/final values', async kind => {
+    const key = kind === 'refusal' ? 'refusal' : 'text';
+    for (const stage of ['added', 'done', 'final']) {
+      for (const value of stage === 'added' ? [null, 3, {}, []] : [undefined, null, 3]) {
+        // Wire JSON has independent objects for part.done, item.done and the
+        // completed response, so mutate only the stage under test.
+        const events = sparsePartsEvents().map(item => JSON.parse(JSON.stringify(item)) as Record<string, any>);
+        const target = stage === 'final'
+          ? events.at(-1)!.response.output.flatMap((item: any) => [...(item.summary ?? []), ...(item.content ?? [])]).find((part: any) => part.type === kind)
+          : events.find(item => item.type.endsWith(`part.${stage}`) && item.part.type === kind)!.part;
+        if (value === undefined) delete target[key]; else target[key] = value;
+        const raw = events.map(event).join('');
+        const mapped = await new Response(source(raw, 1).pipeThrough(createResponsesChatStream('friendly'))).text();
+        expect(mapped).toContain('"responses_bridge_error"'); expect(mapped).not.toContain('[DONE]');
+        await expect(collectResponsesChatStream(source(raw, 1), 'friendly')).rejects.toMatchObject({ status: 502 });
+      }
+    }
+  });
   it.each(['reasoning_text', 'reasoning_raw_text'])('preserves Ark %s deltas, final content and tools across byte-split UTF-8', async carrier => {
     for (const output of [responses().output, [responseCall]]) {
       const tools = output.some((item: any) => item.type === 'function_call');

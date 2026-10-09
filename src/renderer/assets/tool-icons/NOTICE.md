@@ -1,7 +1,7 @@
 # Tool icon attribution
 
 These marks identify compatible tools in ModelDock. They do not imply endorsement.
-Third-party source geometry is unchanged; ModelDock applies theme colors using CSS masks. The Claude Code letter C and four JetBrains compatibility monograms are original ModelDock artwork.
+Third-party source geometry is unchanged. Monochrome marks use theme colors and CSS masks; JetBrains product icons retain their official colors and proportions. The Claude Code letter C is original ModelDock artwork.
 Retrieved 2026-10-06. On 2026-10-07 the existing local SVGs and license texts were
 verified to match official UTF-8 source contents at the fixed revisions below.
 These matching revisions are audit evidence, not a claim that the original
@@ -28,6 +28,6 @@ this directory ship with the app.
 
 - **Claude Code compatibility label**: Original letter C SVG by ModelDock contributors, authored 2026-10-09. This is not an official Claude or Anthropic brand mark. License: MIT, `LICENSE-modeldock.txt`. Local geometry and SHA-256 provenance are recorded in `manifest.json`.
 
-- **WebStorm, IntelliJ IDEA, Rider and PyCharm compatibility labels**: Original geometric letter SVGs by ModelDock contributors, authored 2026-10-09. These are not official JetBrains brand marks. License: MIT, `LICENSE-modeldock.txt`. Local geometry and SHA-256 provenance are recorded in `manifest.json`.
+- **WebStorm, IntelliJ IDEA, JetBrains Rider and PyCharm product icons**: JetBrains s.r.o.; downloaded 2026-10-09 from the [official brand page](https://www.jetbrains.com/company/brand/) and its linked SVG files. Preserved unmodified, displayed in their original colors, and scaled proportionally. Product names and logos are JetBrains trademarks. These assets follow the JetBrains Brand Guidelines and are excluded from ModelDock's MIT artwork license. See `LICENSE-jetbrains-brand.txt` for attribution and authoritative links, and `manifest.json` for source URLs and SHA-256 records.
 
 All product names and marks belong to their respective owners.

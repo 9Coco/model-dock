@@ -20,7 +20,7 @@ interface CompactLayout {
 interface MaterialReadback {
   icons: { symbol: string; family: string; width: number; height: number; paths: number; geometryWidth: number; geometryHeight: number; color: string; fill: string; stroke: string; currentColor: boolean; decorative: boolean; focusable: boolean; externalNode: boolean; controlNamed: boolean; filled?: number; outline?: number }[];
   navigation: { page: string; symbol: string; active: boolean; filled?: number; outline?: number }[];
-  brand: { app: string; tools: { tool: string; mask: string; material: boolean }[] };
+  brand: { app: string; tools: { tool: string; mask: string; image: string; imageComplete: boolean; naturalWidth: number; naturalHeight: number; filter: string; material: boolean }[] };
   remoteFonts: string[];
   legacySvg: number;
 }
@@ -94,7 +94,7 @@ export async function verifyCompactUi(window: BrowserWindow, store: Store, outpu
         decorative:icon.getAttribute('aria-hidden')==='true',focusable:icon.getAttribute('focusable')!=='false'||icon.getAttribute('tabindex')==='0',externalNode:!!icon.querySelector('use,image,foreignObject'),controlNamed:named,...variant(icon)};
     });
     const navigation=[...document.querySelectorAll('.sidebar button[data-page]')].flatMap(button=>{const icon=button.querySelector('svg[data-material-symbol]');return icon?[{page:button.dataset.page,symbol:icon.dataset.materialSymbol,active:button.getAttribute('aria-current')==='page',...variant(icon)}]:[];});
-    const brand={app:document.querySelector('[data-app-brand-icon]')?.getAttribute('src')||'',tools:[...document.querySelectorAll('.sidebar [data-tool-icon]')].map(icon=>{const mark=icon.querySelector('.tool-logo-mark'),css=mark?getComputedStyle(mark):null;return {tool:icon.dataset.toolIcon,mask:css?.maskImage||css?.webkitMaskImage||'',material:!!icon.querySelector('[data-material-symbol]')};})};
+    const brand={app:document.querySelector('[data-app-brand-icon]')?.getAttribute('src')||'',tools:[...document.querySelectorAll('.sidebar [data-tool-icon]')].map(icon=>{const mark=icon.querySelector('.tool-logo-mark'),image=icon.querySelector('.tool-logo-image'),css=mark?getComputedStyle(mark):null;return {tool:icon.dataset.toolIcon,mask:css?.maskImage||css?.webkitMaskImage||'',image:image?(image.currentSrc||image.src):'',imageComplete:!!image?.complete,naturalWidth:image?.naturalWidth||0,naturalHeight:image?.naturalHeight||0,filter:image?getComputedStyle(image).filter:'none',material:!!icon.querySelector('[data-material-symbol]')};})};
     const remoteFonts=performance.getEntriesByType('resource').map(entry=>entry.name).filter(name=>/https?:\\/\\/(?:fonts\\.googleapis\\.com|fonts\\.gstatic\\.com)\\//i.test(name));
     return {icons,navigation,brand,remoteFonts,legacySvg:document.querySelectorAll('svg.lucide').length};
   })()`;
@@ -159,8 +159,12 @@ export async function verifyCompactUi(window: BrowserWindow, store: Store, outpu
       assert.ok(icon.decorative && !icon.focusable && !icon.externalNode, `Inline decorative icon must not add a focus stop or remote reference: ${icon.symbol}`);
       assert.ok(icon.controlNamed, `An icon control must retain its text, title or ARIA name: ${icon.symbol}`);
     }
-    assert.deepEqual(value.brand.tools.map(item => item.tool), ['codex', 'opencode', 'dsh', 'vscode', 'copilot']);
-    assert.ok(value.brand.app && value.brand.tools.every(item => item.mask.startsWith('url(') && !item.material), 'App and tool identities remain separate local brand assets');
+    assert.deepEqual(value.brand.tools.map(item => item.tool), ['codex', 'claude-code', 'opencode', 'dsh', 'vscode', 'copilot', 'webstorm', 'intellij-idea', 'rider', 'pycharm']);
+    assert.ok(value.brand.app && value.brand.tools.every(item => !item.material), 'App and tool identities remain separate local brand assets');
+    for (const item of value.brand.tools) {
+      const colorLogo = ['webstorm', 'intellij-idea', 'rider', 'pycharm'].includes(item.tool);
+      assert.ok(colorLogo ? item.image && !item.mask && item.imageComplete && item.naturalWidth > 0 && item.naturalHeight > 0 && item.filter === 'none' : item.mask.startsWith('url(') && !item.image, `Tool brand must retain its image or mask rendering: ${item.tool}`);
+    }
     if (!originalBrand) originalBrand = value.brand;
     else assert.deepEqual(value.brand, originalBrand, 'Functional icon replacement must preserve brand resource identities');
     materialLayouts.push({ name, value });

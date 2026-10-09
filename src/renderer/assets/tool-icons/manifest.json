@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "verifiedAt": "2026-10-09",
   "originalRetrievalDate": "2026-10-06",
-  "verification": "Existing third-party SVG and license UTF-8 contents were compared exactly against official sources at the fixed revisions below; SHA-256 values matched. The original Claude Code letter C icon has local authorship provenance instead of an upstream comparison. The four JetBrains compatibility monograms are original local geometry with ModelDock authorship provenance.",
-  "renderingChanges": "Source geometry is unchanged. ModelDock uses CSS masks and theme colors for display.",
+  "verification": "Existing monochrome icons retain fixed-revision official source hashes. The Claude Code letter C retains local authorship provenance. The four JetBrains icons were downloaded unchanged from the official brand page-linked SVG URLs on 2026-10-09; each resource has a recorded SHA-256.",
+  "renderingChanges": "Monochrome marks use CSS masks and theme colors. The four JetBrains icons preserve original source geometry and colors, and use the same image resources in sidebar and detail views with proportional sizing.",
   "icons": [
     {
       "file": "codex.svg",
@@ -90,55 +90,59 @@
     },
     {
       "file": "webstorm.svg",
-      "label": "WebStorm compatibility monogram - original ModelDock artwork",
-      "sourceType": "original",
-      "author": "ModelDock contributors",
-      "createdAt": "2026-10-09",
-      "sourcePath": "src/renderer/assets/tool-icons/webstorm.svg",
-      "sha256": "d1242f4f0df5fd2d8f7ad3b1fab099c2634791d22bab9db5a327c843c230671a",
-      "viewBox": "0 0 24 24",
-      "license": "MIT",
-      "licenseRecord": "modeldock",
-      "note": "Original geometric letter mark; not official JetBrains product or company artwork."
+      "label": "WebStorm official product icon",
+      "sourceType": "official-brand-download",
+      "owner": "JetBrains s.r.o.",
+      "retrievedAt": "2026-10-09",
+      "source": "https://resources.jetbrains.com/storage/products/company/brand/logos/WebStorm_icon.svg",
+      "brandGuidelines": "https://www.jetbrains.com/company/brand/",
+      "sha256": "122e91c48164cad32675a66a2d064c1c4b258343c7c711239f8a3b0bb7a4fac8",
+      "viewBox": "0 0 64 64",
+      "license": "JetBrains Brand Guidelines and trademark terms",
+      "licenseRecord": "jetbrains-brand",
+      "rendering": "Unmodified SVG rendered as a full-color image with proportional sizing"
     },
     {
       "file": "intellij-idea.svg",
-      "label": "IntelliJ IDEA compatibility monogram - original ModelDock artwork",
-      "sourceType": "original",
-      "author": "ModelDock contributors",
-      "createdAt": "2026-10-09",
-      "sourcePath": "src/renderer/assets/tool-icons/intellij-idea.svg",
-      "sha256": "4f4db68bcb70516a89b985a7d4674f98d07f7653fce512c2e51fbea7c00d7c85",
-      "viewBox": "0 0 24 24",
-      "license": "MIT",
-      "licenseRecord": "modeldock",
-      "note": "Original geometric letter mark; not official JetBrains product or company artwork."
+      "label": "IntelliJ IDEA official product icon",
+      "sourceType": "official-brand-download",
+      "owner": "JetBrains s.r.o.",
+      "retrievedAt": "2026-10-09",
+      "source": "https://resources.jetbrains.com/storage/products/company/brand/logos/IntelliJ_IDEA_icon.svg",
+      "brandGuidelines": "https://www.jetbrains.com/company/brand/",
+      "sha256": "77950f507eab46765204cf67639808bd37f7233dce6223954dacae45bd246a84",
+      "viewBox": "0 0 64 64",
+      "license": "JetBrains Brand Guidelines and trademark terms",
+      "licenseRecord": "jetbrains-brand",
+      "rendering": "Unmodified SVG rendered as a full-color image with proportional sizing"
     },
     {
       "file": "rider.svg",
-      "label": "Rider compatibility monogram - original ModelDock artwork",
-      "sourceType": "original",
-      "author": "ModelDock contributors",
-      "createdAt": "2026-10-09",
-      "sourcePath": "src/renderer/assets/tool-icons/rider.svg",
-      "sha256": "ce5f10e2fc693cb70666acc46fdf8fdce2cf1615d756ddc042811ebf2ba2d7d4",
-      "viewBox": "0 0 24 24",
-      "license": "MIT",
-      "licenseRecord": "modeldock",
-      "note": "Original geometric letter mark; not official JetBrains product or company artwork."
+      "label": "JetBrains Rider official product icon",
+      "sourceType": "official-brand-download",
+      "owner": "JetBrains s.r.o.",
+      "retrievedAt": "2026-10-09",
+      "source": "https://resources.jetbrains.com/storage/products/company/brand/logos/Rider_icon.svg",
+      "brandGuidelines": "https://www.jetbrains.com/company/brand/",
+      "sha256": "a2aa2fb8b735e4552f98a48d28e3ecacdab16fca4d04e551354d8f61c6c3a01c",
+      "viewBox": "0 0 64 64",
+      "license": "JetBrains Brand Guidelines and trademark terms",
+      "licenseRecord": "jetbrains-brand",
+      "rendering": "Unmodified SVG rendered as a full-color image with proportional sizing"
     },
     {
       "file": "pycharm.svg",
-      "label": "PyCharm compatibility monogram - original ModelDock artwork",
-      "sourceType": "original",
-      "author": "ModelDock contributors",
-      "createdAt": "2026-10-09",
-      "sourcePath": "src/renderer/assets/tool-icons/pycharm.svg",
-      "sha256": "4de36801526c001377f032077fc39771eb218f52c10944099d2d1d4cc31be23b",
-      "viewBox": "0 0 24 24",
-      "license": "MIT",
-      "licenseRecord": "modeldock",
-      "note": "Original geometric letter mark; not official JetBrains product or company artwork."
+      "label": "PyCharm official product icon",
+      "sourceType": "official-brand-download",
+      "owner": "JetBrains s.r.o.",
+      "retrievedAt": "2026-10-09",
+      "source": "https://resources.jetbrains.com/storage/products/company/brand/logos/PyCharm_icon.svg",
+      "brandGuidelines": "https://www.jetbrains.com/company/brand/",
+      "sha256": "9ffd475c5139293ac050ea01edeea1e48b0412840e30c54a9238039465a03275",
+      "viewBox": "0 0 64 64",
+      "license": "JetBrains Brand Guidelines and trademark terms",
+      "licenseRecord": "jetbrains-brand",
+      "rendering": "Unmodified SVG rendered as a full-color image with proportional sizing"
     }
   ],
   "licenses": [
@@ -185,6 +189,13 @@
       "sourceType": "local-project",
       "sourcePath": "LICENSE",
       "sha256": "6a6626fdadc65fc56f71d2de975b8a4b765b595d30b40f26c32f059c00a35dd4"
+    },
+    {
+      "id": "jetbrains-brand",
+      "file": "LICENSE-jetbrains-brand.txt",
+      "type": "brand-guidelines-and-attribution",
+      "source": "https://www.jetbrains.com/company/brand/",
+      "sha256": "3285cb18f7cad2b1272f88a59aa432f69bc8102fd61b7a5a5ee9c4b7443a6889"
     }
   ]
 }

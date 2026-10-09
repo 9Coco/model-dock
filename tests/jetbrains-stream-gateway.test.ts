@@ -102,6 +102,49 @@ async function splitBytes(response: ServerResponse, text: string) {
 }
 
 describe('JetBrains Chat streaming HTTP contract', () => {
+  it.each(JETBRAINS_TOOL_IDS)('%s accepts type-only Responses part.added through the full buffered HTTP pipeline', async tool => {
+    const summary = { type: 'reasoning', summary: [{ type: 'summary_text', text: '摘要🙂' }] };
+    const thought = { type: 'reasoning', summary: [], content: [{ type: 'reasoning_text', text: '原始🙂' }] };
+    const output = { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '答🙂' }, { type: 'refusal', refusal: '拒绝🙂' }] };
+    const f = await fixture('responses', async (request, response) => {
+      expect(request.url).toBe('/v1/responses');
+      expect(await bodyOf(request)).toMatchObject({ model: 'synthetic-upstream-model', stream: true });
+      response.setHeader('content-type', 'text/event-stream');
+      const events = [
+        { type: 'response.created', response: { id: 'resp_synthetic', status: 'in_progress', created_at: 1760000000 } },
+        { type: 'response.output_item.added', output_index: 0, item: { type: 'reasoning', status: 'in_progress' } },
+        { type: 'response.reasoning_summary_part.added', output_index: 0, summary_index: 0, part: { type: 'summary_text' } },
+        { type: 'response.reasoning_summary_text.delta', output_index: 0, summary_index: 0, delta: '摘要🙂' },
+        { type: 'response.reasoning_summary_part.done', output_index: 0, summary_index: 0, part: summary.summary[0] },
+        { type: 'response.output_item.done', output_index: 0, item: summary },
+        { type: 'response.output_item.added', output_index: 1, item: { type: 'reasoning', summary: [], content: [] } },
+        { type: 'response.content_part.added', output_index: 1, content_index: 0, part: { type: 'reasoning_text' } },
+        { type: 'response.reasoning_raw_text.delta', output_index: 1, content_index: 0, delta: '原始🙂' },
+        { type: 'response.reasoning_raw_text.done', output_index: 1, content_index: 0, text: '原始🙂' },
+        { type: 'response.content_part.done', output_index: 1, content_index: 0, part: thought.content[0] },
+        { type: 'response.output_item.done', output_index: 1, item: thought },
+        { type: 'response.output_item.added', output_index: 2, item: { type: 'message', role: 'assistant', content: [] } },
+        { type: 'response.content_part.added', output_index: 2, content_index: 0, part: { type: 'output_text' } },
+        { type: 'response.output_text.delta', output_index: 2, content_index: 0, delta: '答🙂' },
+        { type: 'response.output_text.done', output_index: 2, content_index: 0, text: '答🙂' },
+        { type: 'response.content_part.done', output_index: 2, content_index: 0, part: output.content[0] },
+        { type: 'response.content_part.added', output_index: 2, content_index: 1, part: { type: 'refusal' } },
+        { type: 'response.refusal.delta', output_index: 2, content_index: 1, delta: '拒绝🙂' },
+        { type: 'response.refusal.done', output_index: 2, content_index: 1, refusal: '拒绝🙂' },
+        { type: 'response.content_part.done', output_index: 2, content_index: 1, part: output.content[1] },
+        { type: 'response.output_item.done', output_index: 2, item: output },
+        { type: 'response.completed', response: { status: 'completed', output: [summary, thought, output], usage: { input_tokens: 12, output_tokens: 6, total_tokens: 18 } } },
+      ];
+      await splitBytes(response, ': heartbeat\n\n' + events.map(value => sse(value)).join('') + sse('[DONE]'));
+    });
+    const result = await readHttp(f.url(tool), f.headers, input()), chunks = assertValidStream(result);
+    if (tool === 'rider') saveSyntheticFixture('sparse-added-reasoning-answer-refusal.sse', result);
+    expect(reconstruct(chunks)).toMatchObject({ content: '答🙂', reasoning_content: '摘要🙂原始🙂' });
+    expect(chunks.flatMap(chunk => chunk.choices).map(choice => choice.delta.refusal ?? '').join('')).toBe('拒绝🙂');
+    expect(chunks.find(chunk => chunk.choices.some((choice: any) => choice.finish_reason != null)).choices[0].finish_reason).toBe('stop');
+    expect(chunks.at(-1)).toMatchObject({ choices: [], usage: { prompt_tokens: 12, completion_tokens: 6, total_tokens: 18 } });
+    expect(JSON.stringify(f.store.logs())).not.toMatch(/SYNTHETIC_PROMPT|SYNTHETIC_PRIVATE_KEY|摘要|原始|答|拒绝/);
+  });
   it.each(JETBRAINS_TOOL_IDS)('%s decodes raw Responses reasoning and a two-round tool call without duplicating names or arguments', async tool => {
     const bodies: any[] = [];
     const f = await fixture('responses', async (request, response) => {

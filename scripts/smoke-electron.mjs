@@ -147,12 +147,24 @@ child.on('exit', code => {
     if(existsSync(errorFile)) throw new Error(readFileSync(errorFile,'utf8'));
     const value = JSON.parse(readFileSync(resolve(output, 'electron-smoke.json'), 'utf8'));
     if (!value.bridge || !value.text.includes('ModelDock')) throw new Error('Renderer/preload bridge unavailable');
+    if (env.MODELDOCK_SMOKE_TOOL_ICONS_ONLY === '1') {
+      const icons = JSON.parse(readFileSync(resolve(output, 'tool-icons-validation.json'), 'utf8'));
+      if (icons.tools.length !== 10 || icons.jetBrainsTools.length !== 4 || !icons.originalUiRestored || !icons.savedSettingsUnchanged || !icons.toolSelectionsUnchanged || icons.configurationSyncInvoked !== false) throw new Error('Tool icon validation failed');
+      console.log(JSON.stringify({ exitCode: code, bridge: value.bridge, tools: icons.tools.length, layouts: icons.layouts.length, originalUiRestored: icons.originalUiRestored, output }));
+      return;
+    }
     if (env.MODELDOCK_SMOKE_AGGREGATE_ONLY === '1') {
       const result=JSON.parse(readFileSync(resolve(output,'aggregate-modes-validation.json'),'utf8'));
       if(!result.ok||result.tools.length!==10||aggregateRequests.length!==20||aggregateRequests.some(request=>!request.ok))throw new Error('All-tool aggregation/UI routing verification failed');
       writeFileSync(resolve(output,'aggregate-network-validation.json'),JSON.stringify({requests:aggregateRequests},null,2));
       console.log(JSON.stringify({exitCode:code,bridge:value.bridge,tools:result.tools.length,layouts:result.layouts.length,mockRequests:aggregateRequests.length,output}));
       process.exit(code||0);
+    }
+    if (env.MODELDOCK_SMOKE_JETBRAINS_WINDOWS_ONLY === '1') {
+      const result = JSON.parse(readFileSync(resolve(output, 'jetbrains-windows-ui-validation.json'), 'utf8'));
+      if (!result.ok) throw new Error('Windows JetBrains profile and automatic synchronization verification failed');
+      console.log(JSON.stringify({ exitCode: code, bridge: value.bridge, jetBrainsWindows: result, output }));
+      return;
     }
     if (env.MODELDOCK_SMOKE_JETBRAINS_ONLY === '1') {
       const result = JSON.parse(readFileSync(resolve(output,'jetbrains-ui-validation.json'),'utf8'));

@@ -14,9 +14,11 @@ Keep the original copyright and license notices when redistributing them.
 | OpenCode identification mark | [anomalyco/opencode](https://github.com/anomalyco/opencode) | MIT; [license](src/renderer/assets/tool-icons/LICENSE-opencode.txt), [notice](src/renderer/assets/tool-icons/NOTICE.md) |
 | DSH / DeepSeek identification mark | [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) | MIT; [license](src/renderer/assets/tool-icons/LICENSE-deepseek-harness.txt), [notice](src/renderer/assets/tool-icons/NOTICE.md), [brand guidance](https://github.com/deepseek-ai/deepseek-harness/blob/master/BRAND_GUIDELINES.md) |
 | GitHub Copilot identification mark | [GitHub Octicons](https://github.com/github/octicons) | MIT; [license](src/renderer/assets/tool-icons/LICENSE-octicons.txt), [notice](src/renderer/assets/tool-icons/NOTICE.md) |
+| WebStorm, IntelliJ IDEA, JetBrains Rider and PyCharm product icons | [JetBrains official brand assets](https://www.jetbrains.com/company/brand/) | JetBrains Brand Guidelines and trademark terms; [attribution](src/renderer/assets/tool-icons/LICENSE-jetbrains-brand.txt), [notice](src/renderer/assets/tool-icons/NOTICE.md). Excluded from ModelDock's MIT artwork license. |
 
 The artwork identifies compatible products and does not imply endorsement.
-SVG geometry is preserved; ModelDock renders it in its theme colors. Material
+SVG geometry is preserved; monochrome marks use theme colors, while JetBrains
+product icons retain their official colors and proportions. Material
 Symbols are converted into a local React path registry. Their notice and
 manifest record these changes, fixed source revisions and content hashes. Tool
 marks have a separate [verified manifest](src/renderer/assets/tool-icons/manifest.json).

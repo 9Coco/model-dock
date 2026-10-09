@@ -8,6 +8,7 @@ import { bindingConnectionPolicy, resolveBindingModels } from '../shared/binding
 import { nativeDirectBaseUrl } from '../shared/single-entry';
 import { jetBrainsCompletionParameters } from '../shared/jetbrains-completion';
 import { JETBRAINS_TOOLS, type JetBrainsToolId, type JetBrainsStatus } from '../shared/jetbrains';
+import { detectWindowsJetBrainsProfile, type WindowsJetBrainsProcessSnapshot } from './jetbrains-windows';
 export type { JetBrainsToolId } from '../shared/jetbrains';
 
 export interface JetBrainsConfigStore {
@@ -23,6 +24,11 @@ export interface JetBrainsConfigOptions {
   profileRoot?: string; cacheRoot?: string; platform?: NodeJS.Platform; port?: number;
   /** 修改点：仅主进程测试使用，渲染进程不能提供路径或进程检测回调。 */
   processProbe?: (pid: number) => 'running' | 'stopped' | 'unknown';
+  /** Installed product roots / public OS snapshot, only injectable in the main process. */
+  installationRoots?: readonly string[];
+  windowsProcessSnapshot?: () => WindowsJetBrainsProcessSnapshot;
+  /** Transactions always bypass the short display-status cache before writes. */
+  refreshProcessEvidence?: boolean;
   beforeCommit?: () => void; afterFileCommit?: (index: number) => void;
 }
 export type JetBrainsConfigStatus = JetBrainsStatus;
@@ -82,16 +88,26 @@ export function jetBrainsStatus(tool: JetBrainsToolId, homeDirectory = homedir()
     const candidates = readdirSync(paths.profileRoot).filter(name => new RegExp(`^${products[tool].selector}(\\d{4}\\.\\d+)(?:\\.\\d+)?$`).test(name));
     candidates.sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
     if (!candidates.length) return { ...base, message: '未发现该 IDE 的用户配置；可复制参数到 AI Assistant 的提供商与 API 密钥。' };
-    // 修改点：只使用唯一匹配的当前版本；多个配置并存时不猜测用户正在使用哪一个。
-    if (candidates.length !== 1) return { ...base, foundProfile: true, message: '发现多个版本的 IDE 配置，无法确认当前配置；请使用复制接入参数。' };
-    const selector = candidates[0], configDir = join(paths.profileRoot, selector), version = selector.slice(products[tool].selector.length);
+    // Windows uses the installed product's exact dataDirectoryName. Retained
+    // older profiles are not evidence that the active profile is ambiguous.
+    const windows = paths.platform === 'win32' ? detectWindowsJetBrainsProfile(tool, {
+      ...paths, home: homeDirectory, candidates, installationRoots: options.installationRoots,
+      snapshot: options.windowsProcessSnapshot, refresh: options.refreshProcessEvidence,
+    }, readConfig) : undefined;
+    if (windows && !windows.selector) return { ...base, foundProfile: true, running: windows.running, message: windows.message! };
+    if (!windows && candidates.length !== 1) return { ...base, foundProfile: true, message: '发现多个版本的 IDE 配置，无法确认当前配置；请使用复制接入参数。' };
+    const selector = windows?.selector ?? candidates[0], configDir = join(paths.profileRoot, selector), version = selector.slice(products[tool].selector.length);
     safeDirectory(configDir); safeDirectory(join(configDir, 'options'));
     const status = { ...base, configDir, version, foundProfile: true }; located = status;
+    if (windows && windows.running !== 'stopped') return { ...status, running: windows.running, message: windows.message! };
     if (version !== '2026.2') return { ...status, message: '当前版本的配置结构尚未验证；请复制参数，在 IDE 设置中配置。' };
-    if (paths.platform !== 'linux' && !options.processProbe) return { ...status, message: '当前平台尚不能可靠确认 IDE 已退出；请复制参数，在 IDE 设置中配置。' };
-    const pidPath = join(paths.cacheRoot, selector, '.pid'), pidText = readConfig(pidPath)?.trim();
-    if (!pidText || !/^\d{1,10}$/.test(pidText) || !Number.isSafeInteger(Number(pidText)) || Number(pidText) < 1) return { ...status, message: '无法确认 IDE 是否仍运行；请复制参数，在 IDE 设置中配置。' };
-    const running = (options.processProbe ?? defaultProcessProbe)(Number(pidText));
+    if (!windows && paths.platform !== 'linux' && !options.processProbe) return { ...status, message: '当前平台尚不能可靠确认 IDE 已退出；请复制参数，在 IDE 设置中配置。' };
+    let running: JetBrainsConfigStatus['running'] = windows?.running ?? 'unknown';
+    if (!windows) {
+      const pidPath = join(paths.cacheRoot, selector, '.pid'), pidText = readConfig(pidPath)?.trim();
+      if (!pidText || !/^\d{1,10}$/.test(pidText) || !Number.isSafeInteger(Number(pidText)) || Number(pidText) < 1) return { ...status, message: '无法确认 IDE 是否仍运行；请复制参数，在 IDE 设置中配置。' };
+      running = (options.processProbe ?? defaultProcessProbe)(Number(pidText));
+    }
     if (running !== 'stopped') return { ...status, running, message: running === 'running' ? 'IDE 记录的进程仍在运行，请先自行退出 IDE 后刷新，再离线同步设置。' : '无法确认 IDE 已退出；请使用复制接入参数。' };
     for (const spec of specs) { const text = readConfig(join(configDir, 'options', spec.file)); if (text !== null) { const doc = parseXml(text); locate(doc, spec.component); if (spec.json) for (const name of spec.fields) completionValue(doc, spec, name); } }
     return { ...status, running, canApply: true, message: '已确认该 IDE 进程退出，可离线同步模型与地址；API Key 须在 IDE 中手动填写一次。' };
@@ -370,7 +386,7 @@ function replaceFile(path: string, text: string | null): void {
   finally { if (existsSync(temporary)) unlinkSync(temporary); }
 }
 function stopped(tool: JetBrainsToolId, home: string, options: JetBrainsConfigOptions, target?: string): JetBrainsConfigStatus {
-  const status = jetBrainsStatus(tool, home, options);
+  const status = jetBrainsStatus(tool, home, { ...options, refreshProcessEvidence: true });
   if (!status.canApply || !status.configDir || target && target !== status.configDir) throw new Error(status.message || 'JetBrains 配置路径已经变化。');
   return status;
 }
