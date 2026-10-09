@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "verifiedAt": "2026-10-07",
   "originalRetrievalDate": "2026-10-06",
-  "verification": "Existing local SVG and license UTF-8 contents were compared exactly against official sources at the fixed revisions below; SHA-256 values matched. These are verified matching revisions, not a claim about the original download revision.",
+  "verification": "Existing third-party SVG and license UTF-8 contents were compared exactly against official sources at the fixed revisions below; SHA-256 values matched. The original Claude Code letter C icon has local authorship provenance instead of an upstream comparison.",
   "renderingChanges": "Source geometry is unchanged. ModelDock uses CSS masks and theme colors for display.",
   "icons": [
     {
@@ -74,6 +74,19 @@
       "viewBox": "0 0 16 16",
       "license": "MIT",
       "licenseRecord": "octicons"
+    },
+    {
+      "file": "claude-code.svg",
+      "label": "Claude Code compatibility label - original letter C",
+      "sourceType": "original",
+      "author": "ModelDock contributors",
+      "createdAt": "2026-10-09",
+      "sourcePath": "src/renderer/assets/tool-icons/claude-code.svg",
+      "sha256": "6ae80d3f61ce01a2cbf878a52a94e3a7b649be3a97b865f463cd18b209f68fe6",
+      "viewBox": "0 0 24 24",
+      "license": "MIT",
+      "licenseRecord": "modeldock",
+      "note": "Original letter C geometry; not the official Claude or Anthropic brand mark."
     }
   ],
   "licenses": [
@@ -112,6 +125,14 @@
       "sha256": "da259c8bd0de62713ccdcf88910aebca810644f98c2c912bad814fc79ea778df",
       "upstreamUtf8Sha256": "da259c8bd0de62713ccdcf88910aebca810644f98c2c912bad814fc79ea778df",
       "exactTextMatch": true
+    },
+    {
+      "id": "modeldock",
+      "file": "LICENSE-modeldock.txt",
+      "spdx": "MIT",
+      "sourceType": "local-project",
+      "sourcePath": "LICENSE",
+      "sha256": "6a6626fdadc65fc56f71d2de975b8a4b765b595d30b40f26c32f059c00a35dd4"
     }
   ]
 }

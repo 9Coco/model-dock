@@ -30,6 +30,83 @@ const servers: Server[] = [];
 afterEach(async () => { vi.useRealTimers(); await Promise.all(servers.splice(0).map(server => new Promise<void>(resolve => { server.closeAllConnections(); server.close(() => resolve()); }))); });
 
 describe('real model catalog discovery and batch selection', () => {
+  it('discovers Anthropic native models with version/auth headers, preserving /anthropic and native after_id pagination', async () => {
+    const seen: unknown[] = [];
+    const server = createServer((req, res) => {
+      seen.push({ url: req.url, method: req.method, key: req.headers['x-api-key'], auth: req.headers.authorization, version: req.headers['anthropic-version'] });
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify(req.url?.includes('after_id=')
+        ? { data: [{ id: 'claude-second', type: 'model', display_name: 'Second' }], has_more: false, last_id: 'claude-second' }
+        : { data: [{ id: 'claude-first', type: 'model', display_name: 'First', max_input_tokens: 100000, capabilities: { image_input: { supported: true } } }], has_more: true, last_id: 'claude-first' }));
+    }); servers.push(server);
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const f = fixture(fetch); f.store.provider.presetId = 'anthropic';
+    f.store.provider.messagesAuth = 'api-key';
+    f.store.provider.baseUrl = `http://127.0.0.1:${(server.address() as { port: number }).port}/anthropic/v1`;
+    const result = await f.catalog.discover('api');
+    expect(result).toMatchObject({ ok: true });
+    expect(result.models).toHaveLength(2);
+    expect(result.models[0]).toMatchObject({ upstreamId: 'claude-first', displayName: 'First', wireApi: 'messages', contextWindow: 100000, vision: true });
+    expect(result.models[1]).toMatchObject({ upstreamId: 'claude-second', wireApi: 'messages' });
+    expect(seen).toEqual(['/anthropic/v1/models', '/anthropic/v1/models?after_id=claude-first'].map(url => ({ url, method: 'GET', key: 'SYNTHETIC_ONLY', auth: undefined, version: '2023-06-01' })));
+    expect(JSON.stringify(result)).not.toContain('SYNTHETIC_ONLY');
+    expect(f.catalog.addSelected('api', [{ upstreamId: 'claude-first' }]).added[0]).toMatchObject({ wireApi: 'messages', upstreamId: 'claude-first' });
+  });
+  it.each(['api-key', 'bearer'] as const)('uses native catalog semantics and selected %s auth for custom Messages models', async messagesAuth => {
+    const fetcher = vi.fn(async (url, init) => {
+      expect(url).toBe('https://gateway.example.test/anthropic/v1/models');
+      expect(new Headers(init?.headers).get('x-api-key')).toBe(messagesAuth === 'api-key' ? 'SYNTHETIC_ONLY' : null);
+      expect(new Headers(init?.headers).get('authorization')).toBe(messagesAuth === 'bearer' ? 'Bearer SYNTHETIC_ONLY' : null);
+      expect(new Headers(init?.headers).get('anthropic-version')).toBe('2023-06-01');
+      return json({ data: [{ id: 'saved-native', type: 'model' }, { id: 'new-native', type: 'model' }] });
+    });
+    const f = fixture(fetcher as typeof fetch); f.store.provider.baseUrl = 'https://gateway.example.test/anthropic';
+    f.store.provider.messagesAuth = messagesAuth;
+    f.store.models = [{ id: 'native', providerId: 'api', upstreamId: 'saved-native', alias: 'existing', displayName: 'Existing Name', wireApi: 'messages', contextWindow: 12345, tools: true, vision: false, enabled: true }];
+    const result = await f.catalog.discover('api');
+    expect(result).toMatchObject({ ok: true });
+    expect(result.models[0]).toMatchObject({ existingModelId: 'native', wireApi: 'messages', contextWindow: 12345, tools: true, displayName: 'Existing Name' });
+    expect(result.models[1]).toMatchObject({ upstreamId: 'new-native', wireApi: 'messages' });
+    expect(f.catalog.addSelected('api', [{ upstreamId: 'new-native', wireApi: 'messages' }]).added[0].wireApi).toBe('messages');
+  });
+  it.each(['api-key', 'bearer'] as const)('sends only selected %s auth to the native model directory (local upstream)', async messagesAuth => {
+    const seen: unknown[] = [];
+    const server = createServer((req, res) => {
+      seen.push({ key: req.headers['x-api-key'], auth: req.headers.authorization });
+      const valid = messagesAuth === 'api-key' ? req.headers['x-api-key'] === 'SYNTHETIC_ONLY' && !req.headers.authorization
+        : req.headers.authorization === 'Bearer SYNTHETIC_ONLY' && !req.headers['x-api-key'];
+      res.setHeader('Content-Type', 'application/json');
+      if (!valid) { res.statusCode = 401; res.end('{}'); return; }
+      res.end(JSON.stringify({ data: [{ id: 'claude-native' }], has_more: false }));
+    }); servers.push(server);
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const f = fixture(fetch); f.store.provider.presetId = 'anthropic'; f.store.provider.messagesAuth = messagesAuth;
+    f.store.provider.baseUrl = `http://127.0.0.1:${(server.address() as { port: number }).port}/anthropic`;
+    expect(await f.catalog.discover('api')).toMatchObject({ ok: true, models: [expect.objectContaining({ wireApi: 'messages', upstreamId: 'claude-native' })] });
+    expect(seen).toEqual([{ key: messagesAuth === 'api-key' ? 'SYNTHETIC_ONLY' : undefined, auth: messagesAuth === 'bearer' ? 'Bearer SYNTHETIC_ONLY' : undefined }]);
+  });
+  it('invalidates a discovery selection when its Messages auth mode changes', async () => {
+    const f = fixture(); f.store.provider.presetId = 'anthropic'; f.store.provider.messagesAuth = 'bearer';
+    expect((await f.catalog.discover('api')).ok).toBe(true);
+    f.store.provider.messagesAuth = 'api-key';
+    expect(() => f.catalog.addSelected('api', [{ upstreamId: 'real-model' }])).toThrow('供应商配置');
+  });
+  it('refuses a forged prepared endpoint before normalizing custom Messages catalog URLs', async () => {
+    const fetcher = vi.fn(async () => json({ data: [] })); const f = fixture(fetcher as typeof fetch);
+    f.store.models = [{ id: 'native', providerId: 'api', upstreamId: 'saved-native', alias: 'existing', displayName: 'Existing', wireApi: 'messages', contextWindow: 0, tools: true, vision: false, enabled: true }];
+    f.prepareRequest.mockImplementation(async (p, path, body) => ({ ...prepareUpstream(p, { apiKey: 'SYNTHETIC_ONLY' }, path, body), url: 'https://attacker.example.test/v1/models' }));
+    expect(await f.catalog.discover('api')).toMatchObject({ ok: false, errorCategory: 'invalid-provider' });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+  it('does not treat a Messages completion or native error as a model directory', async () => {
+    for (const payload of [{ id: 'msg_synthetic', type: 'message', role: 'assistant', content: [{ type: 'text', text: 'PRIVATE_RESPONSE' }] },
+      { type: 'error', error: { message: 'PRIVATE_ERROR_BODY SYNTHETIC_ONLY' } }]) {
+      const f = fixture(vi.fn(async () => json(payload)) as typeof fetch); f.store.provider.presetId = 'anthropic';
+      const result = await f.catalog.discover('api');
+      expect(result).toMatchObject({ ok: false, errorCategory: 'invalid-response', models: [] });
+      expect(JSON.stringify(result)).not.toMatch(/PRIVATE_RESPONSE|PRIVATE_ERROR_BODY|SYNTHETIC_ONLY/);
+    }
+  });
   it('uses the actual configured base path, authenticated GET and refuses redirects (local mock server)', async () => {
     const seen: { url: string; method: string; auth: string | undefined }[] = [];
     const server = createServer((req, res) => {

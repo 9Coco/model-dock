@@ -29,6 +29,18 @@ async function requestBody(req: IncomingMessage) { const chunks: Buffer[] = []; 
 function event(value: unknown) { return `data: ${JSON.stringify(value)}\n\n`; }
 
 describe('loopback gateway', () => {
+  it('never advertises or forwards Messages-only models through OpenAI routes', async () => {
+    let requests = 0;
+    const mock = await upstream((_req, res) => { requests++; res.end('{}'); });
+    const f = await fixture(mock.url, 'messages');
+    expect((await (await fetch(`${f.url}/models`, { headers: f.headers })).json()).data).toEqual([]);
+    for (const route of ['chat/completions', 'responses']) {
+      const response = await fetch(`${f.url}/${route}`, { method: 'POST', headers: f.headers, body: JSON.stringify({ model: f.model.alias, messages: [{ role: 'user', content: 'OK' }] }) });
+      expect(response.status).toBe(400);
+    }
+    expect((await fetch(`${f.url}/messages`, { method: 'POST', headers: f.headers, body: '{}' })).status).toBe(400);
+    expect(requests).toBe(0);
+  });
   it('configures a stopped gateway without listening and starts on its configured port', async () => {
     const mock = await upstream((_req, res) => { res.end('{}'); });
     const f = await fixture(mock.url); await f.gateway.stop();

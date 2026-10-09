@@ -150,10 +150,15 @@ function redact(value: unknown, key = ''): unknown {
   if (isObject(value)) return Object.fromEntries(Object.entries(value).map(([name, entry]) => [name, redact(entry, name)]));
   return value;
 }
-function validateTool(tool: ToolId): void { if (!TOOL_IDS.includes(tool)) throw new Error('未知工具。'); }
+function validateTool(tool: ToolId): void {
+  // 修改点：Claude Code MCP 尚未适配，不能进入其他客户端的路径或序列化分支。
+  if (tool === 'claude-code') throw new Error('Claude Code MCP 导入、预览和应用暂不支持；未读取或修改任何工具配置。');
+  if (!TOOL_IDS.includes(tool)) throw new Error('未知工具。');
+}
 function validateServer(input: McpServerInput): void {
   if (typeof input.name !== 'string' || !/^[\p{L}\p{N}_.-]{1,100}$/u.test(input.name) || ['__proto__', 'prototype', 'constructor'].includes(input.name)) throw new Error('MCP 名称请使用字母、数字、点、下划线或连字符（最多 100 字）。');
   if (!['stdio', 'http', 'sse'].includes(input.transport)) throw new Error('未知 MCP 传输类型。');
+  if (Array.isArray(input.enabledTools) && input.enabledTools.includes('claude-code')) throw new Error('Claude Code MCP 暂不支持，请在 Claude Code 中独立配置。');
   if (!Array.isArray(input.enabledTools) || input.enabledTools.some(tool => !TOOL_IDS.includes(tool))) throw new Error('工具选择有误。');
   if (input.args !== undefined && (!Array.isArray(input.args) || input.args.some(arg => typeof arg !== 'string'))) throw new Error('参数必须是字符串数组。');
   for (const field of ['command', 'cwd', 'url', 'description'] as const) if (input[field] !== undefined && typeof input[field] !== 'string') throw new Error('MCP 字段必须是字符串。');

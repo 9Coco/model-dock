@@ -33,7 +33,7 @@ interface ProviderRemovalData {
   bindingsBefore: Record<string, unknown>[];
   bindingsAfter: Record<string, unknown>[];
 }
-const TOOL_NAMES: Record<ToolId, string> = { codex: 'Codex', opencode: 'OpenCode', dsh: 'DeepSeek Harness', vscode: 'VS Code', copilot: 'GitHub Copilot' };
+const TOOL_NAMES: Record<ToolId, string> = { codex: 'Codex', opencode: 'OpenCode', dsh: 'DeepSeek Harness', vscode: 'VS Code', copilot: 'GitHub Copilot', 'claude-code': 'Claude Code' };
 const kinds = new Set(['openai-compatible', 'codex', 'grok', 'copilot']);
 let sqlPromise: Promise<SqlJsStatic> | undefined;
 
@@ -72,10 +72,10 @@ export class Store {
     const db = existsSync(filename) ? new SQL.Database(readFileSync(filename)) : new SQL.Database();
     const store = new Store(db, dataDir, codec);
     db.run(`PRAGMA foreign_keys=ON;
-      CREATE TABLE IF NOT EXISTS providers(id TEXT PRIMARY KEY,name TEXT NOT NULL,kind TEXT NOT NULL,base_url TEXT NOT NULL,enabled INTEGER NOT NULL,auth_status TEXT NOT NULL,note TEXT NOT NULL,preset_id TEXT NOT NULL DEFAULT 'custom');
+      CREATE TABLE IF NOT EXISTS providers(id TEXT PRIMARY KEY,name TEXT NOT NULL,kind TEXT NOT NULL,base_url TEXT NOT NULL,enabled INTEGER NOT NULL,auth_status TEXT NOT NULL,note TEXT NOT NULL,preset_id TEXT NOT NULL DEFAULT 'custom',messages_auth TEXT NOT NULL DEFAULT 'bearer',claude_base_url TEXT NOT NULL DEFAULT '');
       CREATE TABLE IF NOT EXISTS secrets(provider_id TEXT PRIMARY KEY REFERENCES providers(id) ON DELETE CASCADE,ciphertext TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS models(id TEXT PRIMARY KEY,provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,upstream_id TEXT NOT NULL,alias TEXT NOT NULL UNIQUE,display_name TEXT NOT NULL,wire_api TEXT NOT NULL,context_window INTEGER NOT NULL,tools INTEGER NOT NULL,vision INTEGER NOT NULL,enabled INTEGER NOT NULL,reasoning_efforts TEXT NOT NULL DEFAULT '[]',default_reasoning_effort TEXT);
-      CREATE TABLE IF NOT EXISTS bindings(id TEXT PRIMARY KEY,name TEXT NOT NULL,enabled INTEGER NOT NULL,model_ids TEXT NOT NULL,default_model_id TEXT NOT NULL,note TEXT NOT NULL,mode TEXT NOT NULL DEFAULT 'aggregate',provider_ids TEXT,model_selection TEXT,vscode_sync_scope TEXT NOT NULL DEFAULT 'managed',copilot_sync_scope TEXT NOT NULL DEFAULT 'managed',dsh_sync_scope TEXT NOT NULL DEFAULT 'managed');
+      CREATE TABLE IF NOT EXISTS bindings(id TEXT PRIMARY KEY,name TEXT NOT NULL,enabled INTEGER NOT NULL,model_ids TEXT NOT NULL,default_model_id TEXT NOT NULL,note TEXT NOT NULL,mode TEXT NOT NULL DEFAULT 'aggregate',provider_ids TEXT,model_selection TEXT,vscode_sync_scope TEXT NOT NULL DEFAULT 'managed',copilot_sync_scope TEXT NOT NULL DEFAULT 'managed',dsh_sync_scope TEXT NOT NULL DEFAULT 'managed',claude_disable_telemetry INTEGER NOT NULL DEFAULT 1);
       CREATE TABLE IF NOT EXISTS logs(id TEXT PRIMARY KEY,time TEXT NOT NULL,alias TEXT NOT NULL,provider_name TEXT NOT NULL,endpoint TEXT NOT NULL,status INTEGER NOT NULL,duration_ms INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS usage_events(id TEXT PRIMARY KEY,time TEXT NOT NULL,alias TEXT NOT NULL,provider_name TEXT NOT NULL,endpoint TEXT NOT NULL,status INTEGER NOT NULL,duration_ms INTEGER NOT NULL,tool TEXT,provider_id TEXT,model_id TEXT,input_tokens INTEGER,output_tokens INTEGER,cached_input_tokens INTEGER,cache_creation_input_tokens INTEGER,source TEXT NOT NULL DEFAULT 'gateway');
       CREATE INDEX IF NOT EXISTS usage_time_idx ON usage_events(time);
@@ -86,11 +86,11 @@ export class Store {
       // Existing databases keep their accounts exactly as stored. Templates are
       // seeded only for an empty, never-initialized store.
       if (!store.one('SELECT id FROM providers LIMIT 1')) for (const preset of providerPresets.filter(p => p.id !== 'custom' && p.id !== 'copilot-subscription')) {
-        db.run('INSERT INTO providers(id,name,kind,base_url,enabled,auth_status,note,preset_id) VALUES(?,?,?,?,?,?,?,?)', [preset.id, preset.name, preset.kind, preset.baseUrl, 1, 'missing', preset.note, preset.id]);
+        db.run('INSERT INTO providers(id,name,kind,base_url,enabled,auth_status,note,preset_id,messages_auth) VALUES(?,?,?,?,?,?,?,?,?)', [preset.id, preset.name, preset.kind, preset.baseUrl, 1, 'missing', preset.note, preset.id, preset.id === 'anthropic' ? 'api-key' : 'bearer']);
       }
       db.run('INSERT INTO settings(key,value) VALUES(?,?)', ['initialized', '1']);
     }
-    for (const [tool, name] of Object.entries(TOOL_NAMES)) db.run('INSERT OR IGNORE INTO bindings(id,name,enabled,model_ids,default_model_id,note,mode,provider_ids,vscode_sync_scope,copilot_sync_scope,dsh_sync_scope) VALUES(?,?,?,?,?,?,?,?,?,?,?)', [tool, name, 0, '[]', '', '', 'auto', '[]', tool === 'vscode' ? 'selected' : 'managed', tool === 'copilot' ? 'selected' : 'managed', tool === 'dsh' ? 'selected' : 'managed']);
+    for (const [tool, name] of Object.entries(TOOL_NAMES)) db.run('INSERT OR IGNORE INTO bindings(id,name,enabled,model_ids,default_model_id,note,mode,provider_ids,vscode_sync_scope,copilot_sync_scope,dsh_sync_scope) VALUES(?,?,?,?,?,?,?,?,?,?,?)', [tool, name, 0, '[]', '', '', tool === 'claude-code' ? 'direct' : 'auto', '[]', tool === 'vscode' ? 'selected' : 'managed', tool === 'copilot' ? 'selected' : 'managed', tool === 'dsh' ? 'selected' : 'managed']);
     if (!store.one("SELECT value FROM settings WHERE key='gateway_key'")) db.run('INSERT INTO settings(key,value) VALUES(?,?)', ['gateway_key', codec.encrypt(store.newKey())]);
     store.persist();
     return store;
@@ -118,7 +118,11 @@ export class Store {
           this.db.run('UPDATE providers SET preset_id=? WHERE id=?', [preset?.id ?? 'custom', String(row.id)]);
         }
       }
+      if (!providerColumns.includes('messages_auth')) this.db.run("ALTER TABLE providers ADD COLUMN messages_auth TEXT NOT NULL DEFAULT 'bearer'");
+      if (!providerColumns.includes('claude_base_url')) this.db.run("ALTER TABLE providers ADD COLUMN claude_base_url TEXT NOT NULL DEFAULT ''");
       if (!bindingColumns.includes('mode')) this.db.run("ALTER TABLE bindings ADD COLUMN mode TEXT NOT NULL DEFAULT 'aggregate'");
+      // 修改点：只迁移 ModelDock 内部选项，启动时不写入 Claude Code 配置。
+      if (!bindingColumns.includes('claude_disable_telemetry')) this.db.run('ALTER TABLE bindings ADD COLUMN claude_disable_telemetry INTEGER NOT NULL DEFAULT 1');
       if (!bindingColumns.includes('provider_ids')) this.db.run('ALTER TABLE bindings ADD COLUMN provider_ids TEXT');
       // NULL retains legacy empty-all/nonempty-filter semantics. No external
       // configuration changes and no expansion of an existing model selection.
@@ -173,7 +177,7 @@ export class Store {
     try { const result = action(); this.db.run('COMMIT'); this.persist(); return result; } catch (error) { try { this.db.run('ROLLBACK'); } catch { /* already committed */ } throw error; }
   }
   private provider(row: Record<string, unknown>): Provider {
-    return { id: String(row.id), name: String(row.name), kind: row.kind as Provider['kind'], presetId: (row.preset_id || 'custom') as Provider['presetId'], baseUrl: String(row.base_url), enabled: Boolean(row.enabled), hasSecret: Boolean(this.one('SELECT provider_id FROM secrets WHERE provider_id=?', [String(row.id)])), authStatus: row.auth_status as Provider['authStatus'], note: String(row.note), ...(row.kind === 'copilot' ? { copilotAccountId: this.getSecret(String(row.id))?.copilotAccountId } : {}) };
+    return { id: String(row.id), name: String(row.name), kind: row.kind as Provider['kind'], presetId: (row.preset_id || 'custom') as Provider['presetId'], baseUrl: String(row.base_url), enabled: Boolean(row.enabled), hasSecret: Boolean(this.one('SELECT provider_id FROM secrets WHERE provider_id=?', [String(row.id)])), authStatus: row.auth_status as Provider['authStatus'], note: String(row.note), ...(row.kind === 'openai-compatible' ? { messagesAuth: row.messages_auth === 'api-key' ? 'api-key' as const : 'bearer' as const, ...(row.claude_base_url ? { claudeBaseUrl: String(row.claude_base_url) } : {}) } : {}), ...(row.kind === 'copilot' ? { copilotAccountId: this.getSecret(String(row.id))?.copilotAccountId } : {}) };
   }
   listProviders(): Provider[] { return this.rows('SELECT * FROM providers ORDER BY rowid').map(row => this.provider(row)); }
   getProvider(providerId: string): Provider | undefined { const row = this.one('SELECT * FROM providers WHERE id=?', [providerId]); return row ? this.provider(row) : undefined; }
@@ -222,6 +226,7 @@ export class Store {
     let providerId = input.id ? id(input.id) : randomUUID();
     const name = text(input.name, '供应商名称', 120);
     if (!kinds.has(input.kind) || typeof input.enabled !== 'boolean') throw new Error('供应商类型或启用状态无效。');
+    if (input.messagesAuth !== undefined && (!['api-key', 'bearer'].includes(input.messagesAuth) || input.kind !== 'openai-compatible')) throw new Error('Messages 鉴权方式无效。');
     let existing = this.getProvider(providerId);
     if (input.id && !existing) throw new Error('供应商不存在，请刷新后重试。');
     const preset = presetById(input.presetId ?? existing?.presetId ?? (input.kind === 'codex' ? 'codex-subscription' : input.kind === 'grok' ? 'grok-build' : input.kind === 'copilot' ? 'copilot-subscription' : 'custom'));
@@ -233,6 +238,9 @@ export class Store {
     if (existing && existing.kind !== input.kind && existing.hasSecret) throw new Error('已有凭据的供应商不能直接改变类型，请新建供应商。');
     const note = typeof input.note === 'string' ? input.note.slice(0, 1000) : '';
     const apiKey = input.apiKey === undefined ? undefined : normalizeApiKey(input.apiKey);
+    if (input.claudeBaseUrl !== undefined && (typeof input.claudeBaseUrl !== 'string' || input.kind !== 'openai-compatible')) throw new Error('Claude Code 接口地址无效。');
+    const claudeBaseUrl = input.claudeBaseUrl === undefined ? existing?.claudeBaseUrl ?? '' : input.claudeBaseUrl.trim() ? validateUpstreamUrl(input.claudeBaseUrl, this.gatewayPort) : '';
+    if (/\/v1\/messages\/?$/.test(claudeBaseUrl)) throw new Error('Claude Code 接口请填写基址，不包含 /v1/messages。');
     if (input.kind === 'openai-compatible') {
       const identity = providerIdentity({ kind: input.kind, name, baseUrl });
       const matches = this.listProviders().filter(provider => provider.kind === 'openai-compatible' && providerIdentity(provider) === identity && provider.id !== providerId);
@@ -257,7 +265,7 @@ export class Store {
       }
     }
     return this.mutate(() => {
-      this.db.run('INSERT INTO providers(id,name,kind,base_url,enabled,auth_status,note,preset_id) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,kind=excluded.kind,base_url=excluded.base_url,enabled=excluded.enabled,note=excluded.note,preset_id=excluded.preset_id', [providerId, name, input.kind, baseUrl, Number(input.enabled), existing?.authStatus ?? 'missing', note, preset.id]);
+      this.db.run('INSERT INTO providers(id,name,kind,base_url,enabled,auth_status,note,preset_id,messages_auth,claude_base_url) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,kind=excluded.kind,base_url=excluded.base_url,enabled=excluded.enabled,note=excluded.note,preset_id=excluded.preset_id,messages_auth=excluded.messages_auth,claude_base_url=excluded.claude_base_url', [providerId, name, input.kind, baseUrl, Number(input.enabled), existing?.authStatus ?? 'missing', note, preset.id, input.messagesAuth ?? existing?.messagesAuth ?? (preset.id === 'anthropic' ? 'api-key' : 'bearer'), claudeBaseUrl]);
       if (apiKey) {
         if (input.kind !== 'openai-compatible') throw new Error('订阅供应商请使用 OAuth 登录。');
         this.putSecret(providerId, { apiKey });
@@ -334,6 +342,8 @@ export class Store {
         if (keys.length > 1) throw new Error('这些供应商使用不同 API Key，请保留为不同账号并使用不同名称。');
         if (new Set(group.map(provider => provider.enabled)).size > 1) throw new Error('这些供应商的启用状态不同，请先统一启用状态后再合并。');
         if (new Set(group.map(provider => provider.presetId ?? 'custom')).size > 1) throw new Error('这些供应商的预设不同，请先统一预设后再合并。');
+        if (new Set(group.map(provider => provider.messagesAuth ?? 'bearer')).size > 1) throw new Error('这些供应商的 Messages 鉴权方式不同，请先统一后再合并。');
+        if (new Set(group.map(provider => provider.claudeBaseUrl ?? '')).size > 1) throw new Error('这些供应商的 Claude Code 接口不同，请先统一后再合并。');
         this.mergedProviderNote(ranked);
       } catch (error) { canMerge = false; message = error instanceof Error ? error.message : '当前重复供应商无法安全合并。'; }
       const proposed = this.mergedBindings(providerIds, target.id);
@@ -516,7 +526,8 @@ export class Store {
     if (!/^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$/.test(requestedAlias)) throw new Error('模型别名只能包含字母、数字和 . _ : / -。');
     const alias = suggestModelAlias(input.providerId, requestedAlias, this.listModels(), modelId);
     if (alias.length > 400) throw new Error('模型别名过长。');
-    if (!['chat-completions', 'responses'].includes(input.wireApi)) throw new Error('模型协议无效。');
+    if (!['chat-completions', 'responses', 'messages'].includes(input.wireApi)) throw new Error('模型协议无效。');
+    if (input.wireApi === 'messages' && this.getProvider(input.providerId)?.kind !== 'openai-compatible') throw new Error('Messages 协议仅支持 API 供应商。');
     if (!Number.isSafeInteger(input.contextWindow) || input.contextWindow < 0 || [input.tools, input.vision, input.enabled].some(v => typeof v !== 'boolean')) throw new Error('模型能力参数无效。');
     const reasoningEfforts = input.reasoningEfforts ?? [];
     if (!Array.isArray(reasoningEfforts) || reasoningEfforts.length > 7 || new Set(reasoningEfforts).size !== reasoningEfforts.length || reasoningEfforts.some(level => !isReasoningEffort(level))) throw new Error('思考强度级别无效。');
@@ -526,7 +537,7 @@ export class Store {
     this.db.run('INSERT INTO models(id,provider_id,upstream_id,alias,display_name,wire_api,context_window,tools,vision,enabled,reasoning_efforts,default_reasoning_effort) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET provider_id=excluded.provider_id,upstream_id=excluded.upstream_id,alias=excluded.alias,display_name=excluded.display_name,wire_api=excluded.wire_api,context_window=excluded.context_window,tools=excluded.tools,vision=excluded.vision,enabled=excluded.enabled,reasoning_efforts=excluded.reasoning_efforts,default_reasoning_effort=excluded.default_reasoning_effort', [modelId, model.providerId, model.upstreamId, alias, model.displayName, model.wireApi, model.contextWindow, Number(model.tools), Number(model.vision), Number(model.enabled), JSON.stringify(reasoningEfforts), defaultReasoningEffort ?? null]); return model;
   }
   deleteModel(modelId: string): void { this.mutate(() => { this.db.run('DELETE FROM models WHERE id=?', [modelId]); this.pruneBindings(); }); }
-  private allBindings(): ToolBinding[] { return this.rows('SELECT * FROM bindings ORDER BY rowid').map(row => ({ id: row.id as ToolId, name: String(row.name), enabled: Boolean(row.enabled), mode: row.mode === 'direct' ? 'direct' : row.mode === 'auto' ? 'auto' : 'aggregate', providerIds: row.provider_ids === null ? undefined : JSON.parse(String(row.provider_ids)), modelIds: JSON.parse(String(row.model_ids)), ...(row.model_selection === 'selected' || row.model_selection === 'all' ? { modelSelection: row.model_selection } : {}), defaultModelId: String(row.default_model_id), note: String(row.note), ...(row.id === 'vscode' ? { vscodeSyncScope: row.vscode_sync_scope === 'managed' ? 'managed' as const : 'selected' as const } : {}), ...(row.id === 'copilot' ? { copilotSyncScope: row.copilot_sync_scope === 'managed' ? 'managed' as const : 'selected' as const } : {}), ...(row.id === 'dsh' ? { dshSyncScope: row.dsh_sync_scope === 'managed' ? 'managed' as const : 'selected' as const } : {}) })); }
+  private allBindings(): ToolBinding[] { return this.rows('SELECT * FROM bindings ORDER BY rowid').map(row => ({ id: row.id as ToolId, name: String(row.name), enabled: Boolean(row.enabled), mode: row.mode === 'direct' ? 'direct' : row.mode === 'auto' ? 'auto' : 'aggregate', providerIds: row.provider_ids === null ? undefined : JSON.parse(String(row.provider_ids)), modelIds: JSON.parse(String(row.model_ids)), ...(row.model_selection === 'selected' || row.model_selection === 'all' ? { modelSelection: row.model_selection } : {}), defaultModelId: String(row.default_model_id), note: String(row.note), ...(row.id === 'vscode' ? { vscodeSyncScope: row.vscode_sync_scope === 'managed' ? 'managed' as const : 'selected' as const } : {}), ...(row.id === 'copilot' ? { copilotSyncScope: row.copilot_sync_scope === 'managed' ? 'managed' as const : 'selected' as const } : {}), ...(row.id === 'dsh' ? { dshSyncScope: row.dsh_sync_scope === 'managed' ? 'managed' as const : 'selected' as const } : {}), ...(row.id === 'claude-code' ? { claudeDisableTelemetry: row.claude_disable_telemetry !== 0 } : {}) })); }
   listBindings(): ToolBinding[] { const bindings = this.allBindings(); return Object.keys(TOOL_NAMES).flatMap(tool => bindings.filter(binding => binding.id === tool)); }
   saveBinding(binding: ToolBinding): void {
     if (!Object.hasOwn(TOOL_NAMES, binding.id) || typeof binding.enabled !== 'boolean' || !Array.isArray(binding.modelIds) || typeof binding.defaultModelId !== 'string') throw new Error('工具绑定无效。');
@@ -549,18 +560,25 @@ export class Store {
     const models = new Set(allModels.map(model => model.id));
     const modelIds = [...new Set(binding.modelIds)];
     if (modelIds.some(modelId => typeof modelId !== 'string' || !models.has(modelId))) throw new Error('工具绑定引用了不存在的模型。');
-    const mode = binding.mode ?? 'aggregate';
+    const mode = binding.mode ?? (binding.id === 'claude-code' ? 'direct' : 'aggregate');
     if (!['direct', 'aggregate', 'auto'].includes(mode)) throw new Error('工具模式无效。');
     if (binding.providerIds !== undefined && !Array.isArray(binding.providerIds)) throw new Error('来源选择无效。');
     const providerIds = binding.providerIds === undefined ? [...new Set(allModels.filter(model => modelIds.includes(model.id)).map(model => model.providerId))] : [...new Set(binding.providerIds)];
     const providers = this.listProviders();
     if (providerIds.some(providerId => typeof providerId !== 'string' || !providers.some(provider => provider.id === providerId))) throw new Error('工具绑定引用了不存在的来源。');
     if (mode === 'direct' && binding.id === 'codex' && (providerIds.length > 1 || binding.enabled && providerIds.length !== 1)) throw new Error('Codex 直连模式必须选择恰好一个来源。');
+    if (binding.claudeDisableTelemetry !== undefined && (binding.id !== 'claude-code' || typeof binding.claudeDisableTelemetry !== 'boolean')) throw new Error('Claude Code 隐私选项无效。');
+    const previousClaudePrivacy = this.one('SELECT claude_disable_telemetry FROM bindings WHERE id=?', [binding.id])?.claude_disable_telemetry;
+    const claudePrivacy = binding.id === 'claude-code' ? binding.claudeDisableTelemetry ?? previousClaudePrivacy !== 0 : true;
+    if (binding.id === 'claude-code') {
+      if (mode === 'aggregate' || providerIds.length > 1 || binding.enabled && providerIds.length !== 1) throw new Error('Claude Code 目前必须选择单个供应商或订阅来源。');
+    }
     if (binding.enabled && !providerIds.length) throw new Error('工具配置至少需要选择一个来源。');
     if (modelIds.some(modelId => !providerIds.includes(allModels.find(model => model.id === modelId)!.providerId))) throw new Error('模型过滤必须属于所选来源。');
     const candidate = { ...binding, mode, providerIds, modelIds, modelSelection, enabled: true };
+    if (binding.id === 'claude-code' && binding.enabled && !resolveBindingModels(candidate, allModels, providers).length) throw new Error('Claude Code 需要所选来源的可用模型。');
     if (binding.defaultModelId && !resolveBindingModels(candidate, allModels, providers).some(model => model.id === binding.defaultModelId)) throw new Error('默认模型必须属于工具可用模型。');
-    this.mutate(() => this.db.run('UPDATE bindings SET name=?,enabled=?,model_ids=?,default_model_id=?,note=?,mode=?,provider_ids=?,model_selection=?,vscode_sync_scope=?,copilot_sync_scope=?,dsh_sync_scope=? WHERE id=?', [TOOL_NAMES[binding.id], Number(binding.enabled), JSON.stringify(modelIds), binding.defaultModelId, typeof binding.note === 'string' ? binding.note.slice(0, 1000) : '', mode, JSON.stringify(providerIds), modelSelection ?? null, syncScope, copilotScope, dshScope, binding.id]));
+    this.mutate(() => this.db.run('UPDATE bindings SET name=?,enabled=?,model_ids=?,default_model_id=?,note=?,mode=?,provider_ids=?,model_selection=?,vscode_sync_scope=?,copilot_sync_scope=?,dsh_sync_scope=?,claude_disable_telemetry=? WHERE id=?', [TOOL_NAMES[binding.id], Number(binding.enabled), JSON.stringify(modelIds), binding.defaultModelId, typeof binding.note === 'string' ? binding.note.slice(0, 1000) : '', mode, JSON.stringify(providerIds), modelSelection ?? null, syncScope, copilotScope, dshScope, Number(claudePrivacy), binding.id]));
   }
   private pruneBindings(): void {
     const models = this.listModels();

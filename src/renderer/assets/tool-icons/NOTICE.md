@@ -1,7 +1,7 @@
 # Tool icon attribution
 
 These marks identify compatible tools in ModelDock. They do not imply endorsement.
-Source geometry is unchanged; ModelDock applies its theme colors using CSS masks.
+Third-party source geometry is unchanged; ModelDock applies theme colors using CSS masks. The Claude Code letter C is original ModelDock artwork.
 Retrieved 2026-10-06. On 2026-10-07 the existing local SVGs and license texts were
 verified to match official UTF-8 source contents at the fixed revisions below.
 These matching revisions are audit evidence, not a claim that the original
@@ -25,5 +25,7 @@ this directory ship with the app.
 - **GitHub Copilot mark**: GitHub, Octicons, `icons/copilot-16.svg`.
   Source: https://github.com/github/octicons/blob/e7e03d50b03b5d303c550a1152f43b063c8bd798/icons/copilot-16.svg
   License: MIT, `LICENSE-octicons.txt`.
+
+- **Claude Code compatibility label**: Original letter C SVG by ModelDock contributors, authored 2026-10-09. This is not an official Claude or Anthropic brand mark. License: MIT, `LICENSE-modeldock.txt`. Local geometry and SHA-256 provenance are recorded in `manifest.json`.
 
 All product names and marks belong to their respective owners.

@@ -9,7 +9,7 @@ import { BusyIcon, EmptyState, Modal, type Notify } from './components';
 import { modelDisplayLabel } from '../shared/model-names';
 import { ToolIcon } from './ToolIcon';
 
-const toolNames: Record<ToolId, string> = { codex: 'Codex', opencode: 'OpenCode', dsh: 'DSH', vscode: 'VS Code', copilot: 'Copilot app' };
+const toolNames: Record<ToolId, string> = { codex: 'Codex', 'claude-code': 'Claude Code', opencode: 'OpenCode', dsh: 'DSH', vscode: 'VS Code', copilot: 'Copilot app' };
 const toolIds = Object.keys(toolNames) as ToolId[];
 const dimensions = [['byProvider', '供应商', 'provider'], ['byTool', '工具', 'tool'], ['byModel', '模型', 'model']] as const;
 const percent = (part: number, whole: number) => whole ? `${Number((part / whole * 100).toFixed(1))}%` : '未知';

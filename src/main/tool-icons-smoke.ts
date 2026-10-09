@@ -3,7 +3,7 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { BrowserWindow } from 'electron';
 
-const toolIds = ['codex', 'opencode', 'dsh', 'vscode', 'copilot'] as const;
+const toolIds = ['codex', 'claude-code', 'opencode', 'dsh', 'vscode', 'copilot'] as const;
 
 interface IconReadback {
   tool: string;
@@ -28,7 +28,7 @@ export async function verifyToolIcons(window: BrowserWindow, outputDir: string, 
     while (Date.now() < deadline) { if (await evaluate<boolean>(source)) return; await pause(25); }
     throw new Error(`Tool icon validation timed out: ${label}`);
   }
-  await waitFor(`!!document.querySelector('.app-shell')&&document.querySelectorAll('.sidebar [data-page="tools"][data-tool-id]').length===5`, 'tool navigation');
+  await waitFor(`!!document.querySelector('.app-shell')&&document.querySelectorAll('.sidebar [data-page="tools"][data-tool-id]').length===6`, 'tool navigation');
   const size = window.getSize();
   const original = await evaluate<{ theme?: string; colorScheme: string; navigation: Record<string, string>; settings: unknown; scroll: Record<string, number> }>(`(async()=>{
     const root=document.documentElement,active=document.querySelector('.sidebar [aria-current="page"]');

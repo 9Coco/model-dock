@@ -4,6 +4,7 @@ import { ConnectionTester, type ConnectionStore } from '../src/main/connection-t
 import { OAuthManager, prepareUpstream, type OAuthStore, type PreparedUpstream } from '../src/main/oauth';
 import type { Model, Provider, ProviderSecret } from '../src/shared/types';
 import { firstConnectionModel } from '../src/shared/connection-types';
+import { anthropicBaseUrl, anthropicEndpoint } from '../src/main/anthropic-endpoint';
 
 const provider: Provider = { id: 'api', name: 'Test Plan', kind: 'openai-compatible', presetId: 'custom', baseUrl: 'https://api.example.test/coding/v3', enabled: true, hasSecret: true, authStatus: 'ready', note: '' };
 const saved: Model = { id: 'saved', providerId: 'api', upstreamId: 'actual-model', alias: 'local-name', displayName: 'Model', wireApi: 'chat-completions', contextWindow: 0, tools: true, vision: false, enabled: true };
@@ -31,6 +32,141 @@ const servers: Server[] = [];
 afterEach(async () => {
   vi.useRealTimers();
   await Promise.all(servers.splice(0).map(server => new Promise<void>(resolve => { server.closeAllConnections(); server.close(() => resolve()); })));
+});
+
+const nativeMessage = (stopReason = 'end_turn', content: unknown[] = [{ type: 'text', text: 'PRIVATE_GENERATION' }], outputTokens = 2) => ({
+  id: 'msg_synthetic', type: 'message', role: 'assistant', model: 'claude-test', content, stop_reason: stopReason,
+  stop_sequence: null, usage: { input_tokens: 3, output_tokens: outputTokens },
+});
+const messageEvents = (stopReason = 'end_turn') => [
+  { type: 'message_start', message: { ...nativeMessage(), content: [], stop_reason: null, usage: { input_tokens: 3, output_tokens: 1 } } },
+  { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+  { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'PRIVATE_GENERATION' } },
+  { type: 'content_block_stop', index: 0 },
+  { type: 'message_delta', delta: { stop_reason: stopReason, stop_sequence: null }, usage: { output_tokens: 2 } },
+  { type: 'message_stop' },
+];
+const messageStream = (events: unknown[]) => events.map(value => {
+  const event = value as { type: string };
+  return `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
+}).join('');
+
+describe('Anthropic Messages inference uses its native contract', () => {
+  it.each([
+    ['https://api.anthropic.com', 'https://api.anthropic.com'],
+    ['https://api.anthropic.com/v1/', 'https://api.anthropic.com'],
+    ['https://gateway.example.test/anthropic', 'https://gateway.example.test/anthropic'],
+    ['https://gateway.example.test/anthropic/v1', 'https://gateway.example.test/anthropic'],
+  ])('normalizes the API base %s without losing a custom prefix', (input, base) => {
+    expect(anthropicBaseUrl(input)).toBe(base);
+    expect(anthropicEndpoint(input, '/messages')).toBe(`${base}/v1/messages`);
+  });
+  it.each(['http://remote.example.test', 'https://user:secret@gateway.example.test', 'https://gateway.example.test?key=secret', 'https://gateway.example.test/#fragment'])('rejects unsafe base %s', base => {
+    expect(() => anthropicEndpoint(base, '/messages')).toThrow();
+  });
+  it.each(['api-key', 'bearer'] as const)('sends only the selected %s auth header to a native upstream and records only usage/shape diagnostics', async messagesAuth => {
+    const seen: unknown[] = [];
+    const server = createServer((req, res) => {
+      let raw = ''; req.on('data', chunk => { raw += chunk; });
+      req.on('end', () => {
+        seen.push({ route: req.url, method: req.method, key: req.headers['x-api-key'], auth: req.headers.authorization, version: req.headers['anthropic-version'], body: JSON.parse(raw) });
+        const valid = messagesAuth === 'api-key' ? req.headers['x-api-key'] === 'SYNTHETIC_ONLY' && !req.headers.authorization
+          : req.headers.authorization === 'Bearer SYNTHETIC_ONLY' && !req.headers['x-api-key'];
+        if (!valid) { res.statusCode = 401; res.end('{}'); return; }
+        res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(nativeMessage()));
+      });
+    }); servers.push(server);
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const f = fixture(fetch); f.store.provider.baseUrl = `http://127.0.0.1:${(server.address() as { port: number }).port}/anthropic/v1`;
+    f.store.provider.messagesAuth = messagesAuth;
+    f.store.models[0].wireApi = 'messages';
+    const diagnostics = vi.fn();
+    const tester = new ConnectionTester(f.store, { prepareRequest: f.prepareRequest }, { fetch, diagnostics });
+    const result = await tester.test('api');
+    expect(result).toMatchObject({ ok: true, wireApi: 'messages', testedModel: 'actual-model', statusCode: 200 });
+    expect(seen).toEqual([{ route: '/anthropic/v1/messages', method: 'POST', key: messagesAuth === 'api-key' ? 'SYNTHETIC_ONLY' : undefined, auth: messagesAuth === 'bearer' ? 'Bearer SYNTHETIC_ONLY' : undefined, version: '2023-06-01',
+      body: { model: 'actual-model', messages: [{ role: 'user', content: 'Reply OK.' }], stream: false, max_tokens: 16 } }]);
+    expect(diagnostics).toHaveBeenCalledWith('info', 'connection.response', expect.objectContaining({ wireApi: 'messages', outputItems: 1, outputTokens: 2, hasOutputText: true }));
+    expect(JSON.stringify([result, diagnostics.mock.calls])).not.toMatch(/PRIVATE_GENERATION|SYNTHETIC_ONLY|Reply OK/);
+  });
+  it.each(['end_turn', 'max_tokens'])('validates actual native stream events and %s completion (local mock upstream)', async stopReason => {
+    const server = createServer((req, res) => {
+      expect(req.url).toBe('/anthropic/v1/messages'); expect(req.headers['anthropic-version']).toBe('2023-06-01');
+      res.setHeader('Content-Type', 'text/event-stream'); res.end(messageStream(messageEvents(stopReason)));
+    }); servers.push(server);
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const f = fixture(fetch); f.store.provider.baseUrl = `http://127.0.0.1:${(server.address() as { port: number }).port}/anthropic`;
+    const result = await f.tester.test('api', { upstreamId: 'claude-test', wireApi: 'messages' });
+    expect(result).toMatchObject({ ok: true, wireApi: 'messages' });
+    expect(result.message).toContain(stopReason === 'max_tokens' ? '输出上限' : '成功完成');
+    expect(JSON.stringify(result)).not.toContain('PRIVATE_GENERATION');
+  });
+  it('supports Anthropic API Key authentication without requiring a Bearer header and rejects missing API version', async () => {
+    const fetcher = vi.fn(async () => json(nativeMessage())); const f = fixture(fetcher as typeof fetch);
+    f.store.provider.messagesAuth = 'api-key';
+    f.prepareRequest.mockImplementation(async (p, route, body) => ({ ...prepareUpstream(p, f.store.secret, route, body), headers: { 'x-api-key': 'SYNTHETIC_ONLY', 'anthropic-version': '2023-06-01' } }));
+    expect(await f.tester.test('api', { upstreamId: 'claude-test', wireApi: 'messages' })).toMatchObject({ ok: true });
+    f.prepareRequest.mockImplementation(async (p, route, body) => ({ ...prepareUpstream(p, f.store.secret, route, body), headers: { 'x-api-key': 'SYNTHETIC_ONLY' } }));
+    expect(await f.tester.test('api', { upstreamId: 'claude-test', wireApi: 'messages' })).toMatchObject({ ok: false, outcome: 'configuration' });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+  it.each(['api-key', 'bearer'] as const)('refuses opposite or extra credential headers for configured %s auth before sending a key', async messagesAuth => {
+    const fetcher = vi.fn(async () => json(nativeMessage())); const f = fixture(fetcher as typeof fetch);
+    f.store.provider.messagesAuth = messagesAuth;
+    for (const headers of [
+      { 'anthropic-version': '2023-06-01', ...(messagesAuth === 'api-key' ? { Authorization: 'Bearer SYNTHETIC_ONLY' } : { 'x-api-key': 'SYNTHETIC_ONLY' }) },
+      { 'anthropic-version': '2023-06-01', Authorization: 'Bearer SYNTHETIC_ONLY', 'x-api-key': 'SYNTHETIC_ONLY' },
+    ] as Record<string, string>[]) {
+      f.prepareRequest.mockImplementation(async (p, route, body) => ({ ...prepareUpstream(p, f.store.secret, route, body), headers }));
+      expect(await f.tester.test('api', { upstreamId: 'claude-test', wireApi: 'messages' })).toMatchObject({ ok: false, outcome: 'configuration' });
+    }
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+  it('reports genuine JSON output truncation and reasoning usage without claiming a final answer', async () => {
+    for (const response of [nativeMessage('max_tokens', [], 16), nativeMessage('max_tokens', [{ type: 'thinking', thinking: 'PRIVATE_REASONING' }], 0)]) {
+      const result = await fixture(vi.fn(async () => json(response)) as typeof fetch).tester.test('api', { upstreamId: 'claude-test', wireApi: 'messages' });
+      expect(result).toMatchObject({ ok: true, message: expect.stringContaining('输出上限') });
+      expect(JSON.stringify(result)).not.toContain('PRIVATE_REASONING');
+    }
+  });
+  it('does not accept Chat/Responses/model-list payloads or unfinished Messages as native inference', async () => {
+    const responses = [json(chat()), json(nativeResponse()), json({ data: [{ id: 'claude-test' }] }), json({ ...nativeMessage(), role: 'user' }),
+      json({ ...nativeMessage(), stop_reason: null }), json(nativeMessage('max_tokens', [], 0)),
+      new Response(messageStream(messageEvents().slice(0, -1)), { headers: { 'Content-Type': 'text/event-stream' } }),
+      new Response(messageStream([{ type: 'message_stop' }]), { headers: { 'Content-Type': 'text/event-stream' } }),
+      new Response(messageStream([messageEvents()[0], messageEvents()[2], messageEvents()[4], messageEvents()[5]]), { headers: { 'Content-Type': 'text/event-stream' } }),
+    ];
+    for (const response of responses) expect(await fixture(vi.fn(async () => response) as typeof fetch).tester.test('api', { upstreamId: 'claude-test', wireApi: 'messages' })).toMatchObject({ ok: false, outcome: 'invalid-response' });
+  });
+  it('rejects JSON and late native SSE errors and never returns upstream error bodies', async () => {
+    const responses = [json({ type: 'error', error: { type: 'overloaded_error', message: 'PRIVATE_ERROR_BODY SYNTHETIC_ONLY' } }),
+      json({ ...nativeMessage(), stop_details: { type: 'refusal', explanation: 'PRIVATE_ERROR_BODY' } }),
+      new Response(messageStream([...messageEvents(), { type: 'error', error: { type: 'overloaded_error', message: 'PRIVATE_ERROR_BODY' } }]), { headers: { 'Content-Type': 'text/event-stream' } }),
+    ];
+    for (const response of responses) {
+      const result = await fixture(vi.fn(async () => response) as typeof fetch).tester.test('api', { upstreamId: 'claude-test', wireApi: 'messages' });
+      expect(result).toMatchObject({ ok: false, outcome: 'upstream' }); expect(JSON.stringify(result)).not.toMatch(/PRIVATE_ERROR_BODY|SYNTHETIC_ONLY/);
+    }
+  });
+  it('aborts a stalled native upstream stream at the test deadline (local mock upstream)', async () => {
+    let started!: () => void, closed!: () => void;
+    const startedPromise = new Promise<void>(resolve => { started = resolve; });
+    const closedPromise = new Promise<void>(resolve => { closed = resolve; });
+    const server = createServer((req, res) => {
+      expect(req.url).toBe('/v1/messages');
+      res.on('close', closed); res.setHeader('Content-Type', 'text/event-stream');
+      res.write(messageStream([messageEvents()[0]])); started();
+    }); servers.push(server);
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    const f = fixture(fetch); f.store.provider.baseUrl = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    const pending = f.tester.test('api', { upstreamId: 'claude-test', wireApi: 'messages' });
+    await startedPromise;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(await pending).toMatchObject({ ok: false, outcome: 'timeout', wireApi: 'messages' });
+    vi.useRealTimers();
+    await closedPromise;
+  });
 });
 
 describe('connection testing sends one actual inference request without model directory access', () => {

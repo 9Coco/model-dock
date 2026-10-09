@@ -20,6 +20,22 @@ function local(manager: McpManager, enabledTools: ('codex' | 'opencode' | 'vscod
   return manager.save({ name: 'test-server', transport: 'stdio', command: 'npx', args: ['-y', 'example-mcp'], enabledTools });
 }
 describe('MCP management', () => {
+  it('rejects every Claude Code MCP entry point before reading or writing other client files', () => {
+    const { root, manager } = setup();
+    const saved = local(manager, ['copilot']);
+    mkdirSync(join(root, '.copilot'));
+    const file = join(root, '.copilot', 'mcp-config.json'), original = '{"mcpServers":{"private":{"command":"keep"}}}';
+    writeFileSync(file, original);
+    expect(() => manager.importFromTool('claude-code')).toThrow('Claude Code MCP');
+    expect(() => manager.preview('claude-code')).toThrow('Claude Code MCP');
+    expect(() => manager.apply('claude-code')).toThrow('Claude Code MCP');
+    expect(() => manager.setToolEnabled(saved.id, 'claude-code', true)).toThrow('Claude Code MCP');
+    expect(() => manager.save({ ...saved, enabledTools: ['claude-code'] })).toThrow('Claude Code MCP');
+    expect(readFileSync(file, 'utf8')).toBe(original);
+    expect(existsSync(join(root, '.config', 'opencode'))).toBe(false);
+    expect(existsSync(join(root, '.claude'))).toBe(false);
+    expect(manager.list()[0].enabledTools).toEqual(['copilot']);
+  });
   it('applies OpenCode MCP only to the configured XDG root and preserves the default profile', () => {
     const f = setup(), configHome = join(f.root, 'custom-config'), target = join(configHome, 'opencode', 'opencode.jsonc');
     mkdirSync(join(f.root, '.config', 'opencode'), { recursive: true });

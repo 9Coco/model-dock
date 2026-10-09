@@ -53,6 +53,7 @@ function counterSignature(value: unknown): unknown {
 }
 const within = (root: string, candidate: string): boolean => { const rel = relative(root, candidate); return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel)); };
 const unsupported: Partial<Record<ToolId, string>> = {
+  'claude-code': 'Claude Code 原生用量记录解析暂未实现；本版不读取或导入其会话记录。通过本机服务的请求可统计，官方 API 直连用量请查看供应商账单。',
   dsh: 'DSH 的会话位置和用量布局随 profile/版本变化，尚未核实本机兼容格式，本版不导入。',
   vscode: 'VS Code Copilot Chat 尚无已核实的稳定本地逐请求 Token 用量格式，本版不导入。',
   copilot: 'Copilot 官方 SDK 的 assistant.usage 是不写入会话日志的临时事件，无法从原生历史日志恢复逐请求 Token 用量。',
@@ -156,7 +157,7 @@ async function parseSession(filename: string, root: string, maxLineBytes: number
  * File paths, prompts, replies and tool output are never stored or returned.
  */
 export async function importToolUsage(tool: ToolId, store: ClientUsageStore, options: UsageImportOptions = {}): Promise<ToolUsageImportResult> {
-  if (!['codex', 'opencode', 'dsh', 'vscode', 'copilot'].includes(tool)) throw new Error('未知工具。');
+  if (!['codex', 'claude-code', 'opencode', 'dsh', 'vscode', 'copilot'].includes(tool)) throw new Error('未知工具。');
   const result: ToolUsageImportResult = { tool, scannedFiles: 0, imported: 0, skipped: 0, deferredFiles: 0, warnings: [], status: 'ready' };
   if (tool === 'opencode') return importOpenCodeUsage(openCodeDataDirectory(options.homeDir, options.opencodeDataDir), store, limits(options));
   if (tool !== 'codex') { result.unsupported = unsupported[tool]; result.status = 'unsupported'; return result; }

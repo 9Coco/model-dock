@@ -6,7 +6,7 @@ const ignored = new Set(['reportRendererError', 'queryDiagnostics', 'diagnostics
 const quiet = new Set(['snapshot', 'getSettings', 'rendererReady', 'authAccounts', 'authProgress', 'copilotAuthProgress', 'mcpList', 'skillsList', 'skillsReadFile', 'usageQuery', 'usageSources', 'listProviderDuplicates']);
 const providerIdOperations = new Set(['deleteProvider', 'testProvider', 'discoverModels', 'addDiscoveredModels', 'beginLogin', 'authProgress', 'cancelLogin', 'refreshAccountUsage', 'logoutAccount', 'copilotLogoutAccount']);
 const toolIdOperations = new Set(['previewConfig', 'exportConfig', 'applyConfig', 'restoreOfficialConfig', 'usageImportTool']);
-const tools = new Set(['codex', 'opencode', 'dsh', 'vscode', 'copilot']);
+const tools = new Set(['codex', 'opencode', 'dsh', 'vscode', 'copilot', 'claude-code']);
 const outcomes = new Set(['success', 'failure', 'cancelled', 'skipped', 'model-required', 'configuration', 'authentication', 'permission', 'model', 'rate-limit', 'upstream', 'network', 'timeout', 'invalid-response', 'unsupported', 'invalid-provider', 'missing-credentials', 'region', 'device-disabled', 'denied', 'expired', 'blocked']);
 const stages = new Set(['device-code', 'device-poll', 'token-exchange', 'account-info', 'refresh', 'discovery']);
 const events: Partial<Record<keyof ModelDockApi, DiagnosticEvent>> = {
@@ -41,7 +41,7 @@ export function diagnosticOperationResult(name: keyof ModelDockApi, args: readon
   if (name === 'saveProvider') context.providerId = id(data.id);
   if (name === 'saveModel') context.modelId = id(data.id);
   if (name === 'testProvider') {
-    if (data.wireApi === 'chat-completions' || data.wireApi === 'responses') context.wireApi = data.wireApi;
+    if (data.wireApi === 'chat-completions' || data.wireApi === 'responses' || data.wireApi === 'messages') context.wireApi = data.wireApi;
     context.outcome = data.ok === true ? 'success' : outcome(data.outcome);
     return { level: data.ok === true ? 'info' : 'warn', event: 'connection.result', context };
   }
