@@ -1,3 +1,5 @@
+import type { Model, Provider, ToolBinding } from './types';
+import { resolveBindingModels, bindingConnectionPolicy } from './bindings';
 export const JETBRAINS_TOOLS = {
   webstorm: { name: 'WebStorm', selectorPrefix: 'WebStorm' },
   'intellij-idea': { name: 'IntelliJ IDEA', selectorPrefix: 'IntelliJIdea' },
@@ -26,18 +28,31 @@ export function jetBrainsBaseUrl(tool: JetBrainsToolId, port: number): string {
 }
 
 /** 修改点：同一连接规则用于参数页面和配置文件；返回值从不含凭据。 */
-export function jetBrainsConnectionParameters(binding: import('./types').ToolBinding, models: readonly import('./types').Model[], providers: readonly import('./types').Provider[], port: number): {
+export function jetBrainsConnectionParameters(binding: ToolBinding, models: readonly Model[], providers: readonly Provider[], port: number): {
   kind: 'direct-api' | 'local-managed'; baseUrl: string; modelId: string; modelIds: string[];
 } {
-  let scoped = binding.enabled ? models.filter(model => model.enabled && model.wireApi !== 'messages'
-    && providers.some(provider => provider.id === model.providerId && provider.enabled)
-    && (binding.providerIds === undefined ? binding.modelIds.includes(model.id) : (binding.mode === 'direct' ? binding.providerIds.slice(0, 1) : binding.providerIds).includes(model.providerId))) : [];
-  if (binding.modelSelection === 'selected' || binding.modelSelection !== 'all' && binding.modelIds.length) scoped = scoped.filter(model => binding.modelIds.includes(model.id));
-  if (binding.mode === 'direct' && binding.providerIds === undefined && scoped.length) scoped = scoped.filter(model => model.providerId === scoped[0].providerId);
-  const providerIds = [...new Set(binding.providerIds ?? scoped.map(model => model.providerId))];
-  const provider = providers.find(item => item.id === providerIds[0]);
-  const direct = binding.mode === 'direct' && providerIds.length === 1 && provider?.kind === 'openai-compatible' && scoped.length > 0 && scoped.every(model => model.wireApi === 'chat-completions');
+  const scoped = resolveBindingModels(binding, [...models], [...providers]);
+  const policy = bindingConnectionPolicy(binding, [...models], [...providers]);
+  const nativeReady = policy.groups[0]?.connection === 'direct-api';
+  const direct = binding.mode === 'direct' || nativeReady;
+  const provider = providers.find(item => item.id === binding.providerIds?.[0]);
   const chosen = scoped.find(model => model.id === binding.defaultModelId) ?? scoped[0];
-  return { kind: direct ? 'direct-api' : 'local-managed', baseUrl: direct ? provider!.baseUrl.replace(/\/+$/, '') : jetBrainsBaseUrl(binding.id as JetBrainsToolId, port),
+  return { kind: direct ? 'direct-api' : 'local-managed', baseUrl: nativeReady && provider ? nativeJetBrainsBaseUrl(provider) ?? provider.baseUrl.replace(/\/+$/, '') : direct ? '' : jetBrainsBaseUrl(binding.id as JetBrainsToolId, port),
     modelId: chosen ? direct ? chosen.upstreamId : chosen.alias : '', modelIds: scoped.map(model => direct ? model.upstreamId : model.alias) };
+}
+/** Official dual-protocol endpoints only; custom Responses endpoints are never guessed. */
+export function nativeJetBrainsBaseUrl(provider: Provider): string | undefined {
+  if (provider.kind !== 'openai-compatible') return;
+  const endpoints: Record<string, readonly string[]> = {
+    deepseek: ['https://api.deepseek.com', 'https://api.deepseek.com/v1'],
+    'volcengine-agent': ['https://ark.cn-beijing.volces.com/api/plan/v3'],
+    'volcengine-token': ['https://ark.cn-beijing.volces.com/api/coding/v3'],
+    'qwen-token': ['https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1', 'https://coding.dashscope.aliyuncs.com/v1'],
+  };
+  try {
+    const url = new URL(provider.baseUrl);
+    if (url.username || url.password || url.search || url.hash) return;
+    const canonical = url.href.replace(/\/+$/, '');
+    return endpoints[provider.presetId ?? '']?.find(endpoint => endpoint === canonical);
+  } catch { return; }
 }

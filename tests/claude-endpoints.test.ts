@@ -34,7 +34,10 @@ describe('official Claude endpoint selection', () => {
   it.each(['codex', 'copilot', 'grok'] as const)('uses the local bridge for %s account subscriptions', kind => {
     const provider = source({ kind, baseUrl: 'https://account.example.test' });
     expect(nativeClaudeBaseUrl(provider)).toBeUndefined();
-    expect(resolveBindingModels(binding, [model], [provider])).toEqual([model]);
-    expect(bindingConnectionPolicy(binding, [model], [provider]).groups[0].connection).toBe('local-managed');
+    expect(resolveBindingModels(binding, [model], [provider])).toEqual([]);
+    expect(bindingConnectionPolicy(binding, [model], [provider]).groups).toEqual([]);
+    const aggregate = { ...binding, mode: 'aggregate' as const };
+    expect(resolveBindingModels(aggregate, [model], [provider])).toEqual([model]);
+    expect(bindingConnectionPolicy(aggregate, [model], [provider]).groups[0].connection).toBe('local-managed');
   });
 });

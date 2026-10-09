@@ -21,7 +21,7 @@ async function fixture(wireApi: WireApi, handler: (request: IncomingMessage, res
   const provider = store.saveProvider({ name: 'Synthetic source', kind: subscription ? 'codex' : 'openai-compatible', baseUrl: subscription ? 'https://chatgpt.com/backend-api/codex' : baseUrl + '/v1', enabled: true, ...(subscription ? {} : { apiKey: 'SYNTHETIC_API_KEY' }) });
   if (subscription) store.setSecret(provider.id, { accessToken: 'SYNTHETIC_ROTATED_OAUTH', refreshToken: 'SYNTHETIC_REFRESH', expiresAt: Date.now() + 3600000 });
   const model = store.saveModel({ providerId: provider.id, upstreamId: 'upstream-model', alias: 'local-model', displayName: 'Synthetic model', wireApi, contextWindow: 0, tools: true, vision: false, enabled: true });
-  store.saveBinding({ id: 'claude-code', name: 'Claude Code', enabled: true, mode: 'direct', providerIds: [provider.id], modelIds: [], defaultModelId: model.id, note: '' });
+  store.saveBinding({ id: 'claude-code', name: 'Claude Code', enabled: true, mode: 'aggregate', providerIds: [provider.id], modelIds: [], defaultModelId: model.id, note: '' });
   const gateway = new Gateway(store, { timeoutMs, prepareRequest: async (_provider, secret, path, body) => ({ url: baseUrl + path, headers: { Authorization: `Bearer ${subscription ? secret.accessToken : secret.apiKey}`, 'Content-Type': 'application/json' }, body: subscription ? { ...body, stream: true } : body }) });
   await gateway.start(0); cleanups.push(() => gateway.stop().then(() => undefined));
   const url = gateway.status().baseUrl.replace(/\/v1$/, '') + '/tool/claude-code/v1/messages';

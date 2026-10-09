@@ -1,6 +1,7 @@
 import type { Model, Provider, ToolBinding } from './types';
 import { claudeConnectionKind, claudeModelsForProvider } from './claude';
 import { isJetBrainsTool } from './jetbrains';
+import { directModelsForProvider, isSingleEntryTool, nativeDirectBaseUrl } from './single-entry';
 
 export interface BindingConnectionGroup {
   /** Direct API groups contain exactly one provider, hence one credential. */
@@ -24,8 +25,9 @@ export function resolveBindingModels(binding: ToolBinding, models: Model[], prov
   const claudeIds = claude && providers ? new Set(providers.filter(provider => provider.enabled).flatMap(provider => binding.mode === 'aggregate'
     ? models.filter(model => model.providerId === provider.id && model.enabled)
     : claudeModelsForProvider(provider, models)).map(model => model.id)) : undefined;
+  const nativeIds = binding.mode === 'direct' && isSingleEntryTool(binding.id) && providers ? new Set(providers.flatMap(provider => directModelsForProvider(binding.id, provider, models)).map(model => model.id)) : undefined;
   let result = models.filter(model => model.enabled && (claude ? !claudeIds || claudeIds.has(model.id) : model.wireApi !== 'messages')
-    && (!providers || providers.some(p => p.id === model.providerId && p.enabled)));
+    && (!providers || providers.some(p => p.id === model.providerId && p.enabled)) && (!nativeIds || nativeIds.has(model.id)));
   if (providerIds !== undefined) {
     const allowed = singleSource ? providerIds.slice(0, 1) : providerIds;
     result = result.filter(model => allowed.includes(model.providerId));
@@ -51,6 +53,7 @@ export function bindingConnectionPolicy(binding: ToolBinding, models: Model[], p
     if (requestedIds.length !== 1) throw new Error('单供应商模式必须只选择一个来源。');
     if (!selectedIds.length) return { kind: 'direct', groups: [] };
     const provider = providers?.find(item => item.id === selectedIds[0]);
+    if (isSingleEntryTool(binding.id)) return { kind: 'direct', groups: provider && nativeDirectBaseUrl(binding.id, provider, resolved) ? [{ connection: 'direct-api', providerIds: selectedIds, modelIds: resolved.map(model => model.id) }] : [] };
     const native = provider?.kind === 'openai-compatible' && (binding.id === 'claude-code' ? claudeConnectionKind(provider, resolved) === 'direct-api'
       : isJetBrainsTool(binding.id) ? resolved.length > 0 && resolved.every(model => model.wireApi === 'chat-completions') : true);
     return { kind: 'direct', groups: [{ connection: native ? 'direct-api' : 'local-managed', providerIds: selectedIds, modelIds: resolved.map(model => model.id) }] };

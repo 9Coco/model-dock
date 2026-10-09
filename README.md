@@ -15,7 +15,7 @@ ModelDock 是跨平台本地模型管理台：全局维护模型来源与别名�
 - 授权生命周期对照 CC Switch 的设备码实现：xAI 校验 OIDC issuer，续期显式携带原权限 scope；ID Token 只保存在主进程加密凭据中，界面取得账号元数据。临时续期网络失败保留原授权状态；明确拒绝或过期停止轮询。导入凭据前取消旧登录、刷新和额度查询，提交刷新前检查原凭据，防止晚回复覆盖新授权。
 - 模型：填写 API Key 后从供应商获取真实模型列表，搜索、勾选并批量添加。不同供应商可用相同模型简称及显示名称，列表和工具中按「套餐名 - 模型名」展示；系统维护唯一的聚合接口 ID。支持真实上游 ID、协议、上下文、工具、视觉与思考强度能力。默认来源未授权、模型列表为空，能力由实际配置确定。
 - Codex 兼容模型目录带独立的 `client_version` 和对应版本请求头，使用原生 `slug` 作为上游 ID，解析显示名称、上下文和明确的能力字段。默认候选隐藏 `hide / none` 条目，已保存和手动添加的模型保留；目录可见性不代表实际模型权限。API / Grok 来源不携带 Codex 目录版本参数。
-- 工具：Codex、Claude Code、OpenCode、DSH、VS Code Copilot Chat、Copilot app，以及 WebStorm、IntelliJ IDEA、Rider、PyCharm 的 AI Assistant；工具页直接勾选供应商并选择模型偏好。前六种工具会自动保存并同步勾选、取消及模型偏好变更；四个 JetBrains IDE 在用户更改选择时也自动同步，IDE 运行中先保存，确认退出后应用最新选择；Copilot app 需运行。十个工具均有「使用聚合接口」选项：关闭时单独连接一家来源，勾选另一家会替换当前来源；开启时使用一个本机入口，选择多家来源并逐个启用模型。聚合模型列表固定在工具页右侧，独立滚动；左侧保留连接参数及供应商操作，缩小窗口仍保持左右两栏。API 优先使用客户端支持的原生协议直连，订阅及需协议转换的来源通过本机服务连接。旧版本的多入口及自动连接方式保留到用户明确切换。原有工具可还原官方配置；JetBrains 可恢复 ModelDock 同步前的设置。模型或来源参数改动后可点击「重新同步」。DSH 的模型与密钥一同同步，无需再次手工配置。
+- 工具：Codex、Claude Code、OpenCode、DSH、VS Code Copilot Chat、Copilot app 与 WebStorm、IntelliJ IDEA、Rider、PyCharm 的 AI Assistant。Codex、Claude Code 与四个 JetBrains IDE 每次只配置一个入口：供应商直连只选择一家支持原生协议的 API，使用供应商地址、API Key 和真实模型 ID；使用聚合接口只连接一个 ModelDock 本机地址，来源与模型多选均在聚合接口内部配置，模型映射列表在右侧独立滚动。直连与聚合的选择分别保存，往返切换保留原聚合模型范围。订阅及不兼容的直连来源只能在兼容的聚合入口内使用，不会暗中退回单家本机协议桥。已有工具支持还原官方配置，JetBrains 可恢复同步前设置；工具交互触发自动同步并先备份，应用启动不会写外部客户端配置。OpenCode、DSH、VS Code 和 Copilot 保留原有多入口与连接方式。
 - 本地网关：固定监听 `127.0.0.1`，默认 `18181`；本地 Key 鉴权、标准模型目录、Chat Completions/Responses、流式转发、请求日志。
 - SQLite：保存来源、模型、绑定与日志；敏感凭据由主进程加密，预览和快照不包含上游密钥。
 - 配置接入：原有六类工具均支持预览 / 导出，并在用户修改勾选或模型偏好后自动同步，写入前备份。VS Code 默认只保留所选自定义供应商，可关闭此选项来保留原有自定义来源；其他 vendor 与 JSONC 注释保留。OpenCode 保留其他供应商、MCP 和非受管 JSONC 注释；Codex 的 TOML 重写保留配置字段，但不保证原注释。Copilot app 通过运行实例的原生接口同步来源、模型和凭据，预览是同步计划参考，不需要再手工导入。DSH 写入 home 插件覆盖与凭据 refs，同步前保存加密恢复记录，清空后恢复原覆盖。
@@ -23,15 +23,15 @@ ModelDock 是跨平台本地模型管理台：全局维护模型来源与别名�
 
 ## JetBrains AI Assistant 模型接入
 
-WebStorm、IntelliJ IDEA、Rider、PyCharm 使用同一套 AI Assistant 设置格式。当前文件同步适配本机已核实的 2026.2 IDE / build 262 插件，各自有独立的供应商选择、默认模型和「使用聚合接口」选项。聚合模式统一连接 `/tool/<工具 ID>/v1`，客户端使用固定本机 Key；关闭聚合时只使用一家来源，单 API 的 Chat Completions 模型可直连上游，使用该来源的 Key 和真实模型 ID，Responses 与订阅通过本机协议桥连接。现有千问、火山、DeepSeek API 及已授权的 ChatGPT/Copilot/Grok 来源可复用，轮换 OAuth 凭据始终留在 ModelDock。
+WebStorm、IntelliJ IDEA、Rider、PyCharm 使用同一套 AI Assistant 设置格式，当前文件同步适配已核实的 2026.2 / build 262 profile。供应商直连只使用一家原生 Chat API，写入供应商 URL、真实模型 ID，并在 IDE 填写该供应商 API Key。官方 DeepSeek、火山及已确认千问入口可复用现有 Responses 模型条目进行原生 Chat 调用，不会更改全局模型协议或影响 Codex。仅支持 Responses 的未知自定义服务不能假设支持原生 Chat，应通过兼容的聚合入口使用。聚合模式只配置 `/tool/<工具 ID>/v1` 一个本机入口，使用固定本机 Key，供应商与映射模型在聚合接口内部管理。轮换 OAuth 凭据留在 ModelDock。
 
-1. 在对应 IDE 的工具页勾选来源并选择「核心与轻量功能模型」。用户更改来源、连接模式或模型时，会保存本机绑定，并在确认 IDE 已退出且 profile 兼容后自动备份和同步设置；IDE 运行中或状态未知时保留最新待办，每 15 秒检查一次，退出后自动应用。应用启动和工具导航不会自动写入 IDE 文件。Chat Completions 模型原生转发，Responses 模型经本机转换；Messages 模型不在此接入范围。
+1. 在工具页选择供应商直连，使用单个供应商下拉和模型选项；或开启「使用聚合接口」，进入聚合接口内部配置，选择内部来源和精确映射模型。用户变更后在确认 IDE 已退出且 profile 兼容时自动备份同步；运行或状态未知时保留最新待办，每 15 秒检查。启动、导航不写文件。直连与聚合草稿独立保存，聚合全部停用保持精确空映射，切换不会重新启用未勾选模型。
 2. 退出 IDE 后会自动同步本次交互的最新待办，也可点击接入参数顶部的「同步 IDE 设置」重新应用，可一次写入 URL、HTTP/1.1 和核心 / 轻量模型，同步前自动备份。「准备本机连接」只启动 ModelDock 本地服务。无法同步时，在 IDE 的「设置 → 工具 → AI Assistant → 提供商与 API 密钥」选择「兼容 OpenAI」，复制页面参数手工填写；工具调用与上下文建议须以套餐实际能力和限制为准。
 3. API Key 首次接入时需在每个 IDE 中手工粘贴一次；切换连接方式或来源后请更新密钥。ModelDock 不读取或写入 JetBrains PasswordSafe。点击 IDE 的「测试连接」后，再发送实际聊天 / 工具请求确认推理可用；模型目录返回成功不能代替推理验证。
 4. 同步只处理已发现的配置 profile，备份后更新 AI Assistant 地址、HTTP 版本、工具调用及核心 / 轻量模型字段，保留其他设置。IDE 运行中、运行状态未知或未找到兼容 profile 时不写文件，待办期间继续检查，也可手工填写接入参数。同步写入失败时停止自动重试并显示原因，处理后可手动重新同步。关闭 ModelDock 会丢弃尚未应用的待办；下次打开保留本机选择，但不会自动重放写入。重新打开 IDE 后确认 API Key；「设置文件已同步」不表示登录或真实账号调用已通过。
 5. 「还原同步前设置」同样要求 IDE 退出，恢复本次受管字段；IDE 凭据存储中的 Key 请在 IDE 内自行确认或更换。「导出参考参数」生成手工填写用 JSON，不能直接导入 IDE。
 
-JetBrains 的 Chat 接口支持将 Responses 的推理文本和工具调用转换为 Chat SSE，包括火山的 `reasoning_text` / `reasoning_raw_text`。当前 Koog 客户端会将中途断流当作成功，因此这四个 IDE 的回复先在本机缓冲并校验完整完成状态，再交给 IDE，最多 32 MiB；首次显示回答会晚于上游首个 token。失败返回 HTTP 错误，不把裸错误 JSON 当作成功 Chat 块。其他工具的流式输出不使用此缓冲。
+JetBrains 聚合接口支持将 Responses 的推理文本和工具调用转换为 Chat SSE，包括火山的 `reasoning_text` / `reasoning_raw_text`。当前 Koog 客户端会将中途断流当作成功，因此这四个 IDE 经聚合接口的回复先在本机缓冲并校验完整完成状态，再交给 IDE，最多 32 MiB；首次显示回答会晚于上游首个 token。失败返回 HTTP 错误，不把裸错误 JSON 当作成功 Chat 块。其他工具的流式输出不使用此缓冲。
 
 Koog 会将显示用的 `assistant.reasoning_content` 回传下一轮。Responses 转换仅保留回答与工具历史，省略这个显示字段，不将它伪造为原生推理项或指令；原生 Chat 来源保留该字段。此转换不承诺完整保留推理历史。
 

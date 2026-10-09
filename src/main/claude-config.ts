@@ -73,7 +73,9 @@ function selection(store: ClaudeConfigStore, revealKey: boolean, port: number): 
   if (selectedProviders.some(provider => provider?.messagesAuth !== undefined && !['api-key', 'bearer'].includes(provider.messagesAuth))) throw new Error('Claude Code Messages 鉴权方式无效。');
   const provider = selectedProviders[0]!;
   if (!models.length) throw new Error('Claude Code 需要至少一个可用模型，请先添加并选择模型。');
-  const localManaged = bindingConnectionPolicy(binding, allModels, providers).groups[0]?.connection === 'local-managed';
+  const policy = bindingConnectionPolicy(binding, allModels, providers);
+  const localManaged = binding.mode === 'aggregate';
+  if (!localManaged && policy.groups[0]?.connection !== 'direct-api') throw new Error('Claude Code 直连需要原生 Messages API；订阅或其他协议请使用聚合接口。');
   if (localManaged && selectedProviders.some(provider => models.some(model => model.providerId === provider!.id) && (!provider!.hasSecret || provider!.authStatus !== 'ready'))) throw new Error('Claude Code 所选来源的凭据尚未就绪，请先保存 API Key 或完成订阅授权。');
   if (localManaged && (!Number.isSafeInteger(port) || port < 1 || port > 65535)) throw new Error('Claude Code 本机入口端口无效。');
   const authMode = !localManaged && provider.messagesAuth === 'api-key' ? 'api-key' : 'bearer';

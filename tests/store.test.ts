@@ -168,7 +168,7 @@ describe('real SQLite storage', () => {
     const binding = store.listBindings()[0];
     expect(() => store.saveBinding({ ...binding, modelIds: ['missing'] })).toThrow(/不存在/);
     expect(() => store.saveBinding({ ...binding, defaultModelId: first.id })).toThrow(/默认/);
-    store.saveBinding({ ...binding, enabled: true, providerIds: undefined, modelIds: [first.id], defaultModelId: first.id });
+    store.saveBinding({ ...binding, mode: 'aggregate', enabled: true, providerIds: undefined, modelIds: [first.id], defaultModelId: first.id });
     store.setSecret(p.id, { apiKey: 'test-token' });
     store.deleteProvider(p.id);
     expect(store.listModels()).toEqual([]);
@@ -207,7 +207,7 @@ describe('real SQLite storage', () => {
     store.saveModel(model(a.id, 'glm'));
     const second = store.saveModel(model(b.id, 'glm'));
     const binding = store.listBindings()[0];
-    store.saveBinding({ ...binding, enabled: true, providerIds: [b.id], defaultModelId: second.id });
+    store.saveBinding({ ...binding, mode: 'aggregate', enabled: true, providerIds: [b.id], defaultModelId: second.id });
     store.deleteProvider(a.id);
     const edited = store.saveModel({ ...second, alias: 'glm', displayName: 'Edited name' });
     expect(edited.alias).toBe(second.alias);
@@ -269,7 +269,7 @@ describe('real SQLite storage', () => {
     const { store } = await setup();
     const a = store.saveProvider({ name: 'A', kind: 'openai-compatible', baseUrl: 'https://a.example.test/v1', enabled: true });
     const b = store.saveProvider({ name: 'B', kind: 'openai-compatible', baseUrl: 'https://b.example.test/v1', enabled: true });
-    const am = store.saveModel(model(a.id, 'a')); const bm = store.saveModel(model(b.id, 'b'));
+    const am = store.saveModel({ ...model(a.id, 'a'), wireApi: 'responses' }); const bm = store.saveModel({ ...model(b.id, 'b'), wireApi: 'responses' });
     const direct = store.listBindings().find(binding => binding.id === 'codex')!;
     expect(() => store.saveBinding({ ...direct, mode: 'direct', enabled: true, providerIds: [a.id, b.id] })).toThrow(/恰好/);
     expect(() => store.saveBinding({ ...direct, mode: 'aggregate', enabled: true, providerIds: [] })).toThrow(/至少/);
@@ -357,16 +357,16 @@ describe('real SQLite storage', () => {
     const added = store.saveModel(model(source.id, 'legacy-later'));
     expect(resolveBindingModels(store.listBindings().find(binding => binding.id === 'codex')!, store.listModels(), store.listProviders()).map(model => model.id)).toEqual([first.id, added.id]);
   });
-  it('migrates missing model selection metadata without replacing a legacy auto binding or touching client files', async () => {
+  it('migrates legacy single API auto to direct without touching client files or expanding its model filter', async () => {
     const { store, dir, codec } = await setup();
     const source = store.saveProvider({ name: 'Legacy auto', kind: 'openai-compatible', baseUrl: 'https://legacy.example.test/v1', enabled: true });
-    const selected = store.saveModel(model(source.id, 'legacy-selected')); store.saveModel(model(source.id, 'legacy-excluded'));
+    const selected = store.saveModel({ ...model(source.id, 'legacy-selected'), wireApi: 'responses' }); store.saveModel({ ...model(source.id, 'legacy-excluded'), wireApi: 'responses' });
     const binding = store.listBindings().find(binding => binding.id === 'codex')!;
-    store.saveBinding({ ...binding, mode: 'auto', enabled: true, providerIds: [source.id], modelIds: [selected.id], defaultModelId: selected.id });
+    store.saveBinding({ ...binding, mode: 'direct', enabled: true, providerIds: [source.id], modelIds: [selected.id], defaultModelId: selected.id });
     const before = store.listBindings(); store.close();
     const SQL = await initSqlJs({ locateFile: file => join(process.cwd(), 'node_modules/sql.js/dist', file) });
     const legacy = new SQL.Database(readFileSync(join(dir, 'modeldock.sqlite')));
-    legacy.run('ALTER TABLE bindings DROP COLUMN model_selection'); writeFileSync(join(dir, 'modeldock.sqlite'), legacy.export()); legacy.close();
+    legacy.run("UPDATE bindings SET mode='auto', connection_choices=NULL WHERE id='codex'"); legacy.run('ALTER TABLE bindings DROP COLUMN model_selection'); writeFileSync(join(dir, 'modeldock.sqlite'), legacy.export()); legacy.close();
     const codexDir = join(dir, '.codex'); mkdirSync(codexDir);
     const clientFile = join(codexDir, 'config.toml'), original = 'model = "official-model"\n'; writeFileSync(clientFile, original);
     const migrated = await Store.create(dir, codec); stores.push(migrated);
@@ -484,7 +484,7 @@ describe('real SQLite storage', () => {
     const other = store.saveProvider({ name: 'Keep fixture', kind: 'openai-compatible', baseUrl: 'https://keep.example.test/v1', enabled: true });
     const selected = store.saveModel(model(source.id, 'remove/a')), second = store.saveModel(model(source.id, 'remove/b')), kept = store.saveModel(model(other.id, 'keep/a'));
     const claudeModel = store.saveModel({ ...model(source.id, 'remove/claude'), wireApi: 'messages' });
-    for (const binding of store.listBindings()) store.saveBinding({ ...binding, enabled: true, mode: 'auto', providerIds: binding.id === 'claude-code' ? [source.id] : [source.id, other.id], modelIds: binding.id === 'dsh' ? [selected.id] : [], defaultModelId: binding.id === 'claude-code' ? claudeModel.id : selected.id, note: 'original binding metadata' });
+    for (const binding of store.listBindings()) store.saveBinding({ ...binding, enabled: true, mode: binding.id === 'codex' || binding.id === 'claude-code' || ['webstorm','intellij-idea','rider','pycharm'].includes(binding.id) ? 'aggregate' : 'auto', providerIds: binding.id === 'claude-code' ? [source.id] : [source.id, other.id], modelIds: binding.id === 'dsh' ? [selected.id] : [], defaultModelId: binding.id === 'claude-code' ? claudeModel.id : selected.id, note: 'original binding metadata' });
     store.setManagedState(`auth-metadata:${source.id}`, { identity: 'SYNTHETIC_ACCOUNT_ID' }); store.setManagedState(`auth-usage:${source.id}`, { status: 'ready', remaining: 72 });
     const beforeProvider = store.getProvider(source.id), beforeModels = store.listModels(), beforeBindings = store.listBindings(), beforeSecret = store.getSecret(source.id);
     const checkpoint = store.beginProviderRemoval(source.id);

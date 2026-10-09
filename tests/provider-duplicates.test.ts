@@ -178,7 +178,7 @@ describe('explicit legacy duplicate preview and safe merge', () => {
     const { store } = await setup(); const empty = source(store), populated = duplicate(store, empty, 'populated', 'synthetic-key');
     model(store, populated.id, 'other-model');
     const binding = store.listBindings()[0];
-    store.saveBinding({ ...binding, enabled: true, mode: 'direct', providerIds: [empty.id], modelIds: [], defaultModelId: '' });
+    store.saveBinding({ ...binding, enabled: true, mode: 'aggregate', providerIds: [empty.id], modelIds: [], defaultModelId: '' });
     const [group] = store.listProviderDuplicates(); store.mergeProviderDuplicates(group.providerIds, group.fingerprint);
     const after = store.listBindings()[0];
     expect(after.enabled).toBe(false);
@@ -202,7 +202,7 @@ describe('explicit legacy duplicate preview and safe merge', () => {
   it('keeps a tool enabled when its original selected models are all disabled and its explicit merged filter remains safe', async () => {
     const { store } = await setup(); const first = source(store), second = duplicate(store, first, 'second', 'synthetic-key');
     const inactive = model(store, first.id, 'inactive', { enabled: false }); model(store, second.id, 'foreign');
-    store.saveBinding({ ...store.listBindings()[0], enabled: true, providerIds: [first.id], modelIds: [] });
+    store.saveBinding({ ...store.listBindings()[0], enabled: true, mode: 'aggregate', providerIds: [first.id], modelIds: [] });
     const [group] = store.listProviderDuplicates(); store.mergeProviderDuplicates(group.providerIds, group.fingerprint);
     expect(store.listBindings()[0]).toMatchObject({ enabled: true, modelIds: [inactive.id] });
     expect(resolveBindingModels(store.listBindings()[0], store.listModels(), store.listProviders())).toEqual([]);
@@ -259,7 +259,7 @@ describe('explicit legacy duplicate preview and safe merge', () => {
     const { store } = await setup(); const first = source(store), second = duplicate(store, first, 'second', 'synthetic-key');
     const a = model(store, first.id, 'a'); const [group] = store.listProviderDuplicates();
     if (change === 'model') store.saveModel({ ...a, displayName: 'Changed' });
-    if (change === 'binding') store.saveBinding({ ...store.listBindings()[0], providerIds: [second.id], enabled: true });
+    if (change === 'binding') store.saveBinding({ ...store.listBindings()[0], mode: 'aggregate', providerIds: [second.id], enabled: true });
     if (change === 'secret') store.setSecret(second.id, { apiKey: 'changed-key' });
     if (change === 'added-member') duplicate(store, first, 'third', 'synthetic-key');
     if (change === 'other-provider') store.saveProvider({ ...store.getProvider('deepseek')!, enabled: false });

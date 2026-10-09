@@ -96,7 +96,13 @@ export interface Model {
   defaultReasoningEffort?: ReasoningEffort;
 }
 export type ModelInput = Omit<Model, 'id'> & { id?: string };
+export interface ToolConnectionChoices {
+  direct?: { providerId: string; defaultModelId: string };
+  aggregate?: { providerIds: string[]; modelIds: string[]; defaultModelId: string; modelSelection?: 'all' | 'selected' };
+}
 export interface ToolBinding {
+  /** Independent drafts for strict single-entry clients; no credentials. */
+  connectionChoices?: ToolConnectionChoices;
   id: ToolId;
   name: string;
   enabled: boolean;
