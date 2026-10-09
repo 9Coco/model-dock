@@ -15,11 +15,25 @@ ModelDock 是跨平台本地模型管理台：全局维护模型来源与别名�
 - 授权生命周期对照 CC Switch 的设备码实现：xAI 校验 OIDC issuer，续期显式携带原权限 scope；ID Token 只保存在主进程加密凭据中，界面取得账号元数据。临时续期网络失败保留原授权状态；明确拒绝或过期停止轮询。导入凭据前取消旧登录、刷新和额度查询，提交刷新前检查原凭据，防止晚回复覆盖新授权。
 - 模型：填写 API Key 后从供应商获取真实模型列表，搜索、勾选并批量添加。不同供应商可用相同模型简称及显示名称，列表和工具中按「套餐名 - 模型名」展示；系统维护唯一的聚合接口 ID。支持真实上游 ID、协议、上下文、工具、视觉与思考强度能力。默认来源未授权、模型列表为空，能力由实际配置确定。
 - Codex 兼容模型目录带独立的 `client_version` 和对应版本请求头，使用原生 `slug` 作为上游 ID，解析显示名称、上下文和明确的能力字段。默认候选隐藏 `hide / none` 条目，已保存和手动添加的模型保留；目录可见性不代表实际模型权限。API / Grok 来源不携带 Codex 目录版本参数。
-- 工具：Codex、Claude Code、OpenCode、DSH、VS Code Copilot Chat、Copilot app；工具页直接勾选供应商并选择模型偏好。六种工具会自动保存并同步勾选、取消及模型偏好变更；Copilot app 需运行。Codex 支持单供应商直连和逐模型选择的聚合接口；Claude Code 一次使用一个 API 或订阅来源，官方 API 优先直连，订阅通过本机服务连接；其余工具可同时直连多家供应商。各工具均可还原官方配置。模型或来源参数改动后可点击「重新同步」。DSH 的模型与密钥一同同步，无需再次手工配置。
+- 工具：Codex、Claude Code、OpenCode、DSH、VS Code Copilot Chat、Copilot app，以及 WebStorm、IntelliJ IDEA、Rider、PyCharm 的 AI Assistant；工具页直接勾选供应商并选择模型偏好。前六种工具会自动保存并同步勾选、取消及模型偏好变更；四个 JetBrains IDE 的选择只保存本机绑定，配置文件同步是独立的显式操作；Copilot app 需运行。Codex 支持单供应商直连和逐模型选择的聚合接口；Claude Code 一次使用一个 API 或订阅来源，官方 API 优先直连，订阅通过本机服务连接；其余工具可同时直连多家供应商。原有工具可还原官方配置；JetBrains 可恢复 ModelDock 同步前的设置。模型或来源参数改动后可点击「重新同步」。DSH 的模型与密钥一同同步，无需再次手工配置。
 - 本地网关：固定监听 `127.0.0.1`，默认 `18181`；本地 Key 鉴权、标准模型目录、Chat Completions/Responses、流式转发、请求日志。
 - SQLite：保存来源、模型、绑定与日志；敏感凭据由主进程加密，预览和快照不包含上游密钥。
-- 配置接入：六类工具均支持预览 / 导出，并在用户修改勾选或模型偏好后自动同步，写入前备份。VS Code 默认只保留所选自定义供应商，可关闭此选项来保留原有自定义来源；其他 vendor 与 JSONC 注释保留。OpenCode 保留其他供应商、MCP 和非受管 JSONC 注释；Codex 的 TOML 重写保留配置字段，但不保证原注释。Copilot app 通过运行实例的原生接口同步来源、模型和凭据，预览是同步计划参考，不需要再手工导入。DSH 写入 home 插件覆盖与凭据 refs，同步前保存加密恢复记录，清空后恢复原覆盖。
+- 配置接入：原有六类工具均支持预览 / 导出，并在用户修改勾选或模型偏好后自动同步，写入前备份。VS Code 默认只保留所选自定义供应商，可关闭此选项来保留原有自定义来源；其他 vendor 与 JSONC 注释保留。OpenCode 保留其他供应商、MCP 和非受管 JSONC 注释；Codex 的 TOML 重写保留配置字段，但不保证原注释。Copilot app 通过运行实例的原生接口同步来源、模型和凭据，预览是同步计划参考，不需要再手工导入。DSH 写入 home 插件覆盖与凭据 refs，同步前保存加密恢复记录，清空后恢复原覆盖。
 - 托盘：关闭主窗口可留在后台运行；退出应用会停止网关。
+
+## JetBrains AI Assistant 模型接入
+
+WebStorm、IntelliJ IDEA、Rider、PyCharm 使用同一套 AI Assistant 设置格式。当前文件同步适配本机已核实的 2026.2 IDE / build 262 插件，各自有独立的供应商选择、默认模型和 `/tool/<工具 ID>/v1` 入口。现有千问、火山、DeepSeek API 及已授权的 ChatGPT/Copilot/Grok 来源可复用；客户端只使用固定本机 Key，上游 API Key 与轮换 OAuth 凭据留在 ModelDock。
+
+1. 在对应 IDE 的工具页勾选来源并选择「核心与轻量功能模型」。这只保存当前 IDE 的本机绑定，不修改 IDE 文件。Chat Completions 模型原生转发，Responses 模型经本机转换；Messages 模型不在此接入范围。
+2. 点击「准备本机连接」，在 IDE 的「设置 → 工具 → AI Assistant → 提供商与 API 密钥」选择「兼容 OpenAI」，复制该工具 URL 和本机 Key，选择 HTTP/1.1。模型指定使用页面显示的完整模型 ID（别名）；核心和轻量 / 快速功能默认使用同一所选模型。工具调用与上下文建议来自模型目录，须以套餐实际能力和限制为准。
+3. API Key 需要在 IDE 中粘贴一次。ModelDock 不读取或写入 JetBrains PasswordSafe。点击 IDE 的「测试连接」后，再发送实际聊天 / 工具请求确认推理可用；模型目录返回成功不能代替推理验证。
+4. 也可先退出 IDE，再显式点击「同步 IDE 设置」。只处理已发现的配置 profile，备份后更新 AI Assistant 地址、HTTP 版本、工具调用及核心 / 轻量模型字段，保留其他设置。IDE 运行中、运行状态未知或未找到兼容 profile 时禁用同步与还原，仍可手工填写接入参数。重新打开 IDE 后确认 API Key；「设置文件已同步」不表示登录或真实账号调用已通过。
+5. 「还原同步前设置」同样要求 IDE 退出，恢复本次受管字段；IDE 凭据存储中的 Key 请在 IDE 内自行确认或更换。「导出参考参数」生成手工填写用 JSON，不能直接导入 IDE。
+
+配置流程参考 JetBrains 官方 [自定义模型](https://www.jetbrains.com/help/ai-assistant/use-custom-models.html)及[提供商与 API 密钥设置](https://www.jetbrains.com/help/ai-assistant/settings-reference-providers-and-api-keys.html)。
+
+此接入管理 AI Assistant 聊天及模型核心功能。Junie、Claude Agent、Codex、Gemini CLI、代码补全及各自独立的账号 / 模型配置由 IDE 管理。ModelDock 本次不导入或部署 JetBrains MCP / Skills，也不读取 IDE 聊天记录；经过本机网关的请求用量按四个工具独立统计。协议转换、配置文件和隔离 Electron 验证，与真实 IDE 界面和上游账号调用分别记录。
 
 ## 授权、MCP、Skills 和用量
 
@@ -241,7 +255,7 @@ API 来源按名称、类型和规范化地址防重复：添加预设时复用�
 - ModelDock 独立于 OpenAI、GitHub、xAI 和各工具厂商。兼容接入使用现有公开客户端标识和已观察到的授权/额度/本机接口，不是 ModelDock 自注册的官方 OAuth 应用，也不代表官方背书。公开客户端 ID 不是秘密；不要删除它们来代替协议审查。提供账号访问、模型目录或额度数据不等于服务承诺稳定私有接口或授予每个模型的推理权限。使用这些服务仍须满足上游账号、权限和服务条款。
 - GPT 登录目前是兼容 Codex 公开客户端的设备码流程，不是为 ModelDock 动态注册的新 SIWC 应用。授权、实际账号额度和模型权限需用户登录后验证。
 - 授权错误按申请设备码、等待授权、兑换凭据和续期步骤显示安全诊断，区分地区限制、设备码未启用、明确拒绝、过期和网络超时。Codex 专属设备授权轮询中的 JSON 403 / 404、`deviceauth_authorization_pending` 均可表示尚未输入验证码，会保持等待、保留验证码和复制按钮，并提供官方授权页面链接；这些状态不表示已完成授权。HTML 拦截、明确拒绝及过期会停止轮询。已有有效账号再次登录失败时保留原授权。设备码的账号 / 工作空间权限条件及本机授权缓存方法参见 [OpenAI 官方授权说明](https://learn.chatgpt.com/docs/auth)；登录失败页可前往授权中心显式导入已登录客户端，导入按钮才读取本机授权文件。
-- 原生上游按来源与模型已有的 Chat Completions / Responses 协议调用；现有其他工具会过滤 Messages 模型。Claude Code 可通过本机服务把 Messages 转换为来源已有协议，或连接官方 Anthropic 兼容入口；无需复制现有模型。跨协议转换的测试与真实供应商验收分别记录。
+- 原生上游按来源与模型已有的 Chat Completions / Responses 协议调用；现有其他工具会过滤 Messages 模型。四个 JetBrains IDE 的 Chat Completions 入口可转换到 Responses 来源；原生 Chat 模型保持原协议。Claude Code 可通过本机服务把 Messages 转换为来源已有协议，或连接官方 Anthropic 兼容入口；无需复制现有模型。跨协议转换的测试与真实供应商验收分别记录。
 - 订阅路径使用 `store:false`，需要发送完整会话历史；不能依赖 `previous_response_id` 或服务端持久化对话。原生 WebSocket 续接尚未实现。千问 Token Plan 的 Responses 支持也需按具体模型选择，不能以套餐名称一概认定。
 - Claude Code 终端接入写入 `CLAUDE_CONFIG_DIR/settings.json`（默认 `~/.claude/settings.json`），一次使用一个现有 API 或账号订阅来源。官方 API 的 Claude 兼容入口使用同一 API Key；ChatGPT/Codex、GitHub Copilot、Grok Build 订阅通过 ModelDock 本机 Messages 服务调用其已有上游协议，OAuth 访问和刷新令牌留在主进程，客户端配置只使用本机 Key。需要本机入口时同步会按需启动服务；使用期间须保持 ModelDock 运行。
 - API 表单的「Claude Code 接口地址」留空时按已知官方地址映射，未识别的 OpenAI 兼容来源可通过本机服务转换；填写时须是支持 Anthropic Messages 的服务地址。此字段不替换已有 OpenAI 地址。Messages 鉴权可选择 `API Key（x-api-key）` 或 `Bearer Token（Authorization）`；Anthropic 新模板默认 API Key，自定义及未设置此字段的历史来源默认 Bearer，仅影响原生 Messages 接口。

@@ -1,5 +1,6 @@
 import type { Model, Provider, ToolBinding } from './types';
 import { claudeConnectionKind, claudeModelsForProvider } from './claude';
+import { isJetBrainsTool } from './jetbrains';
 
 export interface BindingConnectionGroup {
   /** Direct API groups contain exactly one provider, hence one credential. */
@@ -38,6 +39,10 @@ export function resolveBindingModels(binding: ToolBinding, models: Model[], prov
  * Existing explicit modes and model-scoped filters retain their meaning. */
 export function bindingConnectionPolicy(binding: ToolBinding, models: Model[], providers?: Provider[]): BindingConnectionPolicy {
   const resolved = resolveBindingModels(binding, models, providers);
+  if (isJetBrainsTool(binding.id)) {
+    const providerIds = [...new Set(binding.providerIds ?? resolved.map(model => model.providerId))].filter(providerId => !providers || providers.some(provider => provider.id === providerId && provider.enabled));
+    return { kind: 'aggregate', groups: binding.enabled && providerIds.length ? [{ connection: 'local-managed', providerIds, modelIds: resolved.map(model => model.id) }] : [] };
+  }
   if (binding.id === 'claude-code') {
     const providerIds = [...new Set((binding.providerIds ?? resolved.map(model => model.providerId)))];
     if (!binding.enabled || !providerIds.length) return { kind: 'direct', groups: [] };

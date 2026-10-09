@@ -8,7 +8,7 @@ import type { DiscoveryResult, ModelSelection, AddModelsResult } from './catalog
 import type { ConnectionResult, ConnectionTestInput } from './connection-types';
 export type { ConnectionResult, ConnectionTestInput } from './connection-types';
 export type ProviderKind = 'openai-compatible' | 'codex' | 'grok' | 'copilot';
-export type ToolId = 'codex' | 'opencode' | 'dsh' | 'vscode' | 'copilot' | 'claude-code';
+export type ToolId = 'codex' | 'opencode' | 'dsh' | 'vscode' | 'copilot' | 'claude-code' | 'webstorm' | 'intellij-idea' | 'rider' | 'pycharm';
 export type WireApi = 'chat-completions' | 'responses' | 'messages';
 export type ToolMode = 'direct' | 'aggregate' | 'auto';
 /** Thinking levels recognized by client tools (VS Code picker labels these; unknown levels are not written to client configs). */
@@ -162,6 +162,7 @@ export interface AuthProgress {
 }
 export type { DiagnosticEntry, DiagnosticQuery, DiagnosticSnapshot } from './diagnostic-types';
 export interface ModelDockApi {
+  jetBrainsStatus(tool: import('./jetbrains').JetBrainsToolId): Promise<import('./jetbrains').JetBrainsStatus>;
   /** Only a fixed failure kind/name can be reported; never arbitrary log text. */
   reportRendererError(input: { kind: 'error' | 'unhandled-rejection'; errorName?: string }): Promise<void>;
   queryDiagnostics(query?: import('./diagnostic-types').DiagnosticQuery): Promise<import('./diagnostic-types').DiagnosticSnapshot>;

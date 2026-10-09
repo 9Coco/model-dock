@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path';
 import type { ToolId } from '../shared/types';
 import type { ToolUsageImportResult, UsageDataSource, UsageSourcesSnapshot, UsageSyncResult } from '../shared/usage-import-types';
 import { importToolUsage, type ClientUsageStore, type UsageImportOptions } from './usage-import';
+import { JETBRAINS_TOOLS, JETBRAINS_TOOL_IDS } from '../shared/jetbrains';
 import { openCodeDataDirectory } from './opencode-paths';
 
 interface UsageSyncStore extends ClientUsageStore {
@@ -11,8 +12,8 @@ interface UsageSyncStore extends ClientUsageStore {
   getManagedState?<T>(key: string, fallback: T): T;
   setManagedState?(key: string, value: unknown): void;
 }
-const TOOLS: ToolId[] = ['codex', 'claude-code', 'opencode', 'dsh', 'vscode', 'copilot'];
-const NAMES: Record<ToolId, string> = { codex: 'Codex', 'claude-code': 'Claude Code', opencode: 'OpenCode', dsh: 'DSH', vscode: 'VS Code', copilot: 'Copilot app' };
+const TOOLS: ToolId[] = ['codex', 'claude-code', 'opencode', 'dsh', 'vscode', 'copilot', 'webstorm', 'intellij-idea', 'rider', 'pycharm'];
+const NAMES: Record<ToolId, string> = { codex: 'Codex', 'claude-code': 'Claude Code', opencode: 'OpenCode', dsh: 'DSH', vscode: 'VS Code', copilot: 'Copilot app', webstorm: 'WebStorm', 'intellij-idea': 'IntelliJ IDEA', rider: 'Rider', pycharm: 'PyCharm' };
 const PRIVACY = '只读取本地会话的时间、模型标识及 Token 计数；不保存提示词、回复、工具输出、账户凭据，也不修改外部客户端文件。原生事件无法证明 HTTP 成功率或请求速度。';
 const KEY = 'usage-sync:v1';
 
@@ -60,6 +61,7 @@ export class UsageSyncService {
       paths: this.store.dataDir ? [join(this.store.dataDir, 'modeldock.sqlite')] : [], format: '网关请求的最终上游用量',
       description: '自动记录经过本机网关的请求。直接连接供应商的客户端请求由下方原生会话来源提供。' }];
     const specs: { tool: ToolId; paths: string[]; format: string; supported: boolean; description: string }[] = [
+      ...JETBRAINS_TOOL_IDS.map(tool => ({ tool, paths: [], format: 'JetBrains AI Assistant 原生用量导入暂不支持', supported: false, description: `${JETBRAINS_TOOLS[tool].name} 通过 ModelDock 本机入口的请求可统计；本版不读取或导入 IDE 会话内容。` })),
       // 修改点：未实现解析时不展示可读取目录，也不扫描或误导入其他工具的数据。
       { tool: 'claude-code', paths: [], format: 'Claude Code 原生用量导入暂不支持', supported: false, description: '本版不读取或导入 Claude Code 会话记录。通过 ModelDock 本机服务的请求可统计；官方 API 直连用量请查看供应商账单。' },
       { tool: 'codex', paths: [join(codex, 'sessions'), join(codex, 'archived_sessions')], format: 'Codex rollout JSONL', supported: true, description: '读取 token_count 元数据；优先使用单次用量，处理累计计数、回放、归档与分支去重。' },

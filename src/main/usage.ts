@@ -69,7 +69,7 @@ function accumulate(total: UsageTotals, value: UsageRecord, price?: ModelPrice, 
     total.estimatedCostUsd = (total.estimatedCostUsd ?? 0) + estimated;
   }
 }
-const toolNames: Record<ToolId, string> = { codex: 'Codex', opencode: 'OpenCode', dsh: 'DSH', vscode: 'VS Code', copilot: 'Copilot app', 'claude-code': 'Claude Code' };
+const toolNames: Record<ToolId, string> = { codex: 'Codex', opencode: 'OpenCode', dsh: 'DSH', vscode: 'VS Code', copilot: 'Copilot app', 'claude-code': 'Claude Code', webstorm: 'WebStorm', 'intellij-idea': 'IntelliJ IDEA', rider: 'Rider', pycharm: 'PyCharm' };
 function toolKey(value: unknown): ToolId | 'unscoped' { return typeof value === 'string' && Object.hasOwn(toolNames, value) ? value as ToolId : 'unscoped'; }
 const dayNumber = (day: string) => Date.parse(`${day}T00:00:00Z`) / 86400_000;
 function hourBucket(time: number, timeZone: string): { key: string; label: string; time: number } {

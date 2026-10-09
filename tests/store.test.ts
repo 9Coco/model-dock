@@ -127,14 +127,14 @@ describe('real SQLite storage', () => {
     expect(reopened.getSecret(source.id)).toEqual(secret);
   });
 
-  it('seeds unconfigured sources, no invented usable models, and six disabled tool bindings', async () => {
+  it('seeds unconfigured sources, no invented usable models, and ten disabled tool bindings', async () => {
     const { store, dir } = await setup();
     expect(store.listProviders()).toHaveLength(7);
     expect(store.listProviders().map(provider => provider.presetId)).toEqual(['anthropic', 'deepseek', 'volcengine-agent', 'volcengine-token', 'qwen-token', 'codex-subscription', 'grok-build']);
     expect(store.listProviders().every(p => !p.hasSecret && p.authStatus === 'missing')).toBe(true);
     expect(store.listModels()).toEqual([]);
-    expect(store.listBindings()).toHaveLength(6);
-    expect(store.listBindings().map(binding => binding.id)).toEqual(['codex', 'opencode', 'dsh', 'vscode', 'copilot', 'claude-code']);
+    expect(store.listBindings()).toHaveLength(10);
+    expect(store.listBindings().map(binding => binding.id)).toEqual(['codex', 'opencode', 'dsh', 'vscode', 'copilot', 'claude-code', 'webstorm', 'intellij-idea', 'rider', 'pycharm']);
     expect(store.listBindings().every(b => !b.enabled && b.modelIds.length === 0 && !b.defaultModelId)).toBe(true);
     expect(readFileSync(join(dir, 'modeldock.sqlite')).subarray(0, 16).toString()).toBe('SQLite format 3\0');
   });
@@ -488,7 +488,7 @@ describe('real SQLite storage', () => {
     store.setManagedState(`auth-metadata:${source.id}`, { identity: 'SYNTHETIC_ACCOUNT_ID' }); store.setManagedState(`auth-usage:${source.id}`, { status: 'ready', remaining: 72 });
     const beforeProvider = store.getProvider(source.id), beforeModels = store.listModels(), beforeBindings = store.listBindings(), beforeSecret = store.getSecret(source.id);
     const checkpoint = store.beginProviderRemoval(source.id);
-    expect(new Set(checkpoint.affectedToolIds)).toEqual(new Set(['codex', 'opencode', 'dsh', 'vscode', 'copilot', 'claude-code']));
+    expect(new Set(checkpoint.affectedToolIds)).toEqual(new Set(['codex', 'opencode', 'dsh', 'vscode', 'copilot', 'claude-code', 'webstorm', 'intellij-idea', 'rider', 'pycharm']));
     expect(checkpoint.beforeBindings).toEqual(beforeBindings); expect(checkpoint.afterBindings.every(binding => !binding.providerIds?.includes(source.id))).toBe(true);
     expect(store.getProvider(source.id)).toBeUndefined(); expect(store.getSecret(source.id)).toBeUndefined(); expect(store.listModels().map(model => model.id)).toEqual([kept.id]);
     expect(store.getManagedState(`auth-metadata:${source.id}`, null)).toBeNull(); expect(store.getManagedState(`auth-usage:${source.id}`, null)).toBeNull();
@@ -588,7 +588,7 @@ describe('real SQLite storage', () => {
     expect(migrated.getSecret('old-vol')?.apiKey).toBe('legacy-vol-key'); expect(migrated.gatewayKey()).toBe('legacy-local-key');
     const binding = migrated.listBindings().find(item => item.id === 'dsh')!;
     expect(binding).toMatchObject({ mode: 'aggregate', providerIds: ['old-gpt'], modelIds: ['old-model'], defaultModelId: 'old-model', note: 'keep binding' });
-    expect(migrated.listBindings().map(item => item.id)).toEqual(['codex', 'opencode', 'dsh', 'vscode', 'copilot', 'claude-code']);
+    expect(migrated.listBindings().map(item => item.id)).toEqual(['codex', 'opencode', 'dsh', 'vscode', 'copilot', 'claude-code', 'webstorm', 'intellij-idea', 'rider', 'pycharm']);
     migrated.saveProvider({ ...migrated.getProvider('old-vol')!, name: 'Updated legacy name' });
     migrated.close();
     const reopened = await Store.create(dir, codec); stores.push(reopened);

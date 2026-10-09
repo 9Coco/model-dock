@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "verifiedAt": "2026-10-07",
+  "verifiedAt": "2026-10-09",
   "originalRetrievalDate": "2026-10-06",
-  "verification": "Existing third-party SVG and license UTF-8 contents were compared exactly against official sources at the fixed revisions below; SHA-256 values matched. The original Claude Code letter C icon has local authorship provenance instead of an upstream comparison.",
+  "verification": "Existing third-party SVG and license UTF-8 contents were compared exactly against official sources at the fixed revisions below; SHA-256 values matched. The original Claude Code letter C icon has local authorship provenance instead of an upstream comparison. The four JetBrains compatibility monograms are original local geometry with ModelDock authorship provenance.",
   "renderingChanges": "Source geometry is unchanged. ModelDock uses CSS masks and theme colors for display.",
   "icons": [
     {
@@ -87,6 +87,58 @@
       "license": "MIT",
       "licenseRecord": "modeldock",
       "note": "Original letter C geometry; not the official Claude or Anthropic brand mark."
+    },
+    {
+      "file": "webstorm.svg",
+      "label": "WebStorm compatibility monogram - original ModelDock artwork",
+      "sourceType": "original",
+      "author": "ModelDock contributors",
+      "createdAt": "2026-10-09",
+      "sourcePath": "src/renderer/assets/tool-icons/webstorm.svg",
+      "sha256": "d1242f4f0df5fd2d8f7ad3b1fab099c2634791d22bab9db5a327c843c230671a",
+      "viewBox": "0 0 24 24",
+      "license": "MIT",
+      "licenseRecord": "modeldock",
+      "note": "Original geometric letter mark; not official JetBrains product or company artwork."
+    },
+    {
+      "file": "intellij-idea.svg",
+      "label": "IntelliJ IDEA compatibility monogram - original ModelDock artwork",
+      "sourceType": "original",
+      "author": "ModelDock contributors",
+      "createdAt": "2026-10-09",
+      "sourcePath": "src/renderer/assets/tool-icons/intellij-idea.svg",
+      "sha256": "4f4db68bcb70516a89b985a7d4674f98d07f7653fce512c2e51fbea7c00d7c85",
+      "viewBox": "0 0 24 24",
+      "license": "MIT",
+      "licenseRecord": "modeldock",
+      "note": "Original geometric letter mark; not official JetBrains product or company artwork."
+    },
+    {
+      "file": "rider.svg",
+      "label": "Rider compatibility monogram - original ModelDock artwork",
+      "sourceType": "original",
+      "author": "ModelDock contributors",
+      "createdAt": "2026-10-09",
+      "sourcePath": "src/renderer/assets/tool-icons/rider.svg",
+      "sha256": "ce5f10e2fc693cb70666acc46fdf8fdce2cf1615d756ddc042811ebf2ba2d7d4",
+      "viewBox": "0 0 24 24",
+      "license": "MIT",
+      "licenseRecord": "modeldock",
+      "note": "Original geometric letter mark; not official JetBrains product or company artwork."
+    },
+    {
+      "file": "pycharm.svg",
+      "label": "PyCharm compatibility monogram - original ModelDock artwork",
+      "sourceType": "original",
+      "author": "ModelDock contributors",
+      "createdAt": "2026-10-09",
+      "sourcePath": "src/renderer/assets/tool-icons/pycharm.svg",
+      "sha256": "4de36801526c001377f032077fc39771eb218f52c10944099d2d1d4cc31be23b",
+      "viewBox": "0 0 24 24",
+      "license": "MIT",
+      "licenseRecord": "modeldock",
+      "note": "Original geometric letter mark; not official JetBrains product or company artwork."
     }
   ],
   "licenses": [

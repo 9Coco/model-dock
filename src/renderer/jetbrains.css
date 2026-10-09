@@ -1,0 +1,20 @@
+.jetbrains-connection { margin: 0 0 22px; padding: 20px; }
+.jetbrains-connection .section-heading { margin: 0 0 12px; }
+.jetbrains-intro, .jetbrains-key-note, .jetbrains-scope-note { color: var(--muted); font-size: 12px; line-height: 1.7; margin: 10px 0 15px; }
+.jetbrains-parameters { margin: 0; }
+.jetbrains-parameter { display: grid; grid-template-columns: 172px minmax(0, 1fr); gap: 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
+.jetbrains-parameter dt { color: var(--muted); }
+.jetbrains-parameter dd { display: flex; align-items: center; gap: 12px; margin: 0; min-width: 0; }
+.jetbrains-parameter dd code { overflow-wrap: anywhere; min-width: 0; }
+.jetbrains-parameter dd .text-button { margin-left: auto; flex-shrink: 0; }
+.jetbrains-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 16px 0; }
+.jetbrains-profile { border-left: 3px solid var(--line); padding: 2px 0 2px 12px; font-size: 12px; }
+.jetbrains-profile strong, .jetbrains-profile code { display: block; margin-bottom: 6px; overflow-wrap: anywhere; }
+.jetbrains-profile p { margin: 0; color: var(--muted); line-height: 1.7; }
+.jetbrains-scope-note { margin-bottom: 0; }
+@media (max-width: 800px) { .jetbrains-parameter { grid-template-columns: 1fr; gap: 5px; } }
+
+.tool-logo.webstorm { color: #498b9b; }
+.tool-logo.intellij-idea { color: #9872ba; }
+.tool-logo.rider { color: #a96992; }
+.tool-logo.pycharm { color: #65967a; }
