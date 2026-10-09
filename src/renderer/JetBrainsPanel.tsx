@@ -3,6 +3,7 @@ import { isJetBrainsTool, jetBrainsConnectionParameters, JETBRAINS_TOOLS, type J
 import { Copy, KeyRound, Plug2, RefreshCw, FileCode2, ArrowDownToLine, CheckCheck } from './MaterialIcon';
 import { BusyIcon, type Notify } from './components';
 import { useState } from 'react';
+import type { JetBrainsAutoSyncState } from './jetbrains-auto-sync';
 import './jetbrains.css';
 
 interface Props {
@@ -13,6 +14,7 @@ interface Props {
   gateway: GatewayStatus;
   connection?: ReturnType<typeof jetBrainsConnectionParameters>;
   status?: JetBrainsStatus;
+  autoSync?: JetBrainsAutoSyncState;
   busy: boolean;
   notify: Notify;
   onRefresh(): Promise<void>;
@@ -23,7 +25,7 @@ interface Props {
 }
 
 /** 修改点：IDE 密钥始终经主进程复制到剪贴板，不进入 renderer 或 XML。 */
-export function JetBrainsPanel({ tool, api, models, defaultModel, gateway, connection, status, busy, notify, onRefresh, onStatusRefresh, onPreview, onExport, onApply }: Props) {
+export function JetBrainsPanel({ tool, api, models, defaultModel, gateway, connection, status, autoSync, busy, notify, onRefresh, onStatusRefresh, onPreview, onExport, onApply }: Props) {
   const [action, setAction] = useState('');
   if (!isJetBrainsTool(tool)) return null;
   const direct = connection?.kind === 'direct-api';
@@ -42,7 +44,8 @@ export function JetBrainsPanel({ tool, api, models, defaultModel, gateway, conne
   const parameter = (label: string, value: string, buttonLabel?: string) => <div className="jetbrains-parameter"><dt>{label}</dt><dd><code>{value}</code>{buttonLabel && <button className="text-button" disabled={!api || disabled || !ready} onClick={() => void copy(value, label)} aria-label={buttonLabel}><Copy size={14} />复制</button>}</dd></div>;
   return <section className="panel jetbrains-connection" data-jetbrains-connection={tool} data-jetbrains-connection-kind={connection?.kind}>
     <div className="section-heading"><h2>{JETBRAINS_TOOLS[tool].name} 接入参数</h2><div className="jetbrains-top-actions"><button className="button small primary" data-action="apply-tool-config" disabled={!api || disabled || !status?.canApply} title={status?.message ?? '正在确认 IDE 配置和运行状态'} onClick={() => void onApply()}><CheckCheck size={14} />同步 IDE 设置</button><button className="button small secondary" data-action="jetbrains-refresh-status" disabled={!api || disabled} onClick={() => void run('status', async () => { await onStatusRefresh(); })}><BusyIcon active={action === 'status'}><RefreshCw size={14} /></BusyIcon>检查 IDE 状态</button></div></div>
-    <p className="jetbrains-intro">退出 IDE 后，点击「同步 IDE 设置」可一次写入 URL、HTTP 版本和核心 / 轻量模型，同步前会自动备份。API Key 首次接入时需在每个 IDE 手工粘贴一次。{direct ? '当前 API 直连所选供应商，使用该来源的 API Key 和真实模型 ID。' : '「准备本机连接」只启动 ModelDock 本地服务，不会同步 IDE 设置；当前连接使用本机入口和模型别名，使用时保持 ModelDock 运行。'}</p>
+    <p className="jetbrains-intro">更改来源、连接方式或模型后，会自动备份并更新 URL、HTTP 版本和核心 / 轻量模型。IDE 运行时先保存最新选择，退出后自动同步；也可点击「同步 IDE 设置」重新应用。API Key 首次接入或切换来源时仍需在 IDE 手工更新。{direct ? '当前 API 直连所选供应商，使用该来源的 API Key 和真实模型 ID。' : '当前连接使用本机入口和模型别名，使用时保持 ModelDock 运行。「准备本机连接」只启动本地服务。'}</p>
+    {autoSync && <p role="status" className="jetbrains-key-note" data-jetbrains-auto-sync={autoSync.phase}>{autoSync.message}</p>}
     <dl className="jetbrains-parameters">
       {parameter('提供商', '兼容 OpenAI / OpenAI-compatible')}
       {parameter('URL', url, '复制 JetBrains URL')}
@@ -64,6 +67,6 @@ export function JetBrainsPanel({ tool, api, models, defaultModel, gateway, conne
       {status?.configDir && <code>{status.configDir}</code>}
       <p role="status">{status?.message ?? '正在检查配置目录及 IDE 运行状态；也可使用以上参数手工接入。'}</p>
     </div>
-    <p className="jetbrains-scope-note">同步前请退出 IDE。此操作备份并更新已发现 profile 的 AI Assistant 地址、HTTP 版本、工具调用与核心 / 轻量模型设置；API Key 仍需在 IDE 确认。导出的 JSON 是填写参考，不能直接导入 IDE。配置范围为 AI Assistant 聊天及模型核心功能；Junie、Claude Agent、Codex、Gemini CLI 与代码补全的独立配置请在 IDE 内管理。</p>
+    <p className="jetbrains-scope-note">仅在确认 IDE 已退出且 profile 兼容时写入设置。等待期间保留最新选择；关闭 ModelDock 后不自动重放待办，下次可重新同步。API Key 仍需在 IDE 确认。导出的 JSON 是填写参考，不能直接导入 IDE。配置范围为 AI Assistant 聊天及模型核心功能；Junie、Claude Agent、Codex、Gemini CLI 与代码补全的独立配置请在 IDE 内管理。</p>
   </section>;
 }

@@ -18,6 +18,7 @@ import { bindingConnectionPolicy, resolveBindingModels } from '../shared/binding
 import { nativeClaudeBaseUrl } from '../shared/claude';
 import { isJetBrainsTool, jetBrainsConnectionParameters, JETBRAINS_TOOLS, type JetBrainsStatus } from '../shared/jetbrains';
 import { JetBrainsPanel } from './JetBrainsPanel';
+import { JetBrainsAutoSync, type JetBrainsAutoSyncState } from './jetbrains-auto-sync';
 import { Toggle, Modal, EmptyState, BusyIcon } from './components';
 import { AuthPanel } from './AuthPanel';
 import { McpPanel } from './McpPanel';
@@ -62,7 +63,7 @@ const toolInfo: Record<ToolId, { name: string; subtitle: string; description: st
   copilot: { name: 'GitHub Copilot', subtitle: '独立桌面应用', description: '将所选供应商同步到正在运行的 Copilot app。', instruction: '请先打开 Copilot app。勾选后自动同步到应用原生模型注册表，无需重启；在应用的模型选择器中选择导入的模型。' },
   vscode: { name: 'VS Code', subtitle: 'GitHub Copilot 扩展', description: '把本地模型加入编辑器的模型选择器。', instruction: '预览生成的设置，再保存到 VS Code。' },
   opencode: { name: 'OpenCode', subtitle: '桌面 / CLI', description: '连接供应商，在 OpenCode 中使用统一模型目录。', instruction: '选择供应商后预览配置，再按生成的说明应用到 OpenCode。' },
-  ...Object.fromEntries(Object.entries(JETBRAINS_TOOLS).map(([id, info]) => [id, { name: info.name, subtitle: 'JetBrains AI Assistant', description: '将已有 API 和账号订阅用于 AI Assistant。', instruction: '选择来源只保存本机绑定。可手工填写连接参数，或在 IDE 退出后显式同步设置；API Key 需在 IDE 中粘贴确认。' }])) as Record<'webstorm' | 'intellij-idea' | 'rider' | 'pycharm', { name: string; subtitle: string; description: string; instruction: string }>,
+  ...Object.fromEntries(Object.entries(JETBRAINS_TOOLS).map(([id, info]) => [id, { name: info.name, subtitle: 'JetBrains AI Assistant', description: '将已有 API 和账号订阅用于 AI Assistant。', instruction: '更改来源、模式或模型后自动同步；IDE 运行时先保存，退出后同步最新选择。API Key 需在 IDE 中粘贴确认。' }])) as Record<'webstorm' | 'intellij-idea' | 'rider' | 'pycharm', { name: string; subtitle: string; description: string; instruction: string }>,
   codex: { name: 'Codex', subtitle: '桌面 / CLI / IDE', description: '让 Codex 使用你的本地模型入口。', instruction: '预览后可应用到 Codex 配置，原有账号登录保留。' },
 };
 const toolIds: ToolId[] = ['codex', 'claude-code', 'opencode', 'dsh', 'vscode', 'copilot', 'webstorm', 'intellij-idea', 'rider', 'pycharm'];
@@ -125,6 +126,10 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
   const [toolDeliveries, setToolDeliveries] = useState<Partial<Record<ToolId, ToolDelivery>>>({});
   const [toolSyncErrors, setToolSyncErrors] = useState<Partial<Record<ToolId, string>>>({});
   const [jetBrainsStatuses, setJetBrainsStatuses] = useState<Partial<Record<ToolId, JetBrainsStatus>>>({});
+  const [jetBrainsAutoStates, setJetBrainsAutoStates] = useState<Partial<Record<ToolId, JetBrainsAutoSyncState>>>({});
+  const jetBrainsAuto = useRef<JetBrainsAutoSync | null>(null);
+  const jetBrainsAutoOptions = useRef<ConstructorParameters<typeof JetBrainsAutoSync>[0] | null>(null);
+  const jetBrainsRequestedBindings = useRef<Partial<Record<ToolId, ToolBinding>>>({});
   const [toolRestoreLocations, setToolRestoreLocations] = useState<Partial<Record<ToolId, string>>>({});
   const [preview, setPreview] = useState<{ tool: ToolId; data: ConfigPreview } | null>(null);
   const [auth, setAuth] = useState<AuthProgress | null>(null);
@@ -215,8 +220,6 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
   useEffect(() => {
     if (page !== 'tools' || !isJetBrainsTool(selectedTool)) return;
     void loadJetBrainsStatus(selectedTool);
-    const timer = window.setInterval(() => void loadJetBrainsStatus(selectedTool), 5000);
-    return () => window.clearInterval(timer);
   }, [page, selectedTool, loadJetBrainsStatus]);
   useEffect(() => { void refresh(); const timer = window.setInterval(() => void refresh(), 5000); return () => window.clearInterval(timer); }, [refresh]);
   useEffect(() => { if (snapshot) setPort(String(snapshot.gateway.port)); }, [snapshot?.gateway.port]);
@@ -251,7 +254,11 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
     setBusy(previous => ({ ...previous, [key]: true }));
     try { await action(); }
     catch (error) { notify(errorText(error), 'error'); }
-    finally { pendingActions.current.delete(key); setBusy(previous => ({ ...previous, [key]: false })); }
+    finally {
+      pendingActions.current.delete(key); setBusy(previous => ({ ...previous, [key]: false }));
+      // 修改点：保存动作释放锁后才处理待同步，不与手动同步、还原或删除并发。
+      for (const tool of jetBrainsAuto.current?.pending() ?? []) void jetBrainsAuto.current?.attempt(tool);
+    }
   };
   const copy = async (text: string, message = '已复制') => {
     try {
@@ -364,8 +371,13 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
     try {
       await bridge!.saveBinding(next);
       setSnapshot(previous => previous ? { ...previous, bindings: [...previous.bindings.filter(binding => binding.id !== tool), next] } : previous);
-      // 修改点：JetBrains 的来源选择只保存绑定，IDE 文件必须由用户显式同步。
-      if (!isJetBrainsTool(tool) && canApplyTool(tool)) await syncToolConfig(tool, next, true);
+      // 修改点：只有用户交互产生 JetBrains 自动同步待办；IDE 运行时保留最新选择，退出后再写。
+      if (isJetBrainsTool(tool)) {
+        setToolSyncErrors(previous => { const remaining = { ...previous }; delete remaining[tool]; return remaining; });
+        jetBrainsRequestedBindings.current[tool] = next;
+        if (next.enabled && toolModels(next).length && next.defaultModelId) jetBrainsAuto.current?.request(tool, toolSignature(next));
+        else jetBrainsAuto.current?.cancel(tool);
+      } else if (canApplyTool(tool)) await syncToolConfig(tool, next, true);
       else setToolSyncErrors(previous => { const remaining = { ...previous }; delete remaining[tool]; return remaining; });
       await refresh();
     } finally { setPendingBindings(previous => { const remaining = { ...previous }; delete remaining[tool]; return remaining; }); }
@@ -424,6 +436,7 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
     setConfirm({ title: isJetBrainsTool(tool) ? `还原 ${toolInfo[tool].name} 同步前设置？` : `还原 ${toolInfo[tool].name} 官方配置？`, description: `${description} 需要修改的现有配置会先备份，账号登录、MCP、Skills、会话和其他设置保留。此工具在 ModelDock 中的供应商与模型选择会清空，全局供应商和模型保留。`, actionKey: `restore-tool-${tool}`, actionLabel: '确认还原', action: async () => {
       if (pendingActions.current.has('delete') || [`tool-binding-${tool}`, `apply-tool-${tool}`, `export-tool-${tool}`, `preview-${tool}`].some(key => pendingActions.current.has(key))) throw new Error('工具配置正在同步，请稍候再还原。');
       if (isJetBrainsTool(tool) && !(await loadJetBrainsStatus(tool))?.canApply) throw new Error('请先退出 IDE，并确认配置状态后再还原。');
+      if (isJetBrainsTool(tool)) jetBrainsAuto.current?.cancel(tool);
       const location = await bridge!.restoreOfficialConfig(tool);
       setToolDeliveries(previous => { const remaining = { ...previous }; delete remaining[tool]; return remaining; });
       setToolSyncErrors(previous => { const remaining = { ...previous }; delete remaining[tool]; return remaining; });
@@ -499,6 +512,7 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
   };
   const applyTool = async (tool: ToolId) => {
     if (toolOperationPending(tool)) return;
+    if (isJetBrainsTool(tool)) jetBrainsAuto.current?.cancel(tool);
     await run(`apply-tool-${tool}`, async () => {
       const binding = await bindingForDelivery(tool);
       await syncToolConfig(tool, binding, false);
@@ -506,6 +520,55 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
       if (isJetBrainsTool(tool)) await loadJetBrainsStatus(tool);
     });
   };
+  jetBrainsAutoOptions.current = {
+    status: loadJetBrainsStatus,
+    eligible: (tool, signature) => {
+      const binding = jetBrainsRequestedBindings.current[tool];
+      const models = binding ? toolModels(binding) : [];
+      return !!binding?.enabled && !!models.length && models.some(model => model.id === binding.defaultModelId) && toolSignature(binding) === signature;
+    },
+    available: tool => !!bridge && !toolOperationPending(tool),
+    apply: async (tool, signature) => {
+      const key = `apply-tool-${tool}`;
+      if (toolOperationPending(tool)) throw new Error('工具配置正在更新，请稍后同步。');
+      pendingActions.current.add(key); setBusy(previous => ({ ...previous, [key]: true }));
+      try {
+        const location = await bridge!.applyConfig(tool);
+        const binding = jetBrainsRequestedBindings.current[tool]!;
+        setToolDeliveries(previous => ({ ...previous, [tool]: { signature, kind: 'applied', location, providerIds: sourceIdsFor(binding) } }));
+        setToolSyncErrors(previous => { const remaining = { ...previous }; delete remaining[tool]; return remaining; });
+        await refresh();
+      } finally { pendingActions.current.delete(key); setBusy(previous => ({ ...previous, [key]: false })); }
+    },
+    state: (tool, state) => {
+      setJetBrainsAutoStates(previous => { const next = { ...previous }; if (state) next[tool] = state; else delete next[tool]; return next; });
+      if (state?.phase === 'error') { setToolSyncErrors(previous => ({ ...previous, [tool]: state.message })); notify(state.message, 'error'); }
+    },
+  };
+  useEffect(() => {
+    if (!bridge) return;
+    const coordinator = new JetBrainsAutoSync({
+      status: tool => jetBrainsAutoOptions.current!.status(tool), eligible: (tool, signature) => jetBrainsAutoOptions.current!.eligible(tool, signature),
+      available: tool => jetBrainsAutoOptions.current!.available(tool), apply: (tool, signature) => jetBrainsAutoOptions.current!.apply(tool, signature),
+      state: (tool, state) => jetBrainsAutoOptions.current!.state(tool, state),
+    });
+    jetBrainsAuto.current = coordinator;
+    return () => { coordinator.dispose(); if (jetBrainsAuto.current === coordinator) jetBrainsAuto.current = null; };
+  }, [bridge]);
+  const jetBrainsPendingKeys = Object.entries(jetBrainsAutoStates).filter(([, value]) => value?.phase !== 'error').map(([tool]) => tool).sort().join(',');
+  useEffect(() => {
+    if (!bridge) return;
+    const poll = () => {
+      const pending = jetBrainsAuto.current?.pending() ?? [];
+      for (const tool of pending) void jetBrainsAuto.current?.attempt(tool);
+      if (page === 'tools' && isJetBrainsTool(selectedTool) && !pending.includes(selectedTool)) void loadJetBrainsStatus(selectedTool);
+    };
+    // 修改点：待办可跨工具导航等待，但只在本次交互会话中存在；应用重开不会重放写入。
+    if (jetBrainsPendingKeys) poll();
+    if (!jetBrainsPendingKeys && !(page === 'tools' && isJetBrainsTool(selectedTool))) return;
+    const timer = window.setInterval(poll, 15000);
+    return () => window.clearInterval(timer);
+  }, [bridge, page, selectedTool, jetBrainsPendingKeys, loadJetBrainsStatus]);
   const exportTool = async (tool: ToolId) => {
     if (toolOperationPending(tool)) return;
     await run(`export-tool-${tool}`, async () => {
@@ -538,6 +601,7 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
   const selectedProvider = data.providers.find(provider => provider.id === selectedProviderId);
   const currentJetBrains = isJetBrainsTool(selectedTool);
   const currentJetBrainsStatus = jetBrainsStatuses[selectedTool];
+  const currentJetBrainsAuto = jetBrainsAutoStates[selectedTool];
   const currentBinding = bindingFor(selectedTool);
   const currentSourceIds = sourceIdsFor(currentBinding);
   const currentModels = toolModels(currentBinding);
@@ -666,7 +730,7 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
           <div className="tool-detail-summary tool-inline-summary" data-tool-binding={selectedTool} data-claude-connection-kind={currentClaudeKind} data-connection-mode={currentBinding.mode} data-selected-provider-count={currentSourceIds.length} data-selected-model-count={currentModels.length}>
             <div className="tool-connection-heading"><span className="eyebrow">{selectedTool === 'claude-code' ? currentClaudeLabel : currentAggregate ? '本机聚合模型入口' : currentLegacyMode ? '沿用已有连接方式' : currentJetBrainsConnection?.kind === 'local-managed' ? '单来源 · 本机协议桥' : '单来源连接'}</span><button className="button small secondary" data-action="restore-official-tool-config" disabled={!bridge || currentToolBusy || currentJetBrains && !currentJetBrainsStatus?.canApply} title={currentJetBrains ? currentJetBrainsStatus?.message ?? '正在确认 IDE 状态' : undefined} onClick={() => restoreOfficialConfig(selectedTool)}><BusyIcon active={!!busy[`restore-tool-${selectedTool}`]}><RotateCcw size={14} /></BusyIcon>{currentJetBrains ? '还原同步前设置' : '还原官方配置'}</button></div>
             <div className="connection-mode-controls tool-aggregate-option"><label><input type="checkbox" data-action="tool-use-aggregate" data-tool-id={selectedTool} checked={currentAggregate} disabled={!bridge || currentToolBusy} onChange={event => void saveToolMode(selectedTool, event.target.checked ? 'aggregate' : 'direct')} /><span>使用聚合接口</span></label><small>{currentAggregate ? '统一连接 ModelDock 本机入口，可选择多家来源并逐个启用模型。' : currentLegacyMode ? '当前保留已有连接；开启聚合后可使用一个本机入口，取消聚合后可单独连接一家来源。' : '单独连接一家来源，选择另一家会替换当前来源；API 优先直连，订阅由本机管理授权。'}</small>{currentLegacyMode && <small className="legacy-connection-note">当前沿用已有连接方式和模型范围；点击此选项后采用新的单来源或聚合方式。</small>}</div>
-            <div className="tool-inline-heading"><ToolIcon tool={selectedTool} /><div><strong>{toolInfo[selectedTool].subtitle}</strong><span>{currentSourceIds.length} 家供应商 · {currentModels.length} 个可用模型</span></div><span className={`badge ${currentRestored || currentDelivery?.kind === 'applied' ? 'positive' : toolSyncErrors[selectedTool] || currentSourceIds.length ? 'warning' : 'neutral'}`} data-tool-application-status data-tool-application-state={currentRestored ? 'official' : currentCleared ? 'cleared' : currentDelivery?.kind === 'applied' ? 'synced' : toolSyncErrors[selectedTool] ? 'error' : 'saved'}>{busy[`restore-tool-${selectedTool}`] ? '正在还原官方配置' : currentRestored ? currentJetBrains ? '已恢复同步前设置' : '已还原官方配置' : busy[`tool-binding-${selectedTool}`] ? currentCanApply && !currentJetBrains ? '正在自动同步' : '正在保存选择' : busy[`apply-tool-${selectedTool}`] ? '正在同步' : toolSyncErrors[selectedTool] ? '选择已保存，同步未完成' : currentCleared ? '来源已清理' : currentDelivery?.kind === 'applied' ? currentJetBrains ? '设置文件已同步，API Key 需 IDE 确认' : '本次选择已同步' : currentDelivery?.kind === 'exported' ? currentJetBrains ? '参考参数已导出' : '已导出，待工具导入' : currentSourceIds.length ? currentJetBrains ? '选择已保存，尚未同步 IDE' : currentCanApply ? '已保存，可重新同步' : '选择已保存，待导出' : '未选择供应商'}</span></div>
+            <div className="tool-inline-heading"><ToolIcon tool={selectedTool} /><div><strong>{toolInfo[selectedTool].subtitle}</strong><span>{currentSourceIds.length} 家供应商 · {currentModels.length} 个可用模型</span></div><span className={`badge ${currentRestored || currentDelivery?.kind === 'applied' ? 'positive' : toolSyncErrors[selectedTool] || currentSourceIds.length ? 'warning' : 'neutral'}`} data-tool-application-status data-tool-application-state={currentRestored ? 'official' : currentCleared ? 'cleared' : currentDelivery?.kind === 'applied' ? 'synced' : toolSyncErrors[selectedTool] ? 'error' : 'saved'}>{busy[`restore-tool-${selectedTool}`] ? '正在还原官方配置' : currentRestored ? currentJetBrains ? '已恢复同步前设置' : '已还原官方配置' : busy[`tool-binding-${selectedTool}`] ? currentCanApply ? '正在自动同步' : '正在保存选择' : busy[`apply-tool-${selectedTool}`] ? '正在同步' : currentJetBrainsAuto && currentJetBrainsAuto.phase !== 'error' ? currentJetBrainsAuto.phase === 'applying' ? '正在自动同步 IDE' : '选择已保存，退出 IDE 后自动同步' : toolSyncErrors[selectedTool] ? '选择已保存，同步未完成' : currentCleared ? '来源已清理' : currentDelivery?.kind === 'applied' ? currentJetBrains ? '设置文件已同步，API Key 需 IDE 确认' : '本次选择已同步' : currentDelivery?.kind === 'exported' ? currentJetBrains ? '参考参数已导出' : '已导出，待工具导入' : currentSourceIds.length ? currentJetBrains ? '选择已保存，尚未同步 IDE' : currentCanApply ? '已保存，可重新同步' : '选择已保存，待导出' : '未选择供应商'}</span></div>
             <div className="tool-inline-controls"><label>{currentPreferenceLabel}<select aria-label={`${toolInfo[selectedTool].name} ${currentPreferenceLabel}`} data-action="tool-default-model" disabled={!bridge || currentToolBusy || !currentModels.length} value={currentDefault?.id ?? ''} onChange={event => void saveInlineBinding(selectedTool, currentSourceIds, event.target.value)}>{!currentModels.length && <option value="">未设置</option>}{currentModels.map(model => <option key={model.id} value={model.id}>{selectedTool === 'claude-code' ? `${modelLabel(model)} · ${currentClaudeKind === 'direct-api' ? model.upstreamId : model.alias}` : modelLabel(model)}</option>)}</select></label>{!currentJetBrains && <div className="tool-inline-actions"><button className="button small secondary" data-action="preview-tool-config" disabled={!bridge || currentToolBusy || (!currentModels.length && !currentCanClear)} title="预览所选供应商的配置" onClick={() => void showPreview(selectedTool)}><BusyIcon active={!!busy[`preview-${selectedTool}`]}><FileCode2 size={14} /></BusyIcon>预览配置</button>{currentCanApply ? <button className="button small primary" data-action="apply-tool-config" disabled={!bridge || currentToolBusy || (!currentModels.length && !currentCanClear)} title={selectedTool === 'dsh' ? currentOnlySelected ? currentModels.length ? '同步所选供应商并隐藏 DSH 原有模型来源，保留账号授权并备份原文件' : '清空 DSH 显示的模型来源，保留账号授权；关闭仅显示选项可恢复原来源' : currentModels.length ? '同步 ModelDock 来源并恢复 DSH 原有模型来源，保留账号授权' : '清理 ModelDock 来源并恢复 DSH 原有模型来源' : selectedTool === 'copilot' ? currentOnlySelected ? '仅同步所选自定义模型来源，保留 GitHub 内置模型、账号、MCP 和会话历史' : currentModels.length ? '通过正在运行的 Copilot app 重新同步 ModelDock 来源' : '从 Copilot app 模型注册表移除 ModelDock 来源，保留其他来源' : currentModels.length ? '重新写入工具配置，保留其他设置并备份原文件' : selectedTool === 'vscode' && (currentBinding.vscodeSyncScope ?? 'selected') === 'selected' ? '清理此 VS Code 配置的自定义供应商，保留内置模型并备份原文件' : '从此工具配置中移除 ModelDock 管理的来源'} onClick={() => void applyTool(selectedTool)}><BusyIcon active={!!busy[`apply-tool-${selectedTool}`]}><CheckCheck size={14} /></BusyIcon>重新同步</button> : <button className="button small primary" data-action="export-tool-config" disabled={!bridge || currentToolBusy || !currentModels.length} onClick={() => void exportTool(selectedTool)}><BusyIcon active={!!busy[`export-tool-${selectedTool}`]}><ArrowDownToLine size={14} /></BusyIcon>导出配置</button>}</div>}</div>
             {selectedTool === 'claude-code' && <div className="vscode-scope-option claude-privacy-option"><label><input type="checkbox" data-action="claude-disable-telemetry" checked={currentBinding.claudeDisableTelemetry !== false} disabled={!bridge || currentToolBusy} onChange={event => void saveClaudePrivacy(event.target.checked)} /><span>关闭遥测和非必要联网</span></label><small>默认开启，关闭遥测、错误报告和自动更新；模型请求继续使用所选来源。WebFetch 仍可能进行安全检查；此选项不隔离本地文件，也不限制 MCP 或插件联网。同步后重启 Claude Code 生效。</small></div>}
             {selectedTool === 'vscode' && <div className="vscode-scope-option"><label><input type="checkbox" data-action="vscode-only-selected" checked={(currentBinding.vscodeSyncScope ?? 'selected') === 'selected'} disabled={!bridge || currentToolBusy} onChange={event => void saveVscodeScope(event.target.checked ? 'selected' : 'managed')} /><span>仅保留所选供应商</span></label><small>开启后清理其他自定义供应商；内置模型仍由 VS Code 控制。原文件会自动备份。</small></div>}
@@ -678,7 +742,7 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
             {currentRestored && <p className="tool-inline-delivery" role="status" data-tool-official-restored>{currentJetBrains ? '已恢复同步前设置：' : '已恢复官方模型入口：'}<code>{toolRestoreLocations[selectedTool]}</code></p>}
             {currentDelivery && <p className="tool-inline-delivery" role="status">{currentCleared ? selectedTool === 'dsh' ? currentOnlySelected ? '已清理 DSH 显示来源：' : '已恢复 DSH 原来源：' : currentOnlySelected ? '已清理自定义来源：' : '已清理 ModelDock 来源：' : currentDelivery.kind === 'applied' ? selectedTool === 'copilot' ? 'Copilot 模型注册表：' : '已写入：' : '已导出：'}<code>{currentDelivery.location}</code></p>}
           </div>
-          {currentJetBrains && <JetBrainsPanel tool={selectedTool} api={bridge} models={currentModels} defaultModel={currentDefault} gateway={data.gateway} connection={currentJetBrainsConnection} status={currentJetBrainsStatus} busy={currentToolBusy} notify={notify} onRefresh={refresh} onStatusRefresh={() => loadJetBrainsStatus(selectedTool)} onPreview={() => showPreview(selectedTool)} onExport={() => exportTool(selectedTool)} onApply={() => applyTool(selectedTool)} />}
+          {currentJetBrains && <JetBrainsPanel tool={selectedTool} api={bridge} models={currentModels} defaultModel={currentDefault} gateway={data.gateway} connection={currentJetBrainsConnection} status={currentJetBrainsStatus} autoSync={currentJetBrainsAuto} busy={currentToolBusy} notify={notify} onRefresh={refresh} onStatusRefresh={() => loadJetBrainsStatus(selectedTool)} onPreview={() => showPreview(selectedTool)} onExport={() => exportTool(selectedTool)} onApply={() => applyTool(selectedTool)} />}
           <div className="section-heading tool-source-heading"><h2>可用供应商<span className="count-tag">{data.providers.length}</span></h2><div className="tool-source-batch-actions">{!currentSingleProvider && <button className="button small secondary" data-action="select-all-tool-providers" disabled={!bridge || currentToolBusy || !availableToolProviderIds.length} title="选择全部已启用、有凭据且有可用模型的来源，包含搜索结果外的来源" onClick={() => void saveInlineBinding(selectedTool, availableToolProviderIds)}><CheckCheck size={14} />全选可用</button>}<button className="button small secondary" data-action="clear-tool-providers" disabled={!bridge || currentToolBusy || (!currentSourceIds.length && !currentCanClear)} title="清空当前工具的选择及对应配置，包含搜索结果外的来源；保留全局供应商和模型" onClick={() => void saveInlineBinding(selectedTool, [])}><X size={14} />清空选择</button></div><label className="search-box"><Search size={15} /><input aria-label="搜索供应商" placeholder="搜索供应商" value={search} onChange={event => setSearch(event.target.value)} /></label></div>
           <p className="tool-source-selection-note">{currentSingleProvider ? '一次选择一家 API 或账号订阅来源；勾选另一家会替换当前来源。开启「使用聚合接口」可同时使用多家模型。' : currentLegacyMode ? '当前沿用已有连接方式，修改来源仍保留原连接方式；点击上方聚合选项可切换。' : `可选择多家来源。全选覆盖全部 ${availableToolProviderIds.length} 家已启用、有凭据且有兼容模型的来源，包含搜索结果外的来源。`}{' 清空只移除当前工具选择，保留全局供应商和模型。'}</p>
           {toolProviders.length ? <div className="provider-list">{toolProviders.map(provider => providerRow(provider, true))}</div> : <EmptyState compact icon={data.providers.length ? <Search size={25} /> : <Plug2 size={25} />} title={data.providers.length ? '没有匹配的供应商' : '还没有供应商'} description={data.providers.length ? '试试其他名称或服务地址。' : '在左侧添加 API 或订阅供应商，再为这个工具选择模型来源。'} />}

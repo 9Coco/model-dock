@@ -193,6 +193,18 @@ function finishReason(data: Json, tools: boolean): string {
   if (data.status === 'incomplete' && object(data.incomplete_details).reason === 'max_output_tokens') return 'length';
   return failed();
 }
+function reasoningParts(item: Json): { summary: string[]; content: string[] } {
+  const parts = { summary: [] as string[], content: [] as string[] };
+  if (item.summary !== undefined && !Array.isArray(item.summary)) return failed('上游推理摘要无效。');
+  if (item.content !== undefined && !Array.isArray(item.content)) return failed('上游推理文本无效。');
+  for (const raw of Array.isArray(item.summary) ? item.summary : []) {
+    const part = object(raw); if (part.type !== 'summary_text' || typeof part.text !== 'string') return failed('上游推理摘要无效。'); parts.summary.push(part.text);
+  }
+  for (const raw of Array.isArray(item.content) ? item.content : []) {
+    const part = object(raw); if (!['reasoning_text', 'output_text'].includes(String(part.type)) || typeof part.text !== 'string') return failed('上游推理文本无效。'); parts.content.push(part.text);
+  }
+  return parts;
+}
 /** 修改点：保留公开推理摘要/refusal 和真实输入、输出、缓存用量；不伪造思考签名。 */
 export function responsesToChat(value: unknown, modelAlias: string): Json {
   const data = object(value);
@@ -217,10 +229,8 @@ export function responsesToChat(value: unknown, modelAlias: string): Json {
       ids.add(item.call_id); if (!truncated) argumentsValid(item.arguments, true);
       tools.push({ id: item.call_id, type: 'function', function: { name: item.name, arguments: item.arguments } });
     } else if (item.type === 'reasoning') {
-      if (item.summary !== undefined && !Array.isArray(item.summary)) return failed('上游推理摘要无效。');
-      for (const rawSummary of Array.isArray(item.summary) ? item.summary : []) {
-        const summary = object(rawSummary); if (summary.type !== 'summary_text' || typeof summary.text !== 'string') return failed('上游推理摘要无效。'); reasoning += summary.text;
-      }
+      // 修改点：火山 Responses 也可通过 content 下发原始推理文本；两种载体独立校验，摘要优先，避免重复显示。
+      const parts = reasoningParts(item), summary = parts.summary.join(''); reasoning += summary || parts.content.join('');
     } else return failed('上游输出类型暂不支持 Chat 转换。');
   }
   const reason = finishReason(data, tools.length > 0);
@@ -255,16 +265,23 @@ function frameData(frame: string): unknown {
   if (data === '[DONE]') return data;
   try { return JSON.parse(data); } catch { return failed('上游 SSE 不是有效 JSON。'); }
 }
-interface Block { output: number; part: number; kind: 'text' | 'refusal' | 'reasoning' | 'tool'; text: string; id?: string; name?: string; toolIndex?: number; opened: boolean }
+interface Block { output: number; part: number; kind: 'text' | 'refusal' | 'reasoning' | 'reasoning-text' | 'tool'; text: string; id?: string; name?: string; toolIndex?: number; opened: boolean }
 class Mapper {
   readonly id = `chatcmpl_${randomUUID().replace(/-/g, '')}`;
   private created = Math.floor(Date.now() / 1000); private started = false; private terminal = false; private done = false;
   private response: Json = {}; private blocks = new Map<string, Block>(); private toolCount = 0;
+  private itemKinds = new Map<number, string>(); private reasoningCarriers = new Map<number, 'reasoning' | 'reasoning-text'>();
   constructor(private model: string, private emit: (value: Json | '[DONE]') => void) {}
   private chunk(delta: Json, reason: unknown = null): void {
     this.emit({ id: this.id, object: 'chat.completion.chunk', created: this.created, model: this.model, choices: [{ index: 0, delta, finish_reason: reason }] });
   }
   private start(): void { if (!this.started) { this.started = true; this.chunk({ role: 'assistant', content: '' }); } }
+  private itemKind(output: unknown, kind: string): void {
+    if (count(output) === undefined || Number(output) > 10000) return failed('Responses 输出序号无效。');
+    const previous = this.itemKinds.get(Number(output));
+    if (previous && previous !== kind) return failed('上游同一输出的条目类型改变。');
+    this.itemKinds.set(Number(output), kind);
+  }
   private block(output: unknown, part: unknown, kind: Block['kind'], id?: unknown, name?: unknown): Block {
     if (count(output) === undefined || Number(output) > 10000 || count(part) === undefined || Number(part) > 10000) return failed('Responses 输出序号无效。');
     const key = `${kind}:${output}:${part}`;
@@ -286,11 +303,17 @@ class Mapper {
     block.text += delta;
     if (block.text.length > 16 * 1024 * 1024) return failed('上游流式内容过大。');
     if (!delta || !block.opened) return;
+    // 修改点：summary_index/content_index 属于两个索引域。每项选择首个非空推理载体，后续另一载体仍校验但不重复输出。
+    if (block.kind === 'reasoning' || block.kind === 'reasoning-text') {
+      const carrier = this.reasoningCarriers.get(block.output) ?? block.kind; this.reasoningCarriers.set(block.output, carrier);
+      if (carrier !== block.kind) return;
+    }
     if (block.kind === 'tool') this.chunk({ tool_calls: [{ index: block.toolIndex, function: { arguments: delta } }] });
     else this.chunk({ [block.kind === 'text' ? 'content' : block.kind === 'refusal' ? 'refusal' : 'reasoning_content']: delta });
   }
   private item(raw: unknown, output: unknown, final: boolean): void {
     const item = object(raw);
+    this.itemKind(output, String(item.type ?? ''));
     if (item.type === 'function_call') {
       const block = this.block(output, 0, 'tool', item.call_id, item.name);
       if (item.arguments !== undefined) this.append(block, item.arguments, final);
@@ -298,15 +321,18 @@ class Mapper {
       if (item.role !== 'assistant' || !Array.isArray(item.content)) return failed('流式输出消息无效。');
       item.content.forEach((part, index) => this.part(part, output, index, final));
     } else if (item.type === 'reasoning') {
-      if (item.summary !== undefined && !Array.isArray(item.summary)) return failed('流式推理摘要无效。');
+      reasoningParts(item);
       if (Array.isArray(item.summary)) item.summary.forEach((part, index) => this.part(part, output, index, final));
+      if (Array.isArray(item.content)) item.content.forEach((part, index) => this.part(part, output, index, final, true));
     } else return failed('上游流式输出类型暂不支持。');
   }
-  private part(raw: unknown, output: unknown, index: unknown, final: boolean): void {
+  private part(raw: unknown, output: unknown, index: unknown, final: boolean, rawReasoning = false): void {
     const part = object(raw);
-    if (part.type === 'output_text') this.append(this.block(output, index, 'text'), part.text, final);
+    if (part.type === 'reasoning_text' || part.type === 'output_text' && (rawReasoning || this.itemKinds.get(Number(output)) === 'reasoning')) {
+      this.itemKind(output, 'reasoning'); this.append(this.block(output, index, 'reasoning-text'), part.text, final);
+    } else if (part.type === 'output_text') this.append(this.block(output, index, 'text'), part.text, final);
     else if (part.type === 'refusal') this.append(this.block(output, index, 'refusal'), part.refusal, final);
-    else if (part.type === 'summary_text') this.append(this.block(output, index, 'reasoning'), part.text, final);
+    else if (part.type === 'summary_text') { this.itemKind(output, 'reasoning'); this.append(this.block(output, index, 'reasoning'), part.text, final); }
     else return failed('上游流式内容类型暂不支持。');
   }
   add(value: unknown): void {
@@ -325,8 +351,11 @@ class Mapper {
       this.part(data.part, data.output_index, data.content_index ?? data.summary_index, type.endsWith('.done')); return;
     }
     if (['response.output_text.delta', 'response.output_text.done', 'response.refusal.delta', 'response.refusal.done',
-      'response.reasoning_summary_text.delta', 'response.reasoning_summary_text.done'].includes(type)) {
-      const kind = type.startsWith('response.refusal') ? 'refusal' : type.startsWith('response.reasoning') ? 'reasoning' : 'text';
+      'response.reasoning_summary_text.delta', 'response.reasoning_summary_text.done', 'response.reasoning_text.delta', 'response.reasoning_text.done',
+      'response.reasoning_raw_text.delta', 'response.reasoning_raw_text.done'].includes(type)) {
+      const kind = type.startsWith('response.refusal') ? 'refusal' : type.startsWith('response.reasoning_summary') ? 'reasoning'
+        : type.startsWith('response.reasoning_text') || type.startsWith('response.reasoning_raw_text') || this.itemKinds.get(Number(data.output_index)) === 'reasoning' ? 'reasoning-text' : 'text';
+      if (kind === 'reasoning' || kind === 'reasoning-text') this.itemKind(data.output_index, 'reasoning');
       this.append(this.block(data.output_index, data.content_index ?? data.summary_index, kind), type.endsWith('.done') ? kind === 'refusal' ? data.refusal : data.text : data.delta, type.endsWith('.done')); return;
     }
     if (['response.function_call_arguments.delta', 'response.function_call_arguments.done'].includes(type)) {
@@ -354,9 +383,11 @@ class Mapper {
       if (blocks[0].kind === 'tool') {
         if (blocks.length !== 1) return failed('上游同一输出包含不一致的内容类型。');
         const block = blocks[0]; output.push({ type: 'function_call', call_id: block.id, name: block.name, arguments: block.text });
-      } else if (blocks[0].kind === 'reasoning') {
-        if (blocks.some(block => block.kind !== 'reasoning')) return failed('上游同一输出包含不一致的内容类型。');
-        output.push({ type: 'reasoning', summary: blocks.map(block => ({ type: 'summary_text', text: block.text })) });
+      } else if (blocks[0].kind === 'reasoning' || blocks[0].kind === 'reasoning-text') {
+        if (blocks.some(block => block.kind !== 'reasoning' && block.kind !== 'reasoning-text')) return failed('上游同一输出包含不一致的内容类型。');
+        const carrier = this.reasoningCarriers.get(blocks[0].output) ?? 'reasoning', chosen = blocks.filter(block => block.kind === carrier);
+        output.push(carrier === 'reasoning' ? { type: 'reasoning', summary: chosen.map(block => ({ type: 'summary_text', text: block.text })) }
+          : { type: 'reasoning', summary: [], content: chosen.map(block => ({ type: 'reasoning_text', text: block.text })) });
       } else {
         if (blocks.some(block => !['text', 'refusal'].includes(block.kind))) return failed('上游同一输出包含不一致的内容类型。');
         output.push({ type: 'message', role: 'assistant', content: blocks.map(block => block.kind === 'text' ? { type: 'output_text', text: block.text } : { type: 'refusal', refusal: block.text }) });

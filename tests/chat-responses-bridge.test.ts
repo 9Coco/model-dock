@@ -41,6 +41,32 @@ function stream(output: unknown[] = responses().output): string {
     { type: 'response.completed', response: responses([{ type: 'reasoning', summary: [{ type: 'summary_text', text: 'Public summary' }] }, ...output]) },
   ].map(event).join('');
 }
+function rawReasoningStream(output: unknown[] = responses().output): string {
+  const thought = { type: 'reasoning', summary: [], content: [{ type: 'reasoning_text', text: '先检查🙂' }] };
+  return [
+    { type: 'response.created', response: { id: 'resp_synthetic', status: 'in_progress', created_at: 1760000000 } },
+    { type: 'response.output_item.added', output_index: 0, item: { type: 'reasoning', summary: [], content: [] } },
+    { type: 'response.content_part.added', output_index: 0, content_index: 0, part: { type: 'reasoning_text', text: '' } },
+    { type: 'response.reasoning_text.delta', output_index: 0, content_index: 0, delta: '先检查' },
+    { type: 'response.reasoning_text.delta', output_index: 0, content_index: 0, delta: '🙂' },
+    { type: 'response.reasoning_text.done', output_index: 0, content_index: 0, text: '先检查🙂' },
+    { type: 'response.content_part.done', output_index: 0, content_index: 0, part: thought.content[0] },
+    { type: 'response.output_item.done', output_index: 0, item: thought },
+    ...(output.some((item: any) => item.type === 'function_call') ? [
+      { type: 'response.output_item.added', output_index: 1, item: { ...responseCall, arguments: '' } },
+      { type: 'response.function_call_arguments.delta', output_index: 1, delta: '{"path":' },
+      { type: 'response.function_call_arguments.delta', output_index: 1, delta: '"a.ts"}' },
+      { type: 'response.function_call_arguments.done', output_index: 1, arguments: responseCall.arguments },
+      { type: 'response.output_item.done', output_index: 1, item: responseCall },
+    ] : [
+      { type: 'response.output_item.added', output_index: 1, item: { type: 'message', role: 'assistant', content: [] } },
+      { type: 'response.content_part.added', output_index: 1, content_index: 0, part: { type: 'output_text', text: '' } },
+      { type: 'response.output_text.delta', output_index: 1, content_index: 0, delta: '你🙂' },
+      { type: 'response.output_text.done', output_index: 1, content_index: 0, text: '你🙂' },
+    ]),
+    { type: 'response.completed', response: responses([thought, ...output]) },
+  ].map(event).join('');
+}
 function parsedSse(text: string): any[] {
   return text.split('\n\n').filter(Boolean).map(frame => { const data = frame.split('\n').find(line => line.startsWith('data: '))!.slice(6); return data === '[DONE]' ? data : JSON.parse(data); });
 }
@@ -98,6 +124,19 @@ describe('native Chat to Responses request conversion', () => {
 });
 
 describe('Responses to native Chat reply conversion', () => {
+  it('uses official raw reasoning content when summary is empty, and never duplicates a nonempty summary', () => {
+    for (const type of ['reasoning_text', 'output_text']) {
+      const thought = { type: 'reasoning', summary: [], content: [{ type, text: 'Raw fixture reasoning' }], encrypted_content: 'PRIVATE_SIGNATURE' };
+      const raw = responsesToChat(responses([thought, ...responses().output]), 'friendly');
+      expect(raw).toMatchObject({ choices: [{ message: { content: '你🙂', reasoning_content: 'Raw fixture reasoning' } }] });
+      const summary = responsesToChat(responses([{ ...thought, summary: [{ type: 'summary_text', text: 'Public summary' }] }, ...responses().output]), 'friendly');
+      expect(summary).toMatchObject({ choices: [{ message: { reasoning_content: 'Public summary' } }] });
+      expect(JSON.stringify(summary)).not.toMatch(/PRIVATE_SIGNATURE|Raw fixture reasoning/);
+    }
+  });
+  it('still rejects malformed raw reasoning when a valid summary could otherwise conceal it', () => {
+    expect(() => responsesToChat(responses([{ type: 'reasoning', summary: [{ type: 'summary_text', text: 'Valid' }], content: [{ type: 'PRIVATE_UNSUPPORTED', text: 'PRIVATE_BODY' }] }, ...responses().output]), 'friendly')).toThrow('上游推理文本无效');
+  });
   it('preserves text, refusal, public reasoning summaries, tool IDs and real gross/cache usage', () => {
     const converted = responsesToChat(responses([
       { type: 'reasoning', summary: [{ type: 'summary_text', text: 'Public summary' }], encrypted_content: 'PRIVATE_SIGNATURE' },
@@ -131,6 +170,53 @@ describe('Responses to native Chat reply conversion', () => {
 });
 
 describe('Responses to Chat streaming bridge', () => {
+  it.each(['reasoning_text', 'reasoning_raw_text'])('preserves Ark %s deltas, final content and tools across byte-split UTF-8', async carrier => {
+    for (const output of [responses().output, [responseCall]]) {
+      const tools = output.some((item: any) => item.type === 'function_call');
+      const stream = rawReasoningStream(output).replaceAll('response.reasoning_text.', `response.${carrier}.`);
+      const events = parsedSse(await new Response(source(stream, 1).pipeThrough(createResponsesChatStream('friendly'))).text());
+      expect(events.filter(item => typeof item !== 'string').every(item => ['choices', 'created', 'id', 'model', 'object'].every(key => key in item))).toBe(true);
+      expect(events.flatMap(item => item.choices ?? []).map(item => item.delta?.reasoning_content ?? '').join('')).toBe('先检查🙂');
+      expect(events.flatMap(item => item.choices ?? []).map(item => item.delta?.content ?? '').join('')).toBe(tools ? '' : '你🙂');
+      expect(events.at(-1)).toBe('[DONE]');
+      expect(await collectResponsesChatStream(source(stream, 1), 'friendly')).toMatchObject({ choices: [{ message: { reasoning_content: '先检查🙂' }, finish_reason: tools ? 'tool_calls' : 'stop' }] });
+    }
+  });
+  it('keeps summary/raw index domains separate and emits only the first nonempty carrier for each reasoning item', async () => {
+    for (const rawFirst of [false, true]) {
+      const summary = { type: 'response.reasoning_summary_text.delta', output_index: 0, summary_index: 0, delta: 'Summary fixture' };
+      const raw = { type: 'response.reasoning_text.delta', output_index: 0, content_index: 0, delta: 'Raw fixture' };
+      const events = [
+        { type: 'response.output_item.added', output_index: 0, item: { type: 'reasoning', summary: [], content: [] } },
+        { type: 'response.reasoning_summary_part.added', output_index: 0, summary_index: 0, part: { type: 'summary_text', text: '' } },
+        { type: 'response.content_part.added', output_index: 0, content_index: 0, part: { type: 'reasoning_text', text: '' } },
+        ...(rawFirst ? [raw, summary] : [summary, raw]),
+        { type: 'response.completed', response: responses([{ type: 'reasoning', summary: [{ type: 'summary_text', text: summary.delta }], content: [{ type: 'reasoning_text', text: raw.delta }] }, ...responses().output]) },
+      ];
+      const reply = await collectResponsesChatStream(source(events.map(event).join(''), 1), 'friendly');
+      expect(reply).toMatchObject({ choices: [{ finish_reason: 'stop', message: { content: '你🙂', reasoning_content: rawFirst ? raw.delta : summary.delta } }] });
+    }
+  });
+  it('recognizes output_text inside a reasoning item as reasoning rather than answer content', async () => {
+    const raw = [
+      { type: 'response.output_item.added', output_index: 0, item: { type: 'reasoning', summary: [], content: [] } },
+      { type: 'response.content_part.added', output_index: 0, content_index: 0, part: { type: 'output_text', text: '' } },
+      { type: 'response.reasoning_text.delta', output_index: 0, content_index: 0, delta: 'Raw fixture' },
+      { type: 'response.completed', response: responses([{ type: 'reasoning', summary: [], content: [{ type: 'output_text', text: 'Raw fixture' }] }, ...responses().output]) },
+    ].map(event).join('');
+    expect(await collectResponsesChatStream(source(raw, 1), 'friendly')).toMatchObject({ choices: [{ message: { content: '你🙂', reasoning_content: 'Raw fixture' } }] });
+  });
+  it('rejects inconsistent raw final text, changed item types and unsupported events without finish/DONE', async () => {
+    const prefix = event({ type: 'response.reasoning_text.delta', output_index: 0, content_index: 0, delta: 'First' });
+    for (const ending of [
+      event({ type: 'response.completed', response: responses([{ type: 'reasoning', summary: [], content: [{ type: 'reasoning_text', text: 'Different' }] }, ...responses().output]) }),
+      event({ type: 'response.output_item.done', output_index: 0, item: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'First' }] } }),
+      event({ type: 'response.PRIVATE_UNSUPPORTED', delta: 'PRIVATE_BODY' }),
+    ]) {
+      const mapped = await new Response(source(prefix + ending, 1).pipeThrough(createResponsesChatStream('friendly'))).text();
+      expect(mapped).toContain('responses_bridge_error'); expect(mapped).not.toMatch(/\[DONE\]|"finish_reason":"|PRIVATE_/);
+    }
+  });
   it('maps byte-split UTF-8 and CRLF frames without duplicate final text or summary', async () => {
     const raw = stream().replaceAll('\n', '\r\n');
     const events = parsedSse(await new Response(source(raw, 1).pipeThrough(createResponsesChatStream('friendly'))).text());
@@ -226,6 +312,26 @@ describe('Responses to Chat streaming bridge', () => {
     expect(await collectResponsesChatStream(finalUpstream.body!, 'friendly')).toMatchObject({ choices: [{ finish_reason: 'stop', message: { content: '你🙂' } }], usage: { prompt_tokens: 12, completion_tokens: 5 } });
     expect(seen).toHaveLength(2); expect(seen.every(item => item.path === '/v1/responses')).toBe(true);
     expect(seen[1].body.input).toContainEqual({ type: 'function_call', call_id: 'call_synthetic', name: 'read_file', arguments: '{"path":"a.ts"}' });
+  });
+  it('completes a localhost raw-reasoning tool loop without confusing reasoning with answer text', async () => {
+    const seen: any[] = [];
+    const url = await listen(createServer((req, res) => {
+      let raw = ''; req.on('data', part => { raw += part; }); req.on('end', () => {
+        const body = JSON.parse(raw); seen.push(body); res.setHeader('content-type', 'text/event-stream');
+        const returned = body.input.some((item: any) => item.type === 'function_call_output' && item.call_id === 'call_synthetic' && item.output === 'SYNTHETIC_FILE_CONTENT');
+        const bytes = encoder.encode(rawReasoningStream(returned ? responses().output : [responseCall]));
+        for (let offset = 0; offset < bytes.length; offset += 7) res.write(bytes.slice(offset, offset + 7)); res.end();
+      });
+    }));
+    const firstUpstream = await fetch(url, { method: 'POST', body: JSON.stringify(parseChatResponsesRequest(request)) });
+    const first = await collectResponsesChatStream(firstUpstream.body!, 'friendly');
+    expect(first).toMatchObject({ choices: [{ finish_reason: 'tool_calls', message: { content: null, reasoning_content: '先检查🙂', tool_calls: [chatCall] } }] });
+    const firstMessage = { ...(first.choices as any[])[0].message }; delete firstMessage.reasoning_content;
+    const followup = parseChatResponsesRequest({ ...request, messages: [...request.messages, firstMessage, { role: 'tool', tool_call_id: 'call_synthetic', content: 'SYNTHETIC_FILE_CONTENT' }] });
+    const finalUpstream = await fetch(url, { method: 'POST', body: JSON.stringify(followup) });
+    expect(await collectResponsesChatStream(finalUpstream.body!, 'friendly')).toMatchObject({ choices: [{ finish_reason: 'stop', message: { content: '你🙂', reasoning_content: '先检查🙂' } }], usage: { prompt_tokens: 12, completion_tokens: 5, prompt_tokens_details: { cached_tokens: 4 } } });
+    expect(seen).toHaveLength(2); expect(seen[1].input).toContainEqual({ type: 'function_call_output', call_id: 'call_synthetic', output: 'SYNTHETIC_FILE_CONTENT' });
+    expect(JSON.stringify(seen)).not.toContain('先检查🙂');
   });
   it('withholds finish/DONE until actual EOF even after response.completed', async () => {
     let finish!: () => void;
