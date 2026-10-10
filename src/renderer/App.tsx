@@ -11,7 +11,8 @@ import type {
   AuthProgress, ConfigPreview, ConnectionResult, Model, ModelInput,
   Provider, ProviderInput, ProviderKind, ProviderPresetId, ReasoningEffort, Snapshot, ToolBinding, ToolId,
 } from '../shared/types';
-import { REASONING_EFFORTS } from '../shared/types';
+import { lookupModelMetadata } from '../shared/model-metadata';
+import { applyOfficialModelParameters, autoFillModelDraft, freshModelDraft, officialModelParameterFields, type ModelDraftParameterField } from '../shared/model-draft';
 import type { AuthAccount } from '../shared/auth-types';
 import { providerPresets, presetById } from '../shared/presets';
 import { bindingConnectionPolicy, resolveBindingModels } from '../shared/bindings';
@@ -76,7 +77,6 @@ const freshProvider = (presetId: ProviderPresetId = 'deepseek'): ProviderDraft =
   // 修改点：官方 Anthropic 模板使用 x-api-key；自定义及历史来源保留 Bearer 默认。
   return { name: preset.id === 'custom' ? '' : preset.name, kind: preset.kind, presetId: preset.id, baseUrl: preset.baseUrl, apiKey: '', enabled: true, note: '', ...(preset.kind === 'openai-compatible' ? { messagesAuth: preset.id === 'anthropic' ? 'api-key' : 'bearer' } : {}), ...(preset.kind === 'copilot' ? { copilotAccountId: '' } : {}) };
 };
-const freshModel = (providerId = '', wireApi: Model['wireApi'] = 'responses'): ModelDraft => ({ providerId, upstreamId: '', alias: '', displayName: '', wireApi, contextWindow: 128000, tools: true, vision: false, enabled: true });
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 const number = (value: number) => new Intl.NumberFormat('zh-CN').format(value);
 const contextLabel = (value: number) => value === 0 ? '未设置' : value >= 1000000 ? `${(value / 1000000).toFixed(value % 1000000 ? 1 : 0)}M` : `${Math.round(value / 1000)}K`;
@@ -119,6 +119,8 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
     return () => { cancelled = true; };
   }, [providerDraft?.kind, bridge]);
   const [modelDraft, setModelDraft] = useState<ModelDraft | null>(null);
+  const modelTouchedParameters = useRef(new Set<ModelDraftParameterField>());
+  const [modelOfficialParametersApplied, setModelOfficialParametersApplied] = useState(false);
   const [modelDiscovery, setModelDiscovery] = useState<{ provider: Provider; initialResult?: DiscoveryResult } | null>(null);
   const [showProviderDuplicates, setShowProviderDuplicates] = useState(false);
   const [pendingBindings, setPendingBindings] = useState<Partial<Record<ToolId, ToolBinding>>>({});
@@ -167,8 +169,31 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
   const toolOperationPending = (id: ToolId) => pendingActions.current.has('delete') || [`tool-binding-${id}`, `apply-tool-${id}`, `export-tool-${id}`, `preview-${id}`, `restore-tool-${id}`, `undo-tool-${id}`].some(key => pendingActions.current.has(key));
   const anyToolOperationPending = () => !!toolAuto.current?.pending().length || [...pendingActions.current].some(key => /^(tool-binding-|apply-tool-|export-tool-|preview-|restore-tool-|undo-tool-)/.test(key));
   const canApplyTool = (id: ToolId) => isJetBrainsTool(id) ? jetBrainsStatuses[id]?.canApply === true : id === 'codex' || id === 'claude-code' || id === 'opencode' || id === 'dsh' || id === 'vscode' || id === 'copilot';
-  const addModel = (providerId: string) => setModelDraft(freshModel(providerId, presetById(data.providers.find(provider => provider.id === providerId)?.presetId)?.defaultWireApi ?? 'responses'));
-  const editModel = (model: Model) => setModelDraft({ ...model, alias: modelLocalAlias(model) });
+  const addModel = (providerId: string) => {
+    setModelOfficialParametersApplied(false);
+    modelTouchedParameters.current.clear();
+    setModelDraft(freshModelDraft(providerId, presetById(data.providers.find(provider => provider.id === providerId)?.presetId)?.defaultWireApi ?? 'responses'));
+  };
+  const editModel = (model: Model) => {
+    setModelOfficialParametersApplied(false);
+    modelTouchedParameters.current.clear();
+    setModelDraft({ ...model, alias: modelLocalAlias(model) });
+  };
+  // 修改点：新模型只补未手改的参数；已有模型必须点击“应用官方参数”。
+  const updateModelIdentity = (changes: Partial<ModelDraft>) => {
+    setModelOfficialParametersApplied(false);
+    setModelDraft(previous => {
+      if (!previous) return previous;
+      const next = { ...previous, ...changes };
+      const provider = data.providers.find(item => item.id === next.providerId);
+      return autoFillModelDraft(next, lookupModelMetadata(next.upstreamId, provider, next.wireApi), modelTouchedParameters.current);
+    });
+  };
+  const updateModelParameters = (changes: Partial<ModelDraft>, fields: readonly ModelDraftParameterField[]) => {
+    setModelOfficialParametersApplied(false);
+    fields.forEach(field => modelTouchedParameters.current.add(field));
+    setModelDraft(previous => previous ? { ...previous, ...changes } : previous);
+  };
   const modelLabel = (model: Model) => modelDisplayLabel(model, data.providers.find(provider => provider.id === model.providerId));
   const notify = useCallback((message: string, tone: Toast['tone'] = 'success') => {
     const id = Date.now() + Math.random();
@@ -302,10 +327,11 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
   const saveModel = async () => {
     if (!modelDraft) return;
     if (!modelDraft.providerId || !modelDraft.upstreamId.trim() || !modelDraft.alias.trim()) { notify('请选择供应商，并填写上游模型和模型简称。', 'error'); return; }
-    if (!Number.isSafeInteger(modelDraft.contextWindow) || modelDraft.contextWindow < 0) { notify('上下文长度需要是非负整数；0 表示未设置。', 'error'); return; }
+    if ([modelDraft.contextWindow, modelDraft.maxInputTokens ?? 0, modelDraft.maxOutputTokens ?? 0].some(value => !Number.isSafeInteger(value) || value < 0)) { notify('上下文、输入上限和输出预算需要是非负整数；0 表示未设置或自动。', 'error'); return; }
+    if (modelDraft.contextWindow > 0 && ((modelDraft.maxInputTokens ?? 0) > modelDraft.contextWindow || (modelDraft.maxOutputTokens ?? 0) > modelDraft.contextWindow)) { notify('输入上限和输出预算不能超过上下文长度。', 'error'); return; }
     await run('save-model', async () => {
-      await bridge!.saveModel({ ...modelDraft, upstreamId: modelDraft.upstreamId.trim(), alias: modelDraft.alias.trim(), displayName: modelDraft.displayName.trim() || modelDraft.alias.trim() });
-      setModelDraft(null); await refresh(); notify('模型已加入统一目录。');
+      await bridge!.saveModel({ ...modelDraft, thinking: modelDraft.thinking ?? !!modelDraft.reasoningEfforts?.length, upstreamId: modelDraft.upstreamId.trim(), alias: modelDraft.alias.trim(), displayName: modelDraft.displayName.trim() || modelDraft.alias.trim() });
+      setModelDraft(null); await refresh(); notify('模型参数已保存，请重新同步所用工具。');
     });
   };
   const toggleModel = async (model: Model, enabled: boolean) => run(`model-${model.id}`, async () => { await bridge!.saveModel({ ...model, enabled }); await refresh(); });
@@ -721,6 +747,17 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
   }, [data.providers]);
   const draftExistingProviders = providerDraft && !providerDraft.id && providerDraft.kind === 'openai-compatible' ? data.providers.filter(provider => provider.kind === 'openai-compatible' && providerIdentity(provider) === providerIdentity(providerDraft)) : [];
   const modelDraftProvider = modelDraft ? data.providers.find(provider => provider.id === modelDraft.providerId) : undefined;
+  const modelDraftMetadata = modelDraft ? lookupModelMetadata(modelDraft.upstreamId, modelDraftProvider, modelDraft.wireApi) : undefined;
+  const modelDraftThinking = modelDraft?.thinking ?? !!modelDraft?.reasoningEfforts?.length;
+  const modelDraftReasoningLevels = modelDraftMetadata?.reasoningEffortFormat === modelDraft?.wireApi
+    ? modelDraftMetadata?.reasoningEfforts ?? [] : [];
+  const modelDraftUnverifiedLevels = (modelDraft?.reasoningEfforts ?? []).filter(level => modelDraft?.reasoningEffortFormat !== modelDraft?.wireApi || !modelDraftReasoningLevels.includes(level));
+  const applyOfficialParameters = () => {
+    if (!modelDraft || !modelDraftMetadata) return;
+    officialModelParameterFields(modelDraftMetadata).forEach(field => modelTouchedParameters.current.delete(field));
+    setModelDraft(applyOfficialModelParameters(modelDraft, modelDraftMetadata));
+    setModelOfficialParametersApplied(true);
+  };
   const modelRoutePreview = (() => {
     if (!modelDraft?.alias.trim() || !modelDraftProvider) return { alias: '', error: '' };
     try { return { alias: suggestModelAlias(modelDraft.providerId, modelDraft.alias, data.models, modelDraft.id), error: '' }; }
@@ -902,18 +939,32 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
     </Modal>}
     {modelDraft && <Modal title={modelDraft.id ? '编辑模型' : '添加模型'} subtitle="不同供应商可使用相同模型名，聚合列表按套餐区分。" onClose={() => setModelDraft(null)}>
       <form onSubmit={event => { event.preventDefault(); void saveModel(); }}><div className="modal-body">
-        <label className="form-field">模型来源<select value={modelDraft.providerId} required onChange={event => setModelDraft({ ...modelDraft, providerId: event.target.value, wireApi: modelDraft.id ? modelDraft.wireApi : presetById(data.providers.find(provider => provider.id === event.target.value)?.presetId)?.defaultWireApi ?? 'responses' })}><option value="">选择供应商</option>{data.providers.map(provider => <option key={provider.id} value={provider.id}>{provider.name} · {providerKinds[provider.kind].title}</option>)}</select></label>
-        <label className="form-field">上游模型 ID<input data-field="upstream-id" required placeholder="例如：gpt-6.1-sol / glm-5.3" list="discovered-models" value={modelDraft.upstreamId} onChange={event => setModelDraft({ ...modelDraft, upstreamId: event.target.value, alias: !modelDraft.alias || modelDraft.alias === modelDraft.upstreamId ? event.target.value : modelDraft.alias, displayName: !modelDraft.displayName || modelDraft.displayName === modelDraft.upstreamId ? event.target.value : modelDraft.displayName })} /><datalist id="discovered-models">{[...new Set(data.models.filter(model => model.providerId === modelDraft.providerId).map(model => model.upstreamId))].map(id => <option key={id} value={id} />)}</datalist><small>填写供应商实际接受的模型 ID，也可通过获取模型列表批量添加。</small></label>
+        <label className="form-field">模型来源<select value={modelDraft.providerId} required onChange={event => updateModelIdentity({ providerId: event.target.value, wireApi: modelDraft.id ? modelDraft.wireApi : presetById(data.providers.find(provider => provider.id === event.target.value)?.presetId)?.defaultWireApi ?? 'responses' })}><option value="">选择供应商</option>{data.providers.map(provider => <option key={provider.id} value={provider.id}>{provider.name} · {providerKinds[provider.kind].title}</option>)}</select></label>
+        <label className="form-field">上游模型 ID<input data-field="upstream-id" required placeholder="例如：gpt-6.1-sol / glm-5.3" list="discovered-models" value={modelDraft.upstreamId} onChange={event => updateModelIdentity({ upstreamId: event.target.value, alias: !modelDraft.alias || modelDraft.alias === modelDraft.upstreamId ? event.target.value : modelDraft.alias, displayName: !modelDraft.displayName || modelDraft.displayName === modelDraft.upstreamId ? event.target.value : modelDraft.displayName })} /><datalist id="discovered-models">{[...new Set(data.models.filter(model => model.providerId === modelDraft.providerId).map(model => model.upstreamId))].map(id => <option key={id} value={id} />)}</datalist><small>填写供应商实际接受的模型 ID，也可通过获取模型列表批量添加。</small></label>
         <div className="form-columns"><label className="form-field">模型简称<input data-field="model-local-alias" required placeholder="例如：glm-5.3" value={modelDraft.alias} onChange={event => setModelDraft({ ...modelDraft, alias: event.target.value })} /><small>仅在当前供应商内区分；跨供应商可重名。</small></label><label className="form-field">显示名称<input data-field="model-display-name" placeholder="可与其他模型相同" value={modelDraft.displayName} onChange={event => setModelDraft({ ...modelDraft, displayName: event.target.value })} /><small>聚合时显示“套餐名 - 模型名”。</small></label></div>
         {modelDraftProvider && modelDraft.alias.trim() && <div className="model-route-preview">{modelRoutePreview.error ? <span role="alert">{modelRoutePreview.error}</span> : <><strong>{modelDisplayLabel({ ...modelDraft, displayName: modelDraft.displayName || modelDraft.alias }, modelDraftProvider)}</strong><small>聚合接口 ID：<code data-field="model-route-preview">{modelRoutePreview.alias}</code></small></>}</div>}
-        <div className="form-columns"><label className="form-field">调用接口<select data-field="wire-api" value={modelDraft.wireApi} onChange={event => setModelDraft({ ...modelDraft, wireApi: event.target.value as Model['wireApi'] })}><option value="responses">Responses</option><option value="chat-completions">Chat Completions</option><option value="messages">Messages · Anthropic</option></select></label><label className="form-field">上下文长度（0 表示未设置）<input data-field="context-window" type="number" required min="0" step="1" value={modelDraft.contextWindow} onChange={event => setModelDraft({ ...modelDraft, contextWindow: Number(event.target.value) })} /></label></div>
-        <div className="capability-field"><span className="field-label">模型能力</span><label><input type="checkbox" checked={modelDraft.tools} onChange={event => setModelDraft({ ...modelDraft, tools: event.target.checked })} /><Terminal size={16} />工具调用</label><label><input type="checkbox" checked={modelDraft.vision} onChange={event => setModelDraft({ ...modelDraft, vision: event.target.checked })} /><Sparkles size={16} />图片输入</label></div>
-        <div className="capability-field reasoning-field"><span className="field-label">思考强度</span>{REASONING_EFFORTS.map(level => <label key={level}><input type="checkbox" data-field={`reasoning-effort-${level}`} checked={(modelDraft.reasoningEfforts ?? []).includes(level)} onChange={event => {
+        <div className="form-columns"><label className="form-field">调用接口<select data-field="wire-api" value={modelDraft.wireApi} onChange={event => updateModelIdentity({ wireApi: event.target.value as Model['wireApi'] })}><option value="responses">Responses</option><option value="chat-completions">Chat Completions</option><option value="messages">Messages · Anthropic</option></select></label><label className="form-field">上下文长度（0 表示未设置）<input data-field="context-window" type="number" required min="0" step="1" value={modelDraft.contextWindow} onChange={event => updateModelParameters({ contextWindow: Number(event.target.value) }, ['contextWindow'])} /></label></div>
+        <div className="model-official-parameters" data-field="official-parameters">
+          <div className="model-official-heading"><strong>{modelDraftMetadata ? '已核对官方参数' : '参数尚未核实'}</strong><button type="button" className="button secondary" data-action="apply-official-model-parameters" disabled={!modelDraftMetadata} onClick={applyOfficialParameters}>{modelOfficialParametersApplied ? <Check size={14} /> : <RefreshCw size={14} />}{modelOfficialParametersApplied ? '已填入草稿' : '应用官方参数'}</button></div>
+          {modelOfficialParametersApplied && <small role="status" data-field="official-parameters-applied">参数已填入当前草稿；请保存，再重新同步所用工具。</small>}
+          {modelDraftMetadata ? <>
+            <small>核对日期：{modelDraftMetadata.verifiedAt} · <a href={modelDraftMetadata.sourceUrl} target="_blank" rel="noreferrer">查看官方来源</a></small>
+            <small>参数参考：上下文 {number(modelDraftMetadata.contextWindow)}{modelDraftMetadata.maxInputTokens ? ` · 最大输入 ${number(modelDraftMetadata.maxInputTokens)}` : ''}{modelDraftMetadata.maxOutputTokens ? ` · 最大输出 ${number(modelDraftMetadata.maxOutputTokens)}` : ''} tokens。下面的输出预算可小于支持上限。</small>
+            {modelDraftMetadata.notes && <small>{Array.isArray(modelDraftMetadata.notes) ? modelDraftMetadata.notes.join(' ') : modelDraftMetadata.notes}</small>}
+            <small>官方模型规格不代表当前套餐或自定义服务的可用额度；实际接口提供的限制优先。</small>
+            <small>{modelDraft.id ? '已有模型保留当前设置，点击上方按钮才会更新；应用后请保存。' : '已知模型自动填入未手改的参数；手动设置的 0、关闭选项和其他参数会保留。'}</small>
+          </> : <small>此模型或当前供应商接口没有已核实参数；请依据实际接口文档填写。订阅套餐、其他来源或自定义服务的限制可能不同，未设置的长度保留为 0。</small>}
+        </div>
+        <div className="form-columns"><label className="form-field">输入上限（0 自动）<input data-field="max-input-tokens" type="number" min="0" step="1" value={modelDraft.maxInputTokens ?? 0} onChange={event => updateModelParameters({ maxInputTokens: Number(event.target.value) }, ['maxInputTokens'])} /></label><label className="form-field">输出预算（0 自动）<input data-field="max-output-tokens" type="number" min="0" step="1" value={modelDraft.maxOutputTokens ?? 0} onChange={event => updateModelParameters({ maxOutputTokens: Number(event.target.value) }, ['maxOutputTokens'])} /><small>限制单次回复与思考消耗；无需每次都使用最大输出。</small></label></div>
+        <div className="capability-field"><span className="field-label">模型能力</span><label><input type="checkbox" data-field="model-tools" checked={modelDraft.tools} onChange={event => updateModelParameters({ tools: event.target.checked }, ['tools'])} /><Terminal size={16} />工具调用</label><label><input type="checkbox" data-field="model-vision" checked={modelDraft.vision} onChange={event => updateModelParameters({ vision: event.target.checked }, ['vision'])} /><Sparkles size={16} />图片输入</label><label><input type="checkbox" data-field="model-thinking" checked={modelDraftThinking} onChange={event => updateModelParameters(event.target.checked ? { thinking: true } : { thinking: false, reasoningEfforts: [], defaultReasoningEffort: undefined, reasoningEffortFormat: undefined, adaptiveThinking: false, minThinkingBudget: undefined, maxThinkingBudget: undefined }, event.target.checked ? ['thinking'] : ['thinking', 'reasoningEfforts', 'defaultReasoningEffort', 'reasoningEffortFormat', 'adaptiveThinking', 'minThinkingBudget', 'maxThinkingBudget'])} /><Zap size={16} />支持思考</label></div>
+        {modelDraftThinking && modelDraftReasoningLevels.length > 0 && <div className="capability-field reasoning-field"><span className="field-label">当前接口的思考等级</span>{modelDraftReasoningLevels.map(level => <label key={level}><input type="checkbox" data-field={`reasoning-effort-${level}`} checked={(modelDraft.reasoningEfforts ?? []).includes(level)} onChange={event => {
           const current = modelDraft.reasoningEfforts ?? [];
-          const next = event.target.checked ? [...current, level] : current.filter(item => item !== level);
-          setModelDraft({ ...modelDraft, reasoningEfforts: next, defaultReasoningEffort: modelDraft.defaultReasoningEffort && next.includes(modelDraft.defaultReasoningEffort) ? modelDraft.defaultReasoningEffort : undefined });
-        }} />{reasoningEffortLabels[level]}</label>)}</div>
-        {(modelDraft.reasoningEfforts ?? []).length > 0 && <label className="form-field">默认思考强度<select data-field="default-reasoning-effort" value={modelDraft.defaultReasoningEffort ?? ''} onChange={event => setModelDraft({ ...modelDraft, defaultReasoningEffort: (event.target.value || undefined) as ReasoningEffort | undefined })}><option value="">由工具选择</option>{(modelDraft.reasoningEfforts ?? []).map(level => <option key={level} value={level}>{reasoningEffortLabels[level]}（{level}）</option>)}</select><small>勾选级别后同步到 VS Code、Codex、Copilot 和 DSH 的思考强度配置；全部不勾选则不写入思考强度。</small></label>}
+          const next = event.target.checked ? modelDraftReasoningLevels.filter(item => item === level || current.includes(item)) : current.filter(item => item !== level);
+          updateModelParameters({ reasoningEfforts: next, reasoningEffortFormat: modelDraft.wireApi, defaultReasoningEffort: modelDraft.defaultReasoningEffort && next.includes(modelDraft.defaultReasoningEffort) ? modelDraft.defaultReasoningEffort : undefined }, ['reasoningEfforts', 'defaultReasoningEffort', 'reasoningEffortFormat']);
+        }} />{reasoningEffortLabels[level]}</label>)}</div>}
+        {modelDraftThinking && modelDraftReasoningLevels.length === 0 && <p className="model-parameter-note">支持思考与可选等级是两项能力；当前接口未核实可选等级时，不向工具写入通用思考强度。模型可按接口默认值或思考预算工作。</p>}
+        {modelDraftUnverifiedLevels.length > 0 && <p className="model-parameter-note" data-field="unverified-reasoning-levels">当前配置的 {modelDraftUnverifiedLevels.join('、')} 暂未在此接口核实。已有设置仍保留，可点击“应用官方参数”更新。</p>}
+        {modelDraftThinking && (modelDraft.reasoningEfforts ?? []).length > 0 && <label className="form-field">默认思考强度<select data-field="default-reasoning-effort" value={modelDraft.defaultReasoningEffort ?? ''} onChange={event => updateModelParameters({ defaultReasoningEffort: (event.target.value || undefined) as ReasoningEffort | undefined }, ['defaultReasoningEffort'])}><option value="">由工具选择</option>{(modelDraft.reasoningEfforts ?? []).map(level => <option key={level} value={level}>{reasoningEffortLabels[level]}（{level}）</option>)}</select><small>仅向支持当前思考格式的工具导出；选择供应商原生的最大等级不会自动改变输出预算。</small></label>}
         <div className="form-switch-row"><div><strong>启用模型</strong><small>启用后可以为工具选择此模型。</small></div><Toggle checked={modelDraft.enabled} onChange={enabled => setModelDraft({ ...modelDraft, enabled })} label="启用模型" /></div>
       </div><div className="modal-footer"><button type="button" className="button secondary" onClick={() => setModelDraft(null)}>取消</button><button type="submit" className="button primary" disabled={busy['save-model'] || !!modelRoutePreview.error}><BusyIcon active={!!busy['save-model']}><Plus size={16} /></BusyIcon>{modelDraft.id ? '保存修改' : '添加模型'}</button></div></form>
     </Modal>}

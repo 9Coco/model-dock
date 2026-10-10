@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { parse as parseJsonc, type ParseError } from 'jsonc-parser';
 import { parse as parseToml } from '@iarna/toml';
 import { parse as parseYaml } from 'yaml';
-import { buildConfig, buildCopilotDesktopPlan, buildDshPlan, applyConfig, connectionKey } from '../src/main/adapters';
+import { buildConfig, buildCopilotDesktopPlan, buildDshPlan, applyConfig, connectionKey, vsCodeModelConfig } from '../src/main/adapters';
 import type { Model, Provider, ToolBinding } from '../src/shared/types';
 
 const roots: string[] = [];
@@ -31,6 +31,50 @@ function nativeFixture(ids = ['provider-a', 'provider-b', 'subscription']) {
   };
 }
 describe('tool adapters', () => {
+  it('preserves configured large output budgets and a separate smaller input cap across supported clients', () => {
+    const configured: Model = { ...models[0], contextWindow: 1050000, maxInputTokens: 900000, maxOutputTokens: 128000, thinking: true,
+      reasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'], reasoningEffortFormat: 'responses' };
+    const configuredStore = { ...store, listModels: () => [configured] };
+    const vscode = JSON.parse(buildConfig(configuredStore, 'vscode', 19191).content)[0].models[0];
+    expect(vscode).toMatchObject({ maxInputTokens: 900000, maxOutputTokens: 128000, thinking: true, reasoningEffortFormat: 'responses' });
+    expect(vscode).not.toHaveProperty('contextWindow');
+    expect(buildCopilotDesktopPlan(configuredStore, 19191).providers[0].models[0]).toMatchObject({ contextWindow: 900000, maxOutputTokens: 128000 });
+    expect(JSON.parse(buildConfig(configuredStore, 'opencode', 19191).content).provider.modeldock.models['dock-model'].limit).toEqual({ context: 1050000, output: 128000 });
+    expect(dshProviders(buildConfig(configuredStore, 'dsh', 19191).content).modeldock.models[0]).toMatchObject({ contextWindow: 1050000, maxTokens: 128000 });
+    expect(configured.maxOutputTokens).toBe(128000); expect(configured.maxInputTokens).toBe(900000);
+  });
+  it('caps configured output against the actual context and preserves the legacy budget for zero or missing limits', () => {
+    const catalog: Model[] = [{ ...models[0], contextWindow: 100000, maxOutputTokens: 120000, maxInputTokens: 200000 },
+      { ...models[0], id: 'zero', alias: 'zero-budget', maxOutputTokens: 0, maxInputTokens: 0 }];
+    const configuredStore = { ...store, listModels: () => catalog,
+      listBindings: () => store.listBindings().map(binding => ({ ...binding, modelIds: catalog.map(model => model.id) })) };
+    const rows = JSON.parse(buildConfig(configuredStore, 'vscode', 19191).content)[0].models;
+    expect(rows[0]).toMatchObject({ maxInputTokens: 1, maxOutputTokens: 99999 }); expect(rows[0]).not.toHaveProperty('contextWindow');
+    expect(rows[1]).toMatchObject({ contextWindow: 64000, maxOutputTokens: 16000 }); expect(rows[1]).not.toHaveProperty('maxInputTokens');
+    const plan = buildCopilotDesktopPlan(configuredStore, 19191);
+    expect(plan.providers[0].models[0]).toMatchObject({ contextWindow: 1, maxOutputTokens: 99999 });
+  });
+  it('serializes Messages schema fields defensively while preserving the existing client protocol boundaries', () => {
+    const catalog: Model[] = [
+      { ...models[0], id: 'messages', alias: 'adaptive-model', wireApi: 'messages', maxOutputTokens: 32000, thinking: true, adaptiveThinking: true,
+        reasoningEfforts: ['low', 'medium', 'high'], reasoningEffortFormat: 'messages', minThinkingBudget: 1024, maxThinkingBudget: 16000 },
+      { ...models[0], id: 'budget', alias: 'budget-model', wireApi: 'messages', maxOutputTokens: 16000, thinking: true, adaptiveThinking: false, minThinkingBudget: 1024, maxThinkingBudget: 20000 },
+      { ...models[0], id: 'thinking-only', alias: 'no-picker', thinking: true, reasoningEfforts: [], reasoningEffortFormat: 'messages', adaptiveThinking: true, minThinkingBudget: 1024, maxThinkingBudget: 16000 },
+      { ...models[0], id: 'thinking-false', alias: 'explicit-false', thinking: false },
+    ];
+    const configuredStore = { ...store, listModels: () => catalog,
+      listBindings: () => store.listBindings().map(binding => ({ ...binding, modelIds: catalog.map(model => model.id) })) };
+    const integrated = JSON.parse(buildConfig(configuredStore, 'vscode', 19191).content)[0].models;
+    expect(integrated.map((row: any) => row.id)).toEqual(['no-picker', 'explicit-false']);
+    const rows = catalog.map(model => vsCodeModelConfig(model, 'http://127.0.0.1:19191/tool/vscode/v1', 'SYNTHETIC_KEY'));
+    expect(rows[0]).toMatchObject({ url: 'http://127.0.0.1:19191/tool/vscode/v1/messages', apiType: 'messages', thinking: true, adaptiveThinking: true,
+      supportsReasoningEffort: ['low', 'medium', 'high'], reasoningEffortFormat: 'messages' });
+    expect(rows[0]).not.toHaveProperty('minThinkingBudget');
+    expect(rows[1]).toMatchObject({ minThinkingBudget: 1024, maxThinkingBudget: 15999, adaptiveThinking: false });
+    expect(rows[2]).toMatchObject({ thinking: true, apiType: 'responses' });
+    for (const key of ['supportsReasoningEffort', 'reasoningEffortFormat', 'adaptiveThinking', 'minThinkingBudget', 'maxThinkingBudget']) expect(rows[2]).not.toHaveProperty(key);
+    expect(rows[3].thinking).toBe(false);
+  });
   it('writes OpenCode to the explicit XDG config root and preserves the unused default configuration', () => {
     const root = mkdtempSync(join(tmpdir(), 'modeldock-adapter-xdg-')); roots.push(root);
     const configHome = join(root, 'custom-config'), defaultTarget = join(root, '.config', 'opencode', 'opencode.json');

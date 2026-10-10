@@ -1,112 +1,146 @@
-/**
- * Conservative defaults for model discovery when an upstream omits its metadata.
- * These describe the documented model, not an account's entitlement or a gateway's
- * limits. Upstream metadata and explicit user settings must take precedence.
- *
- * Add IDs only after checking both context capacity and image input in an official
- * source. Aliases/snapshots are explicit: never infer capabilities from a family
- * name, an arbitrary date, or a suffix such as latest, thinking, or preview.
- */
+import rawSpecs from './model-specs-data.json';
+import type { Provider, ReasoningEffort, WireApi } from './types';
+
+/** 修改点：参数表按精确模型与供应商接口核对，不把模型能力等同于套餐授权。 */
 export interface ModelMetadata {
+  /** 客户端统一口径：输入与输出合计。Google 独立输入上限另保留 maxInputTokens。 */
   contextWindow: number;
+  maxInputTokens?: number;
+  /** 思考模式条件不同的保守客户端输入预算，不替代上面的官方最大值。 */
+  defaultInputTokens?: number;
+  /** 官方支持上限；首选请求预算可能小于这个值。 */
+  maxOutputTokens?: number;
+  defaultOutputTokens?: number;
   vision: boolean;
+  tools?: boolean;
+  thinking?: boolean;
+  reasoningEfforts?: ReasoningEffort[];
+  defaultReasoningEffort?: ReasoningEffort;
+  reasoningEffortFormat?: WireApi;
+  adaptiveThinking?: boolean;
+  minThinkingBudget?: number;
+  maxThinkingBudget?: number;
   verifiedAt: string;
   sourceUrl: string;
+  sourceUrls?: string[];
+  notes?: string;
 }
-
-const verifiedAt = '2026-10-08';
-const metadataById = new Map<string, Readonly<ModelMetadata>>();
-
-function add(ids: readonly string[], contextWindow: number, vision: boolean, sourceUrl: string, namespaces: readonly string[] = []) {
-  const metadata = Object.freeze({ contextWindow, vision, verifiedAt, sourceUrl });
-  for (const id of ids) {
-    metadataById.set(id, metadata);
-    for (const namespace of namespaces) metadataById.set(`${namespace}/${id}`, metadata);
+interface SpecRecord {
+  ids: string[];
+  vendor: string;
+  providerScope?: { presetId?: string; baseUrl: string };
+  contextWindow: number;
+  contextLimitType: string;
+  outputLimitApis?: WireApi[];
+  maxInputTokens?: number;
+  maxInputTokensThinking?: number;
+  maxOutputTokens?: number;
+  defaultOutputTokens?: number;
+  vision: boolean;
+  tools?: boolean;
+  toolsByWireApi?: Partial<Record<WireApi, boolean>>;
+  supportedWireApis?: WireApi[];
+  thinking?: boolean;
+  thinkingCanDisable?: boolean;
+  reasoningEfforts?: ReasoningEffort[];
+  defaultReasoningEffort?: ReasoningEffort;
+  reasoningApis: WireApi[];
+  adaptiveThinking?: boolean;
+  minThinkingBudget?: number;
+  maxThinkingBudget?: number;
+  verifiedAt: string;
+  sourceUrls: string[];
+  notes: string[];
+  uiNotes?: string[];
+}
+type MetadataProvider = Pick<Provider, 'kind' | 'baseUrl' | 'presetId'>;
+const records = rawSpecs.records as unknown as SpecRecord[];
+const namespaces: Record<string, string[]> = {
+  openai: ['openai'], anthropic: ['anthropic'], google: ['google', 'models'],
+  deepseek: ['deepseek'], qwen: ['qwen'], zai: ['z-ai'], moonshotai: ['moonshotai'], xai: ['x-ai'],
+};
+const generic = new Map<string, SpecRecord>();
+for (const record of records) {
+  if (record.vendor === 'volcengine') continue;
+  for (const id of record.ids) {
+    generic.set(id.toLowerCase(), record);
+    for (const prefix of namespaces[record.vendor] ?? []) generic.set(`${prefix}/${id}`.toLowerCase(), record);
   }
 }
-
-function openai(id: string, contextWindow: number, vision: boolean, snapshots: readonly string[] = [], aliases: readonly string[] = []) {
-  add([id, ...snapshots, ...aliases], contextWindow, vision, `https://developers.openai.com/api/docs/models/${id}`, ['openai']);
+function canonicalBase(value: string): string | undefined {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) return undefined;
+    return `${url.origin}${url.pathname.replace(/\/+$/, '')}`;
+  } catch { return undefined; }
 }
-
-openai('gpt-6.1-sol', 1_050_000, true);
-openai('gpt-6-astra', 1_050_000, true);
-openai('gpt-6-sol', 1_050_000, true);
-openai('gpt-6-luna', 1_050_000, true);
-openai('gpt-5.6-sol', 1_050_000, true, [], ['gpt-5.6']);
-openai('gpt-5.6-terra', 1_050_000, true);
-openai('gpt-5.6-luna', 1_050_000, true);
-openai('gpt-5.5', 1_050_000, true, ['gpt-5.5-2026-04-23']);
-openai('gpt-5.4', 1_050_000, true, ['gpt-5.4-2026-03-05']);
-openai('gpt-5.4-pro', 1_050_000, true, ['gpt-5.4-pro-2026-03-05']);
-openai('gpt-5.4-mini', 400_000, true, ['gpt-5.4-mini-2026-03-17']);
-openai('gpt-5.4-nano', 400_000, true, ['gpt-5.4-nano-2026-03-17']);
-openai('gpt-5.3-codex', 400_000, true);
-openai('gpt-5.2', 400_000, true, ['gpt-5.2-2025-12-11']);
-openai('gpt-5.2-codex', 400_000, true);
-openai('gpt-5.1', 400_000, true, ['gpt-5.1-2025-11-13']);
-openai('gpt-5', 400_000, true, ['gpt-5-2025-08-07']);
-openai('gpt-5-pro', 400_000, true, ['gpt-5-pro-2025-10-06']);
-openai('gpt-5-mini', 400_000, true, ['gpt-5-mini-2025-08-07']);
-openai('gpt-5-nano', 400_000, true, ['gpt-5-nano-2025-08-07']);
-openai('gpt-4.1', 1_047_576, true, ['gpt-4.1-2025-04-14']);
-openai('gpt-4.1-mini', 1_047_576, true, ['gpt-4.1-mini-2025-04-14']);
-openai('gpt-4.1-nano', 1_047_576, true, ['gpt-4.1-nano-2025-04-14']);
-openai('gpt-4o', 128_000, true, ['gpt-4o-2024-05-13', 'gpt-4o-2024-08-06', 'gpt-4o-2024-11-20']);
-openai('gpt-4o-mini', 128_000, true, ['gpt-4o-mini-2024-07-18']);
-openai('o3', 200_000, true, ['o3-2025-04-16']);
-openai('o3-pro', 200_000, true, ['o3-pro-2025-06-10']);
-openai('o3-mini', 200_000, false, ['o3-mini-2025-01-31']);
-openai('o4-mini', 200_000, true, ['o4-mini-2025-04-16']);
-openai('o1', 200_000, true, ['o1-2024-12-17']);
-openai('o1-mini', 128_000, false, ['o1-mini-2024-09-12']);
-
-add(['claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'], 1_000_000, true,
-  'https://platform.claude.com/docs/en/models/overview', ['anthropic']);
-for (const id of ['sonnet-4-6', 'opus-4-6', 'opus-4-7', 'opus-4-8', 'sonnet-5', 'opus-5', 'fable-5']) {
-  add([`claude-${id}`], 1_000_000, true, `https://platform.claude.com/docs/en/models/${id}/overview`, ['anthropic']);
+function matchesScope(record: SpecRecord, base: string): boolean {
+  const expected = record.providerScope && canonicalBase(record.providerScope.baseUrl);
+  return expected === base || record.vendor === 'deepseek' && expected === 'https://api.deepseek.com' && base === `${expected}/v1`;
 }
-add(['claude-sonnet-4-5', 'claude-sonnet-4-5-20250929'], 200_000, true,
-  'https://platform.claude.com/docs/en/models/sonnet-4-5/overview', ['anthropic']);
-add(['claude-opus-4-5', 'claude-opus-4-5-20251101'], 200_000, true,
-  'https://platform.claude.com/docs/en/models/opus-4-5/overview', ['anthropic']);
-add(['claude-haiku-4-5', 'claude-haiku-4-5-20251001'], 200_000, true,
-  'https://platform.claude.com/docs/en/models/haiku-4-5/overview', ['anthropic']);
-
-for (const id of ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-3.1-pro-preview', 'gemini-3.5-flash-lite', 'gemini-3.8-flash']) {
-  // Google publishes an input-token limit instead of a combined context capacity.
-  add([id], 1_048_576, true, `https://ai.google.dev/gemini-api/docs/models/${id}`, ['google', 'models']);
+function officialVendor(record: SpecRecord, base?: string): boolean {
+  if (!base) return false;
+  if (record.providerScope) return matchesScope(record, base);
+  const allowed: Record<string, string[]> = {
+    openai: ['https://api.openai.com/v1'], anthropic: ['https://api.anthropic.com', 'https://api.anthropic.com/v1'],
+    google: ['https://generativelanguage.googleapis.com/v1beta/openai'], xai: ['https://api.x.ai/v1'],
+  };
+  return allowed[record.vendor]?.includes(base) ?? false;
 }
-
-// Current Flash and Pro have different input modalities; do not infer from DeepSeek.
-add(['deepseek-flash'], 1_048_576, true, 'https://api-docs.deepseek.com/api/list-models/', ['deepseek']);
-add(['deepseek-v4-pro'], 1_048_576, false, 'https://api-docs.deepseek.com/api/list-models/', ['deepseek']);
-
-// Aliyun specifies decimal 1M and 256k tokens. Only individually listed models.
-add(['qwen3.8-max', 'qwen3.8-max-0902', 'qwen3.8-flash', 'qwen3.8-omni-flash',
-  'qwen3.7-max-2026-06-08', 'qwen3.7-plus', 'qwen3.7-plus-2026-05-26', 'qwen3.7-flash', 'qwen3.7-flash-2026-07-15',
-  'qwen3.6-plus', 'qwen3.6-plus-2026-04-02', 'qwen3.6-flash', 'qwen3.6-flash-2026-04-16',
-  'qwen3.5-plus', 'qwen3.5-plus-2026-02-15', 'qwen3.5-flash', 'qwen3.5-flash-2026-02-23'],
-1_000_000, true, 'https://help.aliyun.com/zh/model-studio/vision-model/', ['qwen']);
-add(['qwen3.6-35b-a3b', 'qwen3.5-omni-plus'], 256_000, true, 'https://help.aliyun.com/zh/model-studio/vision-model/', ['qwen']);
-
-add(['glm-5'], 200_000, false, 'https://docs.z.ai/guides/llm/glm-5', ['z-ai']);
-add(['glm-5.2'], 1_000_000, false, 'https://docs.z.ai/guides/llm/glm-5.2', ['z-ai']);
-add(['glm-5.3'], 1_000_000, false, 'https://docs.z.ai/guides/llm/glm-5.3', ['z-ai']);
-add(['glm-5.3-flash', 'glm-5.3-flashx'], 1_000_000, true, 'https://docs.z.ai/guides/vlm/glm-5.3-flash', ['z-ai']);
-add(['glm-4.7', 'glm-4.7-flash', 'glm-4.7-flashx'], 200_000, false, 'https://docs.z.ai/guides/llm/glm-4.7', ['z-ai']);
-add(['glm-4.6v', 'glm-4.6v-flash', 'glm-4.6v-flashx'], 128_000, true, 'https://docs.z.ai/guides/vlm/glm-4.6v', ['z-ai']);
-
-// These guides publish rounded 1M/256K capacities. Keep conservative decimal
-// defaults; an upstream's precise token limit always wins over this dictionary.
-add(['kimi-k3'], 1_000_000, true, 'https://platform.kimi.ai/docs/guide/kimi-k3-quickstart', ['moonshotai']);
-add(['kimi-k2.6'], 256_000, true, 'https://platform.kimi.ai/docs/guide/kimi-k2-6-quickstart', ['moonshotai']);
-add(['kimi-k2.7-code', 'kimi-k2.7-code-highspeed'], 256_000, true,
-  'https://platform.kimi.ai/docs/guide/kimi-k2-7-code-quickstart', ['moonshotai']);
-add(['grok-4.7'], 500_000, true, 'https://docs.x.ai/developers/models/grok-4.7', ['x-ai']);
-
-/** Look up an exact documented ID; return a copy so callers cannot edit defaults. */
-export function lookupModelMetadata(upstreamId: string): ModelMetadata | undefined {
-  const metadata = metadataById.get(upstreamId.trim().toLowerCase());
-  return metadata ? { ...metadata } : undefined;
+/**
+ * 修改点：模型字典、供应商套餐覆盖和协议投影共用一个入口。
+ * 订阅来源只相信实时目录，未知代理不自动写入厂商原生思考参数。
+ * 返回副本，保留上游与用户配置的优先级；本函数不写数据库或外部配置。
+ */
+export function lookupModelMetadata(upstreamId: string, provider?: MetadataProvider, wireApi?: WireApi): ModelMetadata | undefined {
+  const id = upstreamId.trim().toLowerCase();
+  if (provider && provider.kind !== 'openai-compatible') return undefined;
+  const base = provider && canonicalBase(provider.baseUrl);
+  const scoped = base && records.find(record => record.ids.some(value => value.toLowerCase() === id) && matchesScope(record, base));
+  const record = scoped || generic.get(id);
+  if (!record) return undefined;
+  const notes = [...record.uiNotes ?? []];
+  const compatibleWire = !wireApi || !record.supportedWireApis || record.supportedWireApis.includes(wireApi);
+  const verifiedOutputLimit = !record.outputLimitApis || !!wireApi && record.outputLimitApis.includes(wireApi);
+  const inputOnly = record.contextLimitType === 'input';
+  const contextWindow = inputOnly ? record.contextWindow + (record.maxOutputTokens ?? 0) : record.contextWindow;
+  if (inputOnly) notes.unshift(`官方给出独立输入上限 ${record.contextWindow}；此处客户端上下文按输入与输出合计计算。`);
+  if (record.thinkingCanDisable === false) notes.push('模型原生思考不可关闭；“支持思考”表示能力，不是关闭开关。');
+  const result: ModelMetadata = {
+    contextWindow, vision: record.vision, sourceUrl: record.sourceUrls[0], sourceUrls: [...record.sourceUrls], verifiedAt: record.verifiedAt,
+    ...(record.maxInputTokens ? { maxInputTokens: record.maxInputTokens } : {}),
+    ...(record.maxOutputTokens && verifiedOutputLimit ? { maxOutputTokens: record.maxOutputTokens } : {}),
+    ...(record.defaultOutputTokens && verifiedOutputLimit ? { defaultOutputTokens: record.defaultOutputTokens } : {}),
+    ...(!compatibleWire ? { tools: false } : typeof record.tools === 'boolean' ? { tools: wireApi && record.toolsByWireApi?.[wireApi] !== undefined ? record.toolsByWireApi[wireApi] : record.tools } : {}),
+    ...(typeof record.thinking === 'boolean' ? { thinking: record.thinking } : {}),
+  };
+  if (record.maxInputTokensThinking && record.maxInputTokens) {
+    result.defaultInputTokens = Math.min(record.maxInputTokensThinking, record.maxInputTokens);
+    notes.push(`关闭思考时最大输入 ${record.maxInputTokens}，开启时 ${record.maxInputTokensThinking}；默认采用较小输入预算。`);
+  }
+  if (!compatibleWire) notes.push('所选接口不在此模型已公开支持的接口中，请先核对调用方式。');
+  if (wireApi && record.toolsByWireApi?.[wireApi] === false && record.tools) notes.push('当前接口默认不支持此模型的工具调用；需要工具时请使用已支持的 Responses 接口。');
+  if (!result.defaultOutputTokens && result.maxOutputTokens && result.maxOutputTokens >= contextWindow) {
+    // 输出能力上限可接近完整上下文，但不能在客户端默认预算中挤掉所有输入空间。
+    result.defaultOutputTokens = Math.min(131072, Math.max(1, Math.floor(contextWindow / 4)));
+    notes.push(`最大输出与上下文共享空间；客户端首选输出预算为 ${result.defaultOutputTokens}，不是另一个模型上限。`);
+  }
+  // 原生厂商等级只有在已核对的接口中可导出；同模型在火山套餐上未证实的等级保持空。
+  const verifiedEndpoint = !provider || officialVendor(record, base);
+  const compatibleReasoning = verifiedEndpoint && compatibleWire && (!wireApi || record.reasoningApis.includes(wireApi));
+  if (compatibleReasoning && record.reasoningEfforts !== undefined) {
+    result.reasoningEfforts = [...record.reasoningEfforts];
+    if (record.defaultReasoningEffort && result.reasoningEfforts.includes(record.defaultReasoningEffort)) result.defaultReasoningEffort = record.defaultReasoningEffort;
+    if (wireApi && result.reasoningEfforts.length) result.reasoningEffortFormat = wireApi;
+  } else if (record.thinking) {
+    result.reasoningEfforts = [];
+    notes.push('当前接口未证实可用的思考档位；保留思考能力，不自动写入强度参数。');
+  }
+  if (verifiedEndpoint && compatibleWire && (!wireApi || wireApi === 'messages')) {
+    if (record.adaptiveThinking !== undefined) result.adaptiveThinking = record.adaptiveThinking;
+    if (record.minThinkingBudget !== undefined) result.minThinkingBudget = record.minThinkingBudget;
+    if (record.maxThinkingBudget !== undefined) result.maxThinkingBudget = record.maxThinkingBudget;
+  }
+  if (notes.length) result.notes = notes.join('\n');
+  return result;
 }

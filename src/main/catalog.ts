@@ -1,6 +1,6 @@
 import { isCopilotUpstream } from './copilot-provider';
 import type { Model, ModelInput, Provider, WireApi } from '../shared/types';
-import { isReasoningEffort, sanitizeReasoningEfforts } from '../shared/types';
+import { isReasoningEffort, MODEL_SPEC_FIELDS, modelSpecs, sanitizeReasoningEfforts } from '../shared/types';
 import type { AddModelsResult, DiscoveredModel, DiscoveryErrorCategory, DiscoveryResult, ModelSelection } from '../shared/catalog-types';
 import { presetById } from '../shared/presets';
 import { modelLocalAlias, suggestModelAlias } from '../shared/model-names';
@@ -70,46 +70,69 @@ function parseModel(entry: unknown, provider: Provider, messagesCatalog = false)
   const capabilities = object(data.capabilities);
   const modalities = inputModalities(data.input_modalities, capabilities.input_modalities, object(data.architecture).input_modalities);
   const limits = object(capabilities.limits), supports = object(capabilities.supports);
-  const upstreamContext = positiveContext(data.context_window, data.contextWindow, data.context_length, data.max_context_length, limits.max_context_window_tokens, messagesCatalog ? data.max_input_tokens : undefined);
-  // A negative parallel-calls flag does not mean that ordinary tools are
-  // unsupported. Only the affirmative native flag supplies this capability.
-  const declaredTools = data.tools ?? data.supports_tools ?? data.supports_tool_calls ?? capabilities.tools ?? capabilities.tool_calling
-    ?? (provider.kind === 'copilot' ? supports.tool_calls : undefined)
-    ?? (provider.kind === 'codex' && data.supports_parallel_tool_calls === true ? true : undefined);
-  const declaredVision = booleanValue(data.vision, data.supports_vision, capabilities.vision, provider.kind === 'copilot' ? supports.vision : undefined, messagesCatalog ? object(capabilities.image_input).supported : undefined);
-  const upstreamVision = declaredVision ?? (modalities.length ? modalities.includes('image') : undefined);
-  const knownMetadata = lookupModelMetadata(upstreamId);
-  const metadataInferred: NonNullable<DiscoveredModel['metadataInferred']> = [];
-  const metadataDefaults: NonNullable<DiscoveredModel['metadataDefaults']> = [];
-  const contextWindow = upstreamContext ?? knownMetadata?.contextWindow ?? 0;
-  const vision = upstreamVision ?? knownMetadata?.vision ?? false;
-  if (upstreamContext === undefined) {
-    if (knownMetadata) metadataInferred.push('contextWindow');
-    else metadataDefaults.push('contextWindow');
-  }
-  if (typeof declaredTools !== 'boolean') metadataDefaults.push('tools');
-  if (upstreamVision === undefined) {
-    if (knownMetadata) metadataInferred.push('vision');
-    else metadataDefaults.push('vision');
-  }
-  const metadataSource = upstreamContext !== undefined || typeof declaredTools === 'boolean' || upstreamVision !== undefined ? 'upstream' : 'defaults';
-  // Codex catalogs use supported_reasoning_levels (+ default_reasoning_level);
-  // Copilot catalogs declare capabilities.supports.reasoning_effort. Entries may
-  // be plain level strings or { effort } objects; unknown levels are dropped.
-  const declaredLevels = data.supported_reasoning_levels ?? data.reasoning_efforts ?? supports.reasoning_effort;
-  const reasoningEfforts = sanitizeReasoningEfforts(Array.isArray(declaredLevels) ? declaredLevels.map(level => typeof level === 'string' ? level : object(level).effort) : []);
-  const declaredDefaultLevel = data.default_reasoning_level ?? data.default_reasoning_effort;
-  const defaultReasoningEffort = isReasoningEffort(declaredDefaultLevel) && reasoningEfforts.includes(declaredDefaultLevel) ? declaredDefaultLevel : undefined;
-  // Upstream declarations and known-model metadata do not prove endpoint compatibility.
-  // 修改点：Copilot 按目录声明的模型接口选择协议，不把全部订阅强制当成 Responses。
+  // Protocol and account identity constrain dictionary inference. Public API limits
+  // must never overwrite a native subscription catalog with the same model name.
   const endpoints = data.supported_endpoints ?? capabilities.supported_endpoints;
   if (provider.kind === 'copilot' && Array.isArray(endpoints) && !endpoints.some(endpoint => endpoint === 'responses' || endpoint === '/responses' || endpoint === 'chat_completions' || endpoint === 'chat-completions' || endpoint === '/chat/completions')) return undefined;
   const wireApi: WireApi = provider.kind === 'copilot' ? Array.isArray(endpoints) && (endpoints.includes('responses') || endpoints.includes('/responses')) ? 'responses' : 'chat-completions'
     : provider.kind === 'openai-compatible' ? messagesCatalog ? 'messages' : presetById(provider.presetId)?.defaultWireApi ?? 'chat-completions' : 'responses';
+  const knownMetadata = lookupModelMetadata(upstreamId, provider, wireApi);
+  const upstreamInput = positiveContext(data.max_input_tokens, data.maxInputTokens, limits.max_input_tokens, limits.max_prompt_tokens);
+  // max_tokens is frequently a default request budget, so it is deliberately
+  // excluded from published output-limit inference.
+  const upstreamOutput = positiveContext(data.max_output_tokens, data.maxOutputTokens, limits.max_output_tokens, limits.max_completion_tokens);
+  const combined = upstreamInput !== undefined && upstreamOutput !== undefined && Number.isSafeInteger(upstreamInput + upstreamOutput) ? upstreamInput + upstreamOutput : undefined;
+  const upstreamContext = positiveContext(data.context_window, data.contextWindow, data.context_length, data.max_context_length, limits.max_context_window_tokens, combined, messagesCatalog ? upstreamInput : undefined);
+  // A negative parallel-calls flag does not rule out ordinary function calls.
+  const declaredTools = booleanValue(data.tools, data.supports_tools, data.supports_tool_calls, capabilities.tools, capabilities.tool_calling,
+    provider.kind === 'copilot' ? supports.tool_calls : undefined, provider.kind === 'codex' && data.supports_parallel_tool_calls === true ? true : undefined);
+  const upstreamVision = booleanValue(data.vision, data.supports_vision, capabilities.vision, provider.kind === 'copilot' ? supports.vision : undefined, messagesCatalog ? object(capabilities.image_input).supported : undefined)
+    ?? (modalities.length ? modalities.includes('image') : undefined);
+  const metadataInferred: NonNullable<DiscoveredModel['metadataInferred']> = [];
+  const metadataDefaults: NonNullable<DiscoveredModel['metadataDefaults']> = [];
+  const contextWindow = upstreamContext ?? knownMetadata?.contextWindow ?? 0;
+  const tools = declaredTools ?? knownMetadata?.tools ?? false;
+  const vision = upstreamVision ?? knownMetadata?.vision ?? false;
+  for (const [key, upstream, dictionary] of [['contextWindow', upstreamContext, knownMetadata?.contextWindow], ['tools', declaredTools, knownMetadata?.tools], ['vision', upstreamVision, knownMetadata?.vision]] as const) {
+    if (upstream === undefined) { if (dictionary !== undefined) metadataInferred.push(key); else metadataDefaults.push(key); }
+  }
+  const declaredReasoning = [data.supported_reasoning_levels, data.reasoning_efforts, data.supports_reasoning_effort, supports.reasoning_effort]
+    .find(value => Array.isArray(value) || value === false);
+  // An explicit negative capability is authoritative even for a known model.
+  const declaredLevels = declaredReasoning === false ? [] : Array.isArray(declaredReasoning) ? declaredReasoning : undefined;
+  const reasoningEfforts = declaredLevels !== undefined
+    ? sanitizeReasoningEfforts(declaredLevels.map(level => typeof level === 'string' ? level : object(level).effort))
+    : knownMetadata?.reasoningEfforts;
+  if (declaredLevels === undefined && reasoningEfforts !== undefined) metadataInferred.push('reasoningEfforts');
+  const declaredDefaultLevel = data.default_reasoning_level ?? data.default_reasoning_effort;
+  const preferredLevel = declaredDefaultLevel ?? knownMetadata?.defaultReasoningEffort;
+  const defaultReasoningEffort = isReasoningEffort(preferredLevel) && reasoningEfforts?.includes(preferredLevel) ? preferredLevel : undefined;
+  if (declaredDefaultLevel === undefined && defaultReasoningEffort !== undefined) metadataInferred.push('defaultReasoningEffort');
+  const declaredFormat = data.reasoning_effort_format ?? data.reasoningEffortFormat;
+  // 修改点：目录发布的是能力上限；接近完整上下文时不能直接充当
+  // 初次添加的请求预算，否则客户端仅剩 1 token 输入空间。用户后续
+  // 明确选择的预算、以及已经保存的模型，仍由 addSelected/rediscovery 保留。
+  const preferredOutput = knownMetadata?.defaultOutputTokens;
+  const upstreamOutputBudget = upstreamOutput !== undefined && contextWindow > 1 && upstreamOutput >= contextWindow
+    ? Math.min(upstreamOutput, preferredOutput !== undefined && preferredOutput > 0 && preferredOutput < contextWindow
+      ? preferredOutput : Math.max(1, Math.floor(contextWindow / 4)))
+    : upstreamOutput;
+  const upstreamSpecs = modelSpecs({
+    maxInputTokens: upstreamInput, maxOutputTokens: upstreamOutputBudget,
+    thinking: booleanValue(data.thinking, data.supports_thinking, capabilities.thinking, supports.thinking, supports.reasoning),
+    reasoningEffortFormat: declaredFormat,
+    adaptiveThinking: booleanValue(data.adaptive_thinking, data.adaptiveThinking, capabilities.adaptive_thinking),
+    minThinkingBudget: positiveContext(data.min_thinking_budget, data.minThinkingBudget),
+    maxThinkingBudget: positiveContext(data.max_thinking_budget, data.maxThinkingBudget),
+  });
+  const inferredSpecs = modelSpecs(knownMetadata ? { ...knownMetadata, maxInputTokens: knownMetadata.defaultInputTokens ?? knownMetadata.maxInputTokens, maxOutputTokens: knownMetadata.defaultOutputTokens ?? knownMetadata.maxOutputTokens } : {});
+  const specs = { ...inferredSpecs, ...upstreamSpecs };
+  for (const key of MODEL_SPEC_FIELDS) if (upstreamSpecs[key] === undefined && inferredSpecs[key] !== undefined) metadataInferred.push(key);
+  const metadataSource = upstreamContext !== undefined || declaredTools !== undefined || upstreamVision !== undefined || declaredLevels !== undefined || Object.keys(upstreamSpecs).length ? 'upstream' : 'defaults';
   return { upstreamId, displayName: safeText(data.display_name ?? data.displayName ?? data.name) || upstreamId,
-    wireApi, contextWindow, tools: declaredTools === true, vision, metadataSource, metadataDefaults,
+    wireApi, contextWindow, tools, vision, metadataSource, metadataDefaults, ...specs,
     ...(metadataInferred.length && knownMetadata ? { metadataInferred, metadataReference: { sourceUrl: knownMetadata.sourceUrl, verifiedAt: knownMetadata.verifiedAt } } : {}),
-    ...(reasoningEfforts.length ? { reasoningEfforts, ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}) } : {}) };
+    ...(reasoningEfforts !== undefined ? { reasoningEfforts, ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}) } : {}) };
 }
 function httpFailure(status: number): CatalogFailure {
   if (status === 401) return new CatalogFailure('authentication', '模型目录返回 HTTP 401：上游拒绝了当前凭据。请确认 API Key 属于此供应商和套餐，并重新保存密钥。', status);
@@ -273,8 +296,10 @@ export class ModelCatalog {
         // them to newly inferred or upstream metadata.
         const { metadataInferred: _inferred, metadataReference: _reference, metadataDefaults: _defaults,
           reasoningEfforts: _levels, defaultReasoningEffort: _defaultLevel, ...discovered } = model;
+        // An old saved row without new fields must stay unknown on rediscovery.
+        for (const key of MODEL_SPEC_FIELDS) delete discovered[key];
         return { ...discovered, alias, existingModelId: existing.id, displayName: existing.displayName, wireApi: existing.wireApi,
-          contextWindow: existing.contextWindow, tools: existing.tools, vision: existing.vision,
+          contextWindow: existing.contextWindow, tools: existing.tools, vision: existing.vision, ...modelSpecs(existing),
           ...(existing.reasoningEfforts ? { reasoningEfforts: [...existing.reasoningEfforts] } : {}),
           ...(existing.defaultReasoningEffort ? { defaultReasoningEffort: existing.defaultReasoningEffort } : {}) };
       });
@@ -319,9 +344,10 @@ export class ModelCatalog {
       const vision = selection.vision ?? found.vision;
       if (!Number.isSafeInteger(contextWindow) || contextWindow < 0 || typeof tools !== 'boolean' || typeof vision !== 'boolean') throw new Error('模型能力参数无效。');
       const reasoningEfforts = selection.reasoningEfforts === undefined ? found.reasoningEfforts ?? [] : sanitizeReasoningEfforts(selection.reasoningEfforts);
-      const defaultReasoningEffort = selection.defaultReasoningEffort ?? found.defaultReasoningEffort;
+      const defaultReasoningEffort = selection.defaultReasoningEffort ?? (found.defaultReasoningEffort && reasoningEfforts.includes(found.defaultReasoningEffort) ? found.defaultReasoningEffort : undefined);
       if (defaultReasoningEffort !== undefined && (!isReasoningEffort(defaultReasoningEffort) || !reasoningEfforts.includes(defaultReasoningEffort))) throw new Error('默认思考强度必须属于模型支持的级别。');
-      inputs.push({ providerId, upstreamId: found.upstreamId, alias, displayName, wireApi, contextWindow, tools, vision, enabled: true, ...(reasoningEfforts.length ? { reasoningEfforts, ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}) } : {}) });
+      const specs = modelSpecs({ ...found, ...Object.fromEntries(MODEL_SPEC_FIELDS.filter(key => selection[key] !== undefined).map(key => [key, selection[key]])) }, true);
+      inputs.push({ providerId, upstreamId: found.upstreamId, alias, displayName, wireApi, contextWindow, tools, vision, enabled: true, ...specs, ...(selection.reasoningEfforts !== undefined || found.reasoningEfforts !== undefined ? { reasoningEfforts, ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}) } : {}) });
     }
     const added = inputs.length ? this.store.saveModels(inputs) : [];
     return { added, skipped };

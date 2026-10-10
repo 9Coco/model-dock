@@ -159,7 +159,7 @@ async function createWindow(forceShow = false) {
   window.webContents.setWindowOpenHandler(({ url }) => {
     try {
       const target = new URL(url);
-      const docs = ['api-docs.deepseek.com', 'docs.volcengine.com', 'help.aliyun.com', 'developers.openai.com', 'platform.claude.com', 'ai.google.dev', 'docs.z.ai', 'platform.kimi.ai', 'docs.x.ai', 'x.ai', 'opencode.ai', 'github.com', 'docs.github.com', 'code.visualstudio.com'];
+      const docs = ['api-docs.deepseek.com', 'docs.volcengine.com', 'help.aliyun.com', 'developers.openai.com', 'platform.claude.com', 'ai.google.dev', 'docs.z.ai', 'platform.kimi.ai', 'platform.minimax.io', 'docs.x.ai', 'x.ai', 'opencode.ai', 'github.com', 'docs.github.com', 'code.visualstudio.com'];
       const authPage = target.hostname === 'auth.openai.com' || target.hostname === 'auth.x.ai' || target.hostname.endsWith('.x.ai') || target.hostname === 'grok.com' || target.hostname.endsWith('.grok.com');
       if (target.protocol === 'https:' && (docs.includes(target.hostname) || authPage && (!target.port || target.port === '443')) && !target.username && !target.password) void shell.openExternal(url);
     } catch { /* malformed links are denied */ }

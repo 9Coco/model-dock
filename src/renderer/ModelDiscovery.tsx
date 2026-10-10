@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, ChevronDown, Download, Info, Layers3, RefreshCw, Search, Settings2 } from './MaterialIcon';
 import type { ModelDockApi, Provider, WireApi } from '../shared/types';
-import type { AddModelsResult, DiscoveredModel, DiscoveryResult, ModelSelection } from '../shared/catalog-types';
+import type { AddModelsResult, DiscoveredModel, DiscoveryResult, ModelMetadataField, ModelSelection } from '../shared/catalog-types';
+import { MODEL_SPEC_FIELDS, modelSpecs } from '../shared/types';
 import { modelDisplayLabel, modelLocalAlias } from '../shared/model-names';
 import { BusyIcon, EmptyState, Modal, type Notify } from './components';
 
-type MetadataField = 'contextWindow' | 'tools' | 'vision';
+type MetadataField = ModelMetadataField;
 type CandidateDraft = DiscoveredModel & { selected: boolean; editedFields?: MetadataField[] };
 interface Props {
   api?: ModelDockApi;
@@ -18,12 +19,12 @@ interface Props {
 }
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 const protocolLabel = (wireApi: WireApi) => wireApi === 'messages' ? 'Anthropic Messages' : wireApi === 'responses' ? 'Responses' : 'Chat Completions';
-const candidateDraft = (model: DiscoveredModel, providerId: string): CandidateDraft => ({ ...model, alias: modelLocalAlias({ providerId, alias: model.alias }), tools: !model.existingModelId && model.metadataDefaults?.includes('tools') ? true : model.tools, selected: !model.existingModelId });
-const metadataLabels: Record<MetadataField, string> = { contextWindow: '上下文', tools: '工具调用', vision: '图片输入' };
+const candidateDraft = (model: DiscoveredModel, providerId: string): CandidateDraft => ({ ...model, alias: modelLocalAlias({ providerId, alias: model.alias }), selected: !model.existingModelId });
+const metadataLabels: Record<MetadataField, string> = { contextWindow: '上下文', tools: '工具调用', vision: '图片输入', maxInputTokens: '输入上限', maxOutputTokens: '输出预算', thinking: '思考能力', reasoningEfforts: '思考等级', defaultReasoningEffort: '默认强度', reasoningEffortFormat: '思考格式', adaptiveThinking: '自适应思考', minThinkingBudget: '最低思考预算', maxThinkingBudget: '最高思考预算' };
 const activeMetadataFields = (model: CandidateDraft, fields: readonly MetadataField[] | undefined) => (fields ?? []).filter(field => !model.editedFields?.includes(field));
 const metadataFieldLabels = (fields: readonly MetadataField[]) => fields.map(field => metadataLabels[field]).join('、');
-const metadataOrigin = (model: CandidateDraft, field: MetadataField) => model.existingModelId ? '已保存设置' : model.editedFields?.includes(field) ? '用户设置' : model.metadataInferred?.some(inferred => inferred === field) ? '内置字典' : model.metadataDefaults?.includes(field) ? '本地默认' : '供应商';
-const patchedCandidate = (model: CandidateDraft, patch: Partial<CandidateDraft>): CandidateDraft => ({ ...model, ...patch, editedFields: [...new Set([...(model.editedFields ?? []), ...(['contextWindow', 'tools', 'vision'] as const).filter(field => Object.prototype.hasOwnProperty.call(patch, field))])] });
+const metadataOrigin = (model: CandidateDraft, field: MetadataField) => model.existingModelId ? '已保存设置' : model.editedFields?.includes(field) ? '用户设置' : model[field] === undefined ? '未声明' : model.metadataInferred?.some(inferred => inferred === field) ? '内置字典' : model.metadataDefaults?.includes(field) ? '本地默认' : '供应商';
+const patchedCandidate = (model: CandidateDraft, patch: Partial<CandidateDraft>): CandidateDraft => ({ ...model, ...patch, editedFields: [...new Set([...(model.editedFields ?? []), ...(['contextWindow', 'tools', 'vision', 'reasoningEfforts', 'defaultReasoningEffort', ...MODEL_SPEC_FIELDS] as const).filter(field => Object.prototype.hasOwnProperty.call(patch, field))])] });
 
 export function ModelDiscovery({ api, provider, notify, onClose, onAdded, onManualAdd, initialResult }: Props) {
   const [result, setResult] = useState<DiscoveryResult | null>(initialResult ?? null);
@@ -110,10 +111,10 @@ export function ModelDiscovery({ api, provider, notify, onClose, onAdded, onManu
       if (!/^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$/.test(alias)) { setError(`「${model.upstreamId}」的模型简称需以字母或数字开头，只能包含字母、数字和 . _ : / -。`); return; }
       if (aliases.has(alias)) { setError(`本次选择中的模型简称「${alias}」重复，请修改后再添加。不同供应商可以使用相同简称。`); return; }
       if (!model.displayName.trim()) { setError(`请为「${model.upstreamId}」填写显示名称。`); return; }
-      if (!Number.isSafeInteger(model.contextWindow) || model.contextWindow < 0) { setError(`「${model.upstreamId}」的上下文长度请填写大于或等于 0 的整数。0 表示未设置。`); return; }
+      if ([model.contextWindow, model.maxInputTokens ?? 0, model.maxOutputTokens ?? 0].some(value => !Number.isSafeInteger(value) || value < 0)) { setError(`「${model.upstreamId}」的上下文、输入上限和输出预算请填写非负整数。0 表示未设置或自动。`); return; }
       aliases.add(alias);
     }
-    const selections: ModelSelection[] = selected.map(({ upstreamId, alias, displayName, wireApi, contextWindow, tools, vision, reasoningEfforts, defaultReasoningEffort }) => ({ upstreamId, alias: alias.trim(), displayName: displayName.trim(), wireApi, contextWindow, tools, vision, reasoningEfforts, defaultReasoningEffort }));
+    const selections: ModelSelection[] = selected.map(model => ({ upstreamId: model.upstreamId, alias: model.alias.trim(), displayName: model.displayName.trim(), wireApi: model.wireApi, contextWindow: model.contextWindow, tools: model.tools, vision: model.vision, reasoningEfforts: model.reasoningEfforts, defaultReasoningEffort: model.defaultReasoningEffort, ...modelSpecs(model) }));
     setAdding(true);
     try {
       const next = await api.addDiscoveredModels(provider.id, selections);
@@ -125,7 +126,7 @@ export function ModelDiscovery({ api, provider, notify, onClose, onAdded, onManu
         const saved = imported.get(model.upstreamId);
         return saved ? { ...model, alias: modelLocalAlias(saved), displayName: saved.displayName, existingModelId: saved.id, selected: false } : skipped.has(model.upstreamId) ? { ...model, existingModelId: model.existingModelId ?? 'existing', selected: false } : model;
       }));
-      notify(`已添加 ${next.added.length} 个模型${next.skipped.length ? `，跳过 ${next.skipped.length} 个已存在模型` : ''}。`);
+      notify(`已添加 ${next.added.length} 个模型${next.skipped.length ? `，跳过 ${next.skipped.length} 个已存在模型` : ''}，请重新同步所用工具。`);
       try { await onAdded(); } catch (failure) { notify(`模型已保存，但页面刷新失败：${errorText(failure)}`, 'info'); }
     } catch (failure) {
       if (mounted.current) setError(errorText(failure));
@@ -140,7 +141,7 @@ export function ModelDiscovery({ api, provider, notify, onClose, onAdded, onManu
         {result?.ok && <>
           <div className="discovery-toolbar"><label className="search-box"><Search size={15} /><input aria-label="搜索模型" placeholder="搜索模型 ID 或名称" value={search} disabled={adding} onChange={event => setSearch(event.target.value)} /></label><span>{models.length} 个模型{models.some(model => model.existingModelId) ? ` · ${models.filter(model => model.existingModelId).length} 个已添加` : ''}</span><button className={`button secondary small ${advanced ? 'selected' : ''}`} aria-expanded={advanced} disabled={adding} onClick={() => setAdvanced(value => !value)}><Settings2 size={14} />高级设置<ChevronDown size={13} className={advanced ? 'discovery-chevron-open' : ''} /></button></div>
           {advanced && <div className="discovery-advanced">
-            <div className="discovery-advanced-copy"><strong>批量配置所选模型</strong><small>优先使用供应商返回的参数；缺少上下文或图片能力时，按内置字典补全。可逐个展开「参数设置」或在这里批量修正，手动设置会覆盖补全值。未声明工具能力时默认允许客户端尝试调用。</small></div>
+            <div className="discovery-advanced-copy"><strong>批量配置所选模型</strong><small>优先使用供应商返回的参数；缺少时按内置字典补全。可逐个展开「参数设置」或在这里批量修正，手动设置会覆盖补全值。无法核实的工具和图片能力默认关闭，可自行启用。</small></div>
             <div className="discovery-advanced-grid">
               <label>调用接口<select value={bulkWireApi} disabled={adding} onChange={event => setBulkWireApi(event.target.value as WireApi | '')}><option value="">保留列表设置</option>{(provider.kind === 'openai-compatible' || provider.kind === 'copilot') && <option value="chat-completions">Chat Completions</option>}<option value="responses">Responses</option>{provider.kind === 'openai-compatible' && <option value="messages">Anthropic Messages</option>}</select></label>
               <label>上下文长度<input type="number" min="0" step="1" value={bulkContext} disabled={adding} placeholder="留空保留，0 为未设置" onChange={event => setBulkContext(event.target.value)} /></label>
@@ -159,7 +160,7 @@ export function ModelDiscovery({ api, provider, notify, onClose, onAdded, onManu
                 <label className="discovery-model-select"><input type="checkbox" checked={model.selected} disabled={locked} aria-label={`选择模型 ${model.upstreamId}`} onChange={event => updateModel(model.upstreamId, { selected: event.target.checked })} /><span>
                   <strong title={model.upstreamId}>{model.upstreamId}</strong>
                   <small title={modelDisplayLabel(model, provider)}>展示：{modelDisplayLabel(model, provider)}</small>
-                  <small>{protocolLabel(model.wireApi)} · {model.contextWindow ? `${model.contextWindow.toLocaleString('zh-CN')} 上下文` : '上下文未设置'}{model.tools ? defaultFields.includes('tools') ? ' · 可尝试工具调用' : ' · 工具调用' : ' · 工具调用关闭'}{model.vision ? ' · 图片输入' : ' · 图片输入关闭'}{model.reasoningEfforts?.length ? ' · 思考强度' : ''}</small>
+                  <small>{protocolLabel(model.wireApi)} · {model.contextWindow ? `${model.contextWindow.toLocaleString('zh-CN')} 上下文` : '上下文未设置'}{model.tools ? defaultFields.includes('tools') ? ' · 可尝试工具调用' : ' · 工具调用' : ' · 工具调用关闭'}{model.vision ? ' · 图片输入' : ' · 图片输入关闭'}{model.thinking || model.reasoningEfforts?.length ? ' · 支持思考' : ''}{model.reasoningEfforts?.length ? ' · 可选思考等级' : ''}</small>
                   {model.existingModelId ? <span className="badge positive"><Check size={11} />已添加 · 保留已保存参数</span> : <>
                     {!!inferredFields.length && <small className="discovery-defaults">字典补全：{metadataFieldLabels(inferredFields)}</small>}
                     {!!defaultFields.length && <small className="discovery-defaults">缺少规格，使用本地默认：{metadataFieldLabels(defaultFields)}</small>}
@@ -172,15 +173,18 @@ export function ModelDiscovery({ api, provider, notify, onClose, onAdded, onManu
                   <div className="discovery-advanced-grid">
                     <label>调用接口<select aria-label={`${model.upstreamId} 调用接口`} value={model.wireApi} disabled={locked} onChange={event => updateModel(model.upstreamId, { wireApi: event.target.value as WireApi })}>{(provider.kind === 'openai-compatible' || provider.kind === 'copilot') && <option value="chat-completions">Chat Completions</option>}<option value="responses">Responses</option>{provider.kind === 'openai-compatible' && <option value="messages">Anthropic Messages</option>}</select></label>
                     <label><span>上下文长度 <small>{metadataOrigin(model, 'contextWindow')}</small></span><input aria-label={`${model.upstreamId} 上下文长度`} type="number" min="0" step="1" value={model.contextWindow} disabled={locked} onChange={event => updateModel(model.upstreamId, { contextWindow: event.target.value === '' ? 0 : Number(event.target.value) })} /></label>
+                    <label><span>输入上限 <small>{metadataOrigin(model, 'maxInputTokens')}</small></span><input aria-label={`${model.upstreamId} 输入上限`} type="number" min="0" step="1" value={model.maxInputTokens ?? 0} disabled={locked} onChange={event => updateModel(model.upstreamId, { maxInputTokens: event.target.value === '' ? 0 : Number(event.target.value) })} /></label>
+                    <label><span>输出预算 <small>{metadataOrigin(model, 'maxOutputTokens')}</small></span><input aria-label={`${model.upstreamId} 输出预算`} type="number" min="0" step="1" value={model.maxOutputTokens ?? 0} disabled={locked} onChange={event => updateModel(model.upstreamId, { maxOutputTokens: event.target.value === '' ? 0 : Number(event.target.value) })} /></label>
+                    <label><span>思考能力 <small>{metadataOrigin(model, 'thinking')}</small></span><select aria-label={`${model.upstreamId} 思考能力`} value={model.thinking === undefined ? 'unknown' : model.thinking ? 'yes' : 'no'} disabled={locked} onChange={event => updateModel(model.upstreamId, event.target.value === 'no' ? { thinking: false, reasoningEfforts: [], defaultReasoningEffort: undefined, reasoningEffortFormat: undefined, adaptiveThinking: false, minThinkingBudget: undefined, maxThinkingBudget: undefined } : { thinking: event.target.value === 'yes' ? true : undefined })}><option value="unknown">未核实</option><option value="yes">支持</option><option value="no">不支持</option></select></label>
                     <label><span>工具调用 <small>{metadataOrigin(model, 'tools')}</small></span><select aria-label={`${model.upstreamId} 工具调用`} value={model.tools ? 'yes' : 'no'} disabled={locked} onChange={event => updateModel(model.upstreamId, { tools: event.target.value === 'yes' })}><option value="yes">启用</option><option value="no">关闭</option></select></label>
                     <label><span>图片输入 <small>{metadataOrigin(model, 'vision')}</small></span><select aria-label={`${model.upstreamId} 图片输入`} value={model.vision ? 'yes' : 'no'} disabled={locked} onChange={event => updateModel(model.upstreamId, { vision: event.target.value === 'yes' })}><option value="yes">启用</option><option value="no">关闭</option></select></label>
                   </div>
-                  <p className="discovery-settings-note">{model.existingModelId ? '这些参数已保存，可在供应商模型列表中修改。' : '0 表示上下文未设置；手动修改会覆盖供应商或字典值，添加后保存。'}{!!inferredFields.length && model.metadataReference && <> <a href={model.metadataReference.sourceUrl} target="_blank" rel="noopener noreferrer">字典参考文档</a> · 核对日期 {model.metadataReference.verifiedAt}</>}</p>
+                  <p className="discovery-settings-note">{model.existingModelId ? '这些参数已保存，可在供应商模型列表中修改。' : '0 表示长度未设置或自动；输出预算可以小于官方上限。思考能力不等同于可选等级，手动修改添加后保存。'}{!!inferredFields.length && model.metadataReference && <> <a href={model.metadataReference.sourceUrl} target="_blank" rel="noopener noreferrer">字典参考文档</a> · 核对日期 {model.metadataReference.verifiedAt}</>}</p>
                 </details>
               </div>;
             })}
           </div> : <EmptyState compact icon={<Layers3 size={24} />} title={search.trim() ? '没有匹配的模型' : '供应商返回了空列表'} description={search.trim() ? '修改搜索内容后继续选择。' : '该地址暂未返回模型，请检查供应商地址与账号权限，也可以手动添加。'} />}
-          <div className="discovery-note"><Info size={14} /><span>上下文和图片能力优先采用供应商参数，缺少时按内置字典补全，可展开「参数设置」手动修正。不同供应商可以添加同名模型；目录和工具中按「套餐名 - 模型名」展示。模型可见和字典规格不代表实际调用权限，仍需推理验证。未声明工具能力时允许客户端尝试；上下文未设置时，工具配置使用 32K 上下文 / 4K 输出的保守预算，以上预算并非上游规格。</span></div>
+          <div className="discovery-note"><Info size={14} /><span>参数优先采用供应商声明，缺少时按内置字典补全，可展开「参数设置」手动修正。不同供应商可以添加同名模型；目录和工具中按「套餐名 - 模型名」展示。无法核实的工具和图片能力默认关闭，可自行启用。模型可见和字典规格不代表实际调用权限，仍需推理验证。上下文未设置时，工具配置使用 32K 上下文 / 4K 输出的保守预算，以上预算并非上游规格。</span></div>
         </>}
         {!result && !error && <EmptyState compact icon={<Layers3 size={24} />} title="尚未获取模型" description="点击重新获取，从供应商读取真实模型列表。" />}
         {added && <div className="discovery-success" role="status"><Check size={15} /><span>已添加 {added.added.length} 个模型{added.skipped.length ? `，跳过 ${added.skipped.length} 个已存在模型` : ''}，可在供应商模型列表和工具配置中使用。</span></div>}

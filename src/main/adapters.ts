@@ -11,6 +11,7 @@ import type { CopilotDesktopPlan } from './copilot-desktop';
 import { dshPatchPreview, type DshPlan, type DshProviderProfile } from './dsh-config';
 import { openCodeConfigDirectory } from './opencode-paths';
 import { applyClaudeConfig, buildClaudeConfig } from './claude-config';
+import { anthropicEndpoint } from './anthropic-endpoint';
 import { isJetBrainsTool } from '../shared/jetbrains';
 import { applyJetBrainsConfig, buildJetBrainsConfig, type JetBrainsConfigOptions } from './jetbrains-config';
 
@@ -19,9 +20,15 @@ const PLACEHOLDER = '__MODELDOCK_LOCAL_KEY__';
 const UNKNOWN_CONTEXT_BUDGET = 32768;
 const UNKNOWN_OUTPUT_BUDGET = 4096;
 function clientBudget(model: Model) {
-  return model.contextWindow > 0
-    ? { context: model.contextWindow, output: Math.max(1, Math.min(16384, Math.floor(model.contextWindow / 4))) }
-    : { context: UNKNOWN_CONTEXT_BUDGET, output: UNKNOWN_OUTPUT_BUDGET };
+  const context = model.contextWindow > 0 ? model.contextWindow : UNKNOWN_CONTEXT_BUDGET;
+  const legacyOutput = model.contextWindow > 0 ? Math.max(1, Math.min(16384, Math.floor(context / 4))) : UNKNOWN_OUTPUT_BUDGET;
+  // 修改点：显式输出预算不再被旧 16K 默认值截断；输入和输出仍共享上下文。
+  const requestedOutput = model.maxOutputTokens !== undefined && model.maxOutputTokens > 0 ? model.maxOutputTokens : legacyOutput;
+  return { context, output: Math.max(1, Math.min(requestedOutput, Math.max(1, context - 1))) };
+}
+function clientInputBudget(model: Model): number {
+  const budget = clientBudget(model), available = Math.max(0, budget.context - budget.output);
+  return model.maxInputTokens !== undefined && model.maxInputTokens > 0 ? Math.min(model.maxInputTokens, available) : available;
 }
 function clientBudgetNotice(models: Model[]): string {
   return models.some(model => model.contextWindow === 0)
@@ -151,18 +158,33 @@ const CODEX_REASONING_DESCRIPTIONS: Record<ReasoningEffort, string> = {
   medium: 'Balances speed and reasoning depth', high: 'Greater reasoning depth for complex problems',
   xhigh: 'Extra high reasoning depth for complex problems', max: 'Maximum reasoning depth for the hardest problems',
 };
-function vscode(groups: ClientGroup[]) {
-  // VS Code 把 customendpoint 的 apiKey 当作其秘密存储的 ${input:...} 引用解析，chatLanguageModels.json
-  // 里的明文会被解析为空；requestHeaders 原样透传且允许覆盖 authorization，凭据必须随模型放在这里。
-  return groups.map(group => ({ name: group.name, vendor: 'customendpoint', apiKey: group.key, models: group.models.map(m => ({
+/** Main-process serializer only; exposing schema fields does not expand client/protocol bindings. */
+export function vsCodeModelConfig(m: Model, base: string, key: string) {
+  const budget = clientBudget(m);
+  return {
     id: m.alias, name: m.displayName || m.alias, apiType: m.wireApi,
-    url: group.base + (m.wireApi === 'responses' ? '/responses' : '/chat/completions'),
-    toolCalling: m.tools, vision: m.vision, contextWindow: clientBudget(m).context,
-    maxOutputTokens: clientBudget(m).output,
-    requestHeaders: { authorization: `Bearer ${group.key}` },
+    url: m.wireApi === 'messages' ? anthropicEndpoint(base, '/messages') : base + (m.wireApi === 'responses' ? '/responses' : '/chat/completions'),
+    toolCalling: m.tools, vision: m.vision,
+    // VS Code treats contextWindow as source of truth. With a separately
+    // published input cap, omit it so maxInputTokens + output stays consistent.
+    ...(m.maxInputTokens !== undefined && m.maxInputTokens > 0 ? { maxInputTokens: clientInputBudget(m) } : { contextWindow: budget.context }),
+    maxOutputTokens: budget.output,
+    requestHeaders: { authorization: `Bearer ${key}` },
+    ...(m.thinking !== undefined || m.reasoningEfforts?.length ? { thinking: m.thinking ?? true } : {}),
     // Without supportsReasoningEffort VS Code shows no Thinking Effort picker.
-    ...(m.reasoningEfforts?.length ? { supportsReasoningEffort: [...m.reasoningEfforts], ...(m.defaultReasoningEffort ? { defaultReasoningEffort: m.defaultReasoningEffort } : {}) } : {}),
-  })) }));
+    ...(m.reasoningEfforts?.length ? { supportsReasoningEffort: [...m.reasoningEfforts], ...(m.defaultReasoningEffort ? { defaultReasoningEffort: m.defaultReasoningEffort } : {}), ...(m.reasoningEffortFormat ? { reasoningEffortFormat: m.reasoningEffortFormat } : {}) } : {}),
+    ...(m.wireApi === 'messages' ? {
+      ...(m.adaptiveThinking !== undefined ? { adaptiveThinking: m.adaptiveThinking } : {}),
+      ...(m.adaptiveThinking !== true && m.minThinkingBudget !== undefined && m.minThinkingBudget > 0 && m.minThinkingBudget < budget.output && m.maxThinkingBudget !== undefined && m.maxThinkingBudget > 0
+        ? { minThinkingBudget: m.minThinkingBudget, maxThinkingBudget: Math.min(m.maxThinkingBudget, budget.output - 1) } : {}),
+    } : {}),
+  };
+}
+function vscode(groups: ClientGroup[]) {
+  // VS Code customendpoint apiKey references its secret storage. requestHeaders
+  // preserve the existing explicit synchronization credential contract.
+  return groups.map(group => ({ name: group.name, vendor: 'customendpoint', apiKey: group.key,
+    models: group.models.map(model => vsCodeModelConfig(model, group.base, group.key)) }));
 }
 function nativeCopilotId(namespace: string, kind: 'provider' | 'model', id: string): string {
   const value = createHash('sha1').update(`ModelDock/Copilot/v1/${namespace}/${kind}/${id}`).digest().subarray(0, 16);
@@ -191,7 +213,7 @@ export function buildCopilotDesktopPlan(store: AdapterStore, port: number, revea
         displayName: model.displayName || model.alias,
         wireApi: model.wireApi === 'responses' ? 'responses' as const : 'chat' as const,
         // Copilot stores an input budget, separately from the output budget.
-        contextWindow: model.contextWindow > 0 ? budget.context - budget.output : 0,
+        contextWindow: model.contextWindow > 0 ? clientInputBudget(model) : 0,
         maxOutputTokens: budget.output,
         ...(model.reasoningEfforts?.length ? { supportedReasoningEfforts: [...model.reasoningEfforts] } : {}),
       };
