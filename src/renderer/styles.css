@@ -1095,3 +1095,12 @@ td { padding: 12px; color: #5b7152; }
 .single-entry-workspace .tool-inline-summary > .tool-aggregate-option,
 .single-entry-workspace .tool-inline-summary > .single-entry-direct-source { flex: 0 0 auto; margin: 0; }
 .single-entry-workspace .tool-inline-summary > .single-entry-target { margin: 0; }
+
+/* 修改点：官方规格与用户输出预算分开展示，保持小窗口内可换行。 */
+.model-official-parameters { padding: 11px 13px; margin: 0 0 16px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-soft); color: var(--ink); font-size: 12px; overflow-wrap: anywhere; }
+.model-official-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.model-official-heading .button { font-size: 11px; padding: 7px 10px; }
+.model-official-parameters small { display: block; color: var(--muted); line-height: 1.7; margin-top: 7px; }
+.model-official-parameters a { color: var(--accent); }
+.model-parameter-note { color: var(--muted); font-size: 11px; line-height: 1.7; margin: -3px 0 16px; }
+.capability-field { flex-wrap: wrap; row-gap: 9px; }

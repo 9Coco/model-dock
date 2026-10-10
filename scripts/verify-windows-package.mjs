@@ -3,7 +3,8 @@ import { createHash } from 'node:crypto';
 import { lstatSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { extractFile, listPackage, statFile } from '@electron/asar';
+import { extractFile, getRawHeader, listPackage, statFile } from '@electron/asar';
+import { NtExecutable, NtExecutableResource } from 'resedit';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const digest = value => createHash('sha256').update(value).digest('hex');
@@ -96,10 +97,19 @@ function verifyPackage(directory) {
 
   const executable = join(directory, 'ModelDock.exe');
   assertOrdinaryFile(executable);
+  // 修改点：资源刷新后同时校验 Windows PE 内嵌 ASAR header SHA，避免保留旧记录。
+  const exeResources = NtExecutableResource.from(NtExecutable.from(readOrdinaryFile(executable)));
+  const integrity = exeResources.entries.find(entry => entry.type === 'INTEGRITY' && entry.id === 'ELECTRONASAR');
+  assert(integrity, 'Windows executable is missing the embedded ASAR integrity resource.');
+  const integrityEntries = JSON.parse(Buffer.from(integrity.bin).toString('utf8'));
+  const expectedHeaderHash = digest(getRawHeader(archive).headerString);
+  const matchingEntries = integrityEntries.filter(entry => String(entry.file).split(String.fromCharCode(92)).join('/') === 'resources/app.asar');
+  assert(matchingEntries.length === 1 && matchingEntries[0].alg === 'SHA256' && matchingEntries[0].value === expectedHeaderHash,
+    'Embedded ASAR integrity does not match the packaged app.asar header.');
   execFileSync(process.execPath, [join(root, 'scripts/verify-exe-icon.mjs'), executable],
     { cwd: root, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   console.log(JSON.stringify({ windowsPackageVerified: true, version: manifest.version,
-    directory, productionEntryVerified: true, resourcesVerified: true, iconVerified: true }));
+    directory, productionEntryVerified: true, resourcesVerified: true, iconVerified: true, embeddedAsarIntegrityVerified: true }));
 }
 
 try {

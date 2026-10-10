@@ -30,6 +30,99 @@ const servers: Server[] = [];
 afterEach(async () => { vi.useRealTimers(); await Promise.all(servers.splice(0).map(server => new Promise<void>(resolve => { server.closeAllConnections(); server.close(() => resolve()); }))); });
 
 describe('real model catalog discovery and batch selection', () => {
+  it('discovers complete provider-specific Kimi defaults and saves the selected output budget rather than the native maximum', async () => {
+    const f = fixture(vi.fn(async () => json({ data: [{ id: 'kimi-k3' }] })) as typeof fetch);
+    f.store.provider.presetId = 'volcengine-agent'; f.store.provider.baseUrl = 'https://ark.cn-beijing.volces.com/api/plan/v3';
+    const result = await f.catalog.discover('api');
+    expect(result.models[0]).toMatchObject({ contextWindow: 1024000, maxOutputTokens: 131072, thinking: true, reasoningEfforts: [] });
+    expect(result.models[0].metadataInferred).toEqual(expect.arrayContaining(['contextWindow', 'maxOutputTokens', 'thinking', 'reasoningEfforts']));
+    const selected = f.catalog.addSelected('api', [{ upstreamId: 'kimi-k3' }]).added[0];
+    expect(selected).toMatchObject({ contextWindow: 1024000, maxOutputTokens: 131072, thinking: true, reasoningEfforts: [] });
+    expect(selected).not.toHaveProperty('defaultReasoningEffort');
+  });
+  it('honors explicit upstream false capabilities and an empty reasoning list while filling only missing input/output fields', async () => {
+    const f = fixture(vi.fn(async () => json({ data: [{ id: 'gpt-6.1-sol', context_window: 900000, max_input_tokens: 800000,
+      max_output_tokens: 50000, tools: false, vision: false, thinking: false, supported_reasoning_levels: [] }] })) as typeof fetch);
+    f.store.provider.baseUrl = 'https://api.openai.com/v1';
+    const candidate = (await f.catalog.discover('api')).models[0];
+    expect(candidate).toMatchObject({ contextWindow: 900000, maxInputTokens: 800000, maxOutputTokens: 50000,
+      tools: false, vision: false, thinking: false, reasoningEfforts: [] });
+    expect(candidate).not.toHaveProperty('defaultReasoningEffort');
+    for (const key of ['contextWindow', 'maxInputTokens', 'maxOutputTokens', 'tools', 'vision', 'thinking', 'reasoningEfforts']) expect(candidate.metadataInferred ?? []).not.toContain(key);
+    expect(f.catalog.addSelected('api', [{ upstreamId: 'gpt-6.1-sol' }]).added[0]).toMatchObject({ maxInputTokens: 800000, maxOutputTokens: 50000, thinking: false, reasoningEfforts: [] });
+  });
+  it('parses independent directory limits and rejects default max_tokens as a published output limit', async () => {
+    const f = fixture(vi.fn(async () => json({ data: [
+      { id: 'independent-limits', max_input_tokens: 200000, max_output_tokens: 32000 },
+      { id: 'default-budget', max_tokens: 8192, max_input_tokens: '200000', max_output_tokens: -1 },
+      { id: 'nested-limits', capabilities: { limits: { max_prompt_tokens: 64000, max_completion_tokens: 12000 }, supports: { reasoning: false } } },
+    ] })) as typeof fetch);
+    const candidates = (await f.catalog.discover('api')).models;
+    expect(candidates[0]).toMatchObject({ contextWindow: 232000, maxInputTokens: 200000, maxOutputTokens: 32000 });
+    expect(candidates[1]).toMatchObject({ contextWindow: 0 });
+    for (const key of ['maxInputTokens', 'maxOutputTokens', 'thinking', 'reasoningEfforts']) expect(candidates[1]).not.toHaveProperty(key);
+    expect(candidates[2]).toMatchObject({ contextWindow: 76000, maxInputTokens: 64000, maxOutputTokens: 12000, thinking: false });
+    expect(f.catalog.addSelected('api', [{ upstreamId: 'independent-limits', maxOutputTokens: 24000, thinking: false }]).added[0])
+      .toMatchObject({ contextWindow: 232000, maxInputTokens: 200000, maxOutputTokens: 24000, thinking: false });
+    expect(() => f.catalog.addSelected('api', [{ upstreamId: 'nested-limits', maxOutputTokens: -1 }])).toThrow('模型规格参数');
+  });
+  it('keeps an explicit negative reasoning-effort capability authoritative over official defaults', async () => {
+    const f = fixture(vi.fn(async () => json({ data: [{ id: 'gpt-6.1-sol', capabilities: { supports: { reasoning_effort: false } } }] })) as typeof fetch);
+    f.store.provider.baseUrl = 'https://api.openai.com/v1';
+    const candidate = (await f.catalog.discover('api')).models[0];
+    expect(candidate.reasoningEfforts).toEqual([]); expect(candidate).not.toHaveProperty('defaultReasoningEffort');
+    expect(candidate.metadataInferred ?? []).not.toContain('reasoningEfforts');
+    expect(f.catalog.addSelected('api', [{ upstreamId: 'gpt-6.1-sol' }]).added[0].reasoningEfforts).toEqual([]);
+  });
+  it('uses a safe initial output budget for a published full-context limit while preserving upstream attribution and explicit choices', async () => {
+    const fetcher = vi.fn(async () => json({ data: [{ id: 'MiniMax-M2.5', context_window: 204800, max_output_tokens: 204800 }] }));
+    const f = fixture(fetcher as typeof fetch);
+    f.store.provider.presetId = 'anthropic'; f.store.provider.baseUrl = 'https://api.minimax.io/anthropic';
+    const candidate = (await f.catalog.discover('api')).models[0];
+    expect(candidate).toMatchObject({ contextWindow: 204800, maxOutputTokens: 65536, metadataSource: 'upstream' });
+    expect(candidate.metadataInferred ?? []).not.toContain('maxOutputTokens');
+    const saved = f.catalog.addSelected('api', [{ upstreamId: 'MiniMax-M2.5', maxOutputTokens: 190000 }]).added[0];
+    expect(saved.maxOutputTokens).toBe(190000);
+    expect((await f.catalog.discover('api')).models[0]).toMatchObject({ existingModelId: saved.id, maxOutputTokens: 190000 });
+    expect(f.store.models[0].maxOutputTokens).toBe(190000);
+  });
+  it('uses one quarter of the actual context when a published output cap has no usable preferred budget', async () => {
+    const f = fixture(vi.fn(async () => json({ data: [
+      { id: 'unknown-large-output', context_window: 200000, max_output_tokens: 400000 },
+      { id: 'MiniMax-M2.5', context_window: 32000, max_output_tokens: 32000 },
+      { id: 'unknown-smaller-output', context_window: 200000, max_output_tokens: 100000 },
+    ] })) as typeof fetch);
+    f.store.provider.presetId = 'anthropic'; f.store.provider.baseUrl = 'https://api.minimax.io/anthropic';
+    const candidates = (await f.catalog.discover('api')).models;
+    expect(candidates[0]).toMatchObject({ contextWindow: 200000, maxOutputTokens: 50000, metadataSource: 'upstream' });
+    expect(candidates[1]).toMatchObject({ contextWindow: 32000, maxOutputTokens: 8000, metadataSource: 'upstream' });
+    expect(candidates[2]).toMatchObject({ contextWindow: 200000, maxOutputTokens: 100000, metadataSource: 'upstream' });
+    expect(candidates[0]).not.toHaveProperty('metadataInferred');
+    const added = f.catalog.addSelected('api', [{ upstreamId: 'unknown-large-output' }, { upstreamId: 'MiniMax-M2.5' }]).added;
+    expect(added.map(model => model.maxOutputTokens)).toEqual([50000, 8000]);
+  });
+  it('keeps native subscription limits authoritative and never fills from public API defaults', async () => {
+    const f = fixture(vi.fn(async () => json({ models: [{ slug: 'gpt-6.1-sol', context_window: 272000,
+      capabilities: { limits: { max_prompt_tokens: 265000, max_output_tokens: 7000 }, supports: { thinking: false } },
+      supported_reasoning_levels: [] }] })) as typeof fetch);
+    f.store.provider = { ...provider, kind: 'codex', presetId: 'codex-subscription', baseUrl: 'https://chatgpt.com/backend-api/codex' };
+    const candidate = (await f.catalog.discover('api')).models[0];
+    expect(candidate).toMatchObject({ contextWindow: 272000, maxInputTokens: 265000, maxOutputTokens: 7000, thinking: false, reasoningEfforts: [] });
+    expect(candidate).not.toHaveProperty('metadataInferred'); expect(candidate).not.toHaveProperty('metadataReference');
+  });
+  it('keeps every saved specification and absent old field unchanged during rediscovery', async () => {
+    const f = fixture(vi.fn(async () => json({ data: [{ id: 'saved-model', max_input_tokens: 100000, max_output_tokens: 50000, thinking: true, supported_reasoning_levels: ['high'] }, { id: 'gpt-6.1-sol' }] })) as typeof fetch);
+    const saved: Model = { id: 'saved', providerId: 'api', upstreamId: 'saved-model', alias: 'saved-model', displayName: 'Saved',
+      wireApi: 'responses', contextWindow: 1234, tools: false, vision: false, enabled: true, maxInputTokens: 777, maxOutputTokens: 33,
+      thinking: false, reasoningEffortFormat: 'responses', adaptiveThinking: false, minThinkingBudget: 0, maxThinkingBudget: 0, reasoningEfforts: [] };
+    const old: Model = { id: 'old', providerId: 'api', upstreamId: 'gpt-6.1-sol', alias: 'old', displayName: 'Old', wireApi: 'responses', contextWindow: 128000, tools: true, vision: false, enabled: true };
+    f.store.models = [saved, old];
+    const candidates = (await f.catalog.discover('api')).models;
+    expect(candidates[0]).toMatchObject({ maxInputTokens: 777, maxOutputTokens: 33, thinking: false, reasoningEffortFormat: 'responses', adaptiveThinking: false, minThinkingBudget: 0, maxThinkingBudget: 0, reasoningEfforts: [] });
+    for (const key of ['maxInputTokens', 'maxOutputTokens', 'thinking', 'reasoningEffortFormat', 'adaptiveThinking', 'minThinkingBudget', 'maxThinkingBudget']) expect(candidates[1]).not.toHaveProperty(key);
+    expect(f.catalog.addSelected('api', [{ upstreamId: 'saved-model' }, { upstreamId: 'gpt-6.1-sol' }])).toEqual({ added: [], skipped: ['saved-model', 'gpt-6.1-sol'] });
+    expect(f.store.models).toEqual([saved, old]);
+  });
   it('discovers Anthropic native models with version/auth headers, preserving /anthropic and native after_id pagination', async () => {
     const seen: unknown[] = [];
     const server = createServer((req, res) => {
@@ -148,15 +241,15 @@ describe('real model catalog discovery and batch selection', () => {
     expect(result.models[4]).toMatchObject({ vision: false, metadataDefaults: ['contextWindow', 'tools'] });
     expect(result.models[5]).toMatchObject({ vision: false, metadataDefaults: ['contextWindow', 'tools', 'vision'] });
   });
-  it('fills only absent metadata from a known model while keeping tool and protocol defaults', async () => {
+  it('fills missing supported capabilities from official metadata without changing the provider protocol', async () => {
     const known = lookupModelMetadata('gpt-4o')!;
     expect(known).toMatchObject({ vision: true });
     const f = fixture(vi.fn(async () => json({ data: [{ id: 'gpt-4o' }] })) as typeof fetch);
     const result = await f.catalog.discover('api');
-    expect(result.models[0]).toMatchObject({ contextWindow: known.contextWindow, vision: true, tools: false, wireApi: 'chat-completions',
-      metadataSource: 'defaults', metadataDefaults: ['tools'], metadataInferred: ['contextWindow', 'vision'],
+    expect(result.models[0]).toMatchObject({ contextWindow: known.contextWindow, vision: true, tools: known.tools, wireApi: 'chat-completions',
+      metadataSource: 'defaults', metadataDefaults: [], metadataInferred: expect.arrayContaining(['contextWindow', 'vision', 'tools']),
       metadataReference: { sourceUrl: known.sourceUrl, verifiedAt: known.verifiedAt } });
-    expect(f.catalog.addSelected('api', [{ upstreamId: 'gpt-4o' }]).added[0]).toMatchObject({ contextWindow: known.contextWindow, vision: true, tools: false, wireApi: 'chat-completions' });
+    expect(f.catalog.addSelected('api', [{ upstreamId: 'gpt-4o' }]).added[0]).toMatchObject({ contextWindow: known.contextWindow, vision: true, tools: known.tools, wireApi: 'chat-completions' });
   });
   it.each([
     [{ context_window: 32000 }, { contextWindow: 32000, vision: true }, ['vision']],
@@ -167,11 +260,11 @@ describe('real model catalog discovery and batch selection', () => {
     const known = lookupModelMetadata('gpt-4o')!;
     const f = fixture(vi.fn(async () => json({ data: [{ id: 'gpt-4o', ...upstream }] })) as typeof fetch);
     const model = (await f.catalog.discover('api')).models[0];
-    expect(model).toMatchObject({ contextWindow: known.contextWindow, metadataSource: 'upstream', metadataDefaults: ['tools'], metadataInferred: inferred, ...expected });
+    expect(model).toMatchObject({ contextWindow: known.contextWindow, metadataSource: 'upstream', metadataDefaults: [], metadataInferred: expect.arrayContaining(inferred), ...expected });
     expect(model.metadataReference).toEqual({ sourceUrl: known.sourceUrl, verifiedAt: known.verifiedAt });
   });
   it('keeps fully declared upstream metadata authoritative and omits dictionary attribution', async () => {
-    const f = fixture(vi.fn(async () => json({ data: [{ id: 'gpt-4o', context_window: 16000, tools: false, vision: false }] })) as typeof fetch);
+    const f = fixture(vi.fn(async () => json({ data: [{ id: 'gpt-4o', context_window: 16000, tools: false, vision: false, max_input_tokens: 12000, max_output_tokens: 4000, thinking: false, supported_reasoning_levels: [] }] })) as typeof fetch);
     const model = (await f.catalog.discover('api')).models[0];
     expect(model).toMatchObject({ contextWindow: 16000, tools: false, vision: false, metadataSource: 'upstream', metadataDefaults: [] });
     expect(model).not.toHaveProperty('metadataInferred');
@@ -184,8 +277,9 @@ describe('real model catalog discovery and batch selection', () => {
       { id: 'capability-model', context_window: -1, capabilities: { limits: { max_context_window_tokens: 128000 }, input_modalities: ['text'] } },
     ] })) as typeof fetch);
     const result = await f.catalog.discover('api');
-    expect(result.models[0]).toMatchObject({ contextWindow: 64000, vision: false, metadataSource: 'upstream', metadataDefaults: ['tools'] });
-    expect(result.models[0]).not.toHaveProperty('metadataInferred');
+    expect(result.models[0]).toMatchObject({ contextWindow: 64000, vision: false, metadataSource: 'upstream', metadataDefaults: [] });
+    expect(result.models[0].metadataInferred).not.toContain('contextWindow');
+    expect(result.models[0].metadataInferred).not.toContain('vision');
     expect(result.models[1]).toMatchObject({ contextWindow: 200000, vision: true, metadataSource: 'upstream', metadataDefaults: ['tools'] });
     expect(result.models[2]).toMatchObject({ contextWindow: 128000, vision: false, metadataSource: 'upstream', metadataDefaults: ['tools'] });
   });
@@ -193,7 +287,7 @@ describe('real model catalog discovery and batch selection', () => {
     const known = lookupModelMetadata('gpt-4o')!;
     const f = fixture(vi.fn(async () => json({ data: [{ id: 'gpt-4o', context_window: contextWindow, vision: 'yes', input_modalities: [false, null, {}, 'invalid'] }] })) as typeof fetch);
     expect((await f.catalog.discover('api')).models[0]).toMatchObject({ contextWindow: known.contextWindow, vision: true,
-      metadataSource: 'defaults', metadataDefaults: ['tools'], metadataInferred: ['contextWindow', 'vision'] });
+      metadataSource: 'defaults', metadataDefaults: [], metadataInferred: expect.arrayContaining(['contextWindow', 'vision']) });
   });
   it('keeps unknown and near-collision IDs unset instead of inferring from their display names', async () => {
     const f = fixture(vi.fn(async () => json({ data: [{ id: 'gpt-4o-not-a-release' }, { id: 'custom-model', display_name: 'gpt-4o' }] })) as typeof fetch);

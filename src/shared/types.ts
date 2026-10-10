@@ -77,7 +77,43 @@ export interface ProviderInput {
   /** Explicitly choose an already authorized GitHub account, or leave empty to log in later. */
   copilotAccountId?: string;
 }
-export interface Model {
+/** 修改点：独立输入限制与客户端输出预算；未声明的能力保持未知，不由旧模型迁移推测。 */
+export interface ModelSpecs {
+  maxInputTokens?: number;
+  /** Preferred client output budget, not an additional context allowance. 0/undefined means unknown. */
+  maxOutputTokens?: number;
+  thinking?: boolean;
+  reasoningEffortFormat?: WireApi;
+  adaptiveThinking?: boolean;
+  minThinkingBudget?: number;
+  maxThinkingBudget?: number;
+}
+export const MODEL_SPEC_FIELDS = ['maxInputTokens', 'maxOutputTokens', 'thinking', 'reasoningEffortFormat', 'adaptiveThinking', 'minThinkingBudget', 'maxThinkingBudget'] as const;
+/** Pick only persisted specification keys. Strict writes reject malformed values; tolerant DB reads omit them. */
+export function modelSpecs(value: unknown, strict = false): ModelSpecs {
+  const result: ModelSpecs = {};
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    if (strict) throw new Error('模型规格参数无效。');
+    return result;
+  }
+  const record = value as Record<string, unknown>;
+  for (const key of MODEL_SPEC_FIELDS) {
+    if (!Object.hasOwn(record, key)) continue;
+    const field = record[key];
+    if (field === undefined) continue;
+    const valid = key === 'thinking' || key === 'adaptiveThinking' ? typeof field === 'boolean'
+      : key === 'reasoningEffortFormat' ? typeof field === 'string' && ['chat-completions', 'responses', 'messages'].includes(field)
+        : typeof field === 'number' && Number.isSafeInteger(field) && field >= 0;
+    if (!valid) { if (strict) throw new Error('模型规格参数无效。'); continue; }
+    Object.assign(result, { [key]: field });
+  }
+  if (result.minThinkingBudget !== undefined && result.maxThinkingBudget !== undefined && result.minThinkingBudget > result.maxThinkingBudget) {
+    if (strict) throw new Error('思考预算下限不能超过上限。');
+    delete result.minThinkingBudget; delete result.maxThinkingBudget;
+  }
+  return result;
+}
+export interface Model extends ModelSpecs {
   id: string;
   providerId: string;
   upstreamId: string;

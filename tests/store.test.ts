@@ -122,6 +122,69 @@ describe('model reasoning effort persistence', () => {
   });
 });
 
+describe('separate model specifications persistence and migration', () => {
+  it('round-trips high input/output limits and explicit false capabilities without adding unknown fields', async () => {
+    const { store, dir, codec } = await setup();
+    const source = store.listProviders()[0];
+    const saved = store.saveModel({ ...model(source.id, 'high-budget'), contextWindow: 1050000,
+      maxInputTokens: 922000, maxOutputTokens: 128000, thinking: true, reasoningEffortFormat: 'responses',
+      adaptiveThinking: false, minThinkingBudget: 1024, maxThinkingBudget: 32768 });
+    const plain = store.saveModel({ ...model(source.id, 'no-new-specs'), maxInputTokens: undefined });
+    expect(plain).not.toHaveProperty('maxInputTokens');
+    store.close();
+    const reopened = await Store.create(dir, codec); stores.push(reopened);
+    expect(reopened.listModels()).toEqual([saved, plain]);
+    const SQL = await initSqlJs({ locateFile: file => join(process.cwd(), 'node_modules/sql.js/dist', file) });
+    const raw = new SQL.Database(readFileSync(join(dir, 'modeldock.sqlite')));
+    try {
+      expect(JSON.parse(String(raw.exec('SELECT specs_json FROM models WHERE id=?', [saved.id])[0].values[0][0]))).toEqual({
+        maxInputTokens: 922000, maxOutputTokens: 128000, thinking: true, reasoningEffortFormat: 'responses',
+        adaptiveThinking: false, minThinkingBudget: 1024, maxThinkingBudget: 32768,
+      });
+      expect(raw.exec('SELECT specs_json FROM models WHERE id=?', [plain.id])[0].values[0][0]).toBe('{}');
+    } finally { raw.close(); }
+  });
+  it('migrates only the new specification container and preserves old model values and object shape', async () => {
+    const { store, dir, codec } = await setup();
+    const saved = store.saveModel({ ...model(store.listProviders()[0].id, 'old-model'), contextWindow: 128000, tools: false,
+      reasoningEfforts: [], enabled: false }); store.close();
+    const filename = join(dir, 'modeldock.sqlite');
+    const SQL = await initSqlJs({ locateFile: file => join(process.cwd(), 'node_modules/sql.js/dist', file) });
+    const old = new SQL.Database(readFileSync(filename)); old.run('ALTER TABLE models DROP COLUMN specs_json');
+    writeFileSync(filename, old.export()); old.close();
+    const clientDir = join(dir, 'client'); mkdirSync(clientDir); const client = join(clientDir, 'settings.json'); writeFileSync(client, '{"keep":"old-client"}');
+    const reopened = await Store.create(dir, codec); stores.push(reopened);
+    expect(reopened.listModels()).toEqual([saved]);
+    expect(readFileSync(client, 'utf8')).toBe('{"keep":"old-client"}');
+    reopened.close(); const raw = new SQL.Database(readFileSync(filename));
+    try {
+      const columns = raw.exec('PRAGMA table_info(models)')[0].values;
+      expect(columns.filter(row => row[1] === 'specs_json')).toHaveLength(1);
+      expect(raw.exec('SELECT specs_json FROM models')[0].values).toEqual([['{}']]);
+    } finally { raw.close(); }
+  });
+  it.each([
+    { maxOutputTokens: -1 }, { maxInputTokens: 1.5 }, { maxOutputTokens: Number.MAX_SAFE_INTEGER + 1 },
+    { thinking: 'true' }, { adaptiveThinking: 1 }, { reasoningEffortFormat: 'unknown' },
+    { minThinkingBudget: 2048, maxThinkingBudget: 1024 },
+  ])('rejects malformed specifications and rolls back the complete batch (%j)', async invalid => {
+    const { store } = await setup(); const source = store.listProviders()[0];
+    expect(() => store.saveModels([model(source.id, 'valid-first'), { ...model(source.id, 'invalid-second'), ...invalid } as ModelInput])).toThrow();
+    expect(store.listModels()).toEqual([]);
+  });
+  it('retains explicit zero/false and ignores invalid or unrelated keys when reading stored JSON', async () => {
+    const { store, dir, codec } = await setup(); const source = store.listProviders()[0];
+    const saved = store.saveModel({ ...model(source.id, 'zero-false'), maxOutputTokens: 0, maxInputTokens: 0, thinking: false, adaptiveThinking: false });
+    store.close(); const filename = join(dir, 'modeldock.sqlite');
+    const SQL = await initSqlJs({ locateFile: file => join(process.cwd(), 'node_modules/sql.js/dist', file) });
+    const raw = new SQL.Database(readFileSync(filename));
+    raw.run('UPDATE models SET specs_json=? WHERE id=?', [JSON.stringify({ maxOutputTokens: 0, maxInputTokens: 0, thinking: false,
+      adaptiveThinking: false, unrelated: 'ignored', alias: 'forged', minThinkingBudget: -1, reasoningEffortFormat: 1 }), saved.id]);
+    writeFileSync(filename, raw.export()); raw.close();
+    const reopened = await Store.create(dir, codec); stores.push(reopened); expect(reopened.listModels()).toEqual([saved]);
+  });
+});
+
 describe('real SQLite storage', () => {
   it('encrypts private managed backups through the existing codec without copying unrelated SQLite contents', async () => {
     const { store, dir, codec } = await setup();

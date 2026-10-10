@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import type { Provider, ProviderInput, ProviderSecret, Model, ModelInput, ToolBinding, ToolId, RequestLog } from '../shared/types';
-import { isReasoningEffort, sanitizeReasoningEfforts } from '../shared/types';
+import { isReasoningEffort, MODEL_SPEC_FIELDS, modelSpecs, sanitizeReasoningEfforts } from '../shared/types';
 import { providerPresets, presetById } from '../shared/presets';
 import { resolveBindingModels } from '../shared/bindings';
 import { directModelsForProvider, isSingleEntryTool, updateSingleEntryBinding } from '../shared/single-entry';
@@ -75,7 +75,7 @@ export class Store {
     db.run(`PRAGMA foreign_keys=ON;
       CREATE TABLE IF NOT EXISTS providers(id TEXT PRIMARY KEY,name TEXT NOT NULL,kind TEXT NOT NULL,base_url TEXT NOT NULL,enabled INTEGER NOT NULL,auth_status TEXT NOT NULL,note TEXT NOT NULL,preset_id TEXT NOT NULL DEFAULT 'custom',messages_auth TEXT NOT NULL DEFAULT 'bearer',claude_base_url TEXT NOT NULL DEFAULT '');
       CREATE TABLE IF NOT EXISTS secrets(provider_id TEXT PRIMARY KEY REFERENCES providers(id) ON DELETE CASCADE,ciphertext TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS models(id TEXT PRIMARY KEY,provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,upstream_id TEXT NOT NULL,alias TEXT NOT NULL UNIQUE,display_name TEXT NOT NULL,wire_api TEXT NOT NULL,context_window INTEGER NOT NULL,tools INTEGER NOT NULL,vision INTEGER NOT NULL,enabled INTEGER NOT NULL,reasoning_efforts TEXT NOT NULL DEFAULT '[]',default_reasoning_effort TEXT);
+      CREATE TABLE IF NOT EXISTS models(id TEXT PRIMARY KEY,provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,upstream_id TEXT NOT NULL,alias TEXT NOT NULL UNIQUE,display_name TEXT NOT NULL,wire_api TEXT NOT NULL,context_window INTEGER NOT NULL,tools INTEGER NOT NULL,vision INTEGER NOT NULL,enabled INTEGER NOT NULL,reasoning_efforts TEXT NOT NULL DEFAULT '[]',default_reasoning_effort TEXT,specs_json TEXT NOT NULL DEFAULT '{}');
       CREATE TABLE IF NOT EXISTS bindings(id TEXT PRIMARY KEY,name TEXT NOT NULL,enabled INTEGER NOT NULL,model_ids TEXT NOT NULL,default_model_id TEXT NOT NULL,note TEXT NOT NULL,mode TEXT NOT NULL DEFAULT 'aggregate',provider_ids TEXT,model_selection TEXT,vscode_sync_scope TEXT NOT NULL DEFAULT 'managed',copilot_sync_scope TEXT NOT NULL DEFAULT 'managed',dsh_sync_scope TEXT NOT NULL DEFAULT 'managed',claude_disable_telemetry INTEGER NOT NULL DEFAULT 1,connection_choices TEXT);
       CREATE TABLE IF NOT EXISTS logs(id TEXT PRIMARY KEY,time TEXT NOT NULL,alias TEXT NOT NULL,provider_name TEXT NOT NULL,endpoint TEXT NOT NULL,status INTEGER NOT NULL,duration_ms INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);`);
@@ -110,6 +110,8 @@ export class Store {
       // Model metadata only; client configs receive thinking levels on explicit sync.
       if (!modelColumns.includes('reasoning_efforts')) this.db.run("ALTER TABLE models ADD COLUMN reasoning_efforts TEXT NOT NULL DEFAULT '[]'");
       if (!modelColumns.includes('default_reasoning_effort')) this.db.run('ALTER TABLE models ADD COLUMN default_reasoning_effort TEXT');
+      // 修改点：仅新增内部规格容器，不改旧上下文/能力，也不触发客户端配置同步。
+      if (!modelColumns.includes('specs_json')) this.db.run("ALTER TABLE models ADD COLUMN specs_json TEXT NOT NULL DEFAULT '{}'");
       if (!providerColumns.includes('preset_id')) {
         this.db.run("ALTER TABLE providers ADD COLUMN preset_id TEXT NOT NULL DEFAULT 'custom'");
         for (const row of this.rows('SELECT id,kind,base_url FROM providers')) {
@@ -518,7 +520,9 @@ export class Store {
   private model(row: Record<string, unknown>): Model {
     const reasoningEfforts = sanitizeReasoningEfforts(JSON.parse(String(row.reasoning_efforts ?? '[]')));
     const defaultLevel = row.default_reasoning_effort;
-    return { id: String(row.id), providerId: String(row.provider_id), upstreamId: String(row.upstream_id), alias: String(row.alias), displayName: String(row.display_name), wireApi: row.wire_api as Model['wireApi'], contextWindow: Number(row.context_window), tools: Boolean(row.tools), vision: Boolean(row.vision), enabled: Boolean(row.enabled), reasoningEfforts, ...(isReasoningEffort(defaultLevel) && reasoningEfforts.includes(defaultLevel) ? { defaultReasoningEffort: defaultLevel } : {}) };
+    let specs = {};
+    try { specs = modelSpecs(JSON.parse(String(row.specs_json ?? '{}'))); } catch { /* Malformed optional metadata cannot replace the model's existing fields. */ }
+    return { id: String(row.id), providerId: String(row.provider_id), upstreamId: String(row.upstream_id), alias: String(row.alias), displayName: String(row.display_name), wireApi: row.wire_api as Model['wireApi'], contextWindow: Number(row.context_window), tools: Boolean(row.tools), vision: Boolean(row.vision), enabled: Boolean(row.enabled), reasoningEfforts, ...(isReasoningEffort(defaultLevel) && reasoningEfforts.includes(defaultLevel) ? { defaultReasoningEffort: defaultLevel } : {}), ...specs };
   }
   listModels(): Model[] { return this.rows('SELECT * FROM models ORDER BY rowid').map(row => this.model(row)); }
   saveModel(input: ModelInput): Model { return this.saveModels([input])[0]; }
@@ -544,8 +548,11 @@ export class Store {
     if (!Array.isArray(reasoningEfforts) || reasoningEfforts.length > 7 || new Set(reasoningEfforts).size !== reasoningEfforts.length || reasoningEfforts.some(level => !isReasoningEffort(level))) throw new Error('思考强度级别无效。');
     const defaultReasoningEffort = input.defaultReasoningEffort;
     if (defaultReasoningEffort !== undefined && (!isReasoningEffort(defaultReasoningEffort) || !reasoningEfforts.includes(defaultReasoningEffort))) throw new Error('默认思考强度必须属于模型支持的级别。');
-    const model: Model = { ...input, id: modelId, upstreamId: text(input.upstreamId, '上游模型 ID'), alias, displayName: text(input.displayName, '模型显示名称'), reasoningEfforts, ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}) };
-    this.db.run('INSERT INTO models(id,provider_id,upstream_id,alias,display_name,wire_api,context_window,tools,vision,enabled,reasoning_efforts,default_reasoning_effort) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET provider_id=excluded.provider_id,upstream_id=excluded.upstream_id,alias=excluded.alias,display_name=excluded.display_name,wire_api=excluded.wire_api,context_window=excluded.context_window,tools=excluded.tools,vision=excluded.vision,enabled=excluded.enabled,reasoning_efforts=excluded.reasoning_efforts,default_reasoning_effort=excluded.default_reasoning_effort', [modelId, model.providerId, model.upstreamId, alias, model.displayName, model.wireApi, model.contextWindow, Number(model.tools), Number(model.vision), Number(model.enabled), JSON.stringify(reasoningEfforts), defaultReasoningEffort ?? null]); return model;
+    const specs = modelSpecs(input, true);
+    const baseModel = { ...input };
+    for (const key of MODEL_SPEC_FIELDS) delete baseModel[key];
+    const model: Model = { ...baseModel, ...specs, id: modelId, upstreamId: text(input.upstreamId, '上游模型 ID'), alias, displayName: text(input.displayName, '模型显示名称'), reasoningEfforts, ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}) };
+    this.db.run('INSERT INTO models(id,provider_id,upstream_id,alias,display_name,wire_api,context_window,tools,vision,enabled,reasoning_efforts,default_reasoning_effort,specs_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET provider_id=excluded.provider_id,upstream_id=excluded.upstream_id,alias=excluded.alias,display_name=excluded.display_name,wire_api=excluded.wire_api,context_window=excluded.context_window,tools=excluded.tools,vision=excluded.vision,enabled=excluded.enabled,reasoning_efforts=excluded.reasoning_efforts,default_reasoning_effort=excluded.default_reasoning_effort,specs_json=excluded.specs_json', [modelId, model.providerId, model.upstreamId, alias, model.displayName, model.wireApi, model.contextWindow, Number(model.tools), Number(model.vision), Number(model.enabled), JSON.stringify(reasoningEfforts), defaultReasoningEffort ?? null, JSON.stringify(specs)]); return model;
   }
   deleteModel(modelId: string): void { this.mutate(() => { this.db.run('DELETE FROM models WHERE id=?', [modelId]); this.pruneBindings(); }); }
   private validateConnectionChoices(choices: ToolBinding['connectionChoices'], models: Model[], providers: Provider[]): void {

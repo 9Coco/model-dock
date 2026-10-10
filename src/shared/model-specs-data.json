@@ -1,0 +1,3428 @@
+{
+  "version": 1,
+  "verifiedAt": "2026-10-10",
+  "records": [
+    {
+      "ids": [
+        "kimi-k3"
+      ],
+      "vendor": "volcengine",
+      "contextWindow": 1024000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://docs.volcengine.com/docs/ark/agent-plan-personal-zcode?lang=zh",
+        "https://docs.volcengine.com/docs/ark/coding-plan-personal-ai-zcode?lang=zh",
+        "https://docs.volcengine.com/docs/ark/coding-plan-personal-plan-overview?lang=zh"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "火山计划通用模型上限结合官方ZCode数值示例；context采用1024000/256000，未把原生厂商规格直接应用于计划。Pi示例有1048576/262144及K3输出65536，与ZCode/套餐总览128k不一致，记录保守客户端默认。thinking支持不证明alias接受reasoning_effort；未验证等级，不导出effort参数。MiniMax与K2.8关闭开关未明确，保留unknown。"
+      ],
+      "providerScope": {
+        "presetId": "volcengine-agent",
+        "baseUrl": "https://ark.cn-beijing.volces.com/api/plan/v3"
+      },
+      "maxOutputTokens": 131072,
+      "tools": true,
+      "thinking": true,
+      "thinkingCanDisable": false,
+      "reasoningEfforts": [],
+      "reasoningApis": [],
+      "uiNotes": [
+        "采用当前套餐官方配置示例的保守参考值；示例间可能存在差异，接口返回限制优先。"
+      ]
+    },
+    {
+      "ids": [
+        "minimax-m3"
+      ],
+      "vendor": "volcengine",
+      "contextWindow": 1024000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://docs.volcengine.com/docs/ark/agent-plan-personal-zcode?lang=zh",
+        "https://docs.volcengine.com/docs/ark/coding-plan-personal-ai-zcode?lang=zh",
+        "https://docs.volcengine.com/docs/ark/coding-plan-personal-plan-overview?lang=zh"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "火山计划通用模型上限结合官方ZCode数值示例；context采用1024000/256000，未把原生厂商规格直接应用于计划。Pi示例有1048576/262144及K3输出65536，与ZCode/套餐总览128k不一致，记录保守客户端默认。thinking支持不证明alias接受reasoning_effort；未验证等级，不导出effort参数。MiniMax与K2.8关闭开关未明确，保留unknown。"
+      ],
+      "providerScope": {
+        "presetId": "volcengine-agent",
+        "baseUrl": "https://ark.cn-beijing.volces.com/api/plan/v3"
+      },
+      "maxOutputTokens": 131072,
+      "tools": true,
+      "thinking": true,
+      "reasoningEfforts": [],
+      "reasoningApis": [],
+      "uiNotes": [
+        "采用当前套餐官方配置示例的保守参考值；示例间可能存在差异，接口返回限制优先。"
+      ]
+    },
+    {
+      "ids": [
+        "glm-5.3",
+        "glm-latest"
+      ],
+      "vendor": "volcengine",
+      "contextWindow": 1024000,
+      "contextLimitType": "combined",
+      "vision": false,
+      "sourceUrls": [
+        "https://docs.volcengine.com/docs/ark/agent-plan-personal-zcode?lang=zh",
+        "https://docs.volcengine.com/docs/ark/coding-plan-personal-ai-zcode?lang=zh",
+        "https://docs.volcengine.com/docs/ark/coding-plan-personal-plan-overview?lang=zh"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "火山计划通用模型上限结合官方ZCode数值示例；context采用1024000/256000，未把原生厂商规格直接应用于计划。Pi示例有1048576/262144及K3输出65536，与ZCode/套餐总览128k不一致，记录保守客户端默认。thinking支持不证明alias接受reasoning_effort；未验证等级，不导出effort参数。MiniMax与K2.8关闭开关未明确，保留unknown。"
+      ],
+      "providerScope": {
+        "presetId": "volcengine-agent",
+        "baseUrl": "https://ark.cn-beijing.volces.com/api/plan/v3"
+      },
+      "maxOutputTokens": 131072,
+      "tools": true,
+      "thinking": true,
+      "thinkingCanDisable": false,
+      "reasoningEfforts": [],
+      "reasoningApis": [],
+      "uiNotes": [
+        "采用当前套餐官方配置示例的保守参考值；示例间可能存在差异，接口返回限制优先。"
+      ]
+    },
+    {
+      "ids": [
+        "glm-5.3-flash"
+      ],
+      "vendor": "volcengine",
+      "contextWindow": 1024000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://docs.volcengine.com/docs/ark/agent-plan-personal-zcode?lang=zh",
+        "https://docs.volcengine.com/docs/ark/coding-plan-personal-ai-zcode?lang=zh",
+        "https://docs.volcengine.com/docs/ark/coding-plan-personal-plan-overview?lang=zh"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "火山计划通用模型上限结合官方ZCode数值示例；context采用1024000/256000，未把原生厂商规格直接应用于计划。Pi示例有1048576/262144及K3输出65536，与ZCode/套餐总览128k不一致，记录保守客户端默认。thinking支持不证明alias接受reasoning_effort；未验证等级，不导出effort参数。MiniMax与K2.8关闭开关未明确，保留unknown。"
+      ],
+      "providerScope": {
+        "presetId": "volcengine-agent",
+        "baseUrl": "https://ark.cn-beijing.volces.com/api/plan/v3"
+      },
+      "maxOutputTokens": 131072,
+      "tools": true,
+      "thinking": true,
+      "thinkingCanDisable": false,
+      "reasoningEfforts": [],
+      "reasoningApis": [],
+      "uiNotes": [
+        "采用当前套餐官方配置示例的保守参考值；示例间可能存在差异，接口返回限制优先。"
+      ]
+    },
+    {
+      "ids": [
+        "deepseek-v4.1-flash"
+      ],
+      "vendor": "volcengine",
+      "contextWindow": 1024000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://docs.volcengine.com/docs/ark/agent-plan-personal-zcode?lang=zh",
+        "https://docs.volcengine.com/docs/ark/coding-plan-personal-ai-zcode?lang=zh",
+        "https://docs.volcengine.com/docs/ark/coding-plan-personal-plan-overview?lang=zh"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "火山计划通用模型上限结合官方ZCode数值示例；context采用1024000/256000，未把原生厂商规格直接应用于计划。Pi示例有1048576/262144及K3输出65536，与ZCode/套餐总览128k不一致，记录保守客户端默认。thinking支持不证明alias接受reasoning_effort；未验证等级，不导出effort参数。MiniMax与K2.8关闭开关未明确，保留unknown。"
+      ],
+      "providerScope": {
+        "presetId": "volcengine-agent",
+        "baseUrl": "https://ark.cn-beijing.volces.com/api/plan/v3"
+      },
+      "maxOutputTokens": 393216,
+      "tools": true,
+      "thinking": true,
+      "thinkingCanDisable": true,
+      "reasoningEfforts": [],
+      "reasoningApis": [],
+      "uiNotes": [
+        "采用当前套餐官方配置示例的保守参考值；示例间可能存在差异，接口返回限制优先。"
+      ]
+    },
+    {
+      "ids": [
+        "deepseek-v4-flash",
+        "deepseek-v4-pro"
+      ],
+      "vendor": "volcengine",
+      "contextWindow": 1024000,
+      "contextLimitType": "combined",
+      "vision": false,
+      "sourceUrls": [
+        "https://docs.volcengine.com/docs/ark/agent-plan-personal-zcode?lang=zh",
+        "https://docs.volcengine.com/docs/ark/coding-plan-personal-ai-zcode?lang=zh",
+        "https://docs.volcengine.com/docs/ark/coding-plan-personal-plan-overview?lang=zh"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "火山计划通用模型上限结合官方ZCode数值示例；context采用1024000/256000，未把原生厂商规格直接应用于计划。Pi示例有1048576/262144及K3输出65536，与ZCode/套餐总览128k不一致，记录保守客户端默认。thinking支持不证明alias接受reasoning_effort；未验证等级，不导出effort参数。MiniMax与K2.8关闭开关未明确，保留unknown。"
+      ],
+      "providerScope": {
+        "presetId": "volcengine-agent",
+        "baseUrl": "https://ark.cn-beijing.volces.com/api/plan/v3"
+      },
+      "maxOutputTokens": 393216,
+      "tools": true,
+      "thinking": true,
+      "thinkingCanDisable": true,
+      "reasoningEfforts": [],
+      "reasoningApis": [],
+      "uiNotes": [
+        "采用当前套餐官方配置示例的保守参考值；示例间可能存在差异，接口返回限制优先。"
+      ]
+    },
+    {
+      "ids": [
+        "kimi-k2.7-code"
+      ],
+      "vendor": "volcengine",
+      "contextWindow": 256000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://docs.volcengine.com/docs/ark/agent-plan-personal-zcode?lang=zh",
+        "https://docs.volcengine.com/docs/ark/coding-plan-personal-ai-zcode?lang=zh",
+        "https://docs.volcengine.com/docs/ark/coding-plan-personal-plan-overview?lang=zh"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "火山计划通用模型上限结合官方ZCode数值示例；context采用1024000/256000，未把原生厂商规格直接应用于计划。Pi示例有1048576/262144及K3输出65536，与ZCode/套餐总览128k不一致，记录保守客户端默认。thinking支持不证明alias接受reasoning_effort；未验证等级，不导出effort参数。MiniMax与K2.8关闭开关未明确，保留unknown。"
+      ],
+      "providerScope": {
+        "presetId": "volcengine-agent",
+        "baseUrl": "https://ark.cn-beijing.volces.com/api/plan/v3"
+      },
+      "maxOutputTokens": 32768,
+      "tools": true,
+      "thinking": true,
+      "thinkingCanDisable": false,
+      "reasoningEfforts": [],
+      "reasoningApis": [],
+      "uiNotes": [
+        "采用当前套餐官方配置示例的保守参考值；示例间可能存在差异，接口返回限制优先。"
+      ]
+    },
+    {
+      "ids": [
+        "kimi-k2.8-preview"
+      ],
+      "vendor": "volcengine",
+      "contextWindow": 1024000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://docs.volcengine.com/docs/ark/agent-plan-personal-zcode?lang=zh",
+        "https://docs.volcengine.com/docs/ark/coding-plan-personal-ai-zcode?lang=zh",
+        "https://docs.volcengine.com/docs/ark/coding-plan-personal-plan-overview?lang=zh"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "火山计划通用模型上限结合官方ZCode数值示例；context采用1024000/256000，未把原生厂商规格直接应用于计划。Pi示例有1048576/262144及K3输出65536，与ZCode/套餐总览128k不一致，记录保守客户端默认。thinking支持不证明alias接受reasoning_effort；未验证等级，不导出effort参数。MiniMax与K2.8关闭开关未明确，保留unknown。"
+      ],
+      "providerScope": {
+        "presetId": "volcengine-agent",
+        "baseUrl": "https://ark.cn-beijing.volces.com/api/plan/v3"
+      },
+      "maxOutputTokens": 1024000,
+      "tools": true,
+      "thinking": true,
+      "reasoningEfforts": [],
+      "reasoningApis": [],
+      "uiNotes": [
+        "采用当前套餐官方配置示例的保守参考值；示例间可能存在差异，接口返回限制优先。"
+      ]
+    },
+    {
+      "ids": [
+        "kimi-k3"
+      ],
+      "vendor": "volcengine",
+      "contextWindow": 1024000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://docs.volcengine.com/docs/ark/agent-plan-personal-zcode?lang=zh",
+        "https://docs.volcengine.com/docs/ark/coding-plan-personal-ai-zcode?lang=zh",
+        "https://docs.volcengine.com/docs/ark/coding-plan-personal-plan-overview?lang=zh"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "火山计划通用模型上限结合官方ZCode数值示例；context采用1024000/256000，未把原生厂商规格直接应用于计划。Pi示例有1048576/262144及K3输出65536，与ZCode/套餐总览128k不一致，记录保守客户端默认。thinking支持不证明alias接受reasoning_effort；未验证等级，不导出effort参数。MiniMax与K2.8关闭开关未明确，保留unknown。"
+      ],
+      "providerScope": {
+        "presetId": "volcengine-token",
+        "baseUrl": "https://ark.cn-beijing.volces.com/api/coding/v3"
+      },
+      "maxOutputTokens": 131072,
+      "tools": true,
+      "thinking": true,
+      "thinkingCanDisable": false,
+      "reasoningEfforts": [],
+      "reasoningApis": [],
+      "uiNotes": [
+        "采用当前套餐官方配置示例的保守参考值；示例间可能存在差异，接口返回限制优先。"
+      ]
+    },
+    {
+      "ids": [
+        "minimax-m3"
+      ],
+      "vendor": "volcengine",
+      "contextWindow": 1024000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://docs.volcengine.com/docs/ark/agent-plan-personal-zcode?lang=zh",
+        "https://docs.volcengine.com/docs/ark/coding-plan-personal-ai-zcode?lang=zh",
+        "https://docs.volcengine.com/docs/ark/coding-plan-personal-plan-overview?lang=zh"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "火山计划通用模型上限结合官方ZCode数值示例；context采用1024000/256000，未把原生厂商规格直接应用于计划。Pi示例有1048576/262144及K3输出65536，与ZCode/套餐总览128k不一致，记录保守客户端默认。thinking支持不证明alias接受reasoning_effort；未验证等级，不导出effort参数。MiniMax与K2.8关闭开关未明确，保留unknown。"
+      ],
+      "providerScope": {
+        "presetId": "volcengine-token",
+        "baseUrl": "https://ark.cn-beijing.volces.com/api/coding/v3"
+      },
+      "maxOutputTokens": 131072,
+      "tools": true,
+      "thinking": true,
+      "reasoningEfforts": [],
+      "reasoningApis": [],
+      "uiNotes": [
+        "采用当前套餐官方配置示例的保守参考值；示例间可能存在差异，接口返回限制优先。"
+      ]
+    },
+    {
+      "ids": [
+        "glm-5.3",
+        "glm-latest"
+      ],
+      "vendor": "volcengine",
+      "contextWindow": 1024000,
+      "contextLimitType": "combined",
+      "vision": false,
+      "sourceUrls": [
+        "https://docs.volcengine.com/docs/ark/agent-plan-personal-zcode?lang=zh",
+        "https://docs.volcengine.com/docs/ark/coding-plan-personal-ai-zcode?lang=zh",
+        "https://docs.volcengine.com/docs/ark/coding-plan-personal-plan-overview?lang=zh"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "火山计划通用模型上限结合官方ZCode数值示例；context采用1024000/256000，未把原生厂商规格直接应用于计划。Pi示例有1048576/262144及K3输出65536，与ZCode/套餐总览128k不一致，记录保守客户端默认。thinking支持不证明alias接受reasoning_effort；未验证等级，不导出effort参数。MiniMax与K2.8关闭开关未明确，保留unknown。"
+      ],
+      "providerScope": {
+        "presetId": "volcengine-token",
+        "baseUrl": "https://ark.cn-beijing.volces.com/api/coding/v3"
+      },
+      "maxOutputTokens": 131072,
+      "tools": true,
+      "thinking": true,
+      "thinkingCanDisable": false,
+      "reasoningEfforts": [],
+      "reasoningApis": [],
+      "uiNotes": [
+        "采用当前套餐官方配置示例的保守参考值；示例间可能存在差异，接口返回限制优先。"
+      ]
+    },
+    {
+      "ids": [
+        "glm-5.3-flash"
+      ],
+      "vendor": "volcengine",
+      "contextWindow": 1024000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://docs.volcengine.com/docs/ark/agent-plan-personal-zcode?lang=zh",
+        "https://docs.volcengine.com/docs/ark/coding-plan-personal-ai-zcode?lang=zh",
+        "https://docs.volcengine.com/docs/ark/coding-plan-personal-plan-overview?lang=zh"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "火山计划通用模型上限结合官方ZCode数值示例；context采用1024000/256000，未把原生厂商规格直接应用于计划。Pi示例有1048576/262144及K3输出65536，与ZCode/套餐总览128k不一致，记录保守客户端默认。thinking支持不证明alias接受reasoning_effort；未验证等级，不导出effort参数。MiniMax与K2.8关闭开关未明确，保留unknown。"
+      ],
+      "providerScope": {
+        "presetId": "volcengine-token",
+        "baseUrl": "https://ark.cn-beijing.volces.com/api/coding/v3"
+      },
+      "maxOutputTokens": 131072,
+      "tools": true,
+      "thinking": true,
+      "thinkingCanDisable": false,
+      "reasoningEfforts": [],
+      "reasoningApis": [],
+      "uiNotes": [
+        "采用当前套餐官方配置示例的保守参考值；示例间可能存在差异，接口返回限制优先。"
+      ]
+    },
+    {
+      "ids": [
+        "deepseek-v4.1-flash"
+      ],
+      "vendor": "volcengine",
+      "contextWindow": 1024000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://docs.volcengine.com/docs/ark/agent-plan-personal-zcode?lang=zh",
+        "https://docs.volcengine.com/docs/ark/coding-plan-personal-ai-zcode?lang=zh",
+        "https://docs.volcengine.com/docs/ark/coding-plan-personal-plan-overview?lang=zh"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "火山计划通用模型上限结合官方ZCode数值示例；context采用1024000/256000，未把原生厂商规格直接应用于计划。Pi示例有1048576/262144及K3输出65536，与ZCode/套餐总览128k不一致，记录保守客户端默认。thinking支持不证明alias接受reasoning_effort；未验证等级，不导出effort参数。MiniMax与K2.8关闭开关未明确，保留unknown。"
+      ],
+      "providerScope": {
+        "presetId": "volcengine-token",
+        "baseUrl": "https://ark.cn-beijing.volces.com/api/coding/v3"
+      },
+      "maxOutputTokens": 393216,
+      "tools": true,
+      "thinking": true,
+      "thinkingCanDisable": true,
+      "reasoningEfforts": [],
+      "reasoningApis": [],
+      "uiNotes": [
+        "采用当前套餐官方配置示例的保守参考值；示例间可能存在差异，接口返回限制优先。"
+      ]
+    },
+    {
+      "ids": [
+        "deepseek-v4-flash",
+        "deepseek-v4-pro"
+      ],
+      "vendor": "volcengine",
+      "contextWindow": 1024000,
+      "contextLimitType": "combined",
+      "vision": false,
+      "sourceUrls": [
+        "https://docs.volcengine.com/docs/ark/agent-plan-personal-zcode?lang=zh",
+        "https://docs.volcengine.com/docs/ark/coding-plan-personal-ai-zcode?lang=zh",
+        "https://docs.volcengine.com/docs/ark/coding-plan-personal-plan-overview?lang=zh"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "火山计划通用模型上限结合官方ZCode数值示例；context采用1024000/256000，未把原生厂商规格直接应用于计划。Pi示例有1048576/262144及K3输出65536，与ZCode/套餐总览128k不一致，记录保守客户端默认。thinking支持不证明alias接受reasoning_effort；未验证等级，不导出effort参数。MiniMax与K2.8关闭开关未明确，保留unknown。"
+      ],
+      "providerScope": {
+        "presetId": "volcengine-token",
+        "baseUrl": "https://ark.cn-beijing.volces.com/api/coding/v3"
+      },
+      "maxOutputTokens": 393216,
+      "tools": true,
+      "thinking": true,
+      "thinkingCanDisable": true,
+      "reasoningEfforts": [],
+      "reasoningApis": [],
+      "uiNotes": [
+        "采用当前套餐官方配置示例的保守参考值；示例间可能存在差异，接口返回限制优先。"
+      ]
+    },
+    {
+      "ids": [
+        "kimi-k2.7-code"
+      ],
+      "vendor": "volcengine",
+      "contextWindow": 256000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://docs.volcengine.com/docs/ark/agent-plan-personal-zcode?lang=zh",
+        "https://docs.volcengine.com/docs/ark/coding-plan-personal-ai-zcode?lang=zh",
+        "https://docs.volcengine.com/docs/ark/coding-plan-personal-plan-overview?lang=zh"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "火山计划通用模型上限结合官方ZCode数值示例；context采用1024000/256000，未把原生厂商规格直接应用于计划。Pi示例有1048576/262144及K3输出65536，与ZCode/套餐总览128k不一致，记录保守客户端默认。thinking支持不证明alias接受reasoning_effort；未验证等级，不导出effort参数。MiniMax与K2.8关闭开关未明确，保留unknown。"
+      ],
+      "providerScope": {
+        "presetId": "volcengine-token",
+        "baseUrl": "https://ark.cn-beijing.volces.com/api/coding/v3"
+      },
+      "maxOutputTokens": 32768,
+      "tools": true,
+      "thinking": true,
+      "thinkingCanDisable": false,
+      "reasoningEfforts": [],
+      "reasoningApis": [],
+      "uiNotes": [
+        "采用当前套餐官方配置示例的保守参考值；示例间可能存在差异，接口返回限制优先。"
+      ]
+    },
+    {
+      "ids": [
+        "kimi-k2.8-preview"
+      ],
+      "vendor": "volcengine",
+      "contextWindow": 1024000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://docs.volcengine.com/docs/ark/agent-plan-personal-zcode?lang=zh",
+        "https://docs.volcengine.com/docs/ark/coding-plan-personal-ai-zcode?lang=zh",
+        "https://docs.volcengine.com/docs/ark/coding-plan-personal-plan-overview?lang=zh"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "火山计划通用模型上限结合官方ZCode数值示例；context采用1024000/256000，未把原生厂商规格直接应用于计划。Pi示例有1048576/262144及K3输出65536，与ZCode/套餐总览128k不一致，记录保守客户端默认。thinking支持不证明alias接受reasoning_effort；未验证等级，不导出effort参数。MiniMax与K2.8关闭开关未明确，保留unknown。"
+      ],
+      "providerScope": {
+        "presetId": "volcengine-token",
+        "baseUrl": "https://ark.cn-beijing.volces.com/api/coding/v3"
+      },
+      "maxOutputTokens": 1024000,
+      "tools": true,
+      "thinking": true,
+      "reasoningEfforts": [],
+      "reasoningApis": [],
+      "uiNotes": [
+        "采用当前套餐官方配置示例的保守参考值；示例间可能存在差异，接口返回限制优先。"
+      ]
+    },
+    {
+      "ids": [
+        "deepseek-flash",
+        "deepseek-v4-flash",
+        "deepseek-v4-flash-vision-exp"
+      ],
+      "vendor": "deepseek",
+      "contextWindow": 1048576,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://api-docs.deepseek.com/api/list-models/",
+        "https://api-docs.deepseek.com/guides/thinking_mode/",
+        "https://api-docs.deepseek.com/quick_start/pricing/"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "原生/models官方示例给出精确token容量；old flash/vision-exp aliases retired模型请求已路由V4.1Flash，不应保留oldFlash vision=false。兼容映射minimal->low medium/xhigh->high ultra->max。"
+      ],
+      "providerScope": {
+        "presetId": "deepseek",
+        "baseUrl": "https://api.deepseek.com"
+      },
+      "maxOutputTokens": 393216,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "high",
+      "thinkingCanDisable": true,
+      "reasoningEfforts": [
+        "low",
+        "high",
+        "max"
+      ],
+      "reasoningApis": [
+        "chat-completions",
+        "responses",
+        "messages"
+      ]
+    },
+    {
+      "ids": [
+        "deepseek-v4-pro"
+      ],
+      "vendor": "deepseek",
+      "contextWindow": 1048576,
+      "contextLimitType": "combined",
+      "vision": false,
+      "sourceUrls": [
+        "https://api-docs.deepseek.com/api/list-models/",
+        "https://api-docs.deepseek.com/guides/thinking_mode/"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "原生DeepSeek服务仍保留V4Pro0813；不由家族推断vision。"
+      ],
+      "providerScope": {
+        "presetId": "deepseek",
+        "baseUrl": "https://api.deepseek.com"
+      },
+      "maxOutputTokens": 393216,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "high",
+      "thinkingCanDisable": true,
+      "reasoningEfforts": [
+        "low",
+        "high",
+        "max"
+      ],
+      "reasoningApis": [
+        "chat-completions",
+        "responses",
+        "messages"
+      ]
+    },
+    {
+      "ids": [
+        "kimi-k3"
+      ],
+      "vendor": "moonshotai",
+      "contextWindow": 1000000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://platform.kimi.ai/docs/guide/kimi-k3-quickstart",
+        "https://platform.kimi.ai/docs/api/models-overview"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "上下文官方仅写1M，此处1000000是保守换算，未证明精确总容量。max_completion_tokens默认131072可设至1048576；禁止转写成max_tokens同上限。K3不接受K2.x thinking开关。"
+      ],
+      "providerScope": {
+        "baseUrl": "https://api.moonshot.ai/v1"
+      },
+      "maxOutputTokens": 1048576,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "max",
+      "thinkingCanDisable": false,
+      "reasoningEfforts": [
+        "low",
+        "high",
+        "max"
+      ],
+      "reasoningApis": [
+        "chat-completions"
+      ],
+      "defaultOutputTokens": 131072,
+      "uiNotes": [
+        "官方上下文仅标为约 1M；最大输出与输入共享空间，默认请求预算保持 131072。",
+        "原生大输出参数为 max_completion_tokens，旧客户端使用的 max_tokens 已弃用，需按客户端支持确认。"
+      ]
+    },
+    {
+      "ids": [
+        "kimi-k2.7-code",
+        "kimi-k2.7-code-highspeed"
+      ],
+      "vendor": "moonshotai",
+      "contextWindow": 256000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://platform.kimi.ai/docs/guide/kimi-k2-7-code-quickstart",
+        "https://platform.kimi.ai/docs/api/models-overview"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "官方context256K此处保守256000。max_tokens默认32768，不代表最大；未找到native最大所以不填写maxOutputTokens。不能导出effort。"
+      ],
+      "providerScope": {
+        "baseUrl": "https://api.moonshot.ai/v1"
+      },
+      "tools": true,
+      "thinking": true,
+      "thinkingCanDisable": false,
+      "reasoningEfforts": [],
+      "reasoningApis": []
+    },
+    {
+      "ids": [
+        "kimi-k2.6"
+      ],
+      "vendor": "moonshotai",
+      "contextWindow": 256000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://platform.kimi.ai/docs/guide/kimi-k2-6-quickstart",
+        "https://platform.kimi.ai/docs/api/models-overview"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "max_tokens默认32768，不代表最大。noeffort。"
+      ],
+      "providerScope": {
+        "baseUrl": "https://api.moonshot.ai/v1"
+      },
+      "tools": true,
+      "thinking": true,
+      "thinkingCanDisable": true,
+      "reasoningEfforts": [],
+      "reasoningApis": []
+    },
+    {
+      "ids": [
+        "qwen3.8-max",
+        "qwen3.8-max-0902",
+        "qwen3.8-max-2026-09-02"
+      ],
+      "vendor": "qwen",
+      "contextWindow": 1000000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://help.aliyun.com/zh/model-studio/qwen3-8-max",
+        "https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions",
+        "https://help.aliyun.com/zh/model-studio/deep-thinking"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "阿里官方模型表给出精确容量；有效推理档位low/medium/xhigh，兼容minimal->low high/max->xhigh none->enable_thinkingfalse。禁止与thinking_budget同时导出；级别不等于思考可用性。"
+      ],
+      "providerScope": {
+        "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+      },
+      "maxInputTokens": 991808,
+      "maxOutputTokens": 131072,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "xhigh",
+      "thinkingCanDisable": true,
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "xhigh"
+      ],
+      "reasoningApis": [
+        "chat-completions"
+      ],
+      "maxInputTokensThinking": 983616
+    },
+    {
+      "ids": [
+        "qwen3.8-flash"
+      ],
+      "vendor": "qwen",
+      "contextWindow": 1000000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://help.aliyun.com/zh/model-studio/qwen3-8-flash",
+        "https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions",
+        "https://help.aliyun.com/zh/model-studio/deep-thinking"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "阿里官方模型表给出精确容量；有效推理档位low/medium/xhigh，兼容minimal->low high/max->xhigh none->enable_thinkingfalse。禁止与thinking_budget同时导出；级别不等于思考可用性。"
+      ],
+      "providerScope": {
+        "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+      },
+      "maxInputTokens": 991808,
+      "maxOutputTokens": 131072,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "xhigh",
+      "thinkingCanDisable": true,
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "xhigh"
+      ],
+      "reasoningApis": [
+        "chat-completions"
+      ],
+      "maxInputTokensThinking": 983616
+    },
+    {
+      "ids": [
+        "qwen3.8-omni-flash"
+      ],
+      "vendor": "qwen",
+      "contextWindow": 1000000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://help.aliyun.com/zh/model-studio/qwen3-8-omni-flash",
+        "https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions",
+        "https://help.aliyun.com/zh/model-studio/deep-thinking"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "阿里官方模型表给出精确容量；有效推理档位low/medium/xhigh，兼容minimal->low high/max->xhigh none->enable_thinkingfalse。禁止与thinking_budget同时导出；级别不等于思考可用性。"
+      ],
+      "providerScope": {
+        "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+      },
+      "maxInputTokens": 991808,
+      "maxOutputTokens": 131072,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "xhigh",
+      "thinkingCanDisable": true,
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "xhigh"
+      ],
+      "reasoningApis": [
+        "chat-completions"
+      ],
+      "maxInputTokensThinking": 983616
+    },
+    {
+      "ids": [
+        "qwen3.7-max",
+        "qwen3.7-max-2026-05-20"
+      ],
+      "vendor": "qwen",
+      "contextWindow": 1000000,
+      "contextLimitType": "combined",
+      "vision": false,
+      "sourceUrls": [
+        "https://help.aliyun.com/zh/model-studio/qwen3-7-max",
+        "https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions",
+        "https://help.aliyun.com/zh/model-studio/deep-thinking"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "官方参数表未将Qwen3.5/3.6/3.7列入reasoning_effort，不导出effort；支持enable_thinking及thinking_budget。模型Stable alias与snapshot逐项核对。"
+      ],
+      "providerScope": {
+        "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+      },
+      "maxInputTokens": 991808,
+      "maxOutputTokens": 131072,
+      "tools": true,
+      "thinking": true,
+      "thinkingCanDisable": true,
+      "reasoningEfforts": [],
+      "reasoningApis": [],
+      "maxInputTokensThinking": 983616
+    },
+    {
+      "ids": [
+        "qwen3.7-max-2026-06-08"
+      ],
+      "vendor": "qwen",
+      "contextWindow": 1000000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://help.aliyun.com/zh/model-studio/qwen3-7-max",
+        "https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions",
+        "https://help.aliyun.com/zh/model-studio/deep-thinking"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "官方参数表未将Qwen3.5/3.6/3.7列入reasoning_effort，不导出effort；支持enable_thinking及thinking_budget。模型Stable alias与snapshot逐项核对。"
+      ],
+      "providerScope": {
+        "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+      },
+      "maxInputTokens": 991808,
+      "maxOutputTokens": 131072,
+      "tools": true,
+      "thinking": true,
+      "thinkingCanDisable": true,
+      "reasoningEfforts": [],
+      "reasoningApis": [],
+      "maxInputTokensThinking": 983616
+    },
+    {
+      "ids": [
+        "qwen3.7-plus",
+        "qwen3.7-plus-2026-05-26"
+      ],
+      "vendor": "qwen",
+      "contextWindow": 1000000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://help.aliyun.com/zh/model-studio/qwen3-7-plus",
+        "https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions",
+        "https://help.aliyun.com/zh/model-studio/deep-thinking"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "官方参数表未将Qwen3.5/3.6/3.7列入reasoning_effort，不导出effort；支持enable_thinking及thinking_budget。模型Stable alias与snapshot逐项核对。"
+      ],
+      "providerScope": {
+        "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+      },
+      "maxInputTokens": 991808,
+      "maxOutputTokens": 131072,
+      "tools": true,
+      "thinking": true,
+      "thinkingCanDisable": true,
+      "reasoningEfforts": [],
+      "reasoningApis": [],
+      "maxInputTokensThinking": 983616
+    },
+    {
+      "ids": [
+        "qwen3.7-flash",
+        "qwen3.7-flash-2026-07-15"
+      ],
+      "vendor": "qwen",
+      "contextWindow": 1000000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://help.aliyun.com/zh/model-studio/qwen3-7-flash",
+        "https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions",
+        "https://help.aliyun.com/zh/model-studio/deep-thinking"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "官方参数表未将Qwen3.5/3.6/3.7列入reasoning_effort，不导出effort；支持enable_thinking及thinking_budget。模型Stable alias与snapshot逐项核对。"
+      ],
+      "providerScope": {
+        "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+      },
+      "maxInputTokens": 991808,
+      "maxOutputTokens": 131072,
+      "tools": true,
+      "thinking": true,
+      "thinkingCanDisable": true,
+      "reasoningEfforts": [],
+      "reasoningApis": [],
+      "maxInputTokensThinking": 983616
+    },
+    {
+      "ids": [
+        "qwen3.6-plus",
+        "qwen3.6-plus-2026-04-02"
+      ],
+      "vendor": "qwen",
+      "contextWindow": 1000000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://help.aliyun.com/zh/model-studio/qwen3-6-plus",
+        "https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions",
+        "https://help.aliyun.com/zh/model-studio/deep-thinking"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "官方参数表未将Qwen3.5/3.6/3.7列入reasoning_effort，不导出effort；支持enable_thinking及thinking_budget。模型Stable alias与snapshot逐项核对。"
+      ],
+      "providerScope": {
+        "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+      },
+      "maxInputTokens": 991808,
+      "maxOutputTokens": 65536,
+      "tools": true,
+      "thinking": true,
+      "thinkingCanDisable": true,
+      "reasoningEfforts": [],
+      "reasoningApis": [],
+      "maxInputTokensThinking": 983616
+    },
+    {
+      "ids": [
+        "qwen3.6-flash",
+        "qwen3.6-flash-2026-04-16"
+      ],
+      "vendor": "qwen",
+      "contextWindow": 1000000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://help.aliyun.com/zh/model-studio/qwen3-6-flash",
+        "https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions",
+        "https://help.aliyun.com/zh/model-studio/deep-thinking"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "官方参数表未将Qwen3.5/3.6/3.7列入reasoning_effort，不导出effort；支持enable_thinking及thinking_budget。模型Stable alias与snapshot逐项核对。"
+      ],
+      "providerScope": {
+        "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+      },
+      "maxInputTokens": 991808,
+      "maxOutputTokens": 65536,
+      "tools": true,
+      "thinking": true,
+      "thinkingCanDisable": true,
+      "reasoningEfforts": [],
+      "reasoningApis": [],
+      "maxInputTokensThinking": 983616
+    },
+    {
+      "ids": [
+        "qwen3.6-max-preview"
+      ],
+      "vendor": "qwen",
+      "contextWindow": 262144,
+      "contextLimitType": "combined",
+      "vision": false,
+      "sourceUrls": [
+        "https://help.aliyun.com/zh/model-studio/qwen3-6-max",
+        "https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions",
+        "https://help.aliyun.com/zh/model-studio/deep-thinking"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "官方参数表未将Qwen3.5/3.6/3.7列入reasoning_effort，不导出effort；支持enable_thinking及thinking_budget。模型Stable alias与snapshot逐项核对。"
+      ],
+      "providerScope": {
+        "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+      },
+      "maxInputTokens": 245760,
+      "maxOutputTokens": 65536,
+      "tools": true,
+      "thinking": true,
+      "thinkingCanDisable": true,
+      "reasoningEfforts": [],
+      "reasoningApis": [],
+      "maxInputTokensThinking": 229376
+    },
+    {
+      "ids": [
+        "qwen3.5-plus",
+        "qwen3.5-plus-2026-02-15"
+      ],
+      "vendor": "qwen",
+      "contextWindow": 1000000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://help.aliyun.com/zh/model-studio/qwen3-5-plus",
+        "https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions",
+        "https://help.aliyun.com/zh/model-studio/deep-thinking"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "官方参数表未将Qwen3.5/3.6/3.7列入reasoning_effort，不导出effort；支持enable_thinking及thinking_budget。模型Stable alias与snapshot逐项核对。"
+      ],
+      "providerScope": {
+        "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+      },
+      "maxInputTokens": 991808,
+      "maxOutputTokens": 65536,
+      "tools": true,
+      "thinking": true,
+      "thinkingCanDisable": true,
+      "reasoningEfforts": [],
+      "reasoningApis": [],
+      "maxInputTokensThinking": 983616
+    },
+    {
+      "ids": [
+        "qwen3.5-flash",
+        "qwen3.5-flash-2026-02-23"
+      ],
+      "vendor": "qwen",
+      "contextWindow": 1000000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://help.aliyun.com/zh/model-studio/qwen3-5-flash",
+        "https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions",
+        "https://help.aliyun.com/zh/model-studio/deep-thinking"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "官方参数表未将Qwen3.5/3.6/3.7列入reasoning_effort，不导出effort；支持enable_thinking及thinking_budget。模型Stable alias与snapshot逐项核对。"
+      ],
+      "providerScope": {
+        "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+      },
+      "maxInputTokens": 991808,
+      "maxOutputTokens": 65536,
+      "tools": true,
+      "thinking": true,
+      "thinkingCanDisable": true,
+      "reasoningEfforts": [],
+      "reasoningApis": [],
+      "maxInputTokensThinking": 983616
+    },
+    {
+      "ids": [
+        "qwen3.7-max-preview",
+        "qwen3.7-max-2026-05-17"
+      ],
+      "vendor": "qwen",
+      "contextWindow": 1000000,
+      "contextLimitType": "combined",
+      "vision": false,
+      "sourceUrls": [
+        "https://help.aliyun.com/zh/model-studio/qwen3-7-max",
+        "https://help.aliyun.com/zh/model-studio/deep-thinking"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "Preview0517仅思考，与stable/0520/0608开关与vision能力不同。"
+      ],
+      "providerScope": {
+        "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+      },
+      "maxInputTokens": 991808,
+      "maxOutputTokens": 131072,
+      "tools": true,
+      "thinking": true,
+      "thinkingCanDisable": false,
+      "reasoningEfforts": [],
+      "reasoningApis": [],
+      "maxInputTokensThinking": 983616
+    },
+    {
+      "ids": [
+        "glm-5.3"
+      ],
+      "vendor": "zai",
+      "contextWindow": 1000000,
+      "contextLimitType": "combined",
+      "vision": false,
+      "sourceUrls": [
+        "https://docs.z.ai/guides/llm/glm-5.3",
+        "https://docs.z.ai/api-reference/llm/chat-completion",
+        "https://docs.z.ai/guides/capabilities/thinking"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "Z.ai上下文仅写1M/200K/128K，此处保守十进制换算，不假称精确token容量。输出131072有API range支持；4.6v模型API说明32K。effort仅GLM5.2及以上，5.2有效high/max，none/minimal关,low/medium->high,xhigh->max。5.3/Flash不可关闭且仅low/high/max；不能给旧GLM假造effort。"
+      ],
+      "providerScope": {
+        "baseUrl": "https://api.z.ai/api/paas/v4"
+      },
+      "maxOutputTokens": 131072,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "max",
+      "thinkingCanDisable": false,
+      "reasoningEfforts": [
+        "low",
+        "high",
+        "max"
+      ],
+      "reasoningApis": [
+        "chat-completions"
+      ]
+    },
+    {
+      "ids": [
+        "glm-5.3-flash",
+        "glm-5.3-flashx"
+      ],
+      "vendor": "zai",
+      "contextWindow": 1000000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://docs.z.ai/guides/vlm/glm-5.3-flash",
+        "https://docs.z.ai/api-reference/llm/chat-completion",
+        "https://docs.z.ai/guides/capabilities/thinking"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "Z.ai上下文仅写1M/200K/128K，此处保守十进制换算，不假称精确token容量。输出131072有API range支持；4.6v模型API说明32K。effort仅GLM5.2及以上，5.2有效high/max，none/minimal关,low/medium->high,xhigh->max。5.3/Flash不可关闭且仅low/high/max；不能给旧GLM假造effort。"
+      ],
+      "providerScope": {
+        "baseUrl": "https://api.z.ai/api/paas/v4"
+      },
+      "maxOutputTokens": 131072,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "max",
+      "thinkingCanDisable": false,
+      "reasoningEfforts": [
+        "low",
+        "high",
+        "max"
+      ],
+      "reasoningApis": [
+        "chat-completions"
+      ]
+    },
+    {
+      "ids": [
+        "glm-5.2"
+      ],
+      "vendor": "zai",
+      "contextWindow": 1000000,
+      "contextLimitType": "combined",
+      "vision": false,
+      "sourceUrls": [
+        "https://docs.z.ai/guides/llm/glm-5.2",
+        "https://docs.z.ai/api-reference/llm/chat-completion",
+        "https://docs.z.ai/guides/capabilities/thinking"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "Z.ai上下文仅写1M/200K/128K，此处保守十进制换算，不假称精确token容量。输出131072有API range支持；4.6v模型API说明32K。effort仅GLM5.2及以上，5.2有效high/max，none/minimal关,low/medium->high,xhigh->max。5.3/Flash不可关闭且仅low/high/max；不能给旧GLM假造effort。"
+      ],
+      "providerScope": {
+        "baseUrl": "https://api.z.ai/api/paas/v4"
+      },
+      "maxOutputTokens": 131072,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "max",
+      "thinkingCanDisable": true,
+      "reasoningEfforts": [
+        "high",
+        "max"
+      ],
+      "reasoningApis": [
+        "chat-completions"
+      ]
+    },
+    {
+      "ids": [
+        "glm-5"
+      ],
+      "vendor": "zai",
+      "contextWindow": 200000,
+      "contextLimitType": "combined",
+      "vision": false,
+      "sourceUrls": [
+        "https://docs.z.ai/guides/llm/glm-5",
+        "https://docs.z.ai/api-reference/llm/chat-completion",
+        "https://docs.z.ai/guides/capabilities/thinking"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "Z.ai上下文仅写1M/200K/128K，此处保守十进制换算，不假称精确token容量。输出131072有API range支持；4.6v模型API说明32K。effort仅GLM5.2及以上，5.2有效high/max，none/minimal关,low/medium->high,xhigh->max。5.3/Flash不可关闭且仅low/high/max；不能给旧GLM假造effort。"
+      ],
+      "providerScope": {
+        "baseUrl": "https://api.z.ai/api/paas/v4"
+      },
+      "maxOutputTokens": 131072,
+      "tools": true,
+      "thinking": true,
+      "thinkingCanDisable": true,
+      "reasoningEfforts": [],
+      "reasoningApis": []
+    },
+    {
+      "ids": [
+        "glm-4.7",
+        "glm-4.7-flash",
+        "glm-4.7-flashx"
+      ],
+      "vendor": "zai",
+      "contextWindow": 200000,
+      "contextLimitType": "combined",
+      "vision": false,
+      "sourceUrls": [
+        "https://docs.z.ai/guides/llm/glm-4.7",
+        "https://docs.z.ai/api-reference/llm/chat-completion",
+        "https://docs.z.ai/guides/capabilities/thinking"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "Z.ai上下文仅写1M/200K/128K，此处保守十进制换算，不假称精确token容量。输出131072有API range支持；4.6v模型API说明32K。effort仅GLM5.2及以上，5.2有效high/max，none/minimal关,low/medium->high,xhigh->max。5.3/Flash不可关闭且仅low/high/max；不能给旧GLM假造effort。"
+      ],
+      "providerScope": {
+        "baseUrl": "https://api.z.ai/api/paas/v4"
+      },
+      "maxOutputTokens": 131072,
+      "tools": true,
+      "thinking": true,
+      "thinkingCanDisable": true,
+      "reasoningEfforts": [],
+      "reasoningApis": []
+    },
+    {
+      "ids": [
+        "glm-4.6v",
+        "glm-4.6v-flash",
+        "glm-4.6v-flashx"
+      ],
+      "vendor": "zai",
+      "contextWindow": 128000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://docs.z.ai/guides/vlm/glm-4.6v",
+        "https://docs.z.ai/api-reference/llm/chat-completion",
+        "https://docs.z.ai/guides/capabilities/thinking"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "Z.ai上下文仅写1M/200K/128K，此处保守十进制换算，不假称精确token容量。输出131072有API range支持；4.6v模型API说明32K。effort仅GLM5.2及以上，5.2有效high/max，none/minimal关,low/medium->high,xhigh->max。5.3/Flash不可关闭且仅low/high/max；不能给旧GLM假造effort。"
+      ],
+      "providerScope": {
+        "baseUrl": "https://api.z.ai/api/paas/v4"
+      },
+      "maxOutputTokens": 32768,
+      "tools": true,
+      "thinking": true,
+      "thinkingCanDisable": true,
+      "reasoningEfforts": [],
+      "reasoningApis": []
+    },
+    {
+      "ids": [
+        "gpt-4.1-mini",
+        "gpt-4.1-mini-2025-04-14"
+      ],
+      "vendor": "openai",
+      "contextWindow": 1047576,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://developers.openai.com/api/docs/models/gpt-4.1-mini",
+        "https://developers.openai.com/api/docs/models/gpt-4.1-mini.md"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "These are public API limits; native subscription runtime catalog takes precedence. Model specification does not establish current account access or availability."
+      ],
+      "maxOutputTokens": 32768,
+      "tools": true,
+      "thinking": false,
+      "thinkingSwitchable": false,
+      "reasoningEfforts": [],
+      "reasoningApis": [],
+      "thinkingCanDisable": false,
+      "supportedWireApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "uiNotes": [
+        "公共 API 规格不能直接覆盖账号订阅目录返回的限制。"
+      ]
+    },
+    {
+      "ids": [
+        "gpt-4.1-nano",
+        "gpt-4.1-nano-2025-04-14"
+      ],
+      "vendor": "openai",
+      "contextWindow": 1047576,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://developers.openai.com/api/docs/models/gpt-4.1-nano",
+        "https://developers.openai.com/api/docs/models/gpt-4.1-nano.md"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "These are public API limits; native subscription runtime catalog takes precedence. Model specification does not establish current account access or availability."
+      ],
+      "maxOutputTokens": 32768,
+      "tools": true,
+      "thinking": false,
+      "thinkingSwitchable": false,
+      "reasoningEfforts": [],
+      "reasoningApis": [],
+      "thinkingCanDisable": false,
+      "supportedWireApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "uiNotes": [
+        "公共 API 规格不能直接覆盖账号订阅目录返回的限制。"
+      ]
+    },
+    {
+      "ids": [
+        "gpt-4.1",
+        "gpt-4.1-2025-04-14"
+      ],
+      "vendor": "openai",
+      "contextWindow": 1047576,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://developers.openai.com/api/docs/models/gpt-4.1",
+        "https://developers.openai.com/api/docs/models/gpt-4.1.md"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "These are public API limits; native subscription runtime catalog takes precedence. Model specification does not establish current account access or availability."
+      ],
+      "maxOutputTokens": 32768,
+      "tools": true,
+      "thinking": false,
+      "thinkingSwitchable": false,
+      "reasoningEfforts": [],
+      "reasoningApis": [],
+      "thinkingCanDisable": false,
+      "supportedWireApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "uiNotes": [
+        "公共 API 规格不能直接覆盖账号订阅目录返回的限制。"
+      ]
+    },
+    {
+      "ids": [
+        "gpt-4o-mini",
+        "gpt-4o-mini-2024-07-18"
+      ],
+      "vendor": "openai",
+      "contextWindow": 128000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://developers.openai.com/api/docs/models/gpt-4o-mini",
+        "https://developers.openai.com/api/docs/models/gpt-4o-mini.md"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "These are public API limits; native subscription runtime catalog takes precedence. Model specification does not establish current account access or availability."
+      ],
+      "maxOutputTokens": 16384,
+      "tools": true,
+      "thinking": false,
+      "thinkingSwitchable": false,
+      "reasoningEfforts": [],
+      "reasoningApis": [],
+      "thinkingCanDisable": false,
+      "supportedWireApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "uiNotes": [
+        "公共 API 规格不能直接覆盖账号订阅目录返回的限制。"
+      ]
+    },
+    {
+      "ids": [
+        "gpt-4o",
+        "gpt-4o-2024-08-06"
+      ],
+      "vendor": "openai",
+      "contextWindow": 128000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://developers.openai.com/api/docs/models/gpt-4o",
+        "https://developers.openai.com/api/docs/models/gpt-4o.md"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "These are public API limits; native subscription runtime catalog takes precedence. Model specification does not establish current account access or availability."
+      ],
+      "maxOutputTokens": 16384,
+      "tools": true,
+      "thinking": false,
+      "thinkingSwitchable": false,
+      "reasoningEfforts": [],
+      "reasoningApis": [],
+      "thinkingCanDisable": false,
+      "supportedWireApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "uiNotes": [
+        "公共 API 规格不能直接覆盖账号订阅目录返回的限制。"
+      ]
+    },
+    {
+      "ids": [
+        "gpt-5-mini",
+        "gpt-5-mini-2025-08-07"
+      ],
+      "vendor": "openai",
+      "contextWindow": 400000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://developers.openai.com/api/docs/models/gpt-5-mini",
+        "https://developers.openai.com/api/docs/models/gpt-5-mini.md",
+        "https://developers.openai.com/cookbook/examples/gpt-5/gpt-5_new_params_and_tools"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "These are public API limits; native subscription runtime catalog takes precedence. Model specification does not establish current account access or availability.",
+        "Reasoning tokens consume the output budget; context and output maxima are separate limits and cannot be added."
+      ],
+      "maxInputTokens": 272000,
+      "maxOutputTokens": 128000,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "medium",
+      "thinkingSwitchable": false,
+      "reasoningEfforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
+      "reasoningApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "thinkingCanDisable": false,
+      "supportedWireApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "uiNotes": [
+        "公共 API 规格不能直接覆盖账号订阅目录返回的限制。"
+      ]
+    },
+    {
+      "ids": [
+        "gpt-5-nano",
+        "gpt-5-nano-2025-08-07"
+      ],
+      "vendor": "openai",
+      "contextWindow": 400000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://developers.openai.com/api/docs/models/gpt-5-nano",
+        "https://developers.openai.com/api/docs/models/gpt-5-nano.md",
+        "https://developers.openai.com/cookbook/examples/gpt-5/gpt-5_new_params_and_tools"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "These are public API limits; native subscription runtime catalog takes precedence. Model specification does not establish current account access or availability.",
+        "Reasoning tokens consume the output budget; context and output maxima are separate limits and cannot be added."
+      ],
+      "maxInputTokens": 272000,
+      "maxOutputTokens": 128000,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "medium",
+      "thinkingSwitchable": false,
+      "reasoningEfforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
+      "reasoningApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "thinkingCanDisable": false,
+      "supportedWireApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "uiNotes": [
+        "公共 API 规格不能直接覆盖账号订阅目录返回的限制。"
+      ]
+    },
+    {
+      "ids": [
+        "gpt-5-pro",
+        "gpt-5-pro-2025-10-06"
+      ],
+      "vendor": "openai",
+      "contextWindow": 400000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://developers.openai.com/api/docs/models/gpt-5-pro",
+        "https://developers.openai.com/api/docs/models/gpt-5-pro.md"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "These are public API limits; native subscription runtime catalog takes precedence. Model specification does not establish current account access or availability.",
+        "Reasoning tokens consume the output budget; context and output maxima are separate limits and cannot be added."
+      ],
+      "maxOutputTokens": 272000,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "high",
+      "thinkingSwitchable": false,
+      "reasoningEfforts": [
+        "high"
+      ],
+      "reasoningApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "thinkingCanDisable": false,
+      "supportedWireApis": [
+        "responses"
+      ],
+      "uiNotes": [
+        "公共 API 规格不能直接覆盖账号订阅目录返回的限制。"
+      ]
+    },
+    {
+      "ids": [
+        "gpt-5.1",
+        "gpt-5.1-2025-11-13"
+      ],
+      "vendor": "openai",
+      "contextWindow": 400000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://developers.openai.com/api/docs/models/gpt-5.1",
+        "https://developers.openai.com/api/docs/models/gpt-5.1.md"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "These are public API limits; native subscription runtime catalog takes precedence. Model specification does not establish current account access or availability.",
+        "Reasoning tokens consume the output budget; context and output maxima are separate limits and cannot be added."
+      ],
+      "maxOutputTokens": 128000,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "none",
+      "thinkingSwitchable": true,
+      "reasoningEfforts": [
+        "none",
+        "low",
+        "medium",
+        "high"
+      ],
+      "reasoningApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "thinkingCanDisable": true,
+      "supportedWireApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "uiNotes": [
+        "公共 API 规格不能直接覆盖账号订阅目录返回的限制。"
+      ]
+    },
+    {
+      "ids": [
+        "gpt-5.2-codex"
+      ],
+      "vendor": "openai",
+      "contextWindow": 400000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://developers.openai.com/api/docs/models/gpt-5.2-codex",
+        "https://developers.openai.com/api/docs/models/gpt-5.2-codex.md"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "These are public API limits; native subscription runtime catalog takes precedence. Model specification does not establish current account access or availability.",
+        "Reasoning tokens consume the output budget; context and output maxima are separate limits and cannot be added."
+      ],
+      "maxInputTokens": 272000,
+      "maxOutputTokens": 128000,
+      "tools": true,
+      "thinking": true,
+      "thinkingSwitchable": false,
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "reasoningApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "thinkingCanDisable": false,
+      "supportedWireApis": [
+        "responses"
+      ],
+      "uiNotes": [
+        "公共 API 规格不能直接覆盖账号订阅目录返回的限制。"
+      ]
+    },
+    {
+      "ids": [
+        "gpt-5.2",
+        "gpt-5.2-2025-12-11"
+      ],
+      "vendor": "openai",
+      "contextWindow": 400000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://developers.openai.com/api/docs/models/gpt-5.2",
+        "https://developers.openai.com/api/docs/models/gpt-5.2.md"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "These are public API limits; native subscription runtime catalog takes precedence. Model specification does not establish current account access or availability.",
+        "Reasoning tokens consume the output budget; context and output maxima are separate limits and cannot be added."
+      ],
+      "maxOutputTokens": 128000,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "none",
+      "thinkingSwitchable": true,
+      "reasoningEfforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "reasoningApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "thinkingCanDisable": true,
+      "supportedWireApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "uiNotes": [
+        "公共 API 规格不能直接覆盖账号订阅目录返回的限制。"
+      ]
+    },
+    {
+      "ids": [
+        "gpt-5.3-codex"
+      ],
+      "vendor": "openai",
+      "contextWindow": 400000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://developers.openai.com/api/docs/models/gpt-5.3-codex",
+        "https://developers.openai.com/api/docs/models/gpt-5.3-codex.md"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "These are public API limits; native subscription runtime catalog takes precedence. Model specification does not establish current account access or availability.",
+        "Reasoning tokens consume the output budget; context and output maxima are separate limits and cannot be added."
+      ],
+      "maxInputTokens": 272000,
+      "maxOutputTokens": 128000,
+      "tools": true,
+      "thinking": true,
+      "thinkingSwitchable": false,
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "reasoningApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "thinkingCanDisable": false,
+      "supportedWireApis": [
+        "responses"
+      ],
+      "uiNotes": [
+        "公共 API 规格不能直接覆盖账号订阅目录返回的限制。"
+      ]
+    },
+    {
+      "ids": [
+        "gpt-5.4-mini",
+        "gpt-5.4-mini-2026-03-17"
+      ],
+      "vendor": "openai",
+      "contextWindow": 400000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://developers.openai.com/api/docs/models/gpt-5.4-mini",
+        "https://developers.openai.com/api/docs/models/gpt-5.4-mini.md"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "These are public API limits; native subscription runtime catalog takes precedence. Model specification does not establish current account access or availability.",
+        "Reasoning tokens consume the output budget; context and output maxima are separate limits and cannot be added."
+      ],
+      "maxInputTokens": 272000,
+      "maxOutputTokens": 128000,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "none",
+      "thinkingSwitchable": true,
+      "reasoningEfforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "reasoningApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "thinkingCanDisable": true,
+      "supportedWireApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "uiNotes": [
+        "公共 API 规格不能直接覆盖账号订阅目录返回的限制。"
+      ]
+    },
+    {
+      "ids": [
+        "gpt-5.4-nano",
+        "gpt-5.4-nano-2026-03-17"
+      ],
+      "vendor": "openai",
+      "contextWindow": 400000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://developers.openai.com/api/docs/models/gpt-5.4-nano",
+        "https://developers.openai.com/api/docs/models/gpt-5.4-nano.md"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "These are public API limits; native subscription runtime catalog takes precedence. Model specification does not establish current account access or availability.",
+        "Reasoning tokens consume the output budget; context and output maxima are separate limits and cannot be added."
+      ],
+      "maxInputTokens": 272000,
+      "maxOutputTokens": 128000,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "none",
+      "thinkingSwitchable": true,
+      "reasoningEfforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "reasoningApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "thinkingCanDisable": true,
+      "supportedWireApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "uiNotes": [
+        "公共 API 规格不能直接覆盖账号订阅目录返回的限制。"
+      ]
+    },
+    {
+      "ids": [
+        "gpt-5.4-pro",
+        "gpt-5.4-pro-2026-03-05"
+      ],
+      "vendor": "openai",
+      "contextWindow": 1050000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://developers.openai.com/api/docs/models/gpt-5.4-pro",
+        "https://developers.openai.com/api/docs/models/gpt-5.4-pro.md"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "These are public API limits; native subscription runtime catalog takes precedence. Model specification does not establish current account access or availability.",
+        "Reasoning tokens consume the output budget; context and output maxima are separate limits and cannot be added."
+      ],
+      "maxOutputTokens": 128000,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "medium",
+      "thinkingSwitchable": false,
+      "reasoningEfforts": [
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "reasoningApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "thinkingCanDisable": false,
+      "supportedWireApis": [
+        "responses"
+      ],
+      "uiNotes": [
+        "公共 API 规格不能直接覆盖账号订阅目录返回的限制。"
+      ]
+    },
+    {
+      "ids": [
+        "gpt-5.4",
+        "gpt-5.4-2026-03-05"
+      ],
+      "vendor": "openai",
+      "contextWindow": 1050000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://developers.openai.com/api/docs/models/gpt-5.4",
+        "https://developers.openai.com/api/docs/models/gpt-5.4.md"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "These are public API limits; native subscription runtime catalog takes precedence. Model specification does not establish current account access or availability.",
+        "Reasoning tokens consume the output budget; context and output maxima are separate limits and cannot be added."
+      ],
+      "maxOutputTokens": 128000,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "none",
+      "thinkingSwitchable": true,
+      "reasoningEfforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "reasoningApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "thinkingCanDisable": true,
+      "supportedWireApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "uiNotes": [
+        "公共 API 规格不能直接覆盖账号订阅目录返回的限制。"
+      ]
+    },
+    {
+      "ids": [
+        "gpt-5.5",
+        "gpt-5.5-2026-04-23"
+      ],
+      "vendor": "openai",
+      "contextWindow": 1050000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://developers.openai.com/api/docs/models/gpt-5.5",
+        "https://developers.openai.com/api/docs/models/gpt-5.5.md"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "These are public API limits; native subscription runtime catalog takes precedence. Model specification does not establish current account access or availability.",
+        "Reasoning tokens consume the output budget; context and output maxima are separate limits and cannot be added."
+      ],
+      "maxOutputTokens": 128000,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "medium",
+      "thinkingSwitchable": true,
+      "reasoningEfforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "reasoningApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "thinkingCanDisable": true,
+      "supportedWireApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "uiNotes": [
+        "公共 API 规格不能直接覆盖账号订阅目录返回的限制。"
+      ]
+    },
+    {
+      "ids": [
+        "gpt-5.6-luna"
+      ],
+      "vendor": "openai",
+      "contextWindow": 1050000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://developers.openai.com/api/docs/models/gpt-5.6-luna",
+        "https://developers.openai.com/api/docs/models/gpt-5.6-luna.md"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "These are public API limits; native subscription runtime catalog takes precedence. Model specification does not establish current account access or availability.",
+        "Reasoning tokens consume the output budget; context and output maxima are separate limits and cannot be added."
+      ],
+      "maxInputTokens": 922000,
+      "maxOutputTokens": 128000,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "medium",
+      "thinkingSwitchable": true,
+      "reasoningEfforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "reasoningApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "thinkingCanDisable": true,
+      "supportedWireApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "uiNotes": [
+        "公共 API 规格不能直接覆盖账号订阅目录返回的限制。"
+      ]
+    },
+    {
+      "ids": [
+        "gpt-5.6-sol",
+        "gpt-5.6"
+      ],
+      "vendor": "openai",
+      "contextWindow": 1050000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+        "https://developers.openai.com/api/docs/models/gpt-5.6-sol.md"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "These are public API limits; native subscription runtime catalog takes precedence. Model specification does not establish current account access or availability.",
+        "Reasoning tokens consume the output budget; context and output maxima are separate limits and cannot be added."
+      ],
+      "maxInputTokens": 922000,
+      "maxOutputTokens": 128000,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "medium",
+      "thinkingSwitchable": true,
+      "reasoningEfforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "reasoningApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "thinkingCanDisable": true,
+      "supportedWireApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "uiNotes": [
+        "公共 API 规格不能直接覆盖账号订阅目录返回的限制。"
+      ]
+    },
+    {
+      "ids": [
+        "gpt-5.6-terra"
+      ],
+      "vendor": "openai",
+      "contextWindow": 1050000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://developers.openai.com/api/docs/models/gpt-5.6-terra",
+        "https://developers.openai.com/api/docs/models/gpt-5.6-terra.md"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "These are public API limits; native subscription runtime catalog takes precedence. Model specification does not establish current account access or availability.",
+        "Reasoning tokens consume the output budget; context and output maxima are separate limits and cannot be added."
+      ],
+      "maxInputTokens": 922000,
+      "maxOutputTokens": 128000,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "medium",
+      "thinkingSwitchable": true,
+      "reasoningEfforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "reasoningApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "thinkingCanDisable": true,
+      "supportedWireApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "uiNotes": [
+        "公共 API 规格不能直接覆盖账号订阅目录返回的限制。"
+      ]
+    },
+    {
+      "ids": [
+        "gpt-5",
+        "gpt-5-2025-08-07"
+      ],
+      "vendor": "openai",
+      "contextWindow": 400000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://developers.openai.com/api/docs/models/gpt-5",
+        "https://developers.openai.com/api/docs/models/gpt-5.md",
+        "https://developers.openai.com/cookbook/examples/gpt-5/gpt-5_new_params_and_tools"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "These are public API limits; native subscription runtime catalog takes precedence. Model specification does not establish current account access or availability.",
+        "Reasoning tokens consume the output budget; context and output maxima are separate limits and cannot be added."
+      ],
+      "maxInputTokens": 272000,
+      "maxOutputTokens": 128000,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "medium",
+      "thinkingSwitchable": false,
+      "reasoningEfforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
+      "reasoningApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "thinkingCanDisable": false,
+      "supportedWireApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "uiNotes": [
+        "公共 API 规格不能直接覆盖账号订阅目录返回的限制。"
+      ]
+    },
+    {
+      "ids": [
+        "gpt-6-astra"
+      ],
+      "vendor": "openai",
+      "contextWindow": 1050000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://developers.openai.com/api/docs/models/gpt-6-astra",
+        "https://developers.openai.com/api/docs/models/gpt-6-astra.md"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "These are public API limits; native subscription runtime catalog takes precedence. Model specification does not establish current account access or availability.",
+        "Tool calling requires Responses; Chat Completions tool calling is unsupported.",
+        "Reasoning tokens consume the output budget; context and output maxima are separate limits and cannot be added."
+      ],
+      "maxInputTokens": 922000,
+      "maxOutputTokens": 128000,
+      "tools": true,
+      "thinking": true,
+      "thinkingSwitchable": false,
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "reasoningApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "toolsByWireApi": {
+        "responses": true,
+        "chat-completions": false
+      },
+      "thinkingCanDisable": false,
+      "supportedWireApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "uiNotes": [
+        "公共 API 规格不能直接覆盖账号订阅目录返回的限制。"
+      ]
+    },
+    {
+      "ids": [
+        "gpt-6-luna"
+      ],
+      "vendor": "openai",
+      "contextWindow": 1050000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://developers.openai.com/api/docs/models/gpt-6-luna",
+        "https://developers.openai.com/api/docs/models/gpt-6-luna.md"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "These are public API limits; native subscription runtime catalog takes precedence. Model specification does not establish current account access or availability.",
+        "Chat Completions tool calling is supported only with reasoning_effort none; Responses supports reasoning with tools.",
+        "Reasoning tokens consume the output budget; context and output maxima are separate limits and cannot be added.",
+        "Chat工具仅在思考关闭时可用；自动默认保守标为不支持，请使用Responses或显式配置none。"
+      ],
+      "maxInputTokens": 922000,
+      "maxOutputTokens": 128000,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "medium",
+      "thinkingSwitchable": true,
+      "reasoningEfforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "reasoningApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "toolsByWireApi": {
+        "responses": true,
+        "chat-completions": false
+      },
+      "thinkingCanDisable": true,
+      "supportedWireApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "uiNotes": [
+        "公共 API 规格不能直接覆盖账号订阅目录返回的限制。"
+      ]
+    },
+    {
+      "ids": [
+        "gpt-6-sol"
+      ],
+      "vendor": "openai",
+      "contextWindow": 1050000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://developers.openai.com/api/docs/models/gpt-6-sol",
+        "https://developers.openai.com/api/docs/models/gpt-6-sol.md"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "These are public API limits; native subscription runtime catalog takes precedence. Model specification does not establish current account access or availability.",
+        "Chat Completions tool calling is supported only with reasoning_effort none; Responses supports reasoning with tools.",
+        "Reasoning tokens consume the output budget; context and output maxima are separate limits and cannot be added.",
+        "Chat工具仅在思考关闭时可用；自动默认保守标为不支持，请使用Responses或显式配置none。"
+      ],
+      "maxInputTokens": 922000,
+      "maxOutputTokens": 128000,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "medium",
+      "thinkingSwitchable": true,
+      "reasoningEfforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "reasoningApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "toolsByWireApi": {
+        "responses": true,
+        "chat-completions": false
+      },
+      "thinkingCanDisable": true,
+      "supportedWireApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "uiNotes": [
+        "公共 API 规格不能直接覆盖账号订阅目录返回的限制。"
+      ]
+    },
+    {
+      "ids": [
+        "gpt-6.1-sol"
+      ],
+      "vendor": "openai",
+      "contextWindow": 1050000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+        "https://developers.openai.com/api/docs/models/gpt-6.1-sol.md"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "These are public API limits; native subscription runtime catalog takes precedence. Model specification does not establish current account access or availability.",
+        "Tool calling requires Responses; Chat Completions tool calling is unsupported.",
+        "Reasoning tokens consume the output budget; context and output maxima are separate limits and cannot be added."
+      ],
+      "maxInputTokens": 922000,
+      "maxOutputTokens": 128000,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "medium",
+      "thinkingSwitchable": false,
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "reasoningApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "toolsByWireApi": {
+        "responses": true,
+        "chat-completions": false
+      },
+      "thinkingCanDisable": false,
+      "supportedWireApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "uiNotes": [
+        "公共 API 规格不能直接覆盖账号订阅目录返回的限制。"
+      ]
+    },
+    {
+      "ids": [
+        "o1-mini",
+        "o1-mini-2024-09-12"
+      ],
+      "vendor": "openai",
+      "contextWindow": 128000,
+      "contextLimitType": "combined",
+      "vision": false,
+      "sourceUrls": [
+        "https://developers.openai.com/api/docs/models/o1-mini",
+        "https://developers.openai.com/api/docs/models/o1-mini.md"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "These are public API limits; native subscription runtime catalog takes precedence. Model specification does not establish current account access or availability.",
+        "Current fetched model page does not establish allowed configurable reasoning effort values. Do not infer from all o-series models.",
+        "Reasoning tokens consume the output budget; context and output maxima are separate limits and cannot be added.",
+        "Text-only, no function calling, Responses endpoint unsupported. Tool list elsewhere in current page is inconsistent with its endpoint table, so function_calling flag and explicit endpoint support were used."
+      ],
+      "maxOutputTokens": 65536,
+      "tools": false,
+      "thinking": true,
+      "reasoningApis": [
+        "chat-completions"
+      ],
+      "toolsByWireApi": {
+        "chat-completions": false,
+        "responses": false
+      },
+      "supportedWireApis": [
+        "chat-completions"
+      ],
+      "uiNotes": [
+        "公共 API 规格不能直接覆盖账号订阅目录返回的限制。"
+      ]
+    },
+    {
+      "ids": [
+        "o1",
+        "o1-2024-12-17"
+      ],
+      "vendor": "openai",
+      "contextWindow": 200000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://developers.openai.com/api/docs/models/o1",
+        "https://developers.openai.com/api/docs/models/o1.md"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "These are public API limits; native subscription runtime catalog takes precedence. Model specification does not establish current account access or availability.",
+        "Current fetched model page does not establish allowed configurable reasoning effort values. Do not infer from all o-series models.",
+        "Reasoning tokens consume the output budget; context and output maxima are separate limits and cannot be added."
+      ],
+      "maxOutputTokens": 100000,
+      "tools": true,
+      "thinking": true,
+      "reasoningApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "supportedWireApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "uiNotes": [
+        "公共 API 规格不能直接覆盖账号订阅目录返回的限制。"
+      ]
+    },
+    {
+      "ids": [
+        "o3-mini",
+        "o3-mini-2025-01-31"
+      ],
+      "vendor": "openai",
+      "contextWindow": 200000,
+      "contextLimitType": "combined",
+      "vision": false,
+      "sourceUrls": [
+        "https://developers.openai.com/api/docs/models/o3-mini",
+        "https://developers.openai.com/api/docs/models/o3-mini.md",
+        "https://developers.openai.com/cookbook/examples/object_oriented_agentic_approach/secure_code_interpreter_tool_for_llm_agents"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "These are public API limits; native subscription runtime catalog takes precedence. Model specification does not establish current account access or availability.",
+        "Reasoning tokens consume the output budget; context and output maxima are separate limits and cannot be added."
+      ],
+      "maxOutputTokens": 100000,
+      "tools": true,
+      "thinking": true,
+      "thinkingSwitchable": false,
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "reasoningApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "thinkingCanDisable": false,
+      "supportedWireApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "uiNotes": [
+        "公共 API 规格不能直接覆盖账号订阅目录返回的限制。"
+      ]
+    },
+    {
+      "ids": [
+        "o3-pro",
+        "o3-pro-2025-06-10"
+      ],
+      "vendor": "openai",
+      "contextWindow": 200000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://developers.openai.com/api/docs/models/o3-pro",
+        "https://developers.openai.com/api/docs/models/o3-pro.md"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "These are public API limits; native subscription runtime catalog takes precedence. Model specification does not establish current account access or availability.",
+        "Current fetched model page does not establish allowed configurable reasoning effort values. Do not infer from all o-series models.",
+        "Reasoning tokens consume the output budget; context and output maxima are separate limits and cannot be added."
+      ],
+      "maxOutputTokens": 100000,
+      "tools": true,
+      "thinking": true,
+      "reasoningApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "supportedWireApis": [
+        "responses"
+      ],
+      "uiNotes": [
+        "公共 API 规格不能直接覆盖账号订阅目录返回的限制。"
+      ]
+    },
+    {
+      "ids": [
+        "o3",
+        "o3-2025-04-16"
+      ],
+      "vendor": "openai",
+      "contextWindow": 200000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://developers.openai.com/api/docs/models/o3",
+        "https://developers.openai.com/api/docs/models/o3.md",
+        "https://developers.openai.com/cookbook/examples/partners/model_selection_guide/model_selection_guide"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "These are public API limits; native subscription runtime catalog takes precedence. Model specification does not establish current account access or availability.",
+        "Reasoning tokens consume the output budget; context and output maxima are separate limits and cannot be added."
+      ],
+      "maxOutputTokens": 100000,
+      "tools": true,
+      "thinking": true,
+      "thinkingSwitchable": false,
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "reasoningApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "thinkingCanDisable": false,
+      "supportedWireApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "uiNotes": [
+        "公共 API 规格不能直接覆盖账号订阅目录返回的限制。"
+      ]
+    },
+    {
+      "ids": [
+        "o4-mini",
+        "o4-mini-2025-04-16"
+      ],
+      "vendor": "openai",
+      "contextWindow": 200000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://developers.openai.com/api/docs/models/o4-mini",
+        "https://developers.openai.com/api/docs/models/o4-mini.md",
+        "https://developers.openai.com/cookbook/examples/partners/model_selection_guide/model_selection_guide"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "These are public API limits; native subscription runtime catalog takes precedence. Model specification does not establish current account access or availability.",
+        "Reasoning tokens consume the output budget; context and output maxima are separate limits and cannot be added."
+      ],
+      "maxOutputTokens": 100000,
+      "tools": true,
+      "thinking": true,
+      "thinkingSwitchable": false,
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "reasoningApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "thinkingCanDisable": false,
+      "supportedWireApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "uiNotes": [
+        "公共 API 规格不能直接覆盖账号订阅目录返回的限制。"
+      ]
+    },
+    {
+      "ids": [
+        "grok-4.7",
+        "grok-4.7-latest"
+      ],
+      "vendor": "xai",
+      "contextWindow": 500000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://docs.x.ai/developers/grok-4-7",
+        "https://docs.x.ai/developers/models/grok-4.7",
+        "https://docs.x.ai/developers/model-capabilities/text/reasoning"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "Official guide says no text output limit; do not invent a fixed maxOutputTokens. Shared 500,000-token context still applies.",
+        "Reasoning cannot be disabled.",
+        "presence_penalty, frequency_penalty, stop are not supported for reasoning models.",
+        "Public API limits must not override lower provider subscription runtime limits."
+      ],
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "high",
+      "thinkingSwitchable": false,
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "reasoningApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "thinkingCanDisable": false,
+      "maxOutputTokensPolicy": "no-independent-text-output-limit-published",
+      "uiNotes": [
+        "这是公共 API 规格，Grok Build 订阅使用其账号目录返回的限制。",
+        "官方没有公布独立的文本输出上限，输出预算由客户端设置。"
+      ]
+    },
+    {
+      "ids": [
+        "claude-fable-5-1"
+      ],
+      "vendor": "anthropic",
+      "contextWindow": 1000000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://platform.claude.com/docs/en/models/fable-5-1/overview",
+        "https://platform.claude.com/docs/en/build-with-claude/effort",
+        "https://platform.claude.com/docs/en/build-with-claude/thinking",
+        "https://platform.claude.com/docs/en/build-with-claude/context-windows",
+        "https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "Text/image input and client tools supported. Thinking cannot be disabled.",
+        "Normal Messages output ceiling is 128000; do not substitute batch-only beta ceilings."
+      ],
+      "maxOutputTokens": 128000,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "high",
+      "thinkingCanDisable": false,
+      "thinkingMode": "adaptive-always-on",
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "reasoningApis": [
+        "messages"
+      ],
+      "adaptiveThinking": true
+    },
+    {
+      "ids": [
+        "claude-opus-5-5"
+      ],
+      "vendor": "anthropic",
+      "contextWindow": 1000000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://platform.claude.com/docs/en/models/opus-5-5/overview",
+        "https://platform.claude.com/docs/en/build-with-claude/effort",
+        "https://platform.claude.com/docs/en/build-with-claude/thinking",
+        "https://platform.claude.com/docs/en/build-with-claude/context-windows",
+        "https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "Thinking cannot be disabled; forced tool_choice any/tool rejects with 400."
+      ],
+      "maxOutputTokens": 128000,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "medium",
+      "thinkingCanDisable": false,
+      "thinkingMode": "adaptive-always-on",
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "reasoningApis": [
+        "messages"
+      ],
+      "adaptiveThinking": true
+    },
+    {
+      "ids": [
+        "claude-sonnet-5-5"
+      ],
+      "vendor": "anthropic",
+      "contextWindow": 1000000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://platform.claude.com/docs/en/models/sonnet-5-5/overview",
+        "https://platform.claude.com/docs/en/build-with-claude/effort",
+        "https://platform.claude.com/docs/en/build-with-claude/thinking",
+        "https://platform.claude.com/docs/en/build-with-claude/context-windows",
+        "https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "thinking.disabled rejects with 400. between_tools is accepted only at low/medium/high; xhigh/max require adaptive.",
+        "Nondefault sampling parameters and forced tool_choice any/tool reject."
+      ],
+      "maxOutputTokens": 128000,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "high",
+      "thinkingCanDisable": false,
+      "thinkingMode": "adaptive",
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "reasoningApis": [
+        "messages"
+      ],
+      "adaptiveThinking": true
+    },
+    {
+      "ids": [
+        "claude-haiku-5-5"
+      ],
+      "vendor": "anthropic",
+      "contextWindow": 1000000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://platform.claude.com/docs/en/models/overview",
+        "https://platform.claude.com/docs/en/build-with-claude/effort",
+        "https://platform.claude.com/docs/en/build-with-claude/thinking",
+        "https://platform.claude.com/docs/en/build-with-claude/context-windows",
+        "https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "thinking.disabled works only at low/medium/high; xhigh/max require adaptive.",
+        "Prompts over 100000 tokens have long-context pricing."
+      ],
+      "maxOutputTokens": 128000,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "medium",
+      "thinkingCanDisable": true,
+      "thinkingMode": "adaptive",
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "reasoningApis": [
+        "messages"
+      ],
+      "adaptiveThinking": true
+    },
+    {
+      "ids": [
+        "claude-sonnet-4-6"
+      ],
+      "vendor": "anthropic",
+      "contextWindow": 1000000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://platform.claude.com/docs/en/models/sonnet-4-6/overview",
+        "https://platform.claude.com/docs/en/build-with-claude/effort",
+        "https://platform.claude.com/docs/en/build-with-claude/thinking",
+        "https://platform.claude.com/docs/en/build-with-claude/context-windows",
+        "https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "1M is now default and needs no beta header.",
+        "Extended thinking budget mode deprecated; adaptive is recommended."
+      ],
+      "maxOutputTokens": 128000,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "high",
+      "thinkingCanDisable": true,
+      "thinkingMode": "adaptive",
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high",
+        "max"
+      ],
+      "reasoningApis": [
+        "messages"
+      ],
+      "adaptiveThinking": true
+    },
+    {
+      "ids": [
+        "claude-opus-4-6"
+      ],
+      "vendor": "anthropic",
+      "contextWindow": 1000000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://platform.claude.com/docs/en/models/opus-4-6/overview",
+        "https://platform.claude.com/docs/en/build-with-claude/effort",
+        "https://platform.claude.com/docs/en/build-with-claude/thinking",
+        "https://platform.claude.com/docs/en/build-with-claude/context-windows",
+        "https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "1M is now default and needs no beta header.",
+        "Extended thinking budget mode deprecated; adaptive is recommended."
+      ],
+      "maxOutputTokens": 128000,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "high",
+      "thinkingCanDisable": true,
+      "thinkingMode": "adaptive",
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high",
+        "max"
+      ],
+      "reasoningApis": [
+        "messages"
+      ],
+      "adaptiveThinking": true
+    },
+    {
+      "ids": [
+        "claude-opus-4-7"
+      ],
+      "vendor": "anthropic",
+      "contextWindow": 1000000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://platform.claude.com/docs/ja/models/opus-4-7/overview",
+        "https://platform.claude.com/docs/en/build-with-claude/effort",
+        "https://platform.claude.com/docs/en/build-with-claude/thinking",
+        "https://platform.claude.com/docs/en/build-with-claude/context-windows",
+        "https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "Thinking is off by default; enable adaptive explicitly."
+      ],
+      "maxOutputTokens": 128000,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "high",
+      "thinkingCanDisable": true,
+      "thinkingMode": "adaptive",
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "reasoningApis": [
+        "messages"
+      ],
+      "adaptiveThinking": true
+    },
+    {
+      "ids": [
+        "claude-opus-4-8"
+      ],
+      "vendor": "anthropic",
+      "contextWindow": 1000000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://platform.claude.com/docs/en/models/opus-4-8/overview",
+        "https://platform.claude.com/docs/en/build-with-claude/effort",
+        "https://platform.claude.com/docs/en/build-with-claude/thinking",
+        "https://platform.claude.com/docs/en/build-with-claude/context-windows",
+        "https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "Thinking is off by default; enable adaptive explicitly."
+      ],
+      "maxOutputTokens": 128000,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "high",
+      "thinkingCanDisable": true,
+      "thinkingMode": "adaptive",
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "reasoningApis": [
+        "messages"
+      ],
+      "adaptiveThinking": true
+    },
+    {
+      "ids": [
+        "claude-sonnet-5"
+      ],
+      "vendor": "anthropic",
+      "contextWindow": 1000000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://platform.claude.com/docs/en/models/sonnet-5/overview",
+        "https://platform.claude.com/docs/en/build-with-claude/effort",
+        "https://platform.claude.com/docs/en/build-with-claude/thinking",
+        "https://platform.claude.com/docs/en/build-with-claude/context-windows",
+        "https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "Manual thinking.enabled with budget_tokens rejects; adaptive default.",
+        "Nondefault sampling parameters reject with 400."
+      ],
+      "maxOutputTokens": 128000,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "high",
+      "thinkingCanDisable": true,
+      "thinkingMode": "adaptive",
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "reasoningApis": [
+        "messages"
+      ],
+      "adaptiveThinking": true
+    },
+    {
+      "ids": [
+        "claude-opus-5"
+      ],
+      "vendor": "anthropic",
+      "contextWindow": 1000000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://platform.claude.com/docs/en/models/opus-5/overview",
+        "https://platform.claude.com/docs/en/build-with-claude/effort",
+        "https://platform.claude.com/docs/en/build-with-claude/thinking",
+        "https://platform.claude.com/docs/en/build-with-claude/context-windows",
+        "https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "thinking.disabled only accepted at low/medium/high; xhigh/max require adaptive."
+      ],
+      "maxOutputTokens": 128000,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "high",
+      "thinkingCanDisable": true,
+      "thinkingMode": "adaptive",
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "reasoningApis": [
+        "messages"
+      ],
+      "adaptiveThinking": true
+    },
+    {
+      "ids": [
+        "claude-fable-5"
+      ],
+      "vendor": "anthropic",
+      "contextWindow": 1000000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://platform.claude.com/docs/en/models/fable-5/overview",
+        "https://platform.claude.com/docs/en/build-with-claude/effort",
+        "https://platform.claude.com/docs/en/build-with-claude/thinking",
+        "https://platform.claude.com/docs/en/build-with-claude/context-windows",
+        "https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "Thinking cannot be disabled."
+      ],
+      "maxOutputTokens": 128000,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "high",
+      "thinkingCanDisable": false,
+      "thinkingMode": "adaptive-always-on",
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "reasoningApis": [
+        "messages"
+      ],
+      "adaptiveThinking": true
+    },
+    {
+      "ids": [
+        "claude-sonnet-4-5",
+        "claude-sonnet-4-5-20250929"
+      ],
+      "vendor": "anthropic",
+      "contextWindow": 200000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://platform.claude.com/docs/de/models/sonnet-4-5/overview",
+        "https://platform.claude.com/docs/en/build-with-claude/effort",
+        "https://platform.claude.com/docs/en/build-with-claude/thinking",
+        "https://platform.claude.com/docs/en/build-with-claude/context-windows",
+        "https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview",
+        "https://platform.claude.com/docs/en/build-with-claude/extended-thinking"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "Only manual thinking.type=enabled plus budget_tokens; output_config.effort unsupported.",
+        "Former 1M beta retired on 2026-04-30; current 200000. Retirement 2026-11-30.",
+        "旧式思考预算必须至少1024并小于本次max_tokens；此处预算范围按默认输出上限计算。"
+      ],
+      "maxOutputTokens": 64000,
+      "tools": true,
+      "thinking": true,
+      "thinkingCanDisable": true,
+      "thinkingMode": "budget",
+      "reasoningEfforts": [],
+      "reasoningApis": [
+        "messages"
+      ],
+      "minThinkingBudget": 1024,
+      "maxThinkingBudget": 63999
+    },
+    {
+      "ids": [
+        "claude-opus-4-5",
+        "claude-opus-4-5-20251101"
+      ],
+      "vendor": "anthropic",
+      "contextWindow": 200000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://platform.claude.com/docs/en/models/opus-4-5/overview",
+        "https://platform.claude.com/docs/en/build-with-claude/effort",
+        "https://platform.claude.com/docs/en/build-with-claude/thinking",
+        "https://platform.claude.com/docs/en/build-with-claude/context-windows",
+        "https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview",
+        "https://platform.claude.com/docs/en/build-with-claude/extended-thinking"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "Manual thinking.type=enabled plus budget_tokens; effort can accompany budget. xhigh/max unsupported.",
+        "旧式思考预算必须至少1024并小于本次max_tokens；此处预算范围按默认输出上限计算。"
+      ],
+      "maxOutputTokens": 64000,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "high",
+      "thinkingCanDisable": true,
+      "thinkingMode": "budget-and-effort",
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "reasoningApis": [
+        "messages"
+      ],
+      "minThinkingBudget": 1024,
+      "maxThinkingBudget": 63999
+    },
+    {
+      "ids": [
+        "claude-haiku-4-5",
+        "claude-haiku-4-5-20251001"
+      ],
+      "vendor": "anthropic",
+      "contextWindow": 200000,
+      "contextLimitType": "combined",
+      "vision": true,
+      "sourceUrls": [
+        "https://platform.claude.com/docs/en/models/haiku-4-5/overview",
+        "https://platform.claude.com/docs/en/build-with-claude/effort",
+        "https://platform.claude.com/docs/en/build-with-claude/thinking",
+        "https://platform.claude.com/docs/en/build-with-claude/context-windows",
+        "https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview",
+        "https://platform.claude.com/docs/en/build-with-claude/extended-thinking"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "Only manual thinking.type=enabled plus budget_tokens; output_config.effort unsupported.",
+        "旧式思考预算必须至少1024并小于本次max_tokens；此处预算范围按默认输出上限计算。"
+      ],
+      "maxOutputTokens": 64000,
+      "tools": true,
+      "thinking": true,
+      "thinkingCanDisable": true,
+      "thinkingMode": "budget",
+      "reasoningEfforts": [],
+      "reasoningApis": [
+        "messages"
+      ],
+      "minThinkingBudget": 1024,
+      "maxThinkingBudget": 63999
+    },
+    {
+      "ids": [
+        "gemini-2.5-pro"
+      ],
+      "vendor": "google",
+      "contextWindow": 1048576,
+      "contextLimitType": "input",
+      "vision": true,
+      "sourceUrls": [
+        "https://ai.google.dev/gemini-api/docs/models/gemini-2.5-pro",
+        "https://ai.google.dev/gemini-api/docs/thinking",
+        "https://ai.google.dev/gemini-api/docs/generate-content/thinking",
+        "https://ai.google.dev/gemini-api/docs/openai"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "Native GenerateContent default is dynamic thinking; cannot disable.",
+        "OpenAI compatibility maps minimal/low to 1024, medium to 8192, high to 24576; high does not mean maximum native budget.",
+        "Published 1048576 is input limit, not combined input plus output."
+      ],
+      "maxInputTokens": 1048576,
+      "maxOutputTokens": 65536,
+      "tools": true,
+      "thinking": true,
+      "thinkingCanDisable": false,
+      "thinkingMode": "budget",
+      "reasoningEfforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
+      "reasoningApis": [
+        "chat-completions"
+      ]
+    },
+    {
+      "ids": [
+        "gemini-2.5-flash"
+      ],
+      "vendor": "google",
+      "contextWindow": 1048576,
+      "contextLimitType": "input",
+      "vision": true,
+      "sourceUrls": [
+        "https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash",
+        "https://ai.google.dev/gemini-api/docs/thinking",
+        "https://ai.google.dev/gemini-api/docs/generate-content/thinking",
+        "https://ai.google.dev/gemini-api/docs/openai"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "Native GenerateContent default is dynamic thinking.",
+        "reasoning_effort none disables thinking in OpenAI compatibility."
+      ],
+      "maxInputTokens": 1048576,
+      "maxOutputTokens": 65536,
+      "tools": true,
+      "thinking": true,
+      "thinkingCanDisable": true,
+      "thinkingMode": "budget",
+      "reasoningEfforts": [
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
+      "reasoningApis": [
+        "chat-completions"
+      ]
+    },
+    {
+      "ids": [
+        "gemini-2.5-flash-lite"
+      ],
+      "vendor": "google",
+      "contextWindow": 1048576,
+      "contextLimitType": "input",
+      "vision": true,
+      "sourceUrls": [
+        "https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash-lite",
+        "https://ai.google.dev/gemini-api/docs/thinking",
+        "https://ai.google.dev/gemini-api/docs/generate-content/thinking",
+        "https://ai.google.dev/gemini-api/docs/openai"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "Thinking supported but off by default. Enabled native budget range 512..24576, with 0 for off.",
+        "reasoning_effort none disables thinking in OpenAI compatibility."
+      ],
+      "maxInputTokens": 1048576,
+      "maxOutputTokens": 65536,
+      "tools": true,
+      "thinking": true,
+      "thinkingCanDisable": true,
+      "thinkingMode": "budget",
+      "reasoningEfforts": [
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
+      "reasoningApis": [
+        "chat-completions"
+      ]
+    },
+    {
+      "ids": [
+        "gemini-3.1-pro-preview"
+      ],
+      "vendor": "google",
+      "contextWindow": 1048576,
+      "contextLimitType": "input",
+      "vision": true,
+      "sourceUrls": [
+        "https://ai.google.dev/gemini-api/docs/models/gemini-3.1-pro-preview",
+        "https://ai.google.dev/gemini-api/docs/thinking",
+        "https://ai.google.dev/gemini-api/docs/generate-content/thinking",
+        "https://ai.google.dev/gemini-api/docs/openai"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "Native levels low/medium/high; cannot turn off. OpenAI minimal maps to low.",
+        "Separate gemini-3.1-pro-preview-customtools endpoint exists; it is not an arbitrary suffix alias."
+      ],
+      "maxInputTokens": 1048576,
+      "maxOutputTokens": 65536,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "high",
+      "thinkingCanDisable": false,
+      "thinkingMode": "levels",
+      "reasoningEfforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
+      "reasoningApis": [
+        "chat-completions"
+      ]
+    },
+    {
+      "ids": [
+        "gemini-3.5-flash-lite"
+      ],
+      "vendor": "google",
+      "contextWindow": 1048576,
+      "contextLimitType": "input",
+      "vision": true,
+      "sourceUrls": [
+        "https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite",
+        "https://ai.google.dev/gemini-api/docs/thinking",
+        "https://ai.google.dev/gemini-api/docs/generate-content/thinking",
+        "https://ai.google.dev/gemini-api/docs/openai"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "Native levels minimal/low/medium/high."
+      ],
+      "maxInputTokens": 1048576,
+      "maxOutputTokens": 65536,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "minimal",
+      "thinkingCanDisable": false,
+      "thinkingMode": "levels",
+      "reasoningEfforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
+      "reasoningApis": [
+        "chat-completions"
+      ]
+    },
+    {
+      "ids": [
+        "gemini-3.8-flash"
+      ],
+      "vendor": "google",
+      "contextWindow": 1048576,
+      "contextLimitType": "input",
+      "vision": true,
+      "sourceUrls": [
+        "https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash",
+        "https://ai.google.dev/gemini-api/docs/thinking",
+        "https://ai.google.dev/gemini-api/docs/generate-content/thinking",
+        "https://ai.google.dev/gemini-api/docs/openai"
+      ],
+      "verifiedAt": "2026-10-10",
+      "notes": [
+        "Native minimal is explicitly unsupported and returns an error; do not export it.",
+        "Native levels low/medium/high."
+      ],
+      "maxInputTokens": 1048576,
+      "maxOutputTokens": 65536,
+      "tools": true,
+      "thinking": true,
+      "defaultReasoningEffort": "medium",
+      "thinkingCanDisable": false,
+      "thinkingMode": "levels",
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "reasoningApis": [
+        "chat-completions"
+      ]
+    },
+    {
+      "ids": [
+        "MiniMax-M3"
+      ],
+      "vendor": "minimax",
+      "providerScope": {
+        "baseUrl": "https://api.minimax.io/v1"
+      },
+      "contextWindow": 1000000,
+      "contextLimitType": "combined",
+      "maxOutputTokens": 524288,
+      "defaultOutputTokens": 131072,
+      "outputLimitApis": [
+        "messages"
+      ],
+      "vision": true,
+      "tools": true,
+      "thinking": true,
+      "thinkingCanDisable": true,
+      "reasoningEfforts": [],
+      "reasoningApis": [],
+      "thinkingConfig": {
+        "chatCompletions": {
+          "defaultEnabled": true,
+          "enabled": {
+            "thinking": {
+              "type": "adaptive"
+            }
+          },
+          "disabled": {
+            "thinking": {
+              "type": "disabled"
+            }
+          }
+        },
+        "messages": {
+          "defaultEnabled": false,
+          "enabled": {
+            "thinking": {
+              "type": "adaptive"
+            }
+          },
+          "disabled": {
+            "thinking": {
+              "type": "disabled"
+            }
+          }
+        },
+        "responses": {
+          "defaultEnabled": false,
+          "enabled": "reasoning.effort non-none enables thinking but does not control depth",
+          "disabled": {
+            "reasoning": {
+              "effort": "none"
+            }
+          }
+        }
+      },
+      "sourceUrls": [
+        "https://platform.minimax.io/docs/api-reference/text-openai-api",
+        "https://platform.minimax.io/docs/api-reference/text-anthropic-api",
+        "https://platform.minimax.io/docs/api-reference/text-chat-anthropic",
+        "https://platform.minimax.io/docs/api-reference/responses-create"
+      ],
+      "verifiedAt": "2026-10-10",
+      "status": "verified",
+      "notes": [
+        "保留官方exact ID MiniMax-M3；未证明lowercase/minimax-m3是nativeAPI路由alias，不能重写upstreamId。",
+        "SDK官方表context精确1000000；MessagesAPI max_tokens字段写maximum524288/recommended131072，包括thinking tokens。OpenAI SDK仅声明generation limit但未写精确上限；其精确最大值尚未独立核实，outputLimitApis标messages作为数值证据协议。",
+        "M3思考可关闭。默认行为依wire：Chat默认为on；Messages/Responses默认为off。reasoning_effort强度只针对M3.1FlashPreview，不要向M3导出虚构等级；Responses非none仅开关不调深度。",
+        "Vision支持图像/视频，暂不支持音频；Tool Function及thinkblocks支持。Native最高输出不能传播火山Agent/CodingPlan，火山另有131072上限。",
+        "未调用真实模型服务；仅官方公开文档核对。"
+      ],
+      "adaptiveThinking": true,
+      "uiNotes": [
+        "最高输出数值仅在 Messages API 中明确；其他接口保留未知，不自动套用。",
+        "请使用官方模型 ID 的大小写；参数表不会替你改写上游 ID。",
+        "支持思考表示能力，不能据此虚构可调思考等级。"
+      ]
+    },
+    {
+      "ids": [
+        "MiniMax-M2.5",
+        "MiniMax-M2.5-highspeed"
+      ],
+      "vendor": "minimax",
+      "providerScope": {
+        "baseUrl": "https://api.minimax.io/v1"
+      },
+      "contextWindow": 204800,
+      "contextLimitType": "combined",
+      "maxOutputTokens": 204800,
+      "defaultOutputTokens": 65536,
+      "outputLimitApis": [
+        "messages"
+      ],
+      "vision": false,
+      "tools": true,
+      "thinking": true,
+      "thinkingCanDisable": false,
+      "reasoningEfforts": [],
+      "reasoningApis": [],
+      "thinkingConfig": {
+        "defaultEnabled": true,
+        "canDisable": false,
+        "notes": "thinking.disabled accepted but ignored; always reasons"
+      },
+      "sourceUrls": [
+        "https://platform.minimax.io/docs/api-reference/text-openai-api",
+        "https://platform.minimax.io/docs/api-reference/text-anthropic-api",
+        "https://platform.minimax.io/docs/api-reference/text-chat-anthropic",
+        "https://platform.minimax.io/docs/api-reference/responses-create"
+      ],
+      "verifiedAt": "2026-10-10",
+      "status": "verified",
+      "notes": [
+        "保留官方exact IDs MiniMax-M2.5及MiniMax-M2.5-highspeed；不猜小写nativealias。",
+        "SDK官方context204800；当前MessagesAPI max_tokens说明other models maximum204800/recommended65536，思考计入。SDK明确列出M2.5属于othermodels。完整input/output共享上下文，默认预算65536不宣称同时满上限。",
+        "OpenAI SDK未列精确上限，outputLimitApis只标messages，不能假定API版本/供应商服务完全一致。M2.5当前被Models intro列作legacy但仍在SDK支持models。",
+        "M2.x不能关闭思考，disabled会被忽略，没有真实思考强度档位；textonly，图像/视频不支持，工具支持。",
+        "未调用真实模型服务；未借用百炼/NVIDIA/OpenRouter限制作为原生上限。"
+      ],
+      "adaptiveThinking": false,
+      "uiNotes": [
+        "最高输出数值仅在 Messages API 中明确；其他接口保留未知，不自动套用。",
+        "请使用官方模型 ID 的大小写；参数表不会替你改写上游 ID。",
+        "支持思考表示能力，不能据此虚构可调思考等级。"
+      ]
+    }
+  ]
+}
