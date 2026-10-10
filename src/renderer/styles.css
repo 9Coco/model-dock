@@ -1021,6 +1021,11 @@ td { padding: 12px; color: #5b7152; }
 .discovery-model-settings .discovery-advanced-grid small { color: var(--muted); font-size: 9px; }
 .discovery-settings-note { color: var(--muted); font-size: 10px; line-height: 1.7; margin: 9px 0 0; overflow-wrap: anywhere; }
 .discovery-settings-note a { color: var(--accent); text-underline-offset: 2px; }
+.discovery-reasoning-heading { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 12px; color: var(--ink); font-size: 11px; }
+.discovery-reasoning-heading small { color: var(--muted); font-size: 10px; }
+.discovery-reasoning-field { margin: 10px 0 12px; }
+.discovery-reasoning-default { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; color: var(--ink); font-size: 11px; }
+.discovery-reasoning-default select { flex: 1 1 180px; max-width: 260px; }
 @media (max-width: 760px) {
   .discovery-advanced-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .discovery-model, .discovery-list-header { grid-template-columns: minmax(0, 1fr); gap: 12px; }

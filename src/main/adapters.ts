@@ -172,7 +172,9 @@ export function vsCodeModelConfig(m: Model, base: string, key: string) {
     requestHeaders: { authorization: `Bearer ${key}` },
     ...(m.thinking !== undefined || m.reasoningEfforts?.length ? { thinking: m.thinking ?? true } : {}),
     // Without supportsReasoningEffort VS Code shows no Thinking Effort picker.
-    ...(m.reasoningEfforts?.length ? { supportsReasoningEffort: [...m.reasoningEfforts], ...(m.defaultReasoningEffort ? { defaultReasoningEffort: m.defaultReasoningEffort } : {}), ...(m.reasoningEffortFormat ? { reasoningEffortFormat: m.reasoningEffortFormat } : {}) } : {}),
+    // 修改点：档位由保存的模型设置决定；传参格式随当前接口，防止旧
+    // Responses 格式跟随已切换到 Chat/Messages 的模型继续导出。
+    ...(m.reasoningEfforts?.length ? { supportsReasoningEffort: [...m.reasoningEfforts], ...(m.defaultReasoningEffort ? { defaultReasoningEffort: m.defaultReasoningEffort } : {}), reasoningEffortFormat: m.wireApi } : {}),
     ...(m.wireApi === 'messages' ? {
       ...(m.adaptiveThinking !== undefined ? { adaptiveThinking: m.adaptiveThinking } : {}),
       ...(m.adaptiveThinking !== true && m.minThinkingBudget !== undefined && m.minThinkingBudget > 0 && m.minThinkingBudget < budget.output && m.maxThinkingBudget !== undefined && m.maxThinkingBudget > 0

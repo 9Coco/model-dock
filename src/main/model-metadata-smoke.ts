@@ -49,6 +49,18 @@ export async function verifyModelMetadata(window: BrowserWindow, outputDir: stri
   assert.ok((await evaluate<string>(`document.querySelector(${JSON.stringify(row)}).innerText`)).includes('字典补全'));
   await click(`${row} summary`);
   await waitFor(`!!document.querySelector('input[aria-label="gpt-4o 上下文长度"]')`, 'individual context editor');
+  const directoryUnknown = '.discovery-model:has(input[aria-label="选择模型 unknown-fixture-model"])';
+  await click(`${directoryUnknown} summary`);
+  await evaluate(`(()=>{const select=document.querySelector('select[aria-label="unknown-fixture-model 思考能力"]');Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(select,'yes');select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  await waitFor(`document.querySelectorAll('${directoryUnknown} input[aria-label*="思考等级"]').length===7`, 'directory all legal reasoning grades');
+  await click('input[aria-label="unknown-fixture-model 思考等级 medium"]');
+  await evaluate(`(()=>{const select=document.querySelector('select[aria-label="unknown-fixture-model 默认思考强度"]');Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(select,'medium');select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  await waitFor(`document.querySelector('select[aria-label="unknown-fixture-model 默认思考强度"]').value==='medium'`, 'directory fixed reasoning default');
+  await evaluate(`(()=>{const select=document.querySelector('select[aria-label="unknown-fixture-model 默认思考强度"]');Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(select,'');select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  await waitFor(`document.querySelector('select[aria-label="unknown-fixture-model 默认思考强度"]').value===''`, 'directory default cleared to tool choice');
+  await evaluate(`(()=>{const select=document.querySelector('select[aria-label="unknown-fixture-model 调用接口"]');Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(select,'responses');select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  await waitFor(`document.querySelector('select[aria-label="unknown-fixture-model 调用接口"]').value==='responses'`, 'directory reasoning protocol switch');
+
   const layouts: unknown[] = [];
   for (const [width, height] of [[1320, 880], [980, 680]]) {
     window.setContentSize(width, height);
@@ -57,6 +69,9 @@ export async function verifyModelMetadata(window: BrowserWindow, outputDir: stri
     assert.equal(layout.noOverflow, true); assert.equal(layout.footerVisible, true); assert.equal(layout.editorVisible, true);
     layouts.push({ width, height, ...layout });
     writeFileSync(join(outputDir, `model-metadata-${width}.png`), await captureUi());
+    await evaluate(`document.querySelector('.discovery-body').scrollTop=document.querySelector('.discovery-body').scrollHeight`);
+    await new Promise(done => setTimeout(done, 100));
+    writeFileSync(join(outputDir, `directory-reasoning-${width}.png`), await captureUi());
   }
   await evaluate(`(()=>{const input=document.querySelector('input[aria-label="gpt-4o 上下文长度"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'0');input.dispatchEvent(new Event('input',{bubbles:true}));input.dispatchEvent(new Event('change',{bubbles:true}));})()`);
   await waitFor(`document.querySelector('input[aria-label="gpt-4o 上下文长度"]').value==='0'`, 'zero context override');
@@ -71,12 +86,16 @@ export async function verifyModelMetadata(window: BrowserWindow, outputDir: stri
   assert.equal(saved.find(model => model.upstreamId === 'gpt-4.1')!.contextWindow, discovered.models.find(model => model.upstreamId === 'gpt-4.1')!.contextWindow);
   assert.equal(saved.find(model => model.upstreamId === 'gpt-4.1')!.vision, true);
   assert.equal(saved.find(model => model.upstreamId === 'unknown-fixture-model')!.tools, false);
+  assert.deepEqual(saved.find(model => model.upstreamId === 'unknown-fixture-model')!.reasoningEfforts, ['medium']);
+  assert.equal(saved.find(model => model.upstreamId === 'unknown-fixture-model')!.defaultReasoningEffort, undefined, 'Explicit tool choice survives the renderer selection object and IPC import');
+  assert.equal(saved.find(model => model.upstreamId === 'unknown-fixture-model')!.reasoningEffortFormat, 'responses');
   await click('.discovery-footer .footer-actions .button.secondary:nth-last-child(2)');
   await click('[data-action="discover-models"]');
   await waitFor(`document.querySelectorAll('.discovery-model.existing').length===4`, 'existing candidates');
   const rediscovered = await evaluate<DiscoveryResult>(`window.modelDock.discoverModels(${JSON.stringify(provider.id)})`);
   assert.equal(rediscovered.models.find(model => model.upstreamId === 'gpt-4o')!.contextWindow, 0);
   assert.equal(rediscovered.models.find(model => model.upstreamId === 'gpt-4o')!.vision, false);
+  assert.equal(rediscovered.models.find(model => model.upstreamId === 'unknown-fixture-model')!.defaultReasoningEffort, undefined);
   assert.equal((await evaluate<Snapshot>('window.modelDock.snapshot()')).models.find(model => model.providerId === provider.id && model.upstreamId === 'gpt-4o')!.contextWindow, 0);
   await click('[aria-label="关闭对话框"]');
   // 修改点：只保存合成供应商，不调用官方地址；核对新增/编辑模型的实际 React 表单。
@@ -94,7 +113,9 @@ export async function verifyModelMetadata(window: BrowserWindow, outputDir: stri
   await waitFor(`document.querySelector('${field('context-window')}').value==='1024000'`, 'Kimi scoped context');
   assert.equal(await evaluate<string>(`document.querySelector('${field('max-output-tokens')}').value`), '131072');
   assert.equal(await evaluate<boolean>(`document.querySelector('${field('model-thinking')}').checked`), true);
-  assert.equal(await evaluate<number>(`document.querySelectorAll('[data-field^="reasoning-effort-"]').length`), 0);
+  assert.equal(await evaluate<number>(`document.querySelectorAll('[data-field^="reasoning-effort-"]').length`), 7);
+  assert.deepEqual(await evaluate<string[]>(`[...document.querySelectorAll('[data-field^="reasoning-effort-"]:checked')].map(input=>input.dataset.field.replace('reasoning-effort-',''))`), ['low', 'high', 'max']);
+  assert.equal(await evaluate<string>(`document.querySelector('${field('default-reasoning-effort')}').value`), 'max');
   await input('context-window', '0');
   assert.equal(await evaluate<boolean>(`document.querySelector('${field('model-vision')}').checked`), true);
   await click(field('model-vision'));
@@ -102,10 +123,17 @@ export async function verifyModelMetadata(window: BrowserWindow, outputDir: stri
   await waitFor(`document.querySelector('${field('max-output-tokens')}').value==='0'`, 'unknown output clears');
   assert.equal(await evaluate<boolean>(`document.querySelector('${field('model-vision')}').checked`), false);
   assert.equal(await evaluate<boolean>(`document.querySelector('[data-action="apply-official-model-parameters"]').disabled`), true);
+  await click(field('model-thinking'));
+  assert.equal(await evaluate<number>(`document.querySelectorAll('[data-field^="reasoning-effort-"]').length`), 7);
+  await click(field('reasoning-effort-medium'));
+  assert.equal(await evaluate<boolean>(`document.querySelector('${field('reasoning-effort-medium')}').checked`), true);
+  await click(field('model-thinking'));
+
   await input('upstream-id', 'kimi-k3');
   await waitFor(`document.querySelector('${field('max-output-tokens')}').value==='131072'`, 'known output restores');
   assert.equal(await evaluate<string>(`document.querySelector('${field('context-window')}').value`), '0');
   assert.equal(await evaluate<boolean>(`document.querySelector('${field('model-vision')}').checked`), false);
+  assert.equal(await evaluate<boolean>(`document.querySelector('${field('model-thinking')}').checked`), false);
   await click('[data-action="apply-official-model-parameters"]');
   await waitFor(`document.querySelector('${field('context-window')}').value==='1024000'`, 'explicit apply overrides manual zero');
   assert.equal(await evaluate<boolean>(`!!document.querySelector('[data-field="official-parameters-applied"]')`), true);
@@ -114,6 +142,13 @@ export async function verifyModelMetadata(window: BrowserWindow, outputDir: stri
   assert.equal(await evaluate<boolean>(`!!document.querySelector('[data-field="official-parameters-applied"]')`), false);
   await click('[data-action="apply-official-model-parameters"]');
   await waitFor(`document.querySelector('${field('max-output-tokens')}').value==='131072'`, 'inline feedback reapplies parameters');
+  await click(field('reasoning-effort-medium'));
+  await click(field('reasoning-effort-max'));
+  await evaluate(`(()=>{const select=document.querySelector('${field('default-reasoning-effort')}');Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(select,'high');select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  await evaluate(`(()=>{const select=document.querySelector('${field('wire-api')}');Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(select,'chat-completions');select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  await waitFor(`document.querySelector('${field('wire-api')}').value==='chat-completions'`, 'manual reasoning protocol switch');
+  assert.deepEqual(await evaluate<string[]>(`[...document.querySelectorAll('[data-field^="reasoning-effort-"]:checked')].map(input=>input.dataset.field.replace('reasoning-effort-',''))`), ['low', 'medium', 'high']);
+
   // 等旧通知自行过期；不修改 DOM 或隐藏通知来制造无覆盖截图。
   await waitFor(`document.querySelectorAll('.toast').length===0`, 'previous notifications expire');
   const manualLayouts: unknown[] = [];
@@ -128,21 +163,75 @@ export async function verifyModelMetadata(window: BrowserWindow, outputDir: stri
     await evaluate(`(()=>{const body=document.querySelector('.modal-body'),reference=document.querySelector('[data-field="official-parameters"]');body.scrollTop+=reference.getBoundingClientRect().top-body.getBoundingClientRect().top-8;})()`);
     await new Promise(done => setTimeout(done, 100));
     writeFileSync(join(outputDir, `manual-model-parameters-${width}-details.png`), await captureUi());
+    await evaluate(`document.querySelector('.modal-body').scrollTop=document.querySelector('.modal-body').scrollHeight`);
+    await new Promise(done => setTimeout(done, 100));
+    writeFileSync(join(outputDir, `manual-reasoning-${width}.png`), await captureUi());
   }
   await click('.modal-footer button[type="submit"]');
   await waitFor(`!document.querySelector('.modal')`, 'manual model saved');
   const manual = (await evaluate<Snapshot>('window.modelDock.snapshot()')).models.find(model => model.providerId === official.id && model.upstreamId === 'kimi-k3')!;
   assert.equal(manual.contextWindow, 1024000); assert.equal(manual.maxOutputTokens, 131072); assert.equal(manual.thinking, true);
-  const legacy = await evaluate<Model>(`window.modelDock.saveModel(${JSON.stringify({ ...manual, contextWindow: 128000, maxOutputTokens: 4096, vision: false, thinking: false })})`);
+  assert.deepEqual(manual.reasoningEfforts, ['low', 'medium', 'high']); assert.equal(manual.defaultReasoningEffort, 'high'); assert.equal(manual.reasoningEffortFormat, 'chat-completions');
+  // 修改点：通过真实主题设置切换，截图后恢复原偏好；不改 DOM 或隐藏通知。
+  const originalTheme = await evaluate<string>(`(async()=> (await window.modelDock.getSettings()).settings.theme)()`);
+  const originalResolvedTheme = await evaluate<string>(`document.documentElement.dataset.theme`);
+  await click('[data-page="settings"]');
+  await click('[data-theme-choice="dark"]');
+  await waitFor(`document.documentElement.dataset.theme==='dark'`, 'native dark theme for manual reasoning');
+  await click(`[data-source-id="${official.id}"]`);
+  await click(`[data-model-id="${manual.id}"] [data-action="edit-model"]`);
+  assert.deepEqual(await evaluate<string[]>(`[...document.querySelectorAll('[data-field^="reasoning-effort-"]:checked')].map(input=>input.dataset.field.replace('reasoning-effort-',''))`), ['low', 'medium', 'high']);
+  assert.equal(await evaluate<string>(`document.querySelector('${field('default-reasoning-effort')}').value`), 'high');
+  window.setContentSize(980, 680);
+  await waitFor(`document.querySelectorAll('.toast').length===0`, 'notifications expire before dark reasoning capture');
+  await evaluate(`document.querySelector('.modal-body').scrollTop=document.querySelector('.modal-body').scrollHeight`);
+  await new Promise(done => setTimeout(done, 150));
+  assert.equal(await evaluate<number>(`document.querySelectorAll('[data-field^="reasoning-effort-"]').length`), 7);
+  writeFileSync(join(outputDir, 'manual-reasoning-dark-980.png'), await captureUi());
+  await click('[aria-label="关闭对话框"]');
+  await click('[data-page="settings"]');
+  await click(`[data-theme-choice="${originalTheme}"]`);
+  await waitFor(`document.documentElement.dataset.theme===${JSON.stringify(originalResolvedTheme)}`, 'original theme restored');
+  assert.equal(await evaluate<string>(`(async()=> (await window.modelDock.getSettings()).settings.theme)()`), originalTheme);
+  await click(`[data-source-id="${official.id}"]`);
+
+  const legacy = await evaluate<Model>(`window.modelDock.saveModel(${JSON.stringify({ ...manual, contextWindow: 128000, maxOutputTokens: 4096, vision: false, thinking: true, reasoningEfforts: [], defaultReasoningEffort: undefined, reasoningEffortFormat: undefined })})`);
   await click('[aria-label="刷新本机配置"]');
   await click(`[data-model-id="${legacy.id}"] [data-action="edit-model"]`);
   assert.equal(await evaluate<string>(`document.querySelector('${field('context-window')}').value`), '128000');
   assert.equal(await evaluate<boolean>(`document.querySelector('${field('model-vision')}').checked`), false);
+  assert.equal(await evaluate<number>(`document.querySelectorAll('[data-field^="reasoning-effort-"]').length`), 7);
+  assert.equal(await evaluate<number>(`document.querySelectorAll('[data-field^="reasoning-effort-"]:checked').length`), 0);
   await click('[data-action="apply-official-model-parameters"]');
   await waitFor(`document.querySelector('${field('context-window')}').value==='1024000'`, 'existing Kimi applies official parameters');
+  assert.deepEqual(await evaluate<string[]>(`[...document.querySelectorAll('[data-field^="reasoning-effort-"]:checked')].map(input=>input.dataset.field.replace('reasoning-effort-',''))`), ['low', 'high', 'max']);
+  await click(field('reasoning-effort-max'));
+  await evaluate(`(()=>{const select=document.querySelector('${field('default-reasoning-effort')}');Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(select,'high');select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+
   await click('.modal-footer button[type="submit"]');
   await waitFor(`!document.querySelector('.modal')`, 'updated model saved');
   const updated = (await evaluate<Snapshot>('window.modelDock.snapshot()')).models.find(model => model.id === legacy.id)!;
   assert.equal(updated.contextWindow, 1024000); assert.equal(updated.maxOutputTokens, 131072); assert.equal(updated.vision, true); assert.equal(updated.thinking, true);
-  writeFileSync(join(outputDir, 'model-metadata-validation.json'), JSON.stringify({ ok: true, dictionaryFilled: true, upstreamPrecedence: true, unknownRetained: true, manualZeroAndFalseSaved: true, rediscoveryPreserved: true, modelsAdded: saved.length, layouts, manualLayouts, newModelDefaults: true, unknownIdCleared: true, manualOverridesPreserved: true, explicitApplyUpdatedExisting: true, syntheticOnly: true }, null, 2));
+  assert.deepEqual(updated.reasoningEfforts, ['low', 'high']); assert.equal(updated.defaultReasoningEffort, 'high'); assert.equal(updated.reasoningEffortFormat, 'chat-completions');
+
+  // 订阅模型只应用思考默认，保留其独立目录给出的上下文/图片设置。
+  const subscription = await evaluate<Provider>(`window.modelDock.saveProvider(${JSON.stringify({ name: '订阅思考参数界面测试', kind: 'copilot', presetId: 'copilot-subscription', baseUrl: 'https://api.githubcopilot.com', enabled: true })})`);
+  const subscriptionModel = await evaluate<Model>(`window.modelDock.saveModel(${JSON.stringify({ providerId: subscription.id, upstreamId: 'gemini-3.8-flash', alias: 'gemini-3.8-flash', displayName: '订阅 Gemini', wireApi: 'chat-completions', enabled: true, contextWindow: 200_000, maxInputTokens: 120_000, maxOutputTokens: 8_000, tools: true, vision: false, thinking: true, reasoningEfforts: [] })})`);
+  await click('[aria-label="刷新本机配置"]');
+  await click(`[data-source-id="${subscription.id}"]`);
+  await click(`[data-model-id="${subscriptionModel.id}"] [data-action="edit-model"]`);
+  assert.equal(await evaluate<boolean>(`document.querySelector('[data-action="apply-official-model-parameters"]').disabled`), false);
+  assert.equal(await evaluate<number>(`document.querySelectorAll('[data-field^="reasoning-effort-"]').length`), 7);
+  await click('[data-action="apply-official-model-parameters"]');
+  assert.equal(await evaluate<string>(`document.querySelector('${field('context-window')}').value`), '200000');
+  assert.equal(await evaluate<string>(`document.querySelector('${field('max-input-tokens')}').value`), '120000');
+  assert.equal(await evaluate<string>(`document.querySelector('${field('max-output-tokens')}').value`), '8000');
+  assert.equal(await evaluate<boolean>(`document.querySelector('${field('model-vision')}').checked`), false);
+  assert.deepEqual(await evaluate<string[]>(`[...document.querySelectorAll('[data-field^="reasoning-effort-"]:checked')].map(input=>input.dataset.field.replace('reasoning-effort-',''))`), ['low', 'medium', 'high']);
+  await click('.modal-footer button[type="submit"]');
+  await waitFor(`!document.querySelector('.modal')`, 'subscription thinking defaults saved');
+  const subscriptionSaved = (await evaluate<Snapshot>('window.modelDock.snapshot()')).models.find(model => model.id === subscriptionModel.id)!;
+  assert.equal(subscriptionSaved.contextWindow, 200_000); assert.equal(subscriptionSaved.vision, false);
+  assert.deepEqual(subscriptionSaved.reasoningEfforts, ['low', 'medium', 'high']);
+  writeFileSync(join(outputDir, 'model-metadata-validation.json'), JSON.stringify({ ok: true, dictionaryFilled: true, upstreamPrecedence: true, unknownRetained: true, manualZeroAndFalseSaved: true, rediscoveryPreserved: true, modelsAdded: saved.length, layouts, manualLayouts, newModelDefaults: true, unknownIdCleared: true, manualOverridesPreserved: true, explicitApplyUpdatedExisting: true, sevenReasoningGradesEditable: true, builtinKimiDefaults: true, customReasoningSavedAndReopened: true, protocolFormatUpdated: true, directoryReasoningSaved: true, directoryToolChoicePreservedThroughIpc: true, darkReasoning980CapturedAndThemeRestored: true, oldEmptyGradesApplied: true, unknownThinkingEditable: true, subscriptionReasoningOnlyDefaults: true, syntheticOnly: true }, null, 2));
 }

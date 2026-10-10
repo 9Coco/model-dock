@@ -31,6 +31,13 @@ function nativeFixture(ids = ['provider-a', 'provider-b', 'subscription']) {
   };
 }
 describe('tool adapters', () => {
+  it.each(['chat-completions', 'responses', 'messages'] as const)('exports saved user levels using the current %s format without mutating stale metadata', wireApi => {
+    const configured: Model = { ...models[0], wireApi, thinking: true, reasoningEfforts: ['minimal', 'medium', 'xhigh'], defaultReasoningEffort: 'medium', reasoningEffortFormat: wireApi === 'responses' ? 'chat-completions' : 'responses' };
+    const before = structuredClone(configured);
+    const output = vsCodeModelConfig(configured, 'https://synthetic.example/v1', 'SYNTHETIC_ONLY');
+    expect(output).toMatchObject({ apiType: wireApi, supportsReasoningEffort: ['minimal', 'medium', 'xhigh'], defaultReasoningEffort: 'medium', reasoningEffortFormat: wireApi });
+    expect(configured).toEqual(before);
+  });
   it('preserves configured large output budgets and a separate smaller input cap across supported clients', () => {
     const configured: Model = { ...models[0], contextWindow: 1050000, maxInputTokens: 900000, maxOutputTokens: 128000, thinking: true,
       reasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'], reasoningEffortFormat: 'responses' };

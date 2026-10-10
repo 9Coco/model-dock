@@ -17,6 +17,8 @@ export interface ModelMetadata {
   reasoningEfforts?: ReasoningEffort[];
   defaultReasoningEffort?: ReasoningEffort;
   reasoningEffortFormat?: WireApi;
+  /** 修改点：区分供应商已声明档位与软件维护的建议，不因来源缺失关闭编辑。 */
+  reasoningDefaultsSource?: 'official' | 'builtin';
   adaptiveThinking?: boolean;
   minThinkingBudget?: number;
   maxThinkingBudget?: number;
@@ -54,6 +56,7 @@ interface SpecRecord {
   uiNotes?: string[];
 }
 type MetadataProvider = Pick<Provider, 'kind' | 'baseUrl' | 'presetId'>;
+export type ModelReasoningDefaults = Pick<ModelMetadata, 'thinking' | 'reasoningEfforts' | 'defaultReasoningEffort' | 'reasoningEffortFormat' | 'reasoningDefaultsSource'>;
 const records = rawSpecs.records as unknown as SpecRecord[];
 const namespaces: Record<string, string[]> = {
   openai: ['openai'], anthropic: ['anthropic'], google: ['google', 'models'],
@@ -87,17 +90,41 @@ function officialVendor(record: SpecRecord, base?: string): boolean {
   };
   return allowed[record.vendor]?.includes(base) ?? false;
 }
+function resolveRecord(upstreamId: string, provider?: MetadataProvider) {
+  const id = upstreamId.trim().toLowerCase();
+  const base = provider && canonicalBase(provider.baseUrl);
+  const scoped = base && records.find(record => record.ids.some(value => value.toLowerCase() === id) && matchesScope(record, base));
+  return { id, base, record: scoped || generic.get(id) };
+}
+
+/** 修改点：未声明档位时回退软件维护参数；订阅仅补思考字段，不搬入公开 API 的长度上限。 */
+export function lookupModelReasoningDefaults(upstreamId: string, provider?: MetadataProvider, wireApi?: WireApi): ModelReasoningDefaults | undefined {
+  const { id, base, record } = resolveRecord(upstreamId, provider);
+  if (!record || record.thinking === undefined) return undefined;
+  const compatibleWire = !wireApi || !record.supportedWireApis || record.supportedWireApis.includes(wireApi);
+  if (record.thinking === false || !compatibleWire) return { thinking: record.thinking, reasoningEfforts: [] };
+  const official = (!provider || provider.kind === 'openai-compatible' && officialVendor(record, base))
+    && (!wireApi || record.reasoningApis.includes(wireApi)) && !!record.reasoningEfforts?.length;
+  // 仅使用精确型号/套餐别名；不按名字中的 thinking 或模型家族猜测。
+  const builtinAliases: Record<string, string> = { 'deepseek-v4.1-flash': 'deepseek-flash' };
+  const native = generic.get(id) ?? record.ids.map(value => generic.get(value.toLowerCase())).find(Boolean)
+    ?? generic.get(builtinAliases[id]);
+  const maintained = record.reasoningEfforts?.length ? record : native?.reasoningEfforts?.length ? native : undefined;
+  // 这是软件内的通用建议档位，不是新增的供应商能力声明；用户可以修改或清空。
+  const reasoningEfforts: ReasoningEffort[] = [...maintained?.reasoningEfforts ?? ['low', 'medium', 'high']];
+  const suggested = maintained?.defaultReasoningEffort;
+  const defaultReasoningEffort = suggested && reasoningEfforts.includes(suggested) ? suggested : reasoningEfforts[reasoningEfforts.length - 1];
+  return { thinking: true, reasoningEfforts, defaultReasoningEffort,
+    ...(wireApi ? { reasoningEffortFormat: wireApi } : {}), reasoningDefaultsSource: official ? 'official' : 'builtin' };
+}
 /**
  * 修改点：模型字典、供应商套餐覆盖和协议投影共用一个入口。
- * 订阅来源只相信实时目录，未知代理不自动写入厂商原生思考参数。
+ * 长度等套餐能力保留供应商边界；缺少思考档位时允许采用内置维护建议。
  * 返回副本，保留上游与用户配置的优先级；本函数不写数据库或外部配置。
  */
 export function lookupModelMetadata(upstreamId: string, provider?: MetadataProvider, wireApi?: WireApi): ModelMetadata | undefined {
-  const id = upstreamId.trim().toLowerCase();
   if (provider && provider.kind !== 'openai-compatible') return undefined;
-  const base = provider && canonicalBase(provider.baseUrl);
-  const scoped = base && records.find(record => record.ids.some(value => value.toLowerCase() === id) && matchesScope(record, base));
-  const record = scoped || generic.get(id);
+  const { base, record } = resolveRecord(upstreamId, provider);
   if (!record) return undefined;
   const notes = [...record.uiNotes ?? []];
   const compatibleWire = !wireApi || !record.supportedWireApis || record.supportedWireApis.includes(wireApi);
@@ -125,17 +152,11 @@ export function lookupModelMetadata(upstreamId: string, provider?: MetadataProvi
     result.defaultOutputTokens = Math.min(131072, Math.max(1, Math.floor(contextWindow / 4)));
     notes.push(`最大输出与上下文共享空间；客户端首选输出预算为 ${result.defaultOutputTokens}，不是另一个模型上限。`);
   }
-  // 原生厂商等级只有在已核对的接口中可导出；同模型在火山套餐上未证实的等级保持空。
+  // 修改点：缺少当前接口档位声明时采用维护建议，编辑入口和用户设置始终可用。
   const verifiedEndpoint = !provider || officialVendor(record, base);
-  const compatibleReasoning = verifiedEndpoint && compatibleWire && (!wireApi || record.reasoningApis.includes(wireApi));
-  if (compatibleReasoning && record.reasoningEfforts !== undefined) {
-    result.reasoningEfforts = [...record.reasoningEfforts];
-    if (record.defaultReasoningEffort && result.reasoningEfforts.includes(record.defaultReasoningEffort)) result.defaultReasoningEffort = record.defaultReasoningEffort;
-    if (wireApi && result.reasoningEfforts.length) result.reasoningEffortFormat = wireApi;
-  } else if (record.thinking) {
-    result.reasoningEfforts = [];
-    notes.push('当前接口未证实可用的思考档位；保留思考能力，不自动写入强度参数。');
-  }
+  const reasoningDefaults = lookupModelReasoningDefaults(upstreamId, provider, wireApi);
+  if (reasoningDefaults) Object.assign(result, reasoningDefaults);
+  if (reasoningDefaults?.reasoningDefaultsSource === 'builtin') notes.push('供应商未声明当前接口档位，使用软件内置建议；可手动调整或清空。');
   if (verifiedEndpoint && compatibleWire && (!wireApi || wireApi === 'messages')) {
     if (record.adaptiveThinking !== undefined) result.adaptiveThinking = record.adaptiveThinking;
     if (record.minThinkingBudget !== undefined) result.minThinkingBudget = record.minThinkingBudget;
