@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createServer, type Server } from 'node:http';
-import type { Model, ModelInput, Provider } from '../src/shared/types';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { Model, ModelInput, Provider, ToolBinding } from '../src/shared/types';
 import { ModelCatalog, type CatalogStore } from '../src/main/catalog';
+import { Store } from '../src/main/store';
+import { buildConfig, buildCopilotDesktopPlan } from '../src/main/adapters';
 import { modelCatalogEndpoint, prepareUpstream } from '../src/main/oauth';
 import { lookupModelMetadata } from '../src/shared/model-metadata';
 import { version as appVersion } from '../package.json';
@@ -23,22 +28,104 @@ class MemoryStore implements CatalogStore {
 }
 function fixture(fetcher: typeof fetch = vi.fn(async () => json({ data: [{ id: 'real-model' }] })) as typeof fetch) {
   const store = new MemoryStore();
-  const prepareRequest = vi.fn(async (p: Provider, path: string, body: Record<string, unknown>) => prepareUpstream(p, p.kind === 'openai-compatible' ? { apiKey: 'SYNTHETIC_ONLY' } : { accessToken: 'SYNTHETIC_ONLY' }, path, body));
+  const prepareRequest = vi.fn(async (p: Provider, path: string, body: Record<string, unknown>) => p.kind === 'copilot'
+    // Catalog tests receive a synthetic native-account request; no account manager or real credential is accessed.
+    ? { url: new URL(path, p.baseUrl).toString(), headers: { Authorization: 'Bearer SYNTHETIC_ONLY' }, body }
+    : prepareUpstream(p, p.kind === 'openai-compatible' ? { apiKey: 'SYNTHETIC_ONLY' } : { accessToken: 'SYNTHETIC_ONLY' }, path, body));
   return { store, prepareRequest, catalog: new ModelCatalog(store, { prepareRequest }, { fetch: fetcher }) };
 }
 const servers: Server[] = [];
-afterEach(async () => { vi.useRealTimers(); await Promise.all(servers.splice(0).map(server => new Promise<void>(resolve => { server.closeAllConnections(); server.close(() => resolve()); }))); });
+const persistentStores: Store[] = [];
+const persistentFolders: string[] = [];
+const syntheticCodec = { encrypt: (value: string) => `test:${Buffer.from(value).toString('base64')}`, decrypt: (value: string) => Buffer.from(value.slice(5), 'base64').toString() };
+afterEach(async () => {
+  vi.useRealTimers();
+  await Promise.all(servers.splice(0).map(server => new Promise<void>(resolve => { server.closeAllConnections(); server.close(() => resolve()); })));
+  for (const store of persistentStores.splice(0)) store.close();
+  for (const folder of persistentFolders.splice(0)) rmSync(folder, { recursive: true, force: true });
+});
+async function persistentCatalogFixture(fields: Record<string, unknown> = {}, baseUrl = 'https://ark.cn-beijing.volces.com/api/plan/v3') {
+  const dir = mkdtempSync(join(tmpdir(), 'modeldock-reasoning-chain-')); persistentFolders.push(dir);
+  const store = await Store.create(dir, syntheticCodec); persistentStores.push(store);
+  const source = store.saveProvider({ name: 'Synthetic Ark', kind: 'openai-compatible', presetId: baseUrl.endsWith('/coding/v3') ? 'volcengine-token' : 'volcengine-agent', baseUrl, enabled: true, apiKey: 'SYNTHETIC_ONLY' });
+  const catalog = new ModelCatalog(store, { prepareRequest: async (provider, path, body) => prepareUpstream(provider, { apiKey: 'SYNTHETIC_ONLY' }, path, body) },
+    { fetch: vi.fn(async () => json({ data: [{ id: 'kimi-k3', ...fields }] })) as typeof fetch });
+  return { dir, store, source, catalog };
+}
+async function reopenAndSerializeVsCode(f: Awaited<ReturnType<typeof persistentCatalogFixture>>, selected: Model) {
+  const binding = f.store.listBindings().find(item => item.id === 'vscode')!;
+  f.store.saveBinding({ ...binding, enabled: true, mode: 'direct', providerIds: [f.source.id], modelIds: [selected.id], defaultModelId: selected.id, vscodeSyncScope: 'selected' });
+  f.store.close();
+  const reopened = await Store.create(f.dir, syntheticCodec); persistentStores.push(reopened);
+  const saved = reopened.listModels().find(item => item.id === selected.id)!;
+  const output = JSON.parse(buildConfig(reopened, 'vscode', 18181, true).content)[0].models[0];
+  return { saved, output };
+}
 
 describe('real model catalog discovery and batch selection', () => {
   it('discovers complete provider-specific Kimi defaults and saves the selected output budget rather than the native maximum', async () => {
     const f = fixture(vi.fn(async () => json({ data: [{ id: 'kimi-k3' }] })) as typeof fetch);
     f.store.provider.presetId = 'volcengine-agent'; f.store.provider.baseUrl = 'https://ark.cn-beijing.volces.com/api/plan/v3';
     const result = await f.catalog.discover('api');
-    expect(result.models[0]).toMatchObject({ contextWindow: 1024000, maxOutputTokens: 131072, thinking: true, reasoningEfforts: [] });
+    expect(result.models[0]).toMatchObject({ contextWindow: 1024000, maxOutputTokens: 131072, thinking: true, reasoningEfforts: ['low', 'high', 'max'], defaultReasoningEffort: 'max', reasoningEffortFormat: 'responses' });
     expect(result.models[0].metadataInferred).toEqual(expect.arrayContaining(['contextWindow', 'maxOutputTokens', 'thinking', 'reasoningEfforts']));
     const selected = f.catalog.addSelected('api', [{ upstreamId: 'kimi-k3' }]).added[0];
-    expect(selected).toMatchObject({ contextWindow: 1024000, maxOutputTokens: 131072, thinking: true, reasoningEfforts: [] });
-    expect(selected).not.toHaveProperty('defaultReasoningEffort');
+    expect(selected).toMatchObject({ contextWindow: 1024000, maxOutputTokens: 131072, thinking: true, reasoningEfforts: ['low', 'high', 'max'], defaultReasoningEffort: 'max', reasoningEffortFormat: 'responses' });
+  });
+  it.each(['https://ark.cn-beijing.volces.com/api/plan/v3', 'https://ark.cn-beijing.volces.com/api/coding/v3'])('persists maintained Kimi levels when the directory omits them and exports the current interface for %s', async baseUrl => {
+    const f = await persistentCatalogFixture({}, baseUrl);
+    const discovered = (await f.catalog.discover(f.source.id)).models[0];
+    expect(discovered.reasoningEfforts).toEqual(['low', 'high', 'max']);
+    expect(discovered.metadataInferred).toEqual(expect.arrayContaining(['reasoningEfforts', 'defaultReasoningEffort', 'reasoningEffortFormat']));
+    const selected = f.catalog.addSelected(f.source.id, [{ upstreamId: 'kimi-k3' }]).added[0];
+    const { saved, output } = await reopenAndSerializeVsCode(f, selected);
+    expect(saved).toMatchObject({ reasoningEfforts: ['low', 'high', 'max'], defaultReasoningEffort: 'max', reasoningEffortFormat: 'responses' });
+    expect(output).toMatchObject({ supportsReasoningEffort: ['low', 'high', 'max'], defaultReasoningEffort: 'max', reasoningEffortFormat: 'responses', apiType: 'responses', url: `${baseUrl}/responses` });
+  });
+  it('persists and exports explicit user-selected levels instead of replacing them with maintained defaults', async () => {
+    const f = await persistentCatalogFixture();
+    await f.catalog.discover(f.source.id);
+    const selected = f.catalog.addSelected(f.source.id, [{ upstreamId: 'kimi-k3', wireApi: 'chat-completions', thinking: true, reasoningEfforts: ['minimal', 'medium', 'xhigh'], defaultReasoningEffort: 'medium', reasoningEffortFormat: 'chat-completions' }]).added[0];
+    const { saved, output } = await reopenAndSerializeVsCode(f, selected);
+    expect(saved).toMatchObject({ reasoningEfforts: ['minimal', 'medium', 'xhigh'], defaultReasoningEffort: 'medium', reasoningEffortFormat: 'chat-completions' });
+    expect(output).toMatchObject({ supportsReasoningEffort: ['minimal', 'medium', 'xhigh'], defaultReasoningEffort: 'medium', reasoningEffortFormat: 'chat-completions' });
+  });
+  it('allows the user to clear the maintained default effort while keeping selectable levels', async () => {
+    const f = await persistentCatalogFixture();
+    await f.catalog.discover(f.source.id);
+    const selected = f.catalog.addSelected(f.source.id, [{ upstreamId: 'kimi-k3', reasoningEfforts: ['low', 'high', 'max'], defaultReasoningEffort: undefined, reasoningEffortFormat: 'responses' }]).added[0];
+    const { saved, output } = await reopenAndSerializeVsCode(f, selected);
+    expect(saved.reasoningEfforts).toEqual(['low', 'high', 'max']);
+    expect(saved).not.toHaveProperty('defaultReasoningEffort');
+    expect(output.supportsReasoningEffort).toEqual(['low', 'high', 'max']);
+    expect(output).not.toHaveProperty('defaultReasoningEffort');
+  });
+  it.each([
+    { thinking: false, reasoning_effort_format: 'responses', adaptive_thinking: true, min_thinking_budget: 1024, max_thinking_budget: 4096 },
+    { capabilities: { supports: { reasoning: false } }, supported_reasoning_levels: ['high'] },
+    { supported_reasoning_levels: [] },
+    { supports_reasoning_effort: false },
+  ])('preserves explicit upstream negative capabilities through persistence and VS Code export: %j', async fields => {
+    const f = await persistentCatalogFixture(fields);
+    const discovered = (await f.catalog.discover(f.source.id)).models[0];
+    expect(discovered.reasoningEfforts).toEqual([]);
+    for (const key of ['defaultReasoningEffort', 'reasoningEffortFormat']) expect(discovered).not.toHaveProperty(key);
+    expect(discovered.metadataInferred ?? []).not.toContain('reasoningEfforts');
+    const selected = f.catalog.addSelected(f.source.id, [{ upstreamId: 'kimi-k3' }]).added[0];
+    const { saved, output } = await reopenAndSerializeVsCode(f, selected);
+    expect(saved.reasoningEfforts).toEqual([]);
+    for (const key of ['supportsReasoningEffort', 'defaultReasoningEffort', 'reasoningEffortFormat']) expect(output).not.toHaveProperty(key);
+    if (fields.thinking === false || fields.capabilities) {
+      expect(saved.thinking).toBe(false); expect(output.thinking).toBe(false);
+      for (const key of ['adaptiveThinking', 'minThinkingBudget', 'maxThinkingBudget']) expect(saved).not.toHaveProperty(key);
+    }
+  });
+  it('retains budget-based thinking when upstream explicitly has no selectable effort levels', async () => {
+    const f = fixture(vi.fn(async () => json({ data: [{ id: 'kimi-k3', thinking: true, supported_reasoning_levels: [], min_thinking_budget: 1024, max_thinking_budget: 4096 }] })) as typeof fetch);
+    f.store.provider.presetId = 'volcengine-agent'; f.store.provider.baseUrl = 'https://ark.cn-beijing.volces.com/api/plan/v3';
+    const discovered = (await f.catalog.discover('api')).models[0];
+    expect(discovered).toMatchObject({ thinking: true, reasoningEfforts: [], minThinkingBudget: 1024, maxThinkingBudget: 4096 });
+    expect(discovered).not.toHaveProperty('reasoningEffortFormat');
   });
   it('honors explicit upstream false capabilities and an empty reasoning list while filling only missing input/output fields', async () => {
     const f = fixture(vi.fn(async () => json({ data: [{ id: 'gpt-6.1-sol', context_window: 900000, max_input_tokens: 800000,
@@ -109,6 +196,32 @@ describe('real model catalog discovery and batch selection', () => {
     const candidate = (await f.catalog.discover('api')).models[0];
     expect(candidate).toMatchObject({ contextWindow: 272000, maxInputTokens: 265000, maxOutputTokens: 7000, thinking: false, reasoningEfforts: [] });
     expect(candidate).not.toHaveProperty('metadataInferred'); expect(candidate).not.toHaveProperty('metadataReference');
+  });
+  it.each(['codex', 'copilot'] as const)('fills only missing thinking defaults for the %s subscription directory', async kind => {
+    const entry = { id: 'gpt-6.1-sol', context_window: 272000, max_input_tokens: 265000, max_output_tokens: 7000, tools: false, vision: false };
+    const f = fixture(vi.fn(async () => json(kind === 'codex' ? { models: [entry] } : { data: [entry] })) as typeof fetch);
+    f.store.provider = { ...provider, kind, presetId: kind === 'codex' ? 'codex-subscription' : 'copilot-subscription', baseUrl: kind === 'codex' ? 'https://chatgpt.com/backend-api/codex' : 'https://api.githubcopilot.com' };
+    const discovered = (await f.catalog.discover('api')).models[0];
+    const wireApi = kind === 'codex' ? 'responses' : 'chat-completions';
+    expect(discovered).toMatchObject({ contextWindow: 272000, maxInputTokens: 265000, maxOutputTokens: 7000, tools: false, vision: false, thinking: true, reasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultReasoningEffort: 'medium', reasoningEffortFormat: wireApi });
+    expect(discovered.metadataInferred).toEqual(expect.arrayContaining(['thinking', 'reasoningEfforts', 'defaultReasoningEffort', 'reasoningEffortFormat']));
+    for (const field of ['contextWindow', 'maxInputTokens', 'maxOutputTokens', 'tools', 'vision']) expect(discovered.metadataInferred).not.toContain(field);
+    expect(discovered).not.toHaveProperty('metadataReference');
+    const selected = f.catalog.addSelected('api', [{ upstreamId: 'gpt-6.1-sol' }]).added[0];
+    const adapterStore = {
+      listModels: () => f.store.listModels(), listProviders: () => [f.store.provider], getProvider: (id: string) => f.store.getProvider(id), gatewayKey: () => 'SYNTHETIC_ONLY',
+      listBindings: () => ['vscode', 'copilot'].map(id => ({ id, name: id, enabled: true, mode: 'aggregate', providerIds: ['api'], modelIds: [selected.id], defaultModelId: selected.id, note: '' } as ToolBinding)),
+    };
+    const output = JSON.parse(buildConfig(adapterStore, 'vscode', 18181).content)[0].models[0];
+    expect(output).toMatchObject({ maxInputTokens: 265000, maxOutputTokens: 7000, thinking: true, supportsReasoningEffort: selected.reasoningEfforts, defaultReasoningEffort: 'medium', reasoningEffortFormat: wireApi });
+    expect(buildCopilotDesktopPlan(adapterStore, 18181).providers[0].models[0].supportedReasoningEfforts).toEqual(selected.reasoningEfforts);
+  });
+  it('leaves unknown native subscription models without guessed reasoning levels or public API limits', async () => {
+    const f = fixture(vi.fn(async () => json({ data: [{ id: 'subscription-private-model' }] })) as typeof fetch);
+    f.store.provider = { ...provider, kind: 'copilot', presetId: 'copilot-subscription', baseUrl: 'https://api.githubcopilot.com' };
+    const discovered = (await f.catalog.discover('api')).models[0];
+    expect(discovered).toMatchObject({ contextWindow: 0, tools: false, vision: false });
+    for (const key of ['thinking', 'reasoningEfforts', 'defaultReasoningEffort', 'reasoningEffortFormat', 'maxInputTokens', 'maxOutputTokens']) expect(discovered).not.toHaveProperty(key);
   });
   it('keeps every saved specification and absent old field unchanged during rediscovery', async () => {
     const f = fixture(vi.fn(async () => json({ data: [{ id: 'saved-model', max_input_tokens: 100000, max_output_tokens: 50000, thinking: true, supported_reasoning_levels: ['high'] }, { id: 'gpt-6.1-sol' }] })) as typeof fetch);

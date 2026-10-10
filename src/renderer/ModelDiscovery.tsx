@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, ChevronDown, Download, Info, Layers3, RefreshCw, Search, Settings2 } from './MaterialIcon';
-import type { ModelDockApi, Provider, WireApi } from '../shared/types';
+import type { ModelDockApi, Provider, ReasoningEffort, WireApi } from '../shared/types';
 import type { AddModelsResult, DiscoveredModel, DiscoveryResult, ModelMetadataField, ModelSelection } from '../shared/catalog-types';
-import { MODEL_SPEC_FIELDS, modelSpecs } from '../shared/types';
+import { MODEL_SPEC_FIELDS, REASONING_EFFORTS, modelSpecs } from '../shared/types';
+import { lookupModelMetadata, lookupModelReasoningDefaults } from '../shared/model-metadata';
+import { applyOfficialModelParameters, officialModelParameterFields, reasoningSelectionPatch, withReasoningWireApi } from '../shared/model-draft';
 import { modelDisplayLabel, modelLocalAlias } from '../shared/model-names';
 import { BusyIcon, EmptyState, Modal, type Notify } from './components';
 
@@ -19,12 +21,18 @@ interface Props {
 }
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 const protocolLabel = (wireApi: WireApi) => wireApi === 'messages' ? 'Anthropic Messages' : wireApi === 'responses' ? 'Responses' : 'Chat Completions';
+const reasoningEffortLabels: Record<ReasoningEffort, string> = { none: '无', minimal: '最小', low: '低', medium: '中', high: '高', xhigh: '超高', max: '最大' };
 const candidateDraft = (model: DiscoveredModel, providerId: string): CandidateDraft => ({ ...model, alias: modelLocalAlias({ providerId, alias: model.alias }), selected: !model.existingModelId });
 const metadataLabels: Record<MetadataField, string> = { contextWindow: '上下文', tools: '工具调用', vision: '图片输入', maxInputTokens: '输入上限', maxOutputTokens: '输出预算', thinking: '思考能力', reasoningEfforts: '思考等级', defaultReasoningEffort: '默认强度', reasoningEffortFormat: '思考格式', adaptiveThinking: '自适应思考', minThinkingBudget: '最低思考预算', maxThinkingBudget: '最高思考预算' };
 const activeMetadataFields = (model: CandidateDraft, fields: readonly MetadataField[] | undefined) => (fields ?? []).filter(field => !model.editedFields?.includes(field));
 const metadataFieldLabels = (fields: readonly MetadataField[]) => fields.map(field => metadataLabels[field]).join('、');
 const metadataOrigin = (model: CandidateDraft, field: MetadataField) => model.existingModelId ? '已保存设置' : model.editedFields?.includes(field) ? '用户设置' : model[field] === undefined ? '未声明' : model.metadataInferred?.some(inferred => inferred === field) ? '内置字典' : model.metadataDefaults?.includes(field) ? '本地默认' : '供应商';
-const patchedCandidate = (model: CandidateDraft, patch: Partial<CandidateDraft>): CandidateDraft => ({ ...model, ...patch, editedFields: [...new Set([...(model.editedFields ?? []), ...(['contextWindow', 'tools', 'vision', 'reasoningEfforts', 'defaultReasoningEffort', ...MODEL_SPEC_FIELDS] as const).filter(field => Object.prototype.hasOwnProperty.call(patch, field))])] });
+const patchedCandidate = (model: CandidateDraft, patch: Partial<CandidateDraft>): CandidateDraft => {
+  const merged = { ...model, ...patch };
+  const next = patch.wireApi ? withReasoningWireApi(merged, patch.wireApi) : merged;
+  const edited = (['contextWindow', 'tools', 'vision', 'reasoningEfforts', 'defaultReasoningEffort', ...MODEL_SPEC_FIELDS] as const).filter(field => Object.prototype.hasOwnProperty.call(patch, field) || field === 'reasoningEffortFormat' && !!patch.wireApi);
+  return { ...next, editedFields: [...new Set([...(model.editedFields ?? []), ...edited])] };
+};
 
 export function ModelDiscovery({ api, provider, notify, onClose, onAdded, onManualAdd, initialResult }: Props) {
   const [result, setResult] = useState<DiscoveryResult | null>(initialResult ?? null);
@@ -114,7 +122,7 @@ export function ModelDiscovery({ api, provider, notify, onClose, onAdded, onManu
       if ([model.contextWindow, model.maxInputTokens ?? 0, model.maxOutputTokens ?? 0].some(value => !Number.isSafeInteger(value) || value < 0)) { setError(`「${model.upstreamId}」的上下文、输入上限和输出预算请填写非负整数。0 表示未设置或自动。`); return; }
       aliases.add(alias);
     }
-    const selections: ModelSelection[] = selected.map(model => ({ upstreamId: model.upstreamId, alias: model.alias.trim(), displayName: model.displayName.trim(), wireApi: model.wireApi, contextWindow: model.contextWindow, tools: model.tools, vision: model.vision, reasoningEfforts: model.reasoningEfforts, defaultReasoningEffort: model.defaultReasoningEffort, ...modelSpecs(model) }));
+    const selections: ModelSelection[] = selected.map(model => ({ upstreamId: model.upstreamId, alias: model.alias.trim(), displayName: model.displayName.trim(), wireApi: model.wireApi, contextWindow: model.contextWindow, tools: model.tools, vision: model.vision, reasoningEfforts: model.reasoningEfforts, defaultReasoningEffort: model.defaultReasoningEffort, ...modelSpecs(model), reasoningEffortFormat: model.reasoningEfforts?.length ? model.wireApi : undefined }));
     setAdding(true);
     try {
       const next = await api.addDiscoveredModels(provider.id, selections);
@@ -156,6 +164,9 @@ export function ModelDiscovery({ api, provider, notify, onClose, onAdded, onManu
               const inferredFields = activeMetadataFields(model, model.metadataInferred);
               const defaultFields = activeMetadataFields(model, model.metadataDefaults);
               const locked = adding || !!model.existingModelId;
+              const metadata = lookupModelMetadata(model.upstreamId, provider, model.wireApi);
+              const reasoningMetadata = lookupModelReasoningDefaults(model.upstreamId, provider, model.wireApi);
+              const thinking = model.thinking ?? !!model.reasoningEfforts?.length;
               return <div className={`discovery-model ${model.selected ? 'selected' : ''} ${model.existingModelId ? 'existing' : ''}`} key={model.upstreamId}>
                 <label className="discovery-model-select"><input type="checkbox" checked={model.selected} disabled={locked} aria-label={`选择模型 ${model.upstreamId}`} onChange={event => updateModel(model.upstreamId, { selected: event.target.checked })} /><span>
                   <strong title={model.upstreamId}>{model.upstreamId}</strong>
@@ -179,7 +190,16 @@ export function ModelDiscovery({ api, provider, notify, onClose, onAdded, onManu
                     <label><span>工具调用 <small>{metadataOrigin(model, 'tools')}</small></span><select aria-label={`${model.upstreamId} 工具调用`} value={model.tools ? 'yes' : 'no'} disabled={locked} onChange={event => updateModel(model.upstreamId, { tools: event.target.value === 'yes' })}><option value="yes">启用</option><option value="no">关闭</option></select></label>
                     <label><span>图片输入 <small>{metadataOrigin(model, 'vision')}</small></span><select aria-label={`${model.upstreamId} 图片输入`} value={model.vision ? 'yes' : 'no'} disabled={locked} onChange={event => updateModel(model.upstreamId, { vision: event.target.value === 'yes' })}><option value="yes">启用</option><option value="no">关闭</option></select></label>
                   </div>
-                  <p className="discovery-settings-note">{model.existingModelId ? '这些参数已保存，可在供应商模型列表中修改。' : '0 表示长度未设置或自动；输出预算可以小于官方上限。思考能力不等同于可选等级，手动修改添加后保存。'}{!!inferredFields.length && model.metadataReference && <> <a href={model.metadataReference.sourceUrl} target="_blank" rel="noopener noreferrer">字典参考文档</a> · 核对日期 {model.metadataReference.verifiedAt}</>}</p>
+                  {thinking && <>
+                    <div className="discovery-reasoning-heading"><span>可选思考等级 <small>{metadataOrigin(model, 'reasoningEfforts')}{reasoningMetadata?.reasoningDefaultsSource === 'builtin' ? ' · 内置默认' : ''}</small></span><button type="button" className="button secondary small" disabled={locked || (!metadata && !reasoningMetadata)} aria-label={`${model.upstreamId} 应用维护参数`} onClick={() => {
+                      if (!metadata && !reasoningMetadata) return;
+                      const maintained = applyOfficialModelParameters(model, metadata, reasoningMetadata);
+                      updateModel(model.upstreamId, Object.fromEntries(officialModelParameterFields(metadata, reasoningMetadata).map(field => [field, maintained[field]])) as Partial<CandidateDraft>);
+                    }}>应用维护参数</button></div>
+                    <div className="capability-field reasoning-field discovery-reasoning-field">{REASONING_EFFORTS.map(level => <label key={level}><input type="checkbox" aria-label={`${model.upstreamId} 思考等级 ${level}`} checked={(model.reasoningEfforts ?? []).includes(level)} disabled={locked} onChange={event => updateModel(model.upstreamId, reasoningSelectionPatch(model, level, event.target.checked))} />{reasoningEffortLabels[level]}</label>)}</div>
+                    {!!model.reasoningEfforts?.length && <label className="discovery-reasoning-default">默认思考强度<select aria-label={`${model.upstreamId} 默认思考强度`} value={model.defaultReasoningEffort ?? ''} disabled={locked} onChange={event => updateModel(model.upstreamId, { defaultReasoningEffort: (event.target.value || undefined) as ReasoningEffort | undefined, reasoningEffortFormat: model.wireApi })}><option value="">由工具选择</option>{model.reasoningEfforts.map(level => <option key={level} value={level}>{reasoningEffortLabels[level]}（{level}）</option>)}</select></label>}
+                  </>}
+                  <p className="discovery-settings-note">{model.existingModelId ? '这些参数已保存，可在供应商模型列表中修改。' : '0 表示长度未设置或自动；输出预算可以小于支持上限。已勾选的思考等级会提供给工具选择，添加后保存。'}{!!inferredFields.length && model.metadataReference && <> <a href={model.metadataReference.sourceUrl} target="_blank" rel="noopener noreferrer">字典参考文档</a> · 核对日期 {model.metadataReference.verifiedAt}</>}</p>
                 </details>
               </div>;
             })}

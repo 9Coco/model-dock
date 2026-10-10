@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { lookupModelMetadata } from '../src/shared/model-metadata';
+import { lookupModelMetadata, lookupModelReasoningDefaults } from '../src/shared/model-metadata';
 
 describe('documented model metadata defaults', () => {
   it.each([
@@ -60,15 +60,14 @@ describe('documented model metadata defaults', () => {
     first.vision = false;
     expect(lookupModelMetadata('gpt-4o')).toMatchObject({ contextWindow: 128_000, vision: true });
   });
-  it('keeps native and official Ark Kimi limits and parameter contracts separate', () => {
+  it('keeps Ark Kimi limits separate while falling back to maintained model reasoning defaults', () => {
     const native = lookupModelMetadata('kimi-k3', { kind: 'openai-compatible', baseUrl: 'https://api.moonshot.ai/v1' }, 'chat-completions')!;
     expect(native).toMatchObject({ contextWindow: 1000000, maxOutputTokens: 1048576, defaultOutputTokens: 131072,
       thinking: true, reasoningEfforts: ['low', 'high', 'max'], defaultReasoningEffort: 'max', reasoningEffortFormat: 'chat-completions' });
     for (const path of ['plan', 'coding']) {
       const ark = lookupModelMetadata('kimi-k3', { kind: 'openai-compatible', baseUrl: `https://ark.cn-beijing.volces.com/api/${path}/v3/` }, 'responses')!;
-      expect(ark).toMatchObject({ contextWindow: 1024000, maxOutputTokens: 131072, thinking: true, vision: true, reasoningEfforts: [] });
-      expect(ark).not.toHaveProperty('defaultReasoningEffort');
-      expect(ark).not.toHaveProperty('reasoningEffortFormat');
+      expect(ark).toMatchObject({ contextWindow: 1024000, maxOutputTokens: 131072, thinking: true, vision: true,
+        reasoningEfforts: ['low', 'high', 'max'], defaultReasoningEffort: 'max', reasoningEffortFormat: 'responses', reasoningDefaultsSource: 'builtin' });
       expect(ark.sourceUrl).toContain('docs.volcengine.com');
     }
   });
@@ -81,8 +80,9 @@ describe('documented model metadata defaults', () => {
   ])('does not trust a copied preset ID on a different endpoint %s', baseUrl => {
     const value = lookupModelMetadata('kimi-k3', { kind: 'openai-compatible', presetId: 'volcengine-agent', baseUrl }, 'responses')!;
     expect(value.contextWindow).toBe(1000000);
-    expect(value.reasoningEfforts).toEqual([]);
-    expect(value).not.toHaveProperty('reasoningEffortFormat');
+    expect(value.reasoningEfforts).toEqual(['low', 'high', 'max']);
+    expect(value.reasoningDefaultsSource).toBe('builtin');
+    expect(value.reasoningEffortFormat).toBe('responses');
     expect(value.sourceUrl).toContain('platform.kimi.ai');
   });
   it('does not apply public API maxima to account subscriptions', () => {
@@ -115,8 +115,8 @@ describe('documented model metadata defaults', () => {
     expect(qwen.defaultInputTokens).toBe(983616);
   });
   it('separates thinking capability from effort levels and caps the initial output allocation', () => {
-    expect(lookupModelMetadata('kimi-k2.7-code')).toMatchObject({ thinking: true, reasoningEfforts: [] });
-    expect(lookupModelMetadata('claude-sonnet-4-5')).toMatchObject({ thinking: true, reasoningEfforts: [], minThinkingBudget: 1024, maxThinkingBudget: 63999 });
+    expect(lookupModelMetadata('kimi-k2.7-code')).toMatchObject({ thinking: true, reasoningEfforts: ['low', 'medium', 'high'], reasoningDefaultsSource: 'builtin' });
+    expect(lookupModelMetadata('claude-sonnet-4-5')).toMatchObject({ thinking: true, reasoningEfforts: ['low', 'medium', 'high'], reasoningDefaultsSource: 'builtin', minThinkingBudget: 1024, maxThinkingBudget: 63999 });
     const preview = lookupModelMetadata('kimi-k2.8-preview', { kind: 'openai-compatible', baseUrl: 'https://ark.cn-beijing.volces.com/api/plan/v3' }, 'responses')!;
     expect(preview.maxOutputTokens).toBe(1024000);
     expect(preview.defaultOutputTokens).toBeLessThan(preview.contextWindow);
@@ -142,9 +142,30 @@ describe('documented model metadata defaults', () => {
   });
   it('keeps MiniMax protocol evidence and its plan override separate', () => {
     const native = { kind: 'openai-compatible' as const, baseUrl: 'https://api.minimax.io/v1' };
-    expect(lookupModelMetadata('MiniMax-M3', native, 'messages')).toMatchObject({ contextWindow: 1000000, maxOutputTokens: 524288, defaultOutputTokens: 131072, thinking: true, reasoningEfforts: [] });
+    expect(lookupModelMetadata('MiniMax-M3', native, 'messages')).toMatchObject({ contextWindow: 1000000, maxOutputTokens: 524288, defaultOutputTokens: 131072, thinking: true,
+      reasoningEfforts: ['low', 'medium', 'high'], reasoningDefaultsSource: 'builtin', reasoningEffortFormat: 'messages' });
     expect(lookupModelMetadata('MiniMax-M3', native, 'responses')).not.toHaveProperty('maxOutputTokens');
     expect(lookupModelMetadata('MiniMax-M3', native)).not.toHaveProperty('maxOutputTokens');
     expect(lookupModelMetadata('minimax-m3', { kind: 'openai-compatible', baseUrl: 'https://ark.cn-beijing.volces.com/api/plan/v3' }, 'responses')).toMatchObject({ contextWindow: 1024000, maxOutputTokens: 131072 });
+  });
+  it.each(['kimi-k3', 'glm-5.3', 'glm-latest', 'glm-5.3-flash', 'deepseek-v4.1-flash'])('fills maintained Ark reasoning levels for %s', id => {
+    const provider = { kind: 'openai-compatible' as const, baseUrl: 'https://ark.cn-beijing.volces.com/api/plan/v3' };
+    expect(lookupModelReasoningDefaults(id, provider, 'responses')).toMatchObject({ thinking: true,
+      reasoningEfforts: ['low', 'high', 'max'], reasoningEffortFormat: 'responses', reasoningDefaultsSource: 'builtin' });
+  });
+  it('keeps subscription reasoning fallback independent of public API limits', () => {
+    const provider = { kind: 'copilot' as const, baseUrl: '' };
+    const fallback = lookupModelReasoningDefaults('gpt-6.1-sol', provider, 'responses')!;
+    expect(fallback).toMatchObject({ thinking: true, reasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'], reasoningDefaultsSource: 'builtin' });
+    for (const field of ['contextWindow', 'maxInputTokens', 'maxOutputTokens', 'vision', 'tools']) expect(fallback).not.toHaveProperty(field);
+    expect(lookupModelReasoningDefaults('unknown-experimental', provider, 'responses')).toBeUndefined();
+    expect(lookupModelReasoningDefaults('gpt-4o', provider, 'chat-completions')?.reasoningEfforts).toEqual([]);
+  });
+  it('marks an exact official protocol reference as official while returning independent arrays', () => {
+    const provider = { kind: 'openai-compatible' as const, baseUrl: 'https://api.moonshot.ai/v1' };
+    const official = lookupModelReasoningDefaults('kimi-k3', provider, 'chat-completions')!;
+    expect(official.reasoningDefaultsSource).toBe('official');
+    official.reasoningEfforts!.splice(0);
+    expect(lookupModelReasoningDefaults('kimi-k3', provider, 'chat-completions')?.reasoningEfforts).toEqual(['low', 'high', 'max']);
   });
 });

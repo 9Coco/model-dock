@@ -4,7 +4,7 @@ import { isReasoningEffort, MODEL_SPEC_FIELDS, modelSpecs, sanitizeReasoningEffo
 import type { AddModelsResult, DiscoveredModel, DiscoveryErrorCategory, DiscoveryResult, ModelSelection } from '../shared/catalog-types';
 import { presetById } from '../shared/presets';
 import { modelLocalAlias, suggestModelAlias } from '../shared/model-names';
-import { lookupModelMetadata } from '../shared/model-metadata';
+import { lookupModelMetadata, lookupModelReasoningDefaults } from '../shared/model-metadata';
 import type { PreparedUpstream } from './oauth';
 import { modelCatalogEndpoint } from './oauth';
 import { anthropicEndpoint } from './anthropic-endpoint';
@@ -77,6 +77,8 @@ function parseModel(entry: unknown, provider: Provider, messagesCatalog = false)
   const wireApi: WireApi = provider.kind === 'copilot' ? Array.isArray(endpoints) && (endpoints.includes('responses') || endpoints.includes('/responses')) ? 'responses' : 'chat-completions'
     : provider.kind === 'openai-compatible' ? messagesCatalog ? 'messages' : presetById(provider.presetId)?.defaultWireApi ?? 'chat-completions' : 'responses';
   const knownMetadata = lookupModelMetadata(upstreamId, provider, wireApi);
+  // 订阅目录只借用缺少的思考默认值，不能借用公共 API 的容量或模态。
+  const reasoningMetadata = knownMetadata ?? lookupModelReasoningDefaults(upstreamId, provider, wireApi);
   const upstreamInput = positiveContext(data.max_input_tokens, data.maxInputTokens, limits.max_input_tokens, limits.max_prompt_tokens);
   // max_tokens is frequently a default request budget, so it is deliberately
   // excluded from published output-limit inference.
@@ -98,14 +100,16 @@ function parseModel(entry: unknown, provider: Provider, messagesCatalog = false)
   }
   const declaredReasoning = [data.supported_reasoning_levels, data.reasoning_efforts, data.supports_reasoning_effort, supports.reasoning_effort]
     .find(value => Array.isArray(value) || value === false);
-  // An explicit negative capability is authoritative even for a known model.
-  const declaredLevels = declaredReasoning === false ? [] : Array.isArray(declaredReasoning) ? declaredReasoning : undefined;
+  const declaredThinking = booleanValue(data.thinking, data.supports_thinking, capabilities.thinking, supports.thinking, supports.reasoning);
+  // 修改点：上游明确不支持思考时，也要收口字典推断的等级，不能导出
+  // thinking:false 与非空等级的矛盾配置。缺少声明才使用内置维护参数。
+  const declaredLevels = declaredThinking === false || declaredReasoning === false ? [] : Array.isArray(declaredReasoning) ? declaredReasoning : undefined;
   const reasoningEfforts = declaredLevels !== undefined
     ? sanitizeReasoningEfforts(declaredLevels.map(level => typeof level === 'string' ? level : object(level).effort))
-    : knownMetadata?.reasoningEfforts;
+    : reasoningMetadata?.reasoningEfforts;
   if (declaredLevels === undefined && reasoningEfforts !== undefined) metadataInferred.push('reasoningEfforts');
   const declaredDefaultLevel = data.default_reasoning_level ?? data.default_reasoning_effort;
-  const preferredLevel = declaredDefaultLevel ?? knownMetadata?.defaultReasoningEffort;
+  const preferredLevel = declaredDefaultLevel ?? reasoningMetadata?.defaultReasoningEffort;
   const defaultReasoningEffort = isReasoningEffort(preferredLevel) && reasoningEfforts?.includes(preferredLevel) ? preferredLevel : undefined;
   if (declaredDefaultLevel === undefined && defaultReasoningEffort !== undefined) metadataInferred.push('defaultReasoningEffort');
   const declaredFormat = data.reasoning_effort_format ?? data.reasoningEffortFormat;
@@ -119,19 +123,26 @@ function parseModel(entry: unknown, provider: Provider, messagesCatalog = false)
     : upstreamOutput;
   const upstreamSpecs = modelSpecs({
     maxInputTokens: upstreamInput, maxOutputTokens: upstreamOutputBudget,
-    thinking: booleanValue(data.thinking, data.supports_thinking, capabilities.thinking, supports.thinking, supports.reasoning),
+    thinking: declaredThinking,
     reasoningEffortFormat: declaredFormat,
     adaptiveThinking: booleanValue(data.adaptive_thinking, data.adaptiveThinking, capabilities.adaptive_thinking),
     minThinkingBudget: positiveContext(data.min_thinking_budget, data.minThinkingBudget),
     maxThinkingBudget: positiveContext(data.max_thinking_budget, data.maxThinkingBudget),
   });
-  const inferredSpecs = modelSpecs(knownMetadata ? { ...knownMetadata, maxInputTokens: knownMetadata.defaultInputTokens ?? knownMetadata.maxInputTokens, maxOutputTokens: knownMetadata.defaultOutputTokens ?? knownMetadata.maxOutputTokens } : {});
+  const inferredSpecs = modelSpecs(knownMetadata ? { ...knownMetadata, maxInputTokens: knownMetadata.defaultInputTokens ?? knownMetadata.maxInputTokens, maxOutputTokens: knownMetadata.defaultOutputTokens ?? knownMetadata.maxOutputTokens } : reasoningMetadata ?? {});
   const specs = { ...inferredSpecs, ...upstreamSpecs };
-  for (const key of MODEL_SPEC_FIELDS) if (upstreamSpecs[key] === undefined && inferredSpecs[key] !== undefined) metadataInferred.push(key);
+  if (!reasoningEfforts?.length) delete specs.reasoningEffortFormat;
+  if (declaredThinking === false) {
+    delete specs.adaptiveThinking;
+    delete specs.minThinkingBudget;
+    delete specs.maxThinkingBudget;
+  }
+  for (const key of MODEL_SPEC_FIELDS) if (upstreamSpecs[key] === undefined && specs[key] !== undefined && inferredSpecs[key] !== undefined) metadataInferred.push(key);
   const metadataSource = upstreamContext !== undefined || declaredTools !== undefined || upstreamVision !== undefined || declaredLevels !== undefined || Object.keys(upstreamSpecs).length ? 'upstream' : 'defaults';
   return { upstreamId, displayName: safeText(data.display_name ?? data.displayName ?? data.name) || upstreamId,
     wireApi, contextWindow, tools, vision, metadataSource, metadataDefaults, ...specs,
-    ...(metadataInferred.length && knownMetadata ? { metadataInferred, metadataReference: { sourceUrl: knownMetadata.sourceUrl, verifiedAt: knownMetadata.verifiedAt } } : {}),
+    ...(metadataInferred.length ? { metadataInferred } : {}),
+    ...(metadataInferred.length && knownMetadata ? { metadataReference: { sourceUrl: knownMetadata.sourceUrl, verifiedAt: knownMetadata.verifiedAt } } : {}),
     ...(reasoningEfforts !== undefined ? { reasoningEfforts, ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}) } : {}) };
 }
 function httpFailure(status: number): CatalogFailure {
@@ -344,7 +355,9 @@ export class ModelCatalog {
       const vision = selection.vision ?? found.vision;
       if (!Number.isSafeInteger(contextWindow) || contextWindow < 0 || typeof tools !== 'boolean' || typeof vision !== 'boolean') throw new Error('模型能力参数无效。');
       const reasoningEfforts = selection.reasoningEfforts === undefined ? found.reasoningEfforts ?? [] : sanitizeReasoningEfforts(selection.reasoningEfforts);
-      const defaultReasoningEffort = selection.defaultReasoningEffort ?? (found.defaultReasoningEffort && reasoningEfforts.includes(found.defaultReasoningEffort) ? found.defaultReasoningEffort : undefined);
+      // “由工具选择”会显式清空默认档位；只有未提供该字段才继承目录值。
+      const defaultReasoningEffort = Object.hasOwn(selection, 'defaultReasoningEffort') ? selection.defaultReasoningEffort
+        : found.defaultReasoningEffort && reasoningEfforts.includes(found.defaultReasoningEffort) ? found.defaultReasoningEffort : undefined;
       if (defaultReasoningEffort !== undefined && (!isReasoningEffort(defaultReasoningEffort) || !reasoningEfforts.includes(defaultReasoningEffort))) throw new Error('默认思考强度必须属于模型支持的级别。');
       const specs = modelSpecs({ ...found, ...Object.fromEntries(MODEL_SPEC_FIELDS.filter(key => selection[key] !== undefined).map(key => [key, selection[key]])) }, true);
       inputs.push({ providerId, upstreamId: found.upstreamId, alias, displayName, wireApi, contextWindow, tools, vision, enabled: true, ...specs, ...(selection.reasoningEfforts !== undefined || found.reasoningEfforts !== undefined ? { reasoningEfforts, ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}) } : {}) });
