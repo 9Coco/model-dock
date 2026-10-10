@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { SettingsManager, quoteDesktopExec, type LoginItemAdapter, type SettingsStore } from '../src/main/settings';
 import { DEFAULT_SETTINGS } from '../src/shared/settings-types';
+import type { AppSettings } from '../src/shared/settings-types';
 import { Store } from '../src/main/store';
 
 class MemoryStore implements SettingsStore {
@@ -22,7 +23,17 @@ afterEach(() => {
   if (!isAbsolute(rel) && !rel.startsWith('..' + sep) && rel !== '..' && path !== resolve(tmpdir()) && path.includes('modeldock-settings-test-')) rmSync(path, { recursive: true, force: true });
 });
 const linux = () => new SettingsManager(store, { platform: 'linux', homeDir: fixture, configHome: join(fixture, 'config'), execPath: join(fixture, 'My ModelDock.AppImage'), isPackaged: true });
-const autostart = () => join(fixture, 'config', 'autostart', 'modeldock.desktop');
+const autostart = () => join(fixture, 'config', 'autostart', 'model-dock.desktop');
+const legacyAutostart = () => join(fixture, 'config', 'autostart', 'modeldock.desktop');
+const migrationStage = () => `${legacyAutostart()}.migration`;
+function legacyStartup() {
+  linux().save({ launchAtLogin: true, startHidden: true, theme: 'dark', gatewayPort: 25000 });
+  renameSync(autostart(), legacyAutostart());
+  const saved = store.values.get('app.settings') as { version: 1; settings: AppSettings; linuxAutostart: { path: string; content: string } };
+  saved.linuxAutostart.path = legacyAutostart();
+  store.writes = 0;
+  return structuredClone(saved);
+}
 function windows(login: LoginItemAdapter, packaged = true) { return new SettingsManager(store, { platform: 'win32', homeDir: fixture, execPath: join(fixture, 'ModelDock.exe'), isPackaged: packaged, login }); }
 function loginFixture() {
   let enabled = false;
@@ -207,6 +218,172 @@ describe('application settings', () => {
     expect(readFileSync(autostart(), 'utf8')).toBe(original);
     expect(manager.get().settings.launchAtLogin).toBe(true);
   });
+  it('migrates the exact owned legacy desktop ID without changing preferences and is idempotent', () => {
+    const original = legacyStartup(), manager = linux();
+    expect(existsSync(legacyAutostart())).toBe(true);
+    expect(existsSync(autostart())).toBe(false);
+    expect(store.writes).toBe(0); // constructor/get never create or migrate startup files.
+    expect(manager.get().actualLaunchAtLogin).toBe(true);
+    expect(manager.get().launchAtLoginReason).toContain('尚未完成');
+    expect(manager.migrateLinuxAutostart()).toBe(true);
+    expect(existsSync(legacyAutostart())).toBe(false);
+    expect(existsSync(migrationStage())).toBe(false);
+    expect(readFileSync(autostart(), 'utf8')).toBe(original.linuxAutostart.content);
+    expect(store.values.get('app.settings')).toEqual({ ...original, linuxAutostart: { ...original.linuxAutostart, path: autostart() } });
+    expect(manager.get().settings).toEqual(original.settings);
+    expect(manager.get().actualLaunchAtLogin).toBe(true);
+    expect(manager.migrateLinuxAutostart()).toBe(false);
+    expect(linux().migrateLinuxAutostart()).toBe(false);
+    expect(store.writes).toBe(1);
+    manager.save({ launchAtLogin: false });
+    expect(existsSync(autostart())).toBe(false);
+    expect(existsSync(legacyAutostart())).toBe(false);
+  });
+  it.each(['stage-created', 'old-unlinked', 'target-linked', 'record-updated'] as const)('recovers migration after a crash at %s with at most one active desktop entry', point => {
+    const original = legacyStartup();
+    linkSync(legacyAutostart(), migrationStage());
+    if (point !== 'stage-created') unlinkSync(legacyAutostart());
+    if (point === 'target-linked' || point === 'record-updated') linkSync(migrationStage(), autostart());
+    if (point === 'record-updated') (store.values.get('app.settings') as typeof original).linuxAutostart.path = autostart();
+    expect([autostart(), legacyAutostart()].filter(existsSync)).toHaveLength(point === 'old-unlinked' ? 0 : 1);
+    const manager = linux();
+    expect(manager.migrateLinuxAutostart()).toBe(true);
+    expect(manager.get().actualLaunchAtLogin).toBe(true);
+    expect(existsSync(legacyAutostart())).toBe(false);
+    expect(existsSync(migrationStage())).toBe(false);
+    expect(readFileSync(autostart(), 'utf8')).toBe(original.linuxAutostart.content);
+  });
+  it('does not migrate disabled preferences, externally disabled content, or a missing ownership record', () => {
+    const original = legacyStartup();
+    const managerOptions = { platform: 'linux' as const, homeDir: fixture, configHome: join(fixture, 'config'), execPath: join(fixture, 'My ModelDock.AppImage'), isPackaged: true };
+    (store.values.get('app.settings') as typeof original).settings.launchAtLogin = false;
+    expect(linux().migrateLinuxAutostart()).toBe(false);
+    expect(readFileSync(legacyAutostart(), 'utf8')).toBe(original.linuxAutostart.content);
+    store.values.set('app.settings', { ...original, linuxAutostart: { ...original.linuxAutostart, content: original.linuxAutostart.content.replace('Autostart-enabled=true', 'Autostart-enabled=false') } });
+    writeFileSync(legacyAutostart(), original.linuxAutostart.content.replace('Autostart-enabled=true', 'Autostart-enabled=false'));
+    expect(linux().migrateLinuxAutostart()).toBe(false);
+    store.values.set('app.settings', { version: 1, settings: original.settings });
+    expect(linux().migrateLinuxAutostart()).toBe(false);
+    store.values.set('app.settings', original);
+    expect(new SettingsManager(store, { ...managerOptions, execPath: join(fixture, 'Different.AppImage') }).migrateLinuxAutostart()).toBe(false);
+    expect(new SettingsManager(store, { ...managerOptions, isPackaged: false }).migrateLinuxAutostart()).toBe(false);
+    expect(store.writes).toBe(0);
+    expect(existsSync(autostart())).toBe(false);
+    expect(existsSync(migrationStage())).toBe(false);
+  });
+  it.each(['legacy-modified', 'target-foreign', 'target-identical', 'stage-foreign', 'stage-identical'] as const)('preserves %s without side effects', conflict => {
+    const original = legacyStartup();
+    if (conflict === 'legacy-modified') writeFileSync(legacyAutostart(), 'foreign startup');
+    if (conflict.startsWith('target-')) writeFileSync(autostart(), conflict === 'target-identical' ? original.linuxAutostart.content : 'foreign target');
+    if (conflict.startsWith('stage-')) writeFileSync(migrationStage(), conflict === 'stage-identical' ? original.linuxAutostart.content : 'foreign stage');
+    const before = [legacyAutostart(), autostart(), migrationStage()].map(path => existsSync(path) ? readFileSync(path, 'utf8') : undefined);
+    expect(() => linux().migrateLinuxAutostart()).toThrow('已保留');
+    expect([legacyAutostart(), autostart(), migrationStage()].map(path => existsSync(path) ? readFileSync(path, 'utf8') : undefined)).toEqual(before);
+    expect(store.values.get('app.settings')).toEqual(original);
+    expect(store.writes).toBe(0);
+  });
+  it('does not enable a second desktop entry beside an unmanaged legacy file', () => {
+    mkdirSync(join(legacyAutostart(), '..'), { recursive: true });
+    writeFileSync(legacyAutostart(), 'foreign startup');
+    const manager = linux();
+    expect(manager.migrateLinuxAutostart()).toBe(false);
+    expect(() => manager.save({ launchAtLogin: true })).toThrow('已保留');
+    expect(readFileSync(legacyAutostart(), 'utf8')).toBe('foreign startup');
+    expect(existsSync(autostart())).toBe(false);
+    expect(manager.get().settings.launchAtLogin).toBe(false);
+    expect(store.writes).toBe(0);
+  });
+  it('disables the exact owned legacy entry after migration conflict while preserving a foreign target', () => {
+    const original = legacyStartup();
+    writeFileSync(autostart(), 'foreign target');
+    const manager = linux();
+    expect(() => manager.migrateLinuxAutostart()).toThrow('已保留');
+    expect(manager.get().actualLaunchAtLogin).toBe(true);
+    expect(manager.get().launchAtLoginReason).toContain('仍启用');
+    expect(manager.save({ launchAtLogin: false }).actualLaunchAtLogin).toBe(false);
+    expect(existsSync(legacyAutostart())).toBe(false);
+    expect(readFileSync(autostart(), 'utf8')).toBe('foreign target');
+    expect(store.values.get('app.settings')).toEqual({ version: 1, settings: { ...original.settings, launchAtLogin: false } });
+    expect(() => manager.save({ launchAtLogin: true })).toThrow('已保留');
+  });
+  it('restores the old owned desktop entry when disabling it fails persistence', () => {
+    const original = legacyStartup(), manager = linux();
+    store.fail = true;
+    expect(() => manager.save({ launchAtLogin: false })).toThrow('恢复');
+    expect(readFileSync(legacyAutostart(), 'utf8')).toBe(original.linuxAutostart.content);
+    expect(existsSync(autostart())).toBe(false);
+    expect(manager.get().actualLaunchAtLogin).toBe(true);
+    expect(manager.get().settings.launchAtLogin).toBe(true);
+    expect(store.values.get('app.settings')).toEqual(original);
+  });
+  it('preserves a modified legacy entry when its owner requests disable', () => {
+    const original = legacyStartup();
+    writeFileSync(legacyAutostart(), 'modified legacy');
+    const manager = linux();
+    expect(manager.get().actualLaunchAtLogin).toBe(false);
+    expect(manager.get().launchAtLoginReason).toContain('已被修改');
+    expect(() => manager.save({ launchAtLogin: false })).toThrow('已保留');
+    expect(readFileSync(legacyAutostart(), 'utf8')).toBe('modified legacy');
+    expect(store.values.get('app.settings')).toEqual(original);
+    expect(store.writes).toBe(0);
+  });
+  it('reports moved executable paths and permits explicit disable/re-enable without automatic Exec rewrites', () => {
+    const original = legacyStartup();
+    const manager = new SettingsManager(store, { platform: 'linux', homeDir: fixture, configHome: join(fixture, 'config'), execPath: join(fixture, 'Moved.AppImage'), isPackaged: true });
+    expect(manager.migrateLinuxAutostart()).toBe(false);
+    expect(manager.get().actualLaunchAtLogin).toBe(true);
+    expect(manager.get().launchAtLoginReason).toContain('程序路径');
+    expect(readFileSync(legacyAutostart(), 'utf8')).toBe(original.linuxAutostart.content);
+    expect(store.writes).toBe(0);
+    manager.save({ launchAtLogin: false });
+    expect(existsSync(legacyAutostart())).toBe(false);
+    manager.save({ launchAtLogin: true });
+    expect(manager.get().actualLaunchAtLogin).toBe(true);
+    expect(readFileSync(autostart(), 'utf8')).toContain('Moved.AppImage');
+  });
+  it.each(['legacy', 'target', 'stage'] as const)('preserves dangling %s symlinks without following them', conflict => {
+    const original = legacyStartup();
+    const path = conflict === 'legacy' ? legacyAutostart() : conflict === 'target' ? autostart() : migrationStage();
+    if (conflict === 'legacy') unlinkSync(path);
+    symlinkSync(join(fixture, 'missing-foreign-file'), path);
+    expect(() => linux().migrateLinuxAutostart()).toThrow('已保留');
+    expect(lstatSync(path).isSymbolicLink()).toBe(true);
+    expect(store.values.get('app.settings')).toEqual(original);
+    expect(store.writes).toBe(0);
+    if (conflict !== 'legacy') expect(readFileSync(legacyAutostart(), 'utf8')).toBe(original.linuxAutostart.content);
+  });
+  it('rolls migration and ownership back when store persistence fails, hiding internal error details', () => {
+    const original = legacyStartup(), manager = linux();
+    const normalWrite = store.setManagedState.bind(store);
+    let failOnce = true;
+    store.setManagedState = (key, value) => { if (failOnce) { failOnce = false; store.values.set(key, structuredClone(value)); throw new Error('secret-should-never-surface'); } normalWrite(key, value); };
+    expect(() => manager.migrateLinuxAutostart()).toThrow('恢复');
+    expect(manager.get().settings).toEqual(original.settings);
+    expect(store.values.get('app.settings')).toEqual(original);
+    expect(readFileSync(legacyAutostart(), 'utf8')).toBe(original.linuxAutostart.content);
+    expect(existsSync(autostart())).toBe(false);
+    expect(existsSync(migrationStage())).toBe(false);
+    expect(manager.migrateLinuxAutostart()).toBe(true);
+  });
+  it('retains a recoverable inactive stage when even ownership rollback persistence fails', () => {
+    const original = legacyStartup(), normalWrite = store.setManagedState.bind(store);
+    let failedWrites = 0;
+    store.setManagedState = (key, value) => {
+      if (failedWrites++ < 2) {
+        if (failedWrites === 1) store.values.set(key, structuredClone(value));
+        throw new Error('secret-should-never-surface');
+      }
+      normalWrite(key, value);
+    };
+    expect(() => linux().migrateLinuxAutostart()).toThrow('恢复记录');
+    expect(readFileSync(legacyAutostart(), 'utf8')).toBe(original.linuxAutostart.content);
+    expect(existsSync(autostart())).toBe(false);
+    expect(existsSync(migrationStage())).toBe(true);
+    expect(linux().migrateLinuxAutostart()).toBe(true);
+    expect(existsSync(legacyAutostart())).toBe(false);
+    expect(existsSync(migrationStage())).toBe(false);
+    expect(linux().get().actualLaunchAtLogin).toBe(true);
+  });
   it('quotes desktop exec paths as one literal argument with percent field codes escaped', () => {
     const quoted = quoteDesktopExec('/opt/Model Dock/100%/a$`"\\file');
     expect(quoted).toBe('"/opt/Model Dock/100%%/a\\\\$\\\\`\\\\"\\\\\\\\file"');
@@ -259,7 +436,7 @@ describe('application settings', () => {
     expect(readFileSync(join(directory, 'modeldock.sqlite')).includes(Buffer.from('"theme":"dark"'))).toBe(false);
     const reopened = await Store.create(directory, codec);
     expect(new SettingsManager(reopened, options).get().settings).toMatchObject({ theme: 'dark', startHidden: true, autoStartGateway: true, gatewayPort: 25000 });
-    expect(existsSync(join(fixture, '.config', 'autostart', 'modeldock.desktop'))).toBe(false);
+    expect(existsSync(join(fixture, '.config', 'autostart', 'model-dock.desktop'))).toBe(false);
     reopened.close();
   });
 });

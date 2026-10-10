@@ -1,5 +1,5 @@
 import { spawn as nodeSpawn, type SpawnOptions, type ChildProcess } from 'node:child_process';
-import { existsSync, linkSync, lstatSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { DEFAULT_SETTINGS, type AppSettings, type SettingsSnapshot, type TerminalOption } from '../shared/settings-types';
@@ -23,6 +23,7 @@ export interface SettingsManagerOptions {
   spawn?: (command: string, args: string[], options: SpawnOptions) => ChildProcess;
 }
 interface LinuxAutostart { path: string; content: string }
+interface LinuxStartupFile { content: string; dev: number; ino: number }
 interface StoredSettings { version: 1; settings: AppSettings; linuxAutostart?: LinuxAutostart }
 const KEY = 'app.settings';
 const FLAGS = ['--autostart'];
@@ -61,6 +62,7 @@ export function quoteDesktopExec(path: string): string {
 export class SettingsManager {
   private readonly platform: 'win32' | 'linux' | 'other';
   private readonly autostartPath: string;
+  private readonly legacyAutostartPath: string;
   private readonly spawn: NonNullable<SettingsManagerOptions['spawn']>;
   private state: StoredSettings;
 
@@ -68,7 +70,9 @@ export class SettingsManager {
     this.platform = options.platform === 'win32' || options.platform === 'linux' ? options.platform : 'other';
     const config = options.configHome ?? join(options.homeDir, '.config');
     if (!isAbsolute(config)) throw new Error('配置目录必须是绝对路径。');
-    this.autostartPath = join(config, 'autostart', 'modeldock.desktop');
+    // 修改点：与安装包启动器 desktop ID 一致，使 KDE 会话恢复能识别开机自启并去重。
+    this.autostartPath = join(config, 'autostart', 'model-dock.desktop');
+    this.legacyAutostartPath = join(config, 'autostart', 'modeldock.desktop');
     this.spawn = options.spawn ?? nodeSpawn;
     const stored = store.getManagedState<unknown>(KEY, { version: 1, settings: { ...DEFAULT_SETTINGS } });
     if (!object(stored) || stored.version !== 1 || Object.keys(stored).some(key => !['version', 'settings', 'linuxAutostart'].includes(key))) throw new Error('本地设置格式无效。');
@@ -94,11 +98,97 @@ export class SettingsManager {
     const items = status.launchItems?.filter(item => item.scope === 'user' && item.path.replace(/\//g, '\\').toLowerCase() === path && item.args.length === FLAGS.length && item.args.every((arg, index) => arg === FLAGS[index]));
     return status.openAtLogin && (items?.length ? items.some(item => item.enabled) : status.executableWillLaunchAtLogin ?? true);
   }
-  private linuxFile(): string | undefined {
-    if (!existsSync(this.autostartPath)) return undefined;
-    const info = lstatSync(this.autostartPath);
+  private linuxStartupFile(path: string): LinuxStartupFile | undefined {
+    let info;
+    try { info = lstatSync(path); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw error; }
     if (!info.isFile() || info.isSymbolicLink() || info.size > 16_384) throw new SettingsFailure('启动项由其他程序管理，已保留。');
-    return readFileSync(this.autostartPath, 'utf8');
+    // 修改点：不跟随符号链接，亦不把 dangling symlink 当作不存在的目标覆盖。
+    const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const opened = fstatSync(fd);
+      if (!opened.isFile() || opened.dev !== info.dev || opened.ino !== info.ino || opened.size > 16_384) throw new SettingsFailure('启动项在读取期间被修改，已保留。');
+      return { content: readFileSync(fd, 'utf8'), dev: opened.dev, ino: opened.ino };
+    } finally { closeSync(fd); }
+  }
+  private linuxFile(): string | undefined { return this.linuxStartupFile(this.autostartPath)?.content; }
+
+  /** 修改点：仅迁移旧版完整所有权记录，不在 constructor/get 中登记新的自启动。 */
+  migrateLinuxAutostart(): boolean {
+    const owned = this.state.linuxAutostart;
+    if (this.platform !== 'linux' || this.support() || !this.state.settings.launchAtLogin || !owned || ![this.legacyAutostartPath, this.autostartPath].includes(owned.path)) return false;
+    const content = this.linuxContent();
+    if (owned.content !== content) return false;
+    // 不以 .desktop 结尾：崩溃中间状态也不会成为第二份启用的启动项。
+    const stagePath = `${this.legacyAutostartPath}.migration`;
+    const same = (a: LinuxStartupFile | undefined, b: LinuxStartupFile | undefined) => a !== undefined && b !== undefined && a.dev === b.dev && a.ino === b.ino && a.content === b.content;
+    const read = (path: string) => {
+      const file = this.linuxStartupFile(path);
+      if (file && file.content !== content) throw new SettingsFailure('旧版启动项或迁移目标已被修改，已保留。');
+      return file;
+    };
+    const previous = structuredClone(this.state);
+    let stage: LinuxStartupFile | undefined, mutationStarted = false, persistenceAttempted = false, committed = false;
+    try {
+      let old = read(this.legacyAutostartPath), target = read(this.autostartPath);
+      stage = read(stagePath);
+      if (old && target || old && stage && !same(old, stage) || target && stage && !same(target, stage)) throw new SettingsFailure('旧版启动项或迁移目标存在冲突，已保留。');
+      if (!stage) {
+        if (owned.path === this.autostartPath && !old) return false;
+        if (!old || target || owned.path !== this.legacyAutostartPath) throw new SettingsFailure('旧版启动项迁移记录无法验证，已保留。');
+        mutationStarted = true;
+        linkSync(this.legacyAutostartPath, stagePath);
+        stage = old;
+        if (!same(read(stagePath), stage)) throw new SettingsFailure('旧版启动项在迁移期间被修改，已保留。');
+      }
+      mutationStarted = true;
+      if (old) {
+        if (!same(read(this.legacyAutostartPath), stage)) throw new SettingsFailure('旧版启动项在迁移期间被修改，已保留。');
+        unlinkSync(this.legacyAutostartPath);
+        old = undefined;
+      }
+      // link 的排他创建不覆盖任何现有目标；先移除旧 .desktop 再发布新入口。
+      if (!target) { linkSync(stagePath, this.autostartPath); target = read(this.autostartPath); }
+      if (!same(target, stage)) throw new SettingsFailure('启动项迁移目标在保存期间被修改，已保留。');
+      const next = { ...structuredClone(this.state), linuxAutostart: { path: this.autostartPath, content } };
+      if (owned.path !== this.autostartPath) {
+        persistenceAttempted = true;
+        this.store.setManagedState(KEY, next);
+      }
+      this.state = next;
+      committed = true;
+      if (!same(read(stagePath), target)) throw new SettingsFailure('启动项迁移暂存文件已被修改，已保留。');
+      unlinkSync(stagePath);
+      return true;
+    } catch (error) {
+      if (committed) throw new SettingsFailure('启动项已迁移，暂存文件未能清理；下次启动会重新检查。');
+      if (!mutationStarted) {
+        if (error instanceof SettingsFailure) throw error;
+        throw new SettingsFailure('无法读取旧版启动项，已保留。');
+      }
+      let restored = true;
+      try {
+        if (stage) {
+          const target = read(this.autostartPath);
+          if (target) {
+            if (!same(target, stage)) throw new Error('conflict');
+            unlinkSync(this.autostartPath);
+          }
+          const old = read(this.legacyAutostartPath);
+          if (!old) linkSync(stagePath, this.legacyAutostartPath);
+          else if (!same(old, stage)) throw new Error('conflict');
+        }
+      } catch { restored = false; }
+      let stored = !persistenceAttempted;
+      if (persistenceAttempted) try { this.store.setManagedState(KEY, previous); stored = true; } catch { /* 保留暂存 ownership intent，下次可恢复。 */ }
+      if (restored && stored && stage) try {
+        if (!same(read(stagePath), stage)) throw new Error('conflict');
+        unlinkSync(stagePath);
+      } catch { restored = false; }
+      if (!restored || !stored) throw new SettingsFailure('启动项迁移失败，已保留恢复记录；请检查开机自启状态。');
+      if (error instanceof SettingsFailure) throw error;
+      throw new SettingsFailure('启动项迁移失败，已保留原设置并恢复启动项。');
+    }
   }
   get(): SettingsSnapshot {
     let reason = this.support(), actual = false;
@@ -110,9 +200,21 @@ export class SettingsManager {
           if (status.openAtLogin && !actual) reason = '启动项已登记，但被系统禁用；请在 Windows 启动应用设置中启用。';
         }
         else {
-          const file = this.linuxFile(), owned = this.state.linuxAutostart;
-          actual = file !== undefined && owned?.path === this.autostartPath && file === owned.content;
-          if (file !== undefined && !actual) reason = '同名启动项未由 ModelDock 管理或已被修改。';
+          const owned = this.state.linuxAutostart;
+          if (owned?.path === this.legacyAutostartPath) {
+            const legacy = this.linuxStartupFile(this.legacyAutostartPath)?.content;
+            actual = legacy !== undefined && legacy === owned.content;
+            if (legacy !== undefined) reason = actual
+              ? owned.content === this.linuxContent() ? '旧版开机启动项尚未完成安全迁移。' : '旧版启动项的程序路径与当前版本不同，已保留；可关闭旧启动项后重新启用。'
+              : '旧版启动项已被修改，已保留。';
+            try {
+              if (this.linuxFile() !== undefined) reason = actual ? '旧版启动项仍启用；迁移目标存在冲突，已保留。' : '迁移目标未由 ModelDock 管理，已保留。';
+            } catch { reason = actual ? '旧版启动项仍启用；无法安全读取迁移目标，已保留。' : '无法安全读取迁移目标，已保留。'; }
+          } else {
+            const file = this.linuxFile();
+            actual = file !== undefined && owned?.path === this.autostartPath && file === owned.content;
+            if (file !== undefined && !actual) reason = '同名启动项未由 ModelDock 管理或已被修改。';
+          }
         }
       } catch { reason = '无法读取系统启动项状态。'; }
     }
@@ -122,13 +224,13 @@ export class SettingsManager {
   private linuxContent(): string {
     return `[Desktop Entry]\nType=Application\nVersion=1.0\nName=ModelDock\nComment=ModelDock local model manager\nExec=${quoteDesktopExec(this.options.execPath)} --autostart\nTerminal=false\nX-GNOME-Autostart-enabled=true\nX-ModelDock-Managed=true\n`;
   }
-  private writeLinux(content: string, previous: string | undefined): void {
-    const temp = `${this.autostartPath}.${randomUUID()}.tmp`;
+  private writeLinux(content: string, previous: string | undefined, path = this.autostartPath): void {
+    const temp = `${path}.${randomUUID()}.tmp`;
     try {
       writeFileSync(temp, content, { flag: 'wx', mode: 0o600 });
-      if (this.linuxFile() !== previous) throw new SettingsFailure('启动项在保存期间被修改，已保留。');
-      if (previous === undefined) linkSync(temp, this.autostartPath);
-      else renameSync(temp, this.autostartPath);
+      if (this.linuxStartupFile(path)?.content !== previous) throw new SettingsFailure('启动项在保存期间被修改，已保留。');
+      if (previous === undefined) linkSync(temp, path);
+      else renameSync(temp, path);
     } finally { if (existsSync(temp)) unlinkSync(temp); }
   }
   private changeAutostart(enabled: boolean, next: StoredSettings): () => void {
@@ -149,8 +251,12 @@ export class SettingsManager {
       }
       return rollback;
     }
-    const old = this.linuxFile(), owned = this.state.linuxAutostart;
-    if (old !== undefined && (owned?.path !== this.autostartPath || old !== owned.content)) throw new SettingsFailure('同名启动项未由 ModelDock 管理或已被修改，已保留。');
+    const owned = this.state.linuxAutostart;
+    // 修改点：迁移跳过或失败时，关闭仍须精确移除原来托管的旧入口，而非忽略它。
+    const path = !enabled && owned?.path === this.legacyAutostartPath ? this.legacyAutostartPath : this.autostartPath;
+    const old = this.linuxStartupFile(path)?.content;
+    if (enabled && this.linuxStartupFile(this.legacyAutostartPath)) throw new SettingsFailure('旧版启动项未完成安全迁移，已保留。');
+    if (old !== undefined && (owned?.path !== path || old !== owned.content)) throw new SettingsFailure('同名启动项未由 ModelDock 管理或已被修改，已保留。');
     const content = this.linuxContent();
     if (enabled) {
       if (old !== content) {
@@ -159,14 +265,14 @@ export class SettingsManager {
       }
       next.linuxAutostart = { path: this.autostartPath, content };
     } else {
-      if (old !== undefined) unlinkSync(this.autostartPath);
+      if (old !== undefined) unlinkSync(path);
       delete next.linuxAutostart;
     }
     return () => {
-      const current = this.linuxFile();
+      const current = this.linuxStartupFile(path)?.content;
       if (enabled && current !== content || !enabled && current !== undefined) throw new Error('启动项在保存期间被修改。');
-      if (old === undefined) { if (current !== undefined) unlinkSync(this.autostartPath); }
-      else this.writeLinux(old, current);
+      if (old === undefined) { if (current !== undefined) unlinkSync(path); }
+      else this.writeLinux(old, current, path);
     };
   }
   save(patch: Partial<AppSettings>): SettingsSnapshot {

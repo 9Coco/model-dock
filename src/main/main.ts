@@ -67,6 +67,7 @@ import type { AppSettings } from '../shared/settings-types';
 import type { ModelSelection } from '../shared/catalog-types';
 import type { ConnectionTestInput } from '../shared/connection-types';
 import { WindowPresentation } from './window-presentation';
+import { acquireLinuxInstanceGuard } from './linux-instance-guard';
 
 let window: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -822,8 +823,7 @@ function registerIpc() {
   handle('addDiscoveredModels', (id: string, selected: ModelSelection[]) => { assertEditable(); return catalog.addSelected(id, selected); });
 }
 
-if (!__MODELDOCK_SMOKE_BUILD__ && !app.requestSingleInstanceLock()) app.quit();
-else {
+function initializeApplication() {
   app.on('second-instance', revealWindow);
   app.whenReady().then(async () => {
     if (process.platform === 'win32') app.setAppUserModelId('local.modeldock.desktop');
@@ -927,6 +927,9 @@ else {
       isPackaged: app.isPackaged,
       login: __MODELDOCK_SMOKE_BUILD__ ? { getLoginItemSettings: () => ({ openAtLogin: simulatedStartup }), setLoginItemSettings: value => { simulatedStartup = value.openAtLogin; } } : { getLoginItemSettings: value => app.getLoginItemSettings(value), setLoginItemSettings: value => app.setLoginItemSettings({ ...value, enabled: value.enabled ?? value.openAtLogin }) },
     });
+    // 修改点：只迁移应用自己登记且未被修改的旧自启动项，不重放外部工具配置。
+    try { preferences.migrateLinuxAutostart(); }
+    catch { recordDiagnostic('warn', 'app.error', { stage: 'preferences', outcome: 'configuration' }); }
     nativeTheme.themeSource = preferences.get().settings.theme;
     nativeTheme.on('updated', () => { if (window && !window.isDestroyed()) window.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#19191c' : '#f8f9fb'); });
     startupStage = 'proxy';
@@ -989,3 +992,20 @@ else {
   app.on('activate', () => { if (window) revealWindow(); else if (store) void createWindow(true); });
   app.on('window-all-closed', () => { if (!tray) app.quit(); });
 }
+
+// 修改点：Linux 先取得内核级启动守卫，再进入原生锁和数据库/托盘初始化。
+// 二次启动只向已有实例请求显示窗口，不能在原生锁尚未就绪时创建第二份应用。
+void (async () => {
+  const guard = !__MODELDOCK_SMOKE_BUILD__ && process.platform === 'linux'
+    ? await acquireLinuxInstanceGuard(app.getPath('userData'), revealWindow) : undefined;
+  if (guard === null) { app.quit(); return; }
+  if (!__MODELDOCK_SMOKE_BUILD__ && !app.requestSingleInstanceLock()) {
+    guard?.close(); app.quit(); return;
+  }
+  // 网关和 Store 完成 before-quit 清理后才释放；异常退出由内核自动回收。
+  app.once('will-quit', () => guard?.close());
+  initializeApplication();
+})().catch(() => {
+  dialog.showErrorBox('ModelDock 启动失败', '无法确认应用实例状态，请稍后重新启动 ModelDock。');
+  app.exit(1);
+});
