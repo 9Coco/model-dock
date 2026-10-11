@@ -1,6 +1,7 @@
 import type { AuthFailureCategory, AuthProgress, AuthStage, Provider, ProviderSecret } from '../shared/types';
 import { normalizeApiKey } from './credentials';
 import { anthropicEndpoint } from './anthropic-endpoint';
+import { normalizeUpstreamReasoning } from './upstream-compat';
 import { version as appVersion } from '../../package.json';
 import { safeNetworkErrorCode } from './network-diagnostic';
 import type { AuthNetworkErrorCode } from '../shared/network-types';
@@ -173,7 +174,7 @@ function safeOAuthFailure(response: OAuthResponse, stage: AuthStage): OAuthFailu
  * Chat Completions -> Responses conversion is deliberately not implemented. */
 export function prepareUpstream(provider: Provider, secret: ProviderSecret, path: string, input: Record<string, unknown>): PreparedUpstream {
   const route = path.replace(/^\/v1\//, '/');
-  const body = structuredClone(input);
+  const body = normalizeUpstreamReasoning(provider, route, structuredClone(input));
   const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: body.stream ? 'text/event-stream' : 'application/json' };
   if (provider.kind === 'openai-compatible') {
     if (!secret.apiKey) throw new Error('该来源还没有配置 API Key');

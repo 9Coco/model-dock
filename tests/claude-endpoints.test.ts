@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { nativeClaudeBaseUrl, claudeConnectionKind } from '../src/shared/claude';
+import { nativeClaudeBaseUrl, claudeConnectionKind, preferClaudeResponsesBridge } from '../src/shared/claude';
 import { bindingConnectionPolicy, resolveBindingModels } from '../src/shared/bindings';
 import type { Model, Provider, ToolBinding } from '../src/shared/types';
 
@@ -7,6 +7,23 @@ const source = (patch: Partial<Provider>): Provider => ({ id: 'source', name: 'F
 const model: Model = { id: 'model', providerId: 'source', alias: 'local-alias', upstreamId: 'upstream-real-id', displayName: 'Fixture', wireApi: 'responses', enabled: true, contextWindow: 0, tools: true, vision: false };
 const binding: ToolBinding = { id: 'claude-code', name: 'Claude Code', enabled: true, mode: 'direct', providerIds: ['source'], modelIds: [], defaultModelId: model.id, note: '' };
 describe('official Claude endpoint selection', () => {
+  it.each([
+    ['volcengine-agent', 'https://ark.cn-beijing.volces.com/api/plan/v3'],
+    ['volcengine-token', 'https://ark.cn-beijing.volces.com/api/coding/v3/'],
+  ] as const)('uses the saved Responses wire only for %s MiniMax aggregate compatibility', (presetId, baseUrl) => {
+    const provider = source({ presetId, baseUrl });
+    const selected = { ...model, upstreamId: 'minimax-m3' };
+    expect(preferClaudeResponsesBridge(provider, selected)).toBe(true);
+    expect(claudeConnectionKind(provider, [selected])).toBe('direct-api');
+    expect(nativeClaudeBaseUrl(provider)).toMatch(/\/api\/(plan|coding)$/);
+    expect(selected.wireApi).toBe('responses');
+    for (const patch of [{ upstreamId: 'glm-5.3' }, { upstreamId: 'kimi-k3' }, { providerId: 'other' }, { wireApi: 'messages' as const }, { wireApi: 'chat-completions' as const }])
+      expect(preferClaudeResponsesBridge(provider, { ...selected, ...patch })).toBe(false);
+    for (const patch of [{ presetId: undefined }, { kind: 'codex' as const }, { claudeBaseUrl: 'https://custom.example.test/anthropic' },
+      { baseUrl: 'https://other.example.test/api/coding/v3' }, { baseUrl: 'https://ark.cn-beijing.volces.com/api/v3' },
+      { baseUrl: 'https://ark.cn-beijing.volces.com:8443/api/coding/v3' }, { baseUrl: baseUrl + '?custom=1' }])
+      expect(preferClaudeResponsesBridge({ ...provider, ...patch }, selected)).toBe(false);
+  });
   it.each([
     ['deepseek', 'https://api.deepseek.com', 'https://api.deepseek.com/anthropic'],
     ['deepseek', 'https://api.deepseek.com/v1/', 'https://api.deepseek.com/anthropic'],

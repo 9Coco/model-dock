@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import type { ConfigPreview, Model, Provider, ProviderSecret, ToolBinding } from '../shared/types';
 import { bindingConnectionPolicy, resolveBindingModels } from '../shared/bindings';
-import { claudeConnectionKind, nativeClaudeBaseUrl } from '../shared/claude';
+import { claudeConnectionKind, nativeClaudeBaseUrl, preferClaudeResponsesBridge } from '../shared/claude';
 import { modelDisplayLabel } from '../shared/model-names';
 import { anthropicBaseUrl } from './anthropic-endpoint';
 
@@ -92,7 +92,7 @@ function selection(store: ClaudeConfigStore, revealKey: boolean, port: number): 
   // 修改点：全部为原生 Messages 的聚合保留 thinking；混合 OpenAI 模型不能保证签名格式，关闭客户端对应协议。
   const disableThinking = localManaged && models.some(model => {
     const source = selectedProviders.find(item => item?.id === model.providerId)!;
-    return claudeConnectionKind(source, [model]) === 'local-managed';
+    return claudeConnectionKind(source, [model]) === 'local-managed' || preferClaudeResponsesBridge(source, model);
   });
   if (disableThinking) { env.MAX_THINKING_TOKENS = '0'; env.CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING = '1'; env.CLAUDE_CODE_DISABLE_THINKING = '1'; }
   // 修改点：隐私选择独立保留，取消来源或还原模型配置时不重新开启遥测。
