@@ -27,6 +27,17 @@ export function nativeClaudeBaseUrl(provider: Provider): string | undefined {
   const source = canonical(provider.baseUrl);
   return officialEndpoints[provider.presetId ?? '']?.find(([base]) => canonical(base) === source)?.[1];
 }
+/** The verified MiniMax M3 aggregate route uses the saved Responses protocol.
+ * Native direct mode still uses nativeClaudeBaseUrl; explicit native overrides
+ * and unrelated providers/models must not be redirected by this compatibility rule.
+ */
+export function preferClaudeResponsesBridge(provider: Provider, model: Pick<Model, 'providerId' | 'upstreamId' | 'wireApi'>): boolean {
+  if (provider.kind !== 'openai-compatible' || model.providerId !== provider.id || model.upstreamId !== 'minimax-m3'
+    || model.wireApi !== 'responses' || provider.claudeBaseUrl?.trim()
+    || !['volcengine-agent', 'volcengine-token'].includes(provider.presetId ?? '')) return false;
+  const source = canonical(provider.baseUrl);
+  return source !== undefined && Boolean(officialEndpoints[provider.presetId!]?.some(([base]) => canonical(base) === source));
+}
 /** 已知官方双协议入口可复用现有模型；订阅与普通 OpenAI API 通过本机桥接。
  * 未知原生 Messages 来源仅发布其 Messages 模型，避免把混合协议当作兼容。
  */

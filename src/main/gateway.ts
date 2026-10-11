@@ -9,13 +9,15 @@ import type { Provider, ProviderSecret, Model, ToolId, GatewayStatus } from '../
 import { DEFAULT_SETTINGS } from '../shared/settings-types';
 import type { DiagnosticContext, DiagnosticEvent, DiagnosticLevel } from '../shared/diagnostic-types';
 import { describeError } from './diagnostic-log';
+import { normalizeUpstreamReasoning } from './upstream-compat';
 import { AnthropicBridgeError, parseAnthropicRequest, toAnthropicResponse, createAnthropicStream, collectAnthropicStream, anthropicMessageToSse } from './anthropic-bridge';
 import { ChatResponsesBridgeError, parseChatResponsesRequest, responsesToChat, createResponsesChatStream, collectResponsesChatStream, chatResponseToSse } from './chat-responses-bridge';
 import { isJetBrainsTool } from '../shared/jetbrains';
 import { isSingleEntryTool } from '../shared/single-entry';
 import { JetBrainsChatError, createJetBrainsChatStream, normalizeJetBrainsChatResponse, jetBrainsResponsesHistory } from './jetbrains-chat-stream';
-import { nativeClaudeBaseUrl } from '../shared/claude';
+import { nativeClaudeBaseUrl, preferClaudeResponsesBridge } from '../shared/claude';
 import { NativeMessagesError, prepareNativeMessagesRequest, toNativeMessagesResponse, createNativeMessagesStream, collectNativeMessagesStream, nativeMessagesToSse } from './native-messages';
+import { normalizeNativeMessagesError } from './native-messages-errors';
 import { nativeJetBrainsCompletion } from '../shared/jetbrains-completion';
 import { JetBrainsCompletionError, parseJetBrainsCompletionRequest, normalizeJetBrainsCompletionResponse, createJetBrainsCompletionStream, jetBrainsCompletionToSse } from './jetbrains-completion';
 
@@ -311,6 +313,7 @@ export class Gateway {
     const began = Date.now(); let alias = ''; let providerName = ''; let endpoint = '/'; let logStatus = 200;
     let tool: ToolId | undefined, providerId: string | undefined, modelId: string | undefined;
     let upstreamFailed = false, anthropic = false, chatResponses = false;
+    let upstreamFailureStatus: number | undefined;
     let requestErrorMessage = '';
     let diagnosticEndpoint: string | undefined;
     let diagnosticError: Pick<DiagnosticContext, 'errorName' | 'networkCode' | 'projectFrames'> | undefined;
@@ -318,7 +321,14 @@ export class Gateway {
       if (isObject(value) && ['error', 'response.failed', 'response.incomplete'].includes(String(value.type ?? ''))) {
         // 修改点：合法预算截断会映射为 Messages max_tokens，不能把成功回复记录成 502。
         const details = isObject(value.response) && isObject(value.response.incomplete_details) ? value.response.incomplete_details : undefined;
-        if (!((anthropic || chatResponses) && value.type === 'response.incomplete' && details?.reason === 'max_output_tokens')) upstreamFailed = true;
+        if (!((anthropic || chatResponses) && value.type === 'response.incomplete' && details?.reason === 'max_output_tokens')) {
+          upstreamFailed = true;
+          if (anthropic && value.type === 'error' && isObject(value.error)) {
+            const statuses: Record<string, number> = { invalid_request_error: 400, authentication_error: 401, permission_error: 403,
+              not_found_error: 404, request_too_large: 413, rate_limit_error: 429, timeout_error: 504, overloaded_error: 529 };
+            upstreamFailureStatus = statuses[String(value.error.type)] ?? upstreamFailureStatus;
+          }
+        }
       }
     };
     this.state.requests++;
@@ -368,25 +378,30 @@ export class Gateway {
       const provider = this.store.getProvider(model.providerId);
       const nativeCompletion = completion && provider ? nativeJetBrainsCompletion(model, provider) : undefined;
       if (completion && !nativeCompletion) throw new GatewayError(400, '此模型尚未确认原生 FIM 补全能力；请为 AI 补全选择兼容模型，不使用聊天协议代替。');
-      const nativeMessages = anthropic && provider?.kind === 'openai-compatible' && (model.wireApi === 'messages' || Boolean(nativeClaudeBaseUrl(provider)));
+      const responsesBridge = anthropic && route.tool === 'claude-code' && provider && preferClaudeResponsesBridge(provider, model);
+      const nativeMessages = anthropic && !responsesBridge && provider?.kind === 'openai-compatible' && (model.wireApi === 'messages' || Boolean(nativeClaudeBaseUrl(provider)));
       if (provider && provider.kind !== 'openai-compatible' && ('previous_response_id' in body || 'conversation' in body)) {
         throw new GatewayError(400, '订阅来源不支持服务端会话续接；请移除 previous_response_id / conversation，并在 input 中发送完整会话历史。');
       }
       if (!provider || !this.available(model, nativeMessages)) throw new GatewayError(503, '供应商未启用或凭据尚未就绪。');
       providerName = provider.name;
       providerId = provider.id;
+      if (responsesBridge && Array.isArray(body.messages) && body.messages.some(message => isObject(message) && Array.isArray(message.content)
+        && message.content.some(block => isObject(block) && (['thinking', 'redacted_thinking', 'server_tool_use'].includes(String(block.type)) || /^.+_tool_result$/.test(String(block.type)))))) {
+        throw new GatewayError(400, '此 MiniMax M3 会话包含原生 Messages 思考或服务端工具历史，无法无损转换到 Responses。请保留原会话并新建聊天；历史内容不会被删除。');
+      }
       // 修改点：Claude Messages 在本机转换成来源原生协议，订阅凭据继续由主进程续期。
       const upstreamBody = completion ? parseJetBrainsCompletionRequest(body, model.upstreamId, nativeCompletion?.maxOutputTokens) : nativeMessages ? { ...body, model: model.upstreamId } : anthropic ? { ...parseAnthropicRequest(body, model.wireApi), model: model.upstreamId } : chatResponses ? { ...parseChatResponsesRequest(jetBrainsResponsesHistory(body)), model: model.upstreamId } : { ...body, model: model.upstreamId };
       const upstreamPath = completion ? '/v1/completions' : nativeMessages ? '/v1/messages' : chatResponses ? '/v1/responses' : anthropic ? model.wireApi === 'responses' ? '/v1/responses' : '/v1/chat/completions' : route.endpoint;
-      await this.forward(request, response, provider, model, upstreamPath, upstreamBody, observe, anthropic || chatResponses ? { stream: body.stream === true, kind: nativeMessages ? 'native-messages' : chatResponses ? 'chat-responses' : 'anthropic' } : undefined, isJetBrainsTool(route.tool), nativeCompletion?.baseUrl);
-      logStatus = upstreamFailed ? 502 : response.statusCode;
+      await this.forward(request, response, provider, model, upstreamPath, normalizeUpstreamReasoning(provider, upstreamPath, upstreamBody), observe, anthropic || chatResponses ? { stream: body.stream === true, kind: nativeMessages ? 'native-messages' : chatResponses ? 'chat-responses' : 'anthropic' } : undefined, isJetBrainsTool(route.tool), nativeCompletion?.baseUrl);
+      logStatus = upstreamFailed ? upstreamFailureStatus ?? 502 : response.statusCode;
     } catch (error) {
       diagnosticError = describeError(error);
       logStatus = error instanceof GatewayError || error instanceof AnthropicBridgeError || error instanceof ChatResponsesBridgeError || error instanceof NativeMessagesError || error instanceof JetBrainsChatError || error instanceof JetBrainsCompletionError ? error.status : 502;
       const message = error instanceof GatewayError || error instanceof AnthropicBridgeError || error instanceof ChatResponsesBridgeError || error instanceof NativeMessagesError || error instanceof JetBrainsChatError || error instanceof JetBrainsCompletionError ? error.message : '上游请求失败，请检查连接和供应商状态。';
       requestErrorMessage = message;
       if (!response.destroyed && !response.headersSent) {
-        if (anthropic) jsonResponse(response, logStatus === 499 ? 400 : logStatus, { type: 'error', error: { type: logStatus === 401 ? 'authentication_error' : logStatus >= 500 ? 'api_error' : 'invalid_request_error', message } });
+        if (anthropic) jsonResponse(response, logStatus === 499 ? 400 : logStatus, { type: 'error', error: { type: error instanceof NativeMessagesError ? error.errorType : logStatus === 401 ? 'authentication_error' : logStatus >= 500 ? 'api_error' : 'invalid_request_error', message } });
         else errorResponse(response, logStatus === 499 ? 400 : logStatus, message);
       }
       else if (!response.writableEnded) response.destroy();
@@ -450,6 +465,9 @@ export class Gateway {
               && typeof raw.error.type === 'string' && nativeErrorTypes.has(raw.error.type) && typeof raw.error.message === 'string') {
               message = redact(raw.error.message, secrets).slice(0, 4096);
               type = raw.error.type;
+            } else {
+              const normalized = normalizeNativeMessagesError(raw, upstream.status);
+              type = normalized.type; message = normalized.message;
             }
           } catch { /* 非 JSON 或超大错误正文只返回固定安全文案。 */ }
           const retry = upstream.headers.get('retry-after'); if (retry) response.setHeader('retry-after', retry);

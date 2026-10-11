@@ -2,16 +2,22 @@ import type { Provider, ProviderSecret } from '../shared/types';
 import { nativeClaudeBaseUrl } from '../shared/claude';
 import { anthropicEndpoint } from './anthropic-endpoint';
 import { normalizeApiKey } from './credentials';
+import { normalizeNativeMessagesError, type NativeMessagesErrorType } from './native-messages-errors';
 
 type Json = Record<string, unknown>;
 export class NativeMessagesError extends Error {
-  constructor(message = '上游 Messages 回复无效或未完整完成。', readonly status = 502) { super(message); this.name = 'NativeMessagesError'; }
+  constructor(message = '上游 Messages 回复无效或未完整完成。', readonly status = 502,
+    readonly errorType: NativeMessagesErrorType = status === 400 ? 'invalid_request_error' : 'api_error') { super(message); this.name = 'NativeMessagesError'; }
 }
 export interface NativeMessagesOptions { onUpstreamEvent?: (value: unknown) => void; signal?: AbortSignal }
 export interface NativeMessagesProtocolHeaders { anthropicVersion?: string; anthropicBeta?: string }
 function object(value: unknown): value is Json { return Boolean(value && typeof value === 'object' && !Array.isArray(value)); }
 function record(value: unknown): Json { return object(value) ? value : {}; }
 function fail(message?: string): never { throw new NativeMessagesError(message); }
+function failUpstream(value: unknown): never {
+  const error = normalizeNativeMessagesError(value);
+  throw new NativeMessagesError(error.message, error.status, error.type);
+}
 const encoder = new TextEncoder();
 const event = (value: Json): Uint8Array => encoder.encode(`event: ${value.type}\ndata: ${JSON.stringify(value)}\n\n`);
 
@@ -46,7 +52,12 @@ function observeUpstream(value: unknown, options: NativeMessagesOptions): void {
 
 /** 修改点：原生内容块（包括 thinking/signature）原样保留，仅替换客户端别名。 */
 export function toNativeMessagesResponse(value: unknown, alias: string, options: NativeMessagesOptions = {}): Json {
-  if (!object(value) || object(value.error) || value.type !== 'message' || value.role !== 'assistant' || typeof value.id !== 'string' || !Array.isArray(value.content)
+  if (object(value) && (value.type === 'error' || object(value.error))) {
+    const error = normalizeNativeMessagesError(value);
+    observeUpstream({ type: 'error', error: { type: error.type, message: error.message } }, options);
+    return failUpstream(value);
+  }
+  if (!object(value) || value.type !== 'message' || value.role !== 'assistant' || typeof value.id !== 'string' || !Array.isArray(value.content)
     || typeof value.stop_reason !== 'string' || !value.stop_reason || value.content.some(block => !object(block) || typeof block.type !== 'string')) return fail();
   observeUpstream(value, options);
   return { ...value, model: alias };
@@ -85,14 +96,17 @@ function indexOf(value: Json): number {
 export function createNativeMessagesStream(alias: string, options: NativeMessagesOptions = {}): TransformStream<Uint8Array, Uint8Array> {
   const frames = new Frames(), openBlocks = new Set<number>(), seenBlocks = new Set<number>();
   let started = false, finished = false, errored = false, stopReason: string | undefined;
-  const failure = (controller: TransformStreamDefaultController<Uint8Array>) => {
+  const failure = (controller: TransformStreamDefaultController<Uint8Array>, caught: unknown) => {
     errored = true;
-    const value = { type: 'error', error: { type: 'api_error', message: '上游 Messages 推理失败或响应不完整，请检查模型和供应商状态。' } };
+    const error = caught instanceof NativeMessagesError
+      ? normalizeNativeMessagesError({ type: 'error', error: { type: caught.errorType, message: caught.message } })
+      : normalizeNativeMessagesError(undefined);
+    const value = { type: 'error', error: { type: error.type, message: error.message } };
     observeUpstream(value, options); controller.enqueue(event(value)); controller.terminate();
   };
   const add = (value: Json | undefined, controller: TransformStreamDefaultController<Uint8Array>) => {
     if (!value) return;
-    if (value.type === 'error' || object(value.error)) return fail();
+    if (value.type === 'error' || object(value.error)) return failUpstream(value);
     if (value.type === 'message_start') {
       if (started || finished || !object(value.message) || value.message.type !== 'message' || value.message.role !== 'assistant' || typeof value.message.id !== 'string' || !Array.isArray(value.message.content)) return fail();
       started = true;
@@ -120,12 +134,12 @@ export function createNativeMessagesStream(alias: string, options: NativeMessage
   return new TransformStream<Uint8Array, Uint8Array>({
     transform(chunk, controller) {
       if (errored) return;
-      try { for (const frame of frames.feed(chunk)) add(frameData(frame), controller); } catch { failure(controller); }
+      try { for (const frame of frames.feed(chunk)) add(frameData(frame), controller); } catch (error) { failure(controller, error); }
     },
     flush(controller) {
       if (errored) return;
       try { for (const frame of frames.feed(new Uint8Array(), true)) add(frameData(frame), controller); if (!finished) return fail(); controller.enqueue(event({ type: 'message_stop' })); }
-      catch { failure(controller); }
+      catch (error) { failure(controller, error); }
     },
   });
 }
@@ -137,7 +151,7 @@ export async function collectNativeMessagesStream(source: ReadableStream<Uint8Ar
   let result: Json | undefined, finished = false, bytes = 0;
   const add = (value: Json | undefined) => {
     if (!value) return;
-    if (value.type === 'error') return fail();
+    if (value.type === 'error') return failUpstream(value);
     if (value.type === 'message_start') { result = { ...record(value.message) }; }
     else if (value.type === 'content_block_start') content[indexOf(value)] = structuredClone(record(value.content_block));
     else if (value.type === 'content_block_delta') {

@@ -35,6 +35,21 @@ function fixture() {
 }
 
 describe('Claude Code native BYOK configuration', () => {
+  it('disables the native thinking protocol for aggregate MiniMax Responses while restoring direct user values', () => {
+    const f = fixture();
+    f.provider.presetId = 'volcengine-token'; f.provider.baseUrl = 'https://ark.cn-beijing.volces.com/api/coding/v3';
+    f.model.upstreamId = 'minimax-m3'; f.model.wireApi = 'responses'; f.binding.mode = 'aggregate';
+    const original = { env: { KEEP: 'value', MAX_THINKING_TOKENS: '4096', CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING: '0', CLAUDE_CODE_DISABLE_THINKING: '0' } };
+    f.write(f.target, original); f.apply();
+    expect(f.read().env).toMatchObject({ ANTHROPIC_BASE_URL: 'http://127.0.0.1:18181/tool/claude-code', MAX_THINKING_TOKENS: '0', CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING: '1', CLAUDE_CODE_DISABLE_THINKING: '1', KEEP: 'value' });
+    f.binding.mode = 'direct'; f.apply();
+    expect(f.read().env).toMatchObject({ ANTHROPIC_BASE_URL: 'https://ark.cn-beijing.volces.com/api/coding', MAX_THINKING_TOKENS: '4096', CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING: '0', CLAUDE_CODE_DISABLE_THINKING: '0', KEEP: 'value' });
+    expect(f.read().model).toBe('minimax-m3');
+    f.binding.mode = 'aggregate'; f.model.upstreamId = 'glm-5.3';
+    expect(JSON.parse(buildClaudeConfig(f.store).content).env).not.toHaveProperty('MAX_THINKING_TOKENS');
+    f.model.upstreamId = 'minimax-m3'; f.provider.claudeBaseUrl = 'https://explicit.example.test/anthropic';
+    expect(JSON.parse(buildClaudeConfig(f.store).content).env).not.toHaveProperty('MAX_THINKING_TOKENS');
+  });
   it('previews a single Messages endpoint without credentials or local aliases', () => {
     const f = fixture(), preview = buildConfig(f.store, 'claude-code', 18181), value = JSON.parse(preview.content);
     expect(value.model).toBe(f.model.upstreamId);

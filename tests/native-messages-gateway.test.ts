@@ -84,6 +84,31 @@ async function fixture(options: { handlerA?: (body: any, response: ServerRespons
   const post = (body: unknown, key = store.gatewayKey(), protocolHeaders: Record<string, string> = {}) => fetch(base + '/tool/claude-code/v1/messages', { method: 'POST', headers: { ...protocolHeaders, authorization: `Bearer ${key}`, 'content-type': 'application/json', 'x-api-key': 'MALICIOUS_CLIENT_SECRET' }, body: JSON.stringify(body) });
   return { store, gateway, base, post, requests, providerA, providerB, providerSubscription, modelA, modelB, subscriptionModel };
 }
+describe('native upstream parameter-error classification', () => {
+  it('keeps a streamed Ark InvalidParameter error non-retryable and records its semantic status', async () => {
+    const f = await fixture({ handlerA: async (_body, response) => {
+      response.setHeader('content-type', 'text/event-stream');
+      response.end(sse('message_start', { type: 'message_start', message: { ...message([]), stop_reason: null } })
+        + sse('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } })
+        + sse('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Before tool.' } })
+        + sse('content_block_stop', { type: 'content_block_stop', index: 0 })
+        + sse('error', { type: 'error', error: { type: 'BadRequest', code: 'InvalidParameter', param: 'messages.tool_calls.type', message: 'PRIVATE_REQUEST_ECHO SYNTHETIC_API_KEY_A' } }));
+    } });
+    const response = await f.post(input('native-a', true)); expect(response.status).toBe(200);
+    const raw = await response.text(); expect(raw).toContain('"type":"invalid_request_error"'); expect(raw).toContain('messages.tool_calls.type');
+    expect(raw).not.toContain('event: message_stop'); expect(raw).not.toMatch(/PRIVATE_REQUEST_ECHO|SYNTHETIC_API_KEY_A/);
+    expect(f.store.logs()[0].status).toBe(400);
+  });
+  it('normalizes non-Anthropic HTTP400 shape while preserving a safe fixed parameter hint', async () => {
+    const f = await fixture({ handlerA: async (_body, response) => {
+      response.statusCode = 400; response.setHeader('content-type', 'application/json');
+      response.end(JSON.stringify({ error: { type: 'BadRequest', code: 'InvalidParameter', param: 'messages.tool_calls.type', message: 'PRIVATE_HTTP_BODY SYNTHETIC_API_KEY_A' } }));
+    } });
+    const response = await f.post(input()); expect(response.status).toBe(400); const error = await response.json();
+    expect(error.error.type).toBe('invalid_request_error'); expect(error.error.message).toContain('messages.tool_calls.type');
+    expect(JSON.stringify(error)).not.toMatch(/PRIVATE_HTTP_BODY|SYNTHETIC_API_KEY_A/);
+  });
+});
 function byteChunks(text: string): ReadableStream<Uint8Array> {
   const bytes = new TextEncoder().encode(text);
   return new ReadableStream({ start(controller) { for (let index = 0; index < bytes.length; index += 7) controller.enqueue(bytes.slice(index, index + 7)); controller.close(); } });
@@ -200,8 +225,9 @@ describe('Claude aggregate gateway with native Messages and subscriptions', () =
     const f = await fixture({ handlerA: async (_body, response) => { response.setHeader('content-type', 'text/event-stream'); response.end(nativeStream(options)); } });
     const streamed = await (await f.post(input('native-a', true))).text();
     expect(streamed).toContain('event: error'); expect(streamed).not.toContain('event: message_stop'); expect(streamed).not.toMatch(/PRIVATE_UPSTREAM_ERROR|SYNTHETIC_API_KEY_A/);
-    expect(f.store.logs()[0].status).toBe(502);
-    const nonstream = await f.post(input()); expect(nonstream.status).toBe(502); expect(await nonstream.json()).toMatchObject({ type: 'error' });
+    expect(f.store.logs()[0].status).toBe(options.error ? 529 : 502);
+    const nonstream = await f.post(input()); expect(nonstream.status).toBe(options.error ? 529 : 502);
+    expect(await nonstream.json()).toMatchObject({ type: 'error', error: { type: options.error ? 'overloaded_error' : 'api_error' } });
   });
   it('returns native HTTP rejection safely and never retries a different source', async () => {
     const f = await fixture({ handlerA: async (_body, response) => { response.statusCode = 429; response.setHeader('retry-after', '7'); response.end(JSON.stringify({ type: 'error', error: { message: 'SYNTHETIC_API_KEY_A PRIVATE_UPSTREAM_ERROR' } })); } });
