@@ -142,6 +142,40 @@ describe('loopback gateway', () => {
     const logs = JSON.stringify(f.store.logs()); expect(logs).not.toContain('private prompt'); expect(logs).not.toContain(f.store.gatewayKey()); expect(logs).not.toContain('upstream-private-key');
   });
 
+  it('keeps rejected requests separate from service health, preserves safe history after success and clears it on restart', async () => {
+    let upstreamCalls = 0;
+    const mock = await upstream((_req, res) => { upstreamCalls++; res.end('{}'); });
+    const f = await fixture(mock.url);
+    const began = Date.now();
+    const missing = await fetch(`${f.url}/models?api_key=SYNTHETIC_PRIVATE_QUERY`);
+    expect(missing.status).toBe(401); await missing.text();
+    expect(f.gateway.status()).toMatchObject({ running: true, lastError: '', lastRequestError: { status: 401, message: '需要有效的 ModelDock API Key。', endpoint: '/v1/models' } });
+    expect(f.gateway.status().lastSuccessfulRequestAt).toBeUndefined();
+    const wrong = await fetch(`${f.url}/SYNTHETIC_PRIVATE_PATH?token=SYNTHETIC_PRIVATE_QUERY`, { headers: { authorization: 'Bearer wrong-local-key' } });
+    expect(wrong.status).toBe(401); await wrong.text();
+    const rejected = f.gateway.status().lastRequestError!;
+    expect(rejected.status).toBe(401); expect(rejected.endpoint).toBeUndefined();
+    expect(Number.isFinite(Date.parse(rejected.time))).toBe(true);
+    expect(Date.parse(rejected.time)).toBeGreaterThanOrEqual(began); expect(Date.parse(rejected.time)).toBeLessThanOrEqual(Date.now());
+    expect(JSON.stringify(f.gateway.status())).not.toMatch(/SYNTHETIC_PRIVATE_|wrong-local-key|upstream-private-key/);
+    expect(JSON.stringify(f.gateway.status())).not.toContain(f.store.gatewayKey());
+    const expectedError = { ...rejected };
+    rejected.message = 'caller mutation'; rejected.endpoint = 'caller mutation';
+    expect(f.gateway.status().lastRequestError).toEqual(expectedError);
+    const catalog = await fetch(`${f.url}/models`, { headers: f.headers });
+    expect(catalog.status).toBe(200); expect((await catalog.json()).data[0].id).toBe(f.model.alias);
+    const recovered = f.gateway.status();
+    expect(recovered).toMatchObject({ running: true, lastError: '', lastRequestError: expectedError });
+    expect(Number.isFinite(Date.parse(recovered.lastSuccessfulRequestAt!))).toBe(true);
+    expect(Date.parse(recovered.lastSuccessfulRequestAt!)).toBeGreaterThanOrEqual(Date.parse(expectedError.time));
+    expect(Date.parse(recovered.lastSuccessfulRequestAt!)).toBeLessThanOrEqual(Date.now());
+    expect(upstreamCalls).toBe(0); expect(f.store.logs()).toEqual([]);
+    expect(await f.gateway.start()).toMatchObject({ lastRequestError: expectedError, lastSuccessfulRequestAt: recovered.lastSuccessfulRequestAt });
+    await f.gateway.stop(); await f.gateway.start(0);
+    expect(f.gateway.status()).toMatchObject({ running: true, lastError: '' });
+    expect(f.gateway.status().lastRequestError).toBeUndefined(); expect(f.gateway.status().lastSuccessfulRequestAt).toBeUndefined();
+  });
+
   it('filters tool catalogs and routes default bindings, refusing disabled tools and unbound models', async () => {
     const mock = await upstream(async (req, res) => { const body = await requestBody(req); res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ model: body.model, choices: [] })); });
     const f = await fixture(mock.url);
@@ -280,13 +314,19 @@ describe('loopback gateway', () => {
 
   it('aborts upstream work when the client disconnects and enforces upstream timeouts', async () => {
     let upstreamClosed = false;
+    let requestStatus: number | undefined;
     const mock = await upstream(async (req, res) => { await requestBody(req); res.once('close', () => { upstreamClosed = true; }); res.setHeader('content-type', 'text/event-stream'); res.write(event({ type: 'response.created', response: { id: 'r', model: 'vendor-real-id' } })); });
-    const f = await fixture(mock.url, 'responses', { timeoutMs: 1000 });
+    const f = await fixture(mock.url, 'responses', { timeoutMs: 1000, diagnostics: (_level, event, context) => { if (event === 'gateway.request') requestStatus = context?.statusCode; } });
+    const rejected = await fetch(`${f.url}/models`); expect(rejected.status).toBe(401); await rejected.text();
+    const priorError = f.gateway.status().lastRequestError;
     const controller = new AbortController();
     const response = await fetch(`${f.url}/responses`, { method: 'POST', headers: f.headers, signal: controller.signal, body: JSON.stringify({ model: f.model.alias, stream: true }) });
     await response.body!.getReader().read(); controller.abort();
     for (let i = 0; i < 50 && !upstreamClosed; i++) await new Promise(resolve => setTimeout(resolve, 10));
     expect(upstreamClosed).toBe(true);
+    await expect.poll(() => requestStatus).toBe(499);
+    expect(f.gateway.status()).toMatchObject({ running: true, lastError: '', lastRequestError: priorError });
+    expect(f.gateway.status().lastSuccessfulRequestAt).toBeUndefined();
     const timeoutMock = await upstream((_req, _res) => {});
     const timed = await fixture(timeoutMock.url, 'chat-completions', { timeoutMs: 30 });
     const timeoutResponse = await fetch(`${timed.url}/chat/completions`, { method: 'POST', headers: timed.headers, body: JSON.stringify({ model: timed.model.alias, messages: [] }) });

@@ -195,7 +195,7 @@ export class Gateway {
   private diagnostic(level: DiagnosticLevel, event: DiagnosticEvent, context: DiagnosticContext): void {
     try { this.options.diagnostics?.(level, event, context); } catch { /* Logging cannot affect service lifecycle or requests. */ }
   }
-  status(): GatewayStatus { return { ...this.state }; }
+  status(): GatewayStatus { return { ...this.state, ...(this.state.lastRequestError ? { lastRequestError: { ...this.state.lastRequestError } } : {}) }; }
   configurePort(port: number): void {
     if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('网关端口无效。');
     if (this.server?.listening && port !== this.state.port) throw new Error('请先停止本地服务，再修改端口。');
@@ -233,6 +233,8 @@ export class Gateway {
     const actualPort = typeof address === 'object' && address ? address.port : port;
     this.store.setGatewayPort(actualPort);
     this.state = { ...this.state, running: true, port: actualPort, baseUrl: `http://127.0.0.1:${actualPort}/v1`, lastError: '' };
+    delete this.state.lastRequestError;
+    delete this.state.lastSuccessfulRequestAt;
     server.on('error', error => {
       this.state.lastError = '本地网关发生错误。';
       this.diagnostic('error', 'gateway.runtime_error', { stage: 'gateway', outcome: 'failure', port: this.state.port, ...describeError(error) });
@@ -309,6 +311,7 @@ export class Gateway {
     const began = Date.now(); let alias = ''; let providerName = ''; let endpoint = '/'; let logStatus = 200;
     let tool: ToolId | undefined, providerId: string | undefined, modelId: string | undefined;
     let upstreamFailed = false, anthropic = false, chatResponses = false;
+    let requestErrorMessage = '';
     let diagnosticEndpoint: string | undefined;
     let diagnosticError: Pick<DiagnosticContext, 'errorName' | 'networkCode' | 'projectFrames'> | undefined;
     const observe = (value: unknown) => {
@@ -381,7 +384,7 @@ export class Gateway {
       diagnosticError = describeError(error);
       logStatus = error instanceof GatewayError || error instanceof AnthropicBridgeError || error instanceof ChatResponsesBridgeError || error instanceof NativeMessagesError || error instanceof JetBrainsChatError || error instanceof JetBrainsCompletionError ? error.status : 502;
       const message = error instanceof GatewayError || error instanceof AnthropicBridgeError || error instanceof ChatResponsesBridgeError || error instanceof NativeMessagesError || error instanceof JetBrainsChatError || error instanceof JetBrainsCompletionError ? error.message : '上游请求失败，请检查连接和供应商状态。';
-      if (logStatus !== 499) this.state.lastError = message;
+      requestErrorMessage = message;
       if (!response.destroyed && !response.headersSent) {
         if (anthropic) jsonResponse(response, logStatus === 499 ? 400 : logStatus, { type: 'error', error: { type: logStatus === 401 ? 'authentication_error' : logStatus >= 500 ? 'api_error' : 'invalid_request_error', message } });
         else errorResponse(response, logStatus === 499 ? 400 : logStatus, message);
@@ -389,6 +392,15 @@ export class Gateway {
       else if (!response.writableEnded) response.destroy();
     } finally {
       const successful = logStatus >= 200 && logStatus < 300;
+      const completedAt = new Date().toISOString();
+      if (successful) this.state.lastSuccessfulRequestAt = completedAt;
+      else if (logStatus !== 499) {
+        this.state.lastRequestError = {
+          time: completedAt, status: logStatus,
+          message: requestErrorMessage || '上游请求失败，请检查连接和供应商状态。',
+          ...(diagnosticEndpoint ? { endpoint: diagnosticEndpoint } : {}),
+        };
+      }
       const outcome = successful ? 'success' : logStatus === 499 ? 'cancelled' : logStatus === 401 ? 'authentication'
         : logStatus === 403 ? 'permission' : logStatus === 429 ? 'rate-limit' : logStatus === 408 || logStatus === 504 ? 'timeout'
         : logStatus >= 500 ? 'upstream' : 'configuration';

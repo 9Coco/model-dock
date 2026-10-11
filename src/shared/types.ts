@@ -162,7 +162,16 @@ export interface GatewayStatus {
   port: number;
   baseUrl: string;
   requests: number;
+  /** Service startup/listener failures, independent of client request failures. */
   lastError: string;
+  lastRequestError?: {
+    time: string;
+    status: number;
+    message: string;
+    /** Whitelisted route only; never retain arbitrary paths or query strings. */
+    endpoint?: string;
+  };
+  lastSuccessfulRequestAt?: string;
 }
 export interface RequestLog {
   id: string;
