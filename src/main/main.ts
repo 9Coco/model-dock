@@ -584,6 +584,9 @@ function registerIpc() {
     if (providerRemovalPending) undoManager.clear(id);
     synchronized = true;
     return result;
+    } catch (error) {
+      recordDiagnostic('error', 'config.apply', { operation: 'applyConfig', toolId: id, stage: 'configuration', outcome: 'failure', ...describeError(error) });
+      throw error;
     } finally { if (synchronized) beforeToolSelections.delete(id); toolConfigPending.delete(id); }
   }
   function handle(name: keyof ModelDockApi, fn: (...args: any[]) => unknown) {
