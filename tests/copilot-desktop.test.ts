@@ -41,6 +41,9 @@ class NativeFixture implements CopilotDesktopSocket {
         this.message({ type: 'model_provider_upserted', provider }); break;
       }
       case 'upsert_provider_model': {
+        if (this.models.some(model => model.id !== body.model.id && model.providerId === body.model.providerId && model.modelId === body.model.modelId)) {
+          this.message({ type: 'error', message: 'UNIQUE constraint failed: provider_models.provider_id, provider_models.model_id' }); break;
+        }
         const existing = this.models.findIndex(m => m.id === body.model.id);
         if (existing >= 0) this.models[existing] = body.model; else this.models.push(body.model);
         this.message({ type: 'provider_model_upserted', model: body.model }); break;
@@ -214,6 +217,32 @@ describe('Copilot desktop native configuration bridge', () => {
     expect(await client.sync({ providers: [] }, { ownedProviderIds: owned })).toMatchObject({ providerCount: 0, modelCount: 0, removedProviderCount: 1 });
     expect(fixture.providers.map(p => p.id)).toEqual(['github-account', 'foreign']); expect(fixture.models.map(m => m.id)).toEqual(['foreign-model']);
     expect(fixture.commands.some(c => /session|account|mcp|restart/.test(c.type))).toBe(false);
+  });
+
+  it('replaces obsolete native UUIDs before inserting the same provider model names, after the complete backup', async () => {
+    const { client, fixture } = await connect(); await client.sync(plan(), { ownedProviderIds: owned });
+    const beforeModels = structuredClone(fixture.models), beforeProviders = structuredClone(fixture.providers), beforeSecrets = new Map(fixture.secrets);
+    const next = plan(), replacements = ['23d4bf21-4897-4e6e-9cc7-69c25b738cd3', '23d4bf21-4897-4e6e-9cc7-69c25b738cd4'];
+    next.providers[0].models.forEach((model, index) => { model.id = replacements[index]; });
+    fixture.commands = [];
+    const backup = vi.fn(async snapshot => {
+      expect(snapshot.providers.find((entry: any) => entry.provider.id === sourceA).models).toEqual(beforeModels.filter(model => model.providerId === sourceA));
+      expect(writes(fixture)).toEqual([]);
+      await Promise.resolve();
+      expect(writes(fixture)).toEqual([]); expect(fixture.models).toEqual(beforeModels);
+    });
+    const result = await client.sync(next, { ownedProviderIds: owned, beforeMutation: backup });
+    expect(result).toMatchObject({ modelCount: 3, removedModelCount: 2 }); expect(backup).toHaveBeenCalledOnce();
+    const mutations = writes(fixture);
+    for (const [index, oldId] of [modelA, modelB].entries()) {
+      const removal = mutations.findIndex(command => command.type === 'delete_provider_model' && command.model_id === oldId);
+      const insertion = mutations.findIndex(command => command.type === 'upsert_provider_model' && command.model.id === replacements[index]);
+      expect(removal).toBeGreaterThanOrEqual(0); expect(insertion).toBeGreaterThan(removal);
+      expect(fixture.models.some(model => model.id === oldId)).toBe(false);
+    }
+    expect(fixture.models.filter(model => model.providerId === sourceA).map(model => ({ id: model.id, modelId: model.modelId }))).toEqual(next.providers[0].models.map(model => ({ id: model.id, modelId: model.modelId })));
+    expect(fixture.models.filter(model => model.providerId !== sourceA)).toEqual(beforeModels.filter(model => model.providerId !== sourceA));
+    expect(fixture.providers).toEqual(beforeProviders); expect(fixture.secrets).toEqual(beforeSecrets);
   });
 
   it('exclusively publishes selected custom sources only after backup, preserving account-linked sources even with custom kind', async () => {

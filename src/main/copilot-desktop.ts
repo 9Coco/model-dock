@@ -364,13 +364,15 @@ export class CopilotDesktopClient {
         const saved = parseProvider(ack.provider);
         if (!saved || saved.kind !== 'custom' || saved.accountId || saved.name !== name || Object.entries(settings).some(([key, value]) => saved.settings[key] !== value)) fail('protocol');
         expectedProviders.set(input.id, { name, settings });
-        for (const model of input.models) {
-          const native: CopilotNativeModel = { id: model.id, providerId: input.id, modelId: model.modelId, displayName: model.displayName, wireApiOverride: model.wireApi === 'responses' ? 'responses' : 'completions', ...(model.wireModel ? { wireModel: model.wireModel } : {}), ...(model.contextWindow ? { maxPromptTokens: model.contextWindow } : {}), ...(model.maxOutputTokens ? { maxOutputTokens: model.maxOutputTokens } : {}), ...(model.supportedReasoningEfforts ? { supportedReasoningEfforts: model.supportedReasoningEfforts } : {}) };
-          await this.command({ type: 'upsert_provider_model', model: native }, 'provider_model_upserted', value => object(value.model) && value.model.id === model.id);
-        }
+        // Native model names are unique within a provider, independently of
+        // row UUIDs. Release obsolete rows before recreating the same names.
         const desired = new Set(input.models.map(m => m.id));
         for (const old of snapshot.providers.find(p => p.provider.id === input.id)?.models ?? []) if (!desired.has(old.id)) {
           await this.command({ type: 'delete_provider_model', model_id: old.id }, 'provider_model_deleted', value => value.model_id === old.id); result.removedModelCount++;
+        }
+        for (const model of input.models) {
+          const native: CopilotNativeModel = { id: model.id, providerId: input.id, modelId: model.modelId, displayName: model.displayName, wireApiOverride: model.wireApi === 'responses' ? 'responses' : 'completions', ...(model.wireModel ? { wireModel: model.wireModel } : {}), ...(model.contextWindow ? { maxPromptTokens: model.contextWindow } : {}), ...(model.maxOutputTokens ? { maxOutputTokens: model.maxOutputTokens } : {}), ...(model.supportedReasoningEfforts ? { supportedReasoningEfforts: model.supportedReasoningEfforts } : {}) };
+          await this.command({ type: 'upsert_provider_model', model: native }, 'provider_model_upserted', value => object(value.model) && value.model.id === model.id);
         }
         const savedModels = await this.models(input.id);
         if (savedModels.length !== input.models.length || input.models.some(model => !savedModels.some(saved => saved.id === model.id && saved.modelId === model.modelId && saved.displayName === model.displayName && (saved.wireModel ?? saved.modelId) === (model.wireModel ?? model.modelId) && saved.wireApiOverride === (model.wireApi === 'responses' ? 'responses' : 'completions') && (model.supportedReasoningEfforts === undefined || JSON.stringify(saved.supportedReasoningEfforts) === JSON.stringify(model.supportedReasoningEfforts))))) fail('protocol');

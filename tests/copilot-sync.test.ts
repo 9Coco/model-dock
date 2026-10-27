@@ -79,7 +79,12 @@ class Socket implements CopilotDesktopSocket {
         const provider = { ...body.provider, hasSecret: this.app.secrets.has(body.provider.id) }; this.app.providers.set(provider.id, provider);
         result = { type: 'model_provider_upserted', provider }; break;
       }
-      case 'upsert_provider_model': this.app.models.set(body.model.id, body.model); result = { type: 'provider_model_upserted', model: body.model }; break;
+      case 'upsert_provider_model': {
+        if ([...this.app.models.values()].some(model => model.id !== body.model.id && model.providerId === body.model.providerId && model.modelId === body.model.modelId)) {
+          this.message({ type: 'error', message: 'UNIQUE constraint failed: provider_models.provider_id, provider_models.model_id' }); return;
+        }
+        this.app.models.set(body.model.id, body.model); result = { type: 'provider_model_upserted', model: body.model }; break;
+      }
       case 'delete_model_provider': {
         this.app.providers.delete(body.provider_id); this.app.secrets.delete(body.provider_id);
         for (const [id, model] of this.app.models) if (model.providerId === body.provider_id) this.app.models.delete(id);
@@ -123,6 +128,25 @@ async function safeFailure(operation: Promise<unknown>, category: string) {
 }
 
 describe('running Copilot app synchronization and encrypted ownership recovery', () => {
+  it('restores exact native rows and opaque credentials when replacement of a same-named model UUID fails after insertion', async () => {
+    const f = exclusiveFixture(); await f.apply(makePlan(), 'managed');
+    f.app.providers.get(A)!.settings.privateExtensionMetadata = { keep: true };
+    f.app.models.get(MA)!.supportedReasoningEfforts = ['low', 'high'];
+    const before = structuredClone({ providers: [...f.app.providers], models: [...f.app.models], secrets: [...f.app.secrets] }), journal = f.store.state();
+    const start = f.app.mutations.length;
+    const nativeInsert = vi.spyOn(f.app.models, 'set');
+    let failed = false; f.app.failAfterMutation = true;
+    f.app.failNext = body => { if (!failed && body.type === 'upsert_provider_model' && body.model.id === MB) { failed = true; return true; } return false; };
+    await safeFailure(f.apply(makePlan(A, MB, 'PRIVATE_FAILED_ROTATION'), 'selected'), 'restored');
+    expect(failed).toBe(true);
+    const mutations = f.app.mutations.slice(start);
+    const removal = mutations.findIndex(command => command.type === 'delete_provider_model' && command.model_id === MA), insertion = mutations.findIndex(command => command.type === 'upsert_provider_model' && command.model.id === MB);
+    expect(removal).toBeGreaterThanOrEqual(0); expect(insertion).toBeGreaterThan(removal);
+    expect(nativeInsert).toHaveBeenCalledWith(MB, expect.objectContaining({ providerId: A, modelId: 'same-model' }));
+    expect(new Map(f.app.providers)).toEqual(new Map(before.providers)); expect(new Map(f.app.models)).toEqual(new Map(before.models)); expect(new Map(f.app.secrets)).toEqual(new Map(before.secrets));
+    expect(f.app.models.has(MB)).toBe(false); expect(f.store.state()).toEqual(journal); expect(f.store.state().pending).toBeUndefined();
+    expect(f.calls).toContain('restore');
+  });
   it('selected scope removes unselected custom sources after opaque backup, while never permanently claiming them', async () => {
     const f = exclusiveFixture(), account = structuredClone(f.app.providers.get('account'));
     await f.apply(makePlan());
