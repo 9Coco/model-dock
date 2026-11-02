@@ -1,5 +1,12 @@
 # ModelDock 验证记录
 
+## 2026-11-02 / 0.3.55　Copilot 使用 Codex 订阅时工具调用后空回复
+
+- 在 Windows 上通过已安装的 Copilot 1.1.34 原生 SDK、0.3.53 网关和真实 Codex 订阅复现。Sol / Max 第二轮发出 23 个正文增量及包含 124 个字符的最终消息，随后发出 `response.completed`，其中 `response.output` 为空。SDK 将该轮记成 0 字符并正常结束。两段历史会话也记录了工具调用成功后的空消息，但没有保存当时的原始上游事件。
+- 修复仅用于 Copilot 的 Codex 订阅 Responses 入口。实测该后端能以 `application/octet-stream` 传输事件流。网关按输出序号和原始 ID 将缺失的已完成项补回最后的响应，保留推理项、消息阶段、调用参数和使用量。正文增量仍即时发出。真正只有推理、缺少终态或流损坏时返回协议错误。
+- 两轮真实订阅验收使用隔离的 Copilot 会话和两个只读内存工具。两个工具各执行一次，第二轮上游再次给出空的终态数组，修复后的网关补齐推理与最终消息，SDK 显示 `RED_42/BLUE_73`。另使用本地模拟上游验证了实际 SDK 的流式和非流式请求，包括残缺工具调用不执行，以及持续的无正文响应最终显示错误。未对 Copilot 桌面界面做人工验收。
+- 24 项定向回归、类型检查、生产构建、Windows x64 包的资源和 ASAR 完整性检查通过。完整测试为 1665 项通过、33 项跳过、20 项失败。修改前有相同的 20 个失败用例，涉及 Linux 进程检查和 Windows 文件权限或符号链接。运行中的旧版保持原样。已验证的构建目录为 `release/windows-0.3.55-2026-11-02T10-44-03-166Z-15208/win-unpacked`。
+
 ## 2026-10-11 / 0.3.53：Claude 火山 MiniMax M3 工具调用修复
 
 - 原生火山 Coding Plan Messages 流在工具调用开始后返回 `BadRequest / InvalidParameter / messages.tool_calls.type`，此前被误映射成可重试服务器错误。Claude 聚合入口现在对精确官方火山 Agent/Coding 地址、`minimax-m3`、保存为 Responses 且无自定义 Claude 覆盖的模型，使用原有 `/responses` 协议。直连、全局 Messages、自定义覆盖及其他模型保持原路由。
