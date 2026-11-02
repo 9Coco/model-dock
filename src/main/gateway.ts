@@ -1,6 +1,8 @@
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
 import type { Socket } from 'node:net';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { GatewayError, ResponsesCollector, SseFrames, isObject, sseData, type Json } from './gateway-sse';
+import { copilotCodexEvents, copilotCodexJson } from './copilot-codex-responses';
 import { Store, validateUpstreamUrl } from './store';
 import { isCopilotUpstream } from './copilot-provider';
 import { resolveBindingModels } from '../shared/bindings';
@@ -21,7 +23,6 @@ import { normalizeNativeMessagesError } from './native-messages-errors';
 import { nativeJetBrainsCompletion } from '../shared/jetbrains-completion';
 import { JetBrainsCompletionError, parseJetBrainsCompletionRequest, normalizeJetBrainsCompletionResponse, createJetBrainsCompletionStream, jetBrainsCompletionToSse } from './jetbrains-completion';
 
-type Json = Record<string, unknown>;
 export interface PreparedRequest { url: string; headers: Record<string, string>; body: Json }
 export interface GatewayOptions {
   port?: number;
@@ -36,7 +37,6 @@ const toolIds = new Set(['codex', 'opencode', 'dsh', 'vscode', 'copilot', 'claud
 const upstreamHeaderNames = new Set(['authorization', 'x-api-key', 'anthropic-version', 'anthropic-beta', 'content-type', 'accept', 'user-agent', 'originator', 'version', 'chatgpt-account-id', 'openai-beta', 'openai-organization', 'openai-project', 'session_id', 'conversation_id', 'x-request-id', 'x-grok-cli-version', 'x-grok-client-version', 'x-grok-client-identifier', 'x-grok-client-mode', 'x-xai-token-auth', 'x-authenticateresponse', 'x-grok-conv-id', 'copilot-integration-id', 'editor-version', 'editor-plugin-version', 'x-github-api-version', 'x-initiator']);
 const responseHeaderNames = new Set(['content-type', 'x-request-id', 'retry-after']);
 const nativeErrorTypes = new Set(['invalid_request_error', 'authentication_error', 'permission_error', 'not_found_error', 'request_too_large', 'rate_limit_error', 'api_error', 'overloaded_error', 'timeout_error']);
-class GatewayError extends Error { constructor(readonly status: number, message: string) { super(message); } }
 
 function jsonResponse(response: ServerResponse, status: number, value: unknown): void {
   response.statusCode = status;
@@ -45,7 +45,6 @@ function jsonResponse(response: ServerResponse, status: number, value: unknown):
   response.end(JSON.stringify(value));
 }
 function errorResponse(response: ServerResponse, status: number, message: string): void { jsonResponse(response, status, { error: { message, type: status === 401 ? 'authentication_error' : 'invalid_request_error' } }); }
-function isObject(value: unknown): value is Json { return Boolean(value && typeof value === 'object' && !Array.isArray(value)); }
 function redact(value: string, secrets: string[]): string { let result = value; for (const secret of secrets) if (secret.length >= 4) result = result.split(secret).join('[REDACTED]'); return result; }
 function aliasResponse(value: unknown, alias: string): unknown {
   if (!isObject(value)) return value;
@@ -74,25 +73,6 @@ function readBody(request: IncomingMessage): Promise<Json> {
   });
 }
 
-/** Incremental SSE framing; JSON and UTF-8 code points may cross network chunks. */
-class SseFrames {
-  private decoder = new TextDecoder();
-  private pending = '';
-  feed(chunk: Uint8Array, last = false): string[] {
-    this.pending += this.decoder.decode(chunk, { stream: !last });
-    if (this.pending.length > 16 * 1024 * 1024) throw new GatewayError(502, '上游 SSE 事件过大。');
-    const frames: string[] = [];
-    let match: RegExpExecArray | null;
-    while ((match = /\r\n\r\n|\n\n|\r\r/.exec(this.pending))) { frames.push(this.pending.slice(0, match.index)); this.pending = this.pending.slice(match.index + match[0].length); }
-    if (last && this.pending.trim()) { frames.push(this.pending); this.pending = ''; }
-    return frames;
-  }
-}
-function sseData(frame: string): unknown {
-  const data = frame.split(/\r\n|\n|\r/).filter(line => line.startsWith('data:')).map(line => line.slice(5).replace(/^ /, '')).join('\n');
-  if (!data || data === '[DONE]') return undefined;
-  try { return JSON.parse(data); } catch { throw new GatewayError(502, '上游 SSE 包含无效 JSON。'); }
-}
 function mappedSse(frame: string, alias: string): string {
   try {
     const data = sseData(frame);
@@ -100,55 +80,6 @@ function mappedSse(frame: string, alias: string): string {
     const other = frame.split(/\r\n|\n|\r/).filter(line => !line.startsWith('data:'));
     return [...other, `data: ${JSON.stringify(aliasResponse(data, alias))}`, '', ''].join('\n');
   } catch { return `${frame}\n\n`; } // Streaming preserves upstream events, including errors.
-}
-
-/** Aggregate only the Responses protocol, never invent a successful truncated reply. */
-class ResponsesCollector {
-  private response: Json = {};
-  private items = new Map<number, Json>();
-  private completed = false;
-  add(value: unknown): void {
-    if (!isObject(value)) return;
-    const type = String(value.type ?? '');
-    if (type === 'error' || type === 'response.failed' || type === 'response.incomplete') throw new GatewayError(502, '上游响应未完整完成。');
-    if (type === 'response.created' && isObject(value.response)) this.response = { ...value.response };
-    const index = Number(value.output_index ?? 0);
-    if (!Number.isInteger(index) || index < 0 || index > 10000) throw new GatewayError(502, '上游输出序号无效。');
-    if ((type === 'response.output_item.added' || type === 'response.output_item.done') && isObject(value.item)) this.items.set(index, structuredClone(value.item));
-    else if (type === 'response.content_part.added' || type === 'response.content_part.done') {
-      if (isObject(value.part)) { const item = this.message(index, value.item_id); const content = item.content as unknown[]; content[Number(value.content_index ?? 0)] = structuredClone(value.part); }
-    } else if (type === 'response.output_text.delta' || type === 'response.output_text.done') {
-      const item = this.message(index, value.item_id); const content = item.content as Json[];
-      const partIndex = Number(value.content_index ?? 0);
-      const part = isObject(content[partIndex]) ? content[partIndex] : { type: 'output_text', text: '', annotations: [] };
-      part.text = type.endsWith('.done') ? String(value.text ?? '') : String(part.text ?? '') + String(value.delta ?? '');
-      content[partIndex] = part;
-    } else if (type === 'response.function_call_arguments.delta' || type === 'response.function_call_arguments.done') {
-      const item = this.items.get(index) ?? { id: value.item_id, type: 'function_call', arguments: '' };
-      item.arguments = type.endsWith('.done') ? String(value.arguments ?? '') : String(item.arguments ?? '') + String(value.delta ?? '');
-      this.items.set(index, item);
-    } else if (type === 'response.custom_tool_call_input.delta' || type === 'response.custom_tool_call_input.done') {
-      const item = this.items.get(index) ?? { id: value.item_id, type: 'custom_tool_call', input: '' };
-      item.input = type.endsWith('.done') ? String(value.input ?? '') : String(item.input ?? '') + String(value.delta ?? '');
-      this.items.set(index, item);
-    } else if (type === 'response.completed') {
-      if (!isObject(value.response)) throw new GatewayError(502, '上游完成事件缺少完整响应。');
-      this.response = { ...this.response, ...value.response };
-      this.completed = true;
-    }
-  }
-  private message(index: number, itemId: unknown): Json {
-    const item = this.items.get(index) ?? { id: itemId, type: 'message', role: 'assistant', content: [] };
-    if (!Array.isArray(item.content)) item.content = [];
-    this.items.set(index, item);
-    return item;
-  }
-  result(alias: string): Json {
-    if (!this.completed) throw new GatewayError(502, '上游流已终止，但未收到 response.completed。');
-    const output = Array.isArray(this.response.output) && this.response.output.length ? this.response.output : [...this.items.entries()].sort(([a], [b]) => a - b).map(([, item]) => item);
-    if (!output.length) throw new GatewayError(502, '上游完成事件没有输出内容。');
-    return { ...this.response, object: 'response', status: 'completed', model: alias, output };
-  }
 }
 
 async function write(response: ServerResponse, data: string | Uint8Array, signal?: AbortSignal): Promise<void> {
@@ -166,6 +97,37 @@ async function write(response: ServerResponse, data: string | Uint8Array, signal
     if (signal?.aborted) onAbort();
   });
 }
+async function sendCopilotCodexEvents(events: AsyncIterable<Json> | Json[], response: ServerResponse, stream: boolean, alias: string, observe: (value: unknown) => void, signal: AbortSignal): Promise<void> {
+  let sequence = -1;
+  try {
+    for await (const event of events) {
+      observe(event);
+      if (event.type === 'error' || event.type === 'response.failed') {
+        if (!response.headersSent) throw new GatewayError(502, 'Codex 返回了失败事件，未完成此轮请求。');
+      }
+      if (stream) {
+        if (!response.headersSent) {
+          response.setHeader('content-type', 'text/event-stream; charset=utf-8');
+          response.setHeader('cache-control', 'no-cache');
+          response.setHeader('x-accel-buffering', 'no');
+        }
+        sequence = typeof event.sequence_number === 'number' ? event.sequence_number : sequence + 1;
+        await write(response, `event: ${event.type}\ndata: ${JSON.stringify(aliasResponse(event, alias))}\n\n`, signal);
+      } else if (event.type === 'response.completed' || event.type === 'response.incomplete') {
+        jsonResponse(response, 200, aliasResponse(event.response, alias));
+      }
+    }
+    if (stream) response.end();
+  } catch (error) {
+    if (response.headersSent && !response.destroyed && !response.writableEnded) {
+      const message = error instanceof GatewayError ? error.message : 'Codex 事件流中断，未完成此轮请求。';
+      const failure = { type: 'error', code: 'upstream_error', message, param: null, sequence_number: sequence + 1 };
+      response.end(`event: error\ndata: ${JSON.stringify(failure)}\n\n`);
+    }
+    throw error;
+  }
+}
+
 async function limitedText(response: Response, max = 32 * 1024 * 1024): Promise<string> {
   if (!response.body) return '';
   const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let size = 0;
@@ -393,7 +355,7 @@ export class Gateway {
       // 修改点：Claude Messages 在本机转换成来源原生协议，订阅凭据继续由主进程续期。
       const upstreamBody = completion ? parseJetBrainsCompletionRequest(body, model.upstreamId, nativeCompletion?.maxOutputTokens) : nativeMessages ? { ...body, model: model.upstreamId } : anthropic ? { ...parseAnthropicRequest(body, model.wireApi), model: model.upstreamId } : chatResponses ? { ...parseChatResponsesRequest(jetBrainsResponsesHistory(body)), model: model.upstreamId } : { ...body, model: model.upstreamId };
       const upstreamPath = completion ? '/v1/completions' : nativeMessages ? '/v1/messages' : chatResponses ? '/v1/responses' : anthropic ? model.wireApi === 'responses' ? '/v1/responses' : '/v1/chat/completions' : route.endpoint;
-      await this.forward(request, response, provider, model, upstreamPath, normalizeUpstreamReasoning(provider, upstreamPath, upstreamBody), observe, anthropic || chatResponses ? { stream: body.stream === true, kind: nativeMessages ? 'native-messages' : chatResponses ? 'chat-responses' : 'anthropic' } : undefined, isJetBrainsTool(route.tool), nativeCompletion?.baseUrl);
+      await this.forward(request, response, provider, model, upstreamPath, normalizeUpstreamReasoning(provider, upstreamPath, upstreamBody), observe, anthropic || chatResponses ? { stream: body.stream === true, kind: nativeMessages ? 'native-messages' : chatResponses ? 'chat-responses' : 'anthropic' } : undefined, route.tool, nativeCompletion?.baseUrl);
       logStatus = upstreamFailed ? upstreamFailureStatus ?? 502 : response.statusCode;
     } catch (error) {
       diagnosticError = describeError(error);
@@ -428,7 +390,8 @@ export class Gateway {
       }
     }
   }
-  private async forward(request: IncomingMessage, response: ServerResponse, provider: Provider, model: Model, path: string, body: Json, observe: (value: unknown) => void, bridge?: { stream: boolean; kind: 'anthropic' | 'chat-responses' | 'native-messages' }, jetBrains = false, completionBaseUrl?: string): Promise<void> {
+  private async forward(request: IncomingMessage, response: ServerResponse, provider: Provider, model: Model, path: string, body: Json, observe: (value: unknown) => void, bridge?: { stream: boolean; kind: 'anthropic' | 'chat-responses' | 'native-messages' }, tool?: ToolId, completionBaseUrl?: string): Promise<void> {
+    const jetBrains = isJetBrainsTool(tool);
     const secret = this.store.getSecret(provider.id);
     if (!secret) throw new GatewayError(503, '供应商缺少凭据。');
     const stream = body.stream === true;
@@ -495,7 +458,19 @@ export class Gateway {
         return;
       }
       const sse = upstream.headers.get('content-type')?.includes('text/event-stream');
-      if (completionBaseUrl) {
+      if (tool === 'copilot' && provider.kind === 'codex' && path === '/v1/responses') {
+        if (!upstream.body) throw new GatewayError(502, 'Codex 响应为空。');
+        // Codex requests always ask the subscription backend to stream. In practice
+        // it also serves SSE with an octet-stream (or absent) Content-Type.
+        const mime = upstream.headers.get('content-type')?.split(';', 1)[0].toLowerCase().trim();
+        let events: AsyncIterable<Json> | Json[];
+        if (mime === 'application/json') events = [copilotCodexJson(JSON.parse(await limitedText(upstream)))];
+        else {
+          reader = upstream.body.getReader();
+          events = copilotCodexEvents(reader);
+        }
+        await sendCopilotCodexEvents(events, response, stream, model.alias, observe, controller.signal);
+      } else if (completionBaseUrl) {
         if (sse && !stream) throw new JetBrainsCompletionError(502, 'AI 补全上游忽略了非流式请求；请使用兼容的原生 FIM 接口。');
         if (stream && sse) {
           if (!upstream.body) throw new JetBrainsCompletionError(502);
