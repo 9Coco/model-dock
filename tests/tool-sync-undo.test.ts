@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { parse as parseJsonc } from 'jsonc-parser';
 import { applyConfig, codexHistoryKey } from '../src/main/adapters';
 import { applyClaudeConfig, claudeHistoryKey } from '../src/main/claude-config';
 import { applyDshConfig, type DshPlan } from '../src/main/dsh-config';
@@ -92,6 +93,26 @@ describe('explicit single-step tool synchronization undo', () => {
     await f.manager.run('opencode', undefined, () => target);
     expect(f.store.getManagedState(toolSyncUndoKey('opencode'), null)).toEqual(saved);
     await f.manager.undo('opencode'); expect(readFileSync(target, 'utf8')).toBe('{"mcp":{"keep":{}}}');
+  });
+  it('restores original OpenCode provider restrictions and comments exactly when undoing a successful sync', async () => {
+    const f = fixture('opencode'), target = join(f.root, '.config', 'opencode', 'opencode.jsonc');
+    const original = `{
+  // original allowlist and explicit denials must return together
+  "enabled_providers": ["foreign", "modeldock-retired"],
+  "disabled_providers": ["modeldock", "blocked-foreign"],
+  "model": "foreign/legacy",
+  "provider": {"foreign": {"models": {"legacy": {}}}},
+  "mcp": {"keep": {}}
+}`;
+    f.write(target, original); f.activate();
+    await f.manager.run('opencode', f.oldBinding, () => applyConfig(f.store, 'opencode', 18181, f.root, join(f.root, 'backups'), f.root));
+    const configured = parseJsonc(readFileSync(target, 'utf8'));
+    expect(configured.enabled_providers).toEqual(['foreign', 'modeldock']);
+    expect(configured.disabled_providers).toEqual(['blocked-foreign']);
+    expect(f.manager.status('opencode').available).toBe(true);
+    await f.manager.undo('opencode');
+    expect(readFileSync(target, 'utf8')).toBe(original);
+    expect(f.store.listBindings()[0]).toEqual(f.oldBinding);
   });
   it('rolls a completed sync back when the encrypted undo record cannot be committed', async () => {
     const f = fixture(), target = join(f.root, '.codex', 'config.toml'), original = 'model="original"\n'; f.write(target, original); f.activate();

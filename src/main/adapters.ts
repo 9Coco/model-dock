@@ -354,6 +354,9 @@ export function applyConfig(store: AdapterStore, tool: ToolId, port: number, app
     const current = original ? parseJsonc(original, errors, { allowTrailingComma: true }) : {};
     if (errors.length || !current || typeof current !== 'object' || Array.isArray(current)) throw new Error('OpenCode 配置格式有误，未修改原文件。');
     if (current.provider !== undefined && (!current.provider || typeof current.provider !== 'object' || Array.isArray(current.provider))) throw new Error('OpenCode provider 配置格式有误。');
+    for (const field of ['enabled_providers', 'disabled_providers'] as const) {
+      if (current[field] !== undefined && (!Array.isArray(current[field]) || current[field].some((id: unknown) => typeof id !== 'string'))) throw new Error(`OpenCode ${field} 必须是供应商 ID 字符串数组，未修改原文件。`);
+    }
     const addition = JSON.parse(config.content);
     const options = { formattingOptions: { insertSpaces: true, tabSize: 2 } };
     output = original ?? '{}';
@@ -363,6 +366,16 @@ export function applyConfig(store: AdapterStore, tool: ToolId, port: number, app
     for (const [id, provider] of Object.entries(addition.provider)) output = editJsonc(output, modify(output, ['provider', id], provider, options));
     if (addition.model) output = editJsonc(output, modify(output, ['model'], addition.model, options));
     else if (typeof current.model === 'string' && ownsOpenCodeProvider(current.model.split('/', 1)[0])) output = editJsonc(output, modify(output, ['model'], undefined, options));
+    // 修改点：同步已有供应商过滤器中的受管项，避免新增默认模型被旧白名单或禁用项隐藏。
+    const selectedProviderIds = Object.keys(addition.provider);
+    if (current.enabled_providers !== undefined) {
+      const enabled = [...current.enabled_providers.filter((id: string) => !ownsOpenCodeProvider(id)), ...selectedProviderIds];
+      if (JSON.stringify(enabled) !== JSON.stringify(current.enabled_providers)) output = editJsonc(output, modify(output, ['enabled_providers'], enabled, options));
+    }
+    if (current.disabled_providers !== undefined) {
+      const disabled = current.disabled_providers.filter((id: string) => !ownsOpenCodeProvider(id) || !selectedProviderIds.includes(id));
+      if (disabled.length !== current.disabled_providers.length) output = editJsonc(output, modify(output, ['disabled_providers'], disabled, options));
+    }
   } else if (tool === 'vscode') {
     const parseErrors: ParseError[] = [];
     const rows = original ? parseJsonc(original, parseErrors, { allowTrailingComma: true }) : [];
