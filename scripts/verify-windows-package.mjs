@@ -89,6 +89,9 @@ function verifyPackage(directory) {
   for (const name of ['modeldock.png', 'modeldock-tray.png', 'modeldock.ico', 'modeldock.svg']) {
     verifyCopiedFile(join(root, 'assets', name), join(resources, 'icons', name));
   }
+  for (const name of ['package.json', 'extension.cjs', 'modeldock-trae-bridge.vsix']) {
+    verifyCopiedFile(join(root, 'assets/trae-bridge', name), join(resources, 'trae-bridge', name));
+  }
 
   const wasmName = 'node_modules/sql.js/dist/sql-wasm.wasm';
   assert(names.includes(wasmName) && statFile(archive, normalize(wasmName), false).unpacked === true,

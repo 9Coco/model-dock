@@ -44,7 +44,7 @@ function complete(event: Json, done: ReadonlyMap<number, Json>): Json {
     else output.splice(Math.min(index, output.length), 0, item);
     for (const key of keys) present.set(key, existing ?? item);
   }
-  if (!output.some(usable)) throw new GatewayError(502, 'Codex 已结束响应，但没有返回可供 Copilot 使用的正文、拒绝说明或工具调用。');
+  if (!output.some(usable)) throw new GatewayError(502, 'Codex 已结束响应，但没有返回可供客户端使用的正文、拒绝说明或工具调用。');
   return { ...event, response: { ...response, output } };
 }
 

@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+await import('./package-trae-bridge.mjs');
 const args = process.argv.slice(2);
 if (args.length > 1 || args.length && !['--smoke', '--development'].includes(args[0])) throw new Error('Usage: node scripts/build-main.mjs [--smoke|--development]');
 const mode = args[0] === '--smoke' ? 'smoke' : args[0] === '--development' ? 'development' : 'production';

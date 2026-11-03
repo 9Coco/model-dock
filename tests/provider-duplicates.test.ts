@@ -156,7 +156,7 @@ describe('explicit legacy duplicate preview and safe merge', () => {
     expect(store.listModels()).toEqual(beforeModels.map(value => value.providerId === first.id ? { ...value, providerId: second.id } : value));
     expect(store.listBindings().map(binding => resolveBindingModels(binding, store.listModels(), store.listProviders()).map(value => value.id).sort())).toEqual(beforeScopes);
     expect(store.listBindings().map(binding => binding.defaultModelId)).toEqual(beforeBindings.map(binding => binding.defaultModelId));
-    expect(store.listBindings().map(binding => binding.modelIds)).toEqual([[a.id], [], [a.id, d.id], [b.id], [], [], [], [], [], []]);
+    expect(store.listBindings().map(binding => binding.modelIds)).toEqual([[a.id], [], [a.id, d.id], [b.id], [], [], [], [], [], [], []]);
     expect(store.getProvider(second.id)?.note).toBe('second note\n\noriginal note');
     expect(store.logs()).toEqual(beforeLogs);
     expect(store.getSecret(second.id)?.apiKey).toBe('synthetic-key');

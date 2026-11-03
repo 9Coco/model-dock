@@ -152,6 +152,7 @@ function redact(value: unknown, key = ''): unknown {
   return value;
 }
 function validateTool(tool: ToolId): void {
+  if (tool === 'trae') throw new Error('Trae 目前仅支持模型适配；MCP 请在 Trae 中独立配置。');
   if (isJetBrainsTool(tool)) throw new Error('JetBrains MCP 导入、预览和应用暂不支持；请在 IDE 内独立配置。未读取或修改任何工具配置。');
   // 修改点：Claude Code MCP 尚未适配，不能进入其他客户端的路径或序列化分支。
   if (tool === 'claude-code') throw new Error('Claude Code MCP 导入、预览和应用暂不支持；未读取或修改任何工具配置。');

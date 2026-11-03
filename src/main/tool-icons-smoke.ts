@@ -3,7 +3,7 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { BrowserWindow } from 'electron';
 
-const toolIds = ['codex', 'claude-code', 'opencode', 'dsh', 'vscode', 'copilot', 'webstorm', 'intellij-idea', 'rider', 'pycharm'] as const;
+const toolIds = ['codex', 'claude-code', 'opencode', 'dsh', 'vscode', 'copilot', 'trae', 'webstorm', 'intellij-idea', 'rider', 'pycharm'] as const;
 const jetBrainsIds = ['webstorm', 'intellij-idea', 'rider', 'pycharm'] as const;
 
 interface IconReadback {
@@ -49,7 +49,7 @@ export async function verifyToolIcons(window: BrowserWindow, outputDir: string, 
     while (Date.now() < deadline) { if (await evaluate<boolean>(source)) return; await pause(25); }
     throw new Error(`Tool icon validation timed out: ${label}`);
   }
-  await waitFor(`!!document.querySelector('.app-shell')&&document.querySelectorAll('.sidebar [data-page="tools"][data-tool-id]').length===10`, 'tool navigation');
+  await waitFor(`!!document.querySelector('.app-shell')&&document.querySelectorAll('.sidebar [data-page="tools"][data-tool-id]').length===${toolIds.length}`, 'tool navigation');
   const size = window.getSize();
   const uiSnapshot = `(async()=>{
     const root=document.documentElement,active=document.querySelector('.sidebar [aria-current="page"]');
@@ -101,7 +101,7 @@ export async function verifyToolIcons(window: BrowserWindow, outputDir: string, 
   try {
     for (const theme of ['light', 'dark']) {
       await evaluate(`(()=>{document.documentElement.dataset.theme=${JSON.stringify(theme)};document.documentElement.style.colorScheme=${JSON.stringify(theme)};})()`);
-      // The tall view proves all ten navigation logos can be shown together.
+      // The tall view proves all eleven navigation logos can be shown together.
       // The two ordinary viewports also prove every logo remains reachable.
       for (const [width, height] of [[1320, 1440], [1320, 880], [980, 680]]) {
         window.setSize(width, height);
@@ -113,11 +113,11 @@ export async function verifyToolIcons(window: BrowserWindow, outputDir: string, 
           const together=await Promise.all(buttons.map(button=>read(button.querySelector('.tool-logo'))));
           return {viewport:{width:innerWidth,height:innerHeight},sidebar,allToolsVisibleTogether:together.every(icon=>icon.visible),documentOverflow:document.documentElement.scrollWidth>innerWidth};
         })()`);
-        assert.deepEqual(value.sidebar.map(icon => icon.tool), [...toolIds], 'Ten tool navigation buttons must show their matching logos');
+        assert.deepEqual(value.sidebar.map(icon => icon.tool), [...toolIds], 'Eleven tool navigation buttons must show their matching logos');
         value.sidebar.forEach(assertIcon);
         assert.equal(new Set(value.sidebar.map(icon => icon.source)).size, toolIds.length, 'Every tool must use its own logo resource');
         assert.equal(value.documentOverflow, false, 'Tool logos must not introduce horizontal document overflow');
-        if (height === 1440) assert.ok(value.allToolsVisibleTogether, 'Tall overview must display all ten tools together');
+        if (height === 1440) assert.ok(value.allToolsVisibleTogether, 'Tall overview must display all eleven tools together');
         const headers: IconReadback[] = [];
         const screenshots: string[] = [];
         for (const tool of toolIds) {
@@ -129,7 +129,7 @@ export async function verifyToolIcons(window: BrowserWindow, outputDir: string, 
           assert.equal(header.source, sidebar.source, `Header and sidebar must use the same logo resource: ${tool}`);
           if ((jetBrainsIds as readonly string[]).includes(tool)) assert.ok(Math.abs(header.scale - sidebar.scale) < 0.01, `JetBrains header/sidebar logo proportions must match: ${tool}`);
           headers.push(header);
-          if (height === 880 && (jetBrainsIds as readonly string[]).includes(tool)) {
+          if (height === 880 && (tool === 'trae' || (jetBrainsIds as readonly string[]).includes(tool))) {
             const screenshot = `electron-tool-icons-${theme}-${tool}-detail.png`;
             writeFileSync(join(outputDir, screenshot), await captureUi());
             screenshots.push(screenshot);
@@ -139,7 +139,7 @@ export async function verifyToolIcons(window: BrowserWindow, outputDir: string, 
         assert.ok(brandedHeaders.every(icon => Math.abs(icon.scale - brandedHeaders[0].scale) < 0.01), 'Four JetBrains logos must have the same relative size');
         await selectTool('webstorm');
         if (height === 1440) await evaluate(`document.querySelector('[data-sidebar-scroll="tools"]').scrollTop=0`);
-        const screenshot = height === 1440 ? `electron-tool-icons-${theme}-all-ten.png` : `electron-tool-icons-${theme}-${width}.png`;
+        const screenshot = height === 1440 ? `electron-tool-icons-${theme}-all-eleven.png` : `electron-tool-icons-${theme}-${width}.png`;
         writeFileSync(join(outputDir, screenshot), await captureUi());
         screenshots.push(screenshot);
         layouts.push({ theme, width, height, ...value, headers, screenshots });

@@ -10,6 +10,7 @@ import { claudeConfigDirectory, claudeHistoryKey } from './claude-config';
 import { openCodeConfigDirectory } from './opencode-paths';
 import { DSH_LEGACY_SCRIPT } from './dsh-runtime';
 import { copilotSyncUndoKey, copilotSyncUndoStatus, undoCopilotDesktop, type CopilotSyncOptions } from './copilot-sync';
+import { restoreTraeSyncUndoCheckpoint, traeSyncUndoKey, traeSyncUndoStatus, undoTraeModels, type TraeSyncOptions } from './trae-sync';
 
 /** All contents and ownership snapshots remain in the encrypted main-process
  * managed store. Only status()'s safe metadata is suitable for an IPC response. */
@@ -25,6 +26,7 @@ export interface ToolSyncUndoOptions {
   appData: string; homeDirectory?: string; codexHome?: string; configHome?: string;
   claudeConfigDir?: string; dshHome?: string; copilotHome?: string;
   copilotOptions?: CopilotSyncOptions;
+  traeTarget?: string; traeOptions?: TraeSyncOptions;
   /** Private failure-injection seam, never accepted from a renderer. */
   replaceFile?: (path: string, content: string | null, mode: number) => void;
 }
@@ -41,7 +43,11 @@ interface CopilotRecord {
   version: 1; kind: 'copilot'; tool: 'copilot'; syncedAt: number;
   beforeBinding: ToolBinding; appliedBinding: ToolBinding; nativeCheckpointId: string;
 }
-type UndoRecord = FileRecord | CopilotRecord;
+interface TraeRecord {
+  version: 1; kind: 'trae'; tool: 'trae'; syncedAt: number;
+  beforeBinding: ToolBinding; appliedBinding: ToolBinding; nativeCheckpointId: string;
+}
+type UndoRecord = FileRecord | CopilotRecord | TraeRecord;
 const bindingFields = ['enabled', 'mode', 'providerIds', 'modelIds', 'modelSelection', 'defaultModelId', 'connectionChoices', 'vscodeSyncScope', 'copilotSyncScope', 'dshSyncScope', 'claudeDisableTelemetry'] as const;
 const maximumFileSize = 2 * 1024 * 1024, maximumRecordSize = 8 * 1024 * 1024;
 const errors = {
@@ -121,6 +127,7 @@ export class ToolSyncUndoManager {
     fail('invalid');
   }
   private copilotHome(): string { return this.options.copilotHome ?? join(this.options.homeDirectory ?? homedir(), '.copilot'); }
+  private traeTarget(): string { return this.options.traeTarget ?? join(this.options.appData, 'Trae CN'); }
   private states(keys: string[]): SnapshotState[] { return keys.map(key => ({ key, value: this.store.getManagedState<unknown>(key, null) })); }
   private readRecord(tool: ToolId): UndoRecord | null {
     const value = this.store.getManagedState<UndoRecord | null>(toolSyncUndoKey(tool), null);
@@ -130,6 +137,10 @@ export class ToolSyncUndoManager {
       || Buffer.byteLength(JSON.stringify(value), 'utf8') > maximumRecordSize) fail('invalid');
     if (value.kind === 'copilot') {
       if (tool !== 'copilot' || typeof value.nativeCheckpointId !== 'string') fail('invalid');
+      return value;
+    }
+    if (value.kind === 'trae') {
+      if (tool !== 'trae' || typeof value.nativeCheckpointId !== 'string') fail('invalid');
       return value;
     }
     if (value.kind !== 'files') fail('invalid');
@@ -145,19 +156,26 @@ export class ToolSyncUndoManager {
     if (saved.kind === 'files' && (saved.appliedFiles.some(file => !matches(file))
       || !isDeepStrictEqual(this.states(saved.appliedStates.map(state => state.key)), saved.appliedStates))) fail('changed');
     if (saved.kind === 'copilot' && copilotSyncUndoStatus(this.store, this.copilotHome()).id !== saved.nativeCheckpointId) fail('changed');
+    if (saved.kind === 'trae' && traeSyncUndoStatus(this.store, this.traeTarget()).id !== saved.nativeCheckpointId) fail('changed');
   }
   status(tool: ToolId): ToolSyncUndoStatus {
     if (isJetBrainsTool(tool)) return { available: false, reason: 'JetBrains 使用现有配置备份与还原入口。' };
     if (this.active.has(tool)) return { available: false, reason: errors.busy };
     try {
       const saved = this.readRecord(tool); if (!saved) return { available: false, reason: errors.missing };
-      this.assertApplied(saved); return { available: true, syncedAt: saved.syncedAt };
+      this.assertApplied(saved);
+      if (saved.kind === 'trae') {
+        const native = traeSyncUndoStatus(this.store, this.traeTarget());
+        if (!native.available) return { available: false, reason: native.reason ?? errors.changed, syncedAt: saved.syncedAt };
+      }
+      return { available: true, syncedAt: saved.syncedAt };
     } catch (error) { return { available: false, reason: error instanceof Error && Object.values(errors).includes(error.message) ? error.message : errors.invalid }; }
   }
   clear(tool: ToolId): void {
     if (this.active.has(tool)) fail('busy');
     this.store.setManagedState(toolSyncUndoKey(tool), null);
     if (tool === 'copilot') this.store.setManagedState(copilotSyncUndoKey(this.copilotHome()), null);
+    if (tool === 'trae') this.store.setManagedState(traeSyncUndoKey(this.traeTarget()), null);
   }
   async run<T>(tool: ToolId, beforeBinding: ToolBinding | undefined, operation: () => T | Promise<T>): Promise<T> {
     if (isJetBrainsTool(tool)) return await operation();
@@ -167,6 +185,32 @@ export class ToolSyncUndoManager {
       const appliedBinding = this.binding(tool), before = clone(beforeBinding ?? appliedBinding);
       if (before.id !== tool) fail('invalid');
       const previousRecord = this.store.getManagedState<unknown>(toolSyncUndoKey(tool), null);
+      if (tool === 'trae') {
+        const target = this.traeTarget(), nativeKey = traeSyncUndoKey(target), previousNative = this.store.getManagedState<unknown>(nativeKey, null);
+        this.store.createManagedBackup('tool-sync-selection', { version: 1, tool, beforeBinding: before });
+        const result = await operation(), native = traeSyncUndoStatus(this.store, target);
+        const previousId = previousNative && typeof previousNative === 'object' && 'id' in previousNative ? previousNative.id : undefined;
+        if (native.id === previousId) return result;
+        if (!native.id) fail('invalid');
+        const saved: TraeRecord = { version: 1, kind: 'trae', tool, syncedAt: native.completedAt!, beforeBinding: before, appliedBinding, nativeCheckpointId: native.id };
+        try { this.store.setManagedState(toolSyncUndoKey(tool), saved); }
+        catch {
+          try {
+            if (!this.options.traeOptions) fail('invalid');
+            await undoTraeModels(this.store, target, this.options.traeOptions, () => {
+              try { this.store.restoreBindingSelection(mergeSelection(this.binding(tool), before)); }
+              catch (error) {
+                if (isDeepStrictEqual(selection(this.binding(tool)), selection(before))) this.store.restoreBindingSelection(mergeSelection(this.binding(tool), appliedBinding));
+                throw error;
+              }
+            });
+            await restoreTraeSyncUndoCheckpoint(this.store, target, previousNative, this.options.traeOptions);
+            this.store.setManagedState(toolSyncUndoKey(tool), previousRecord);
+          } catch { fail('recovery'); }
+          fail('rollback');
+        }
+        return result;
+      }
       if (tool === 'copilot') {
         const nativeKey = copilotSyncUndoKey(this.copilotHome()), previousNative = this.store.getManagedState<unknown>(nativeKey, null);
         this.store.createManagedBackup('tool-sync-selection', { version: 1, tool, beforeBinding: before });
@@ -261,6 +305,20 @@ export class ToolSyncUndoManager {
     this.assertApplied(saved); this.active.add(tool);
     try {
       this.store.createManagedBackup('tool-sync-undo-restore', saved);
+      if (saved.kind === 'trae') {
+        if (!this.options.traeOptions) fail('invalid');
+        return await undoTraeModels(this.store, this.traeTarget(), this.options.traeOptions, () => {
+          let bindingAttempted = false;
+          try {
+            if (!isDeepStrictEqual(selection(this.binding(tool)), selection(saved.appliedBinding))) fail('changed');
+            bindingAttempted = true; this.store.restoreBindingSelection(mergeSelection(this.binding(tool), saved.beforeBinding));
+            this.store.setManagedState(toolSyncUndoKey(tool), null);
+          } catch (error) {
+            if (bindingAttempted && isDeepStrictEqual(selection(this.binding(tool)), selection(saved.beforeBinding))) this.store.restoreBindingSelection(mergeSelection(this.binding(tool), saved.appliedBinding));
+            this.store.setManagedState(toolSyncUndoKey(tool), saved); throw error;
+          }
+        });
+      }
       if (saved.kind === 'copilot') return await undoCopilotDesktop(this.store, this.copilotHome(), this.options.copilotOptions, () => {
         let bindingAttempted = false;
         try {

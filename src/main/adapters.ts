@@ -14,6 +14,7 @@ import { applyClaudeConfig, buildClaudeConfig } from './claude-config';
 import { anthropicEndpoint } from './anthropic-endpoint';
 import { isJetBrainsTool } from '../shared/jetbrains';
 import { applyJetBrainsConfig, buildJetBrainsConfig, type JetBrainsConfigOptions } from './jetbrains-config';
+import { buildTraeConfig, buildTraePlan } from './trae-config';
 
 const PLACEHOLDER = '__MODELDOCK_LOCAL_KEY__';
 // These are client request budgets, not inferred upstream model specifications.
@@ -148,6 +149,12 @@ export function editJsonc(text: string, edits: Edit[]): string {
 }
 /** Only call from a trusted main-process copy/export action. */
 export function connectionKey(store: AdapterStore, tool: ToolId): string {
+  if (tool === 'trae') {
+    const plan = buildTraePlan(store, 18181, true);
+    const keys = [...new Set(plan.models.map(model => model.configuration.ak))];
+    if (keys.length !== 1) throw new Error('请先启用 Trae 并选择至少一个可用模型。');
+    return keys[0];
+  }
   const { binding } = selected(store, tool);
   const groups = connectionGroups(store, tool, binding, 18181, true);
   if (groups.length !== 1) throw new Error('此工具使用多个供应商的独立凭据，请导出配置；没有共用的单一连接密钥。');
@@ -268,6 +275,7 @@ export function buildDshPlan(store: AdapterStore, port: number, revealKey = fals
   return { syncScope, providers, credentials, ...(defaultModel ? { defaultModel } : {}), ...(mappings.length ? { legacyDispatch: { version: 1 as const, mappings } } : {}) };
 }
 export function buildConfig(store: AdapterStore, tool: ToolId, port: number, revealKey = false, homeDirectory = homedir(), options: { jetBrainsOptions?: JetBrainsConfigOptions } = {}): ConfigPreview {
+  if (tool === 'trae') return buildTraeConfig(store, port, revealKey);
   if (isJetBrainsTool(tool)) return buildJetBrainsConfig(store, tool, port, revealKey, homeDirectory, options.jetBrainsOptions);
   // 修改点：Claude Code 按原生 Messages 入口或本机协议桥生成配置，不能落入其他工具适配分支。
   if (tool === 'claude-code') return buildClaudeConfig(store, revealKey, port);
@@ -338,6 +346,7 @@ export function applyConfig(store: AdapterStore, tool: ToolId, port: number, app
   if (isJetBrainsTool(tool)) return applyJetBrainsConfig(store, tool, backups, homeDirectory, { ...options.jetBrainsOptions, port });
   if (tool === 'claude-code') return applyClaudeConfig(store, backups, homeDirectory, { claudeConfigDir: options.claudeConfigDir, port });
   if (tool === 'copilot') throw new Error('Copilot 桌面配置需要通过运行中的原生接口同步。');
+  if (tool === 'trae') throw new Error('Trae CN 配置需要通过运行中的原生接口同步。');
   if (tool === 'dsh') throw new Error('DSH 配置需要通过原生插件与凭据同步入口应用。');
   const config = buildConfig(store, tool, port, true);
   if (!config.canApply) throw new Error('此工具暂支持预览和导出，请通过其配置入口合并。');

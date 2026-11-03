@@ -38,6 +38,9 @@ import { verifySidebarScroll } from './sidebar-scroll-smoke';
 import { verifyDshConfiguration } from './dsh-config-smoke';
 import { CopilotDesktopClient } from './copilot-desktop';
 import { applyCopilotDesktop } from './copilot-sync';
+import { buildTraePlan } from './trae-config';
+import { applyTraeModels, type TraeSyncOptions } from './trae-sync';
+import { openTraeNativeClient } from './trae-native';
 import { ToolSyncUndoManager } from './tool-sync-undo';
 import { verifyToolAutoSync } from './tool-auto-sync-smoke';
 import { removeProviderAndSync } from './provider-removal';
@@ -125,7 +128,7 @@ if (runtimeConfig.dataDir) {
   app.setPath('userData', runtimeConfig.dataDir);
   app.setPath('sessionData', runtimeConfig.dataDir);
 }
-const toolIds = new Set(['codex', 'opencode', 'dsh', 'vscode', 'copilot', 'claude-code', 'webstorm', 'intellij-idea', 'rider', 'pycharm']);
+const toolIds = new Set(['codex', 'opencode', 'dsh', 'vscode', 'copilot', 'claude-code', 'trae', 'webstorm', 'intellij-idea', 'rider', 'pycharm']);
 function toolId(value: unknown): ToolId {
   if (typeof value !== 'string' || !toolIds.has(value)) throw new Error('无法识别的工具。');
   return value as ToolId;
@@ -528,6 +531,12 @@ function registerIpc() {
   const beforeToolSelections = new Map<ToolId, ToolBinding>();
   const featureHome = __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home') : app.getPath('home');
   const copilot = copilotTarget();
+  const traeProfilePath = resolve(__MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-appdata', 'Trae CN') : join(app.getPath('appData'), 'Trae CN'));
+  const traeTarget = process.platform === 'win32' ? traeProfilePath.toLowerCase() : traeProfilePath;
+  const traeOptions: TraeSyncOptions = { openClient: async target => {
+    if (__MODELDOCK_SMOKE_BUILD__) throw new Error('隔离界面测试不连接真实 Trae；请使用 Trae 专用原生验收。');
+    return openTraeNativeClient({ userDataPath: target, bridgeAssetsPath: app.isPackaged ? join(process.resourcesPath, 'trae-bridge') : join(app.getAppPath(), 'assets', 'trae-bridge') });
+  } };
   const undoManager = new ToolSyncUndoManager(store, {
     appData: __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-appdata') : app.getPath('appData'),
     homeDirectory: featureHome,
@@ -536,6 +545,7 @@ function registerIpc() {
     claudeConfigDir: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.claude') : process.env.CLAUDE_CONFIG_DIR,
     dshHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.dsh') : process.env.DSH_HOME?.trim() ? resolve(process.env.DSH_HOME.trim()) : join(featureHome, '.dsh'),
     copilotHome: copilot.home, copilotOptions: { openClient: copilot.openClient },
+    traeTarget, traeOptions,
   });
   const assertEditable = () => {
     if (providerRemovalPending) throw new Error('供应商正在删除并同步，请稍后修改配置。');
@@ -559,6 +569,8 @@ function registerIpc() {
     if (id === 'copilot') {
       const target = copilotTarget();
       operation = () => applyCopilotDesktop(store, buildCopilotDesktopPlan(store, gateway.status().port, true), target.home, { openClient: target.openClient, syncScope: binding?.copilotSyncScope ?? 'selected', recordUndo: !providerRemovalPending });
+    } else if (id === 'trae') {
+      operation = () => applyTraeModels(store, buildTraePlan(store, gateway.status().port, true), traeTarget, { ...traeOptions, recordUndo: !providerRemovalPending });
     } else if (id === 'dsh') {
       const configuredDshHome = process.env.DSH_HOME?.trim();
       const dshHome = __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home', '.dsh')
@@ -765,6 +777,7 @@ function registerIpc() {
         claudeConfigDir: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.claude') : process.env.CLAUDE_CONFIG_DIR,
         jetBrainsOptions: jetBrainsOptions(),
         dshHome, dshOptions, copilotHome: target.home, copilotOptions: { openClient: target.openClient },
+        traeTarget, traeOptions,
       }));
       undoManager.clear(id); beforeToolSelections.delete(id);
       return location;
