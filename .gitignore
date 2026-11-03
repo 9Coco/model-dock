@@ -5,6 +5,7 @@ node_modules/
 dist/
 dist-electron/
 release/
+assets/trae-bridge/*.vsix
 *.tsbuildinfo
 
 # Tool caches

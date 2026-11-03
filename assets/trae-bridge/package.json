@@ -1,0 +1,13 @@
+{
+  "name": "trae-bridge",
+  "displayName": "ModelDock 连接助手",
+  "publisher": "modeldock",
+  "version": "0.2.1",
+  "description": "在本机连接 ModelDock 和 Trae 的自定义模型设置。",
+  "license": "MIT",
+  "engines": { "vscode": "^1.100.0" },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished", "onUri"],
+  "main": "./extension.cjs",
+  "extensionKind": ["ui"]
+}

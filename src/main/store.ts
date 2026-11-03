@@ -34,7 +34,7 @@ interface ProviderRemovalData {
   bindingsBefore: Record<string, unknown>[];
   bindingsAfter: Record<string, unknown>[];
 }
-const TOOL_NAMES: Record<ToolId, string> = { codex: 'Codex', opencode: 'OpenCode', dsh: 'DeepSeek Harness', vscode: 'VS Code', copilot: 'GitHub Copilot', 'claude-code': 'Claude Code', webstorm: 'WebStorm', 'intellij-idea': 'IntelliJ IDEA', rider: 'Rider', pycharm: 'PyCharm' };
+const TOOL_NAMES: Record<ToolId, string> = { codex: 'Codex', opencode: 'OpenCode', dsh: 'DeepSeek Harness', vscode: 'VS Code', copilot: 'GitHub Copilot', 'claude-code': 'Claude Code', trae: 'Trae CN', webstorm: 'WebStorm', 'intellij-idea': 'IntelliJ IDEA', rider: 'Rider', pycharm: 'PyCharm' };
 const kinds = new Set(['openai-compatible', 'codex', 'grok', 'copilot']);
 let sqlPromise: Promise<SqlJsStatic> | undefined;
 
@@ -90,7 +90,7 @@ export class Store {
     }
     // 修改点：旧版其他工具允许 direct 多入口，转为等价的 auto 元数据；不改外部配置或所选来源。
     for (const row of store.rows("SELECT id,provider_ids FROM bindings WHERE mode='direct'")) {
-      if (!Object.hasOwn(TOOL_NAMES, String(row.id)) || row.id === 'codex' || row.id === 'claude-code') continue;
+      if (!Object.hasOwn(TOOL_NAMES, String(row.id)) || row.id === 'codex' || row.id === 'claude-code' || row.id === 'trae') continue;
       const ids = row.provider_ids === null ? [] : JSON.parse(String(row.provider_ids));
       if (Array.isArray(ids) && ids.length > 1) db.run("UPDATE bindings SET mode='auto' WHERE id=?", [String(row.id)]);
     }

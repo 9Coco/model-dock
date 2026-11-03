@@ -2,6 +2,7 @@ import type { Model, Provider, ToolBinding } from './types';
 import { claudeConnectionKind, claudeModelsForProvider } from './claude';
 import { isJetBrainsTool } from './jetbrains';
 import { directModelsForProvider, isSingleEntryTool, nativeDirectBaseUrl } from './single-entry';
+import { traeModelsForProvider } from './trae';
 
 export interface BindingConnectionGroup {
   /** Direct API groups contain exactly one provider, hence one credential. */
@@ -25,8 +26,9 @@ export function resolveBindingModels(binding: ToolBinding, models: Model[], prov
   const claudeIds = claude && providers ? new Set(providers.filter(provider => provider.enabled).flatMap(provider => binding.mode === 'aggregate'
     ? models.filter(model => model.providerId === provider.id && model.enabled)
     : claudeModelsForProvider(provider, models)).map(model => model.id)) : undefined;
+  const traeIds = binding.id === 'trae' && providers ? new Set(providers.flatMap(provider => traeModelsForProvider(provider, models, binding.mode === 'aggregate')).map(model => model.id)) : undefined;
   const nativeIds = binding.mode === 'direct' && isSingleEntryTool(binding.id) && providers ? new Set(providers.flatMap(provider => directModelsForProvider(binding.id, provider, models)).map(model => model.id)) : undefined;
-  let result = models.filter(model => model.enabled && (claude ? !claudeIds || claudeIds.has(model.id) : model.wireApi !== 'messages')
+  let result = models.filter(model => model.enabled && (claude ? !claudeIds || claudeIds.has(model.id) : binding.id === 'trae' ? !traeIds || traeIds.has(model.id) : model.wireApi !== 'messages')
     && (!providers || providers.some(p => p.id === model.providerId && p.enabled)) && (!nativeIds || nativeIds.has(model.id)));
   if (providerIds !== undefined) {
     const allowed = singleSource ? providerIds.slice(0, 1) : providerIds;
