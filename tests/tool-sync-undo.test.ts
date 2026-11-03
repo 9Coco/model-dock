@@ -94,24 +94,25 @@ describe('explicit single-step tool synchronization undo', () => {
     expect(f.store.getManagedState(toolSyncUndoKey('opencode'), null)).toEqual(saved);
     await f.manager.undo('opencode'); expect(readFileSync(target, 'utf8')).toBe('{"mcp":{"keep":{}}}');
   });
-  it('restores original OpenCode provider restrictions and comments exactly when undoing a successful sync', async () => {
+  it.each([true, false])('restores original OpenCode restrictions and CRLF comments exactly after undo, with prior allowlist=%s', async hasAllowlist => {
     const f = fixture('opencode'), target = join(f.root, '.config', 'opencode', 'opencode.jsonc');
     const original = `{
   // original allowlist and explicit denials must return together
-  "enabled_providers": ["foreign", "modeldock-retired"],
+  ${hasAllowlist ? '"enabled_providers": ["foreign", "modeldock-retired"],' : '// no provider allowlist existed before synchronization'}
   "disabled_providers": ["modeldock", "blocked-foreign"],
   "model": "foreign/legacy",
   "provider": {"foreign": {"models": {"legacy": {}}}},
   "mcp": {"keep": {}}
-}`;
+}`.replace(/\n/g, '\r\n');
     f.write(target, original); f.activate();
     await f.manager.run('opencode', f.oldBinding, () => applyConfig(f.store, 'opencode', 18181, f.root, join(f.root, 'backups'), f.root));
     const configured = parseJsonc(readFileSync(target, 'utf8'));
-    expect(configured.enabled_providers).toEqual(['foreign', 'modeldock']);
+    expect(configured.enabled_providers).toEqual(['modeldock']);
     expect(configured.disabled_providers).toEqual(['blocked-foreign']);
     expect(f.manager.status('opencode').available).toBe(true);
     await f.manager.undo('opencode');
     expect(readFileSync(target, 'utf8')).toBe(original);
+    expect(Object.hasOwn(parseJsonc(readFileSync(target, 'utf8')), 'enabled_providers')).toBe(hasAllowlist);
     expect(f.store.listBindings()[0]).toEqual(f.oldBinding);
   });
   it('rolls a completed sync back when the encrypted undo record cannot be committed', async () => {
