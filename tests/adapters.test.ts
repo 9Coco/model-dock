@@ -475,12 +475,14 @@ describe('tool adapters', () => {
     applyConfig(nativeFixture([]), 'opencode', 19191, root, join(root, 'backups'), root);
     expect(parseJsonc(readFileSync(target, 'utf8')).model).toBe('other/foreign');
   });
-  it('makes the selected OpenCode default available when an existing allowlist contains only legacy suppliers', () => {
+  it('limits OpenCode to the selected suppliers while retaining unselected supplier definitions, credentials and MCP', () => {
     const root = mkdtempSync(join(tmpdir(), 'modeldock-opencode-filters-')); roots.push(root);
     const target = join(root, '.config', 'opencode', 'opencode.jsonc'); mkdirSync(dirname(target), { recursive: true });
     const legacyIds = ['qwen-token-plan', 'volcengine-agent-plan', 'volcengine-plan', 'cliproxyapi'];
-    const foreign = { name: 'Existing supplier', models: { legacy: { name: 'Existing model' } } };
+    const foreign = { name: 'Existing supplier', options: { apiKey: 'SYNTHETIC_FOREIGN_KEY' }, models: { legacy: { name: 'Existing model' } } };
     const mcp = { keep: { type: 'local', command: ['synthetic-mcp'], enabled: false } };
+    const auth = join(root, '.local', 'share', 'opencode', 'auth.json'), originalAuth = '{"cliproxyapi":{"type":"api","key":"SYNTHETIC_SAVED_AUTH_KEY"}}';
+    mkdirSync(dirname(auth), { recursive: true }); writeFileSync(auth, originalAuth);
     const original = `{
   // preserve the existing provider restrictions
   "enabled_providers": ["qwen-token-plan", /* keep list explanation */ "volcengine-agent-plan", "volcengine-plan", "cliproxyapi"],
@@ -491,31 +493,33 @@ describe('tool adapters', () => {
     const native = nativeFixture(['provider-a', 'provider-b']);
     applyConfig(native, 'opencode', 19191, root, join(root, 'backups'), root);
     const content = readFileSync(target, 'utf8'), value = parseJsonc(content);
-    expect(value.enabled_providers).toEqual([...legacyIds, 'modeldock-provider-a', 'modeldock-provider-b']);
+    expect(value.enabled_providers).toEqual(['modeldock-provider-a', 'modeldock-provider-b']);
+    for (const id of legacyIds) expect(value.enabled_providers).not.toContain(id);
     expect(value.model).toBe('modeldock-provider-b/shared-upstream');
     expect(value.enabled_providers).toContain(value.model.split('/')[0]);
     expect(value.provider.cliproxyapi).toEqual(foreign); expect(value.mcp).toEqual(mcp);
+    expect(readFileSync(auth, 'utf8')).toBe(originalAuth);
     expect(content).toContain('// preserve the existing provider restrictions'); expect(content).toContain('/* keep list explanation */');
     applyConfig(native, 'opencode', 19191, root, join(root, 'backups'), root);
     expect(readFileSync(target, 'utf8')).toBe(content);
     expect(readdirSync(join(root, 'backups')).map(file => readFileSync(join(root, 'backups', file), 'utf8'))).toContain(original);
   });
-  it('updates only managed OpenCode allowlist entries across native, aggregate and empty selections', () => {
+  it('keeps the OpenCode allowlist equal to the selection across native, aggregate and empty modes', () => {
     const root = mkdtempSync(join(tmpdir(), 'modeldock-opencode-filters-')); roots.push(root);
     const target = join(root, '.config', 'opencode', 'opencode.json'); mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, JSON.stringify({ enabled_providers: ['other', 'modeldock', 'modeldock-retired', 'modeldocker', 'other'], provider: { other: { models: { keep: {} } } } }));
     const native = nativeFixture(['provider-a', 'provider-b']);
     applyConfig(native, 'opencode', 19191, root, join(root, 'backups'), root);
-    expect(parseJsonc(readFileSync(target, 'utf8')).enabled_providers).toEqual(['other', 'modeldocker', 'other', 'modeldock-provider-a', 'modeldock-provider-b']);
+    expect(parseJsonc(readFileSync(target, 'utf8')).enabled_providers).toEqual(['modeldock-provider-a', 'modeldock-provider-b']);
     const aggregate = { ...native, listBindings: () => native.listBindings().map(binding => ({ ...binding, mode: 'aggregate' as const })) };
     applyConfig(aggregate, 'opencode', 19191, root, join(root, 'backups'), root);
     const aggregated = parseJsonc(readFileSync(target, 'utf8'));
-    expect(aggregated.enabled_providers).toEqual(['other', 'modeldocker', 'other', 'modeldock']);
+    expect(aggregated.enabled_providers).toEqual(['modeldock']);
     expect(Object.keys(aggregated.provider)).toEqual(['other', 'modeldock']);
     expect(aggregated.model).toMatch(/^modeldock\//);
     applyConfig(nativeFixture([]), 'opencode', 19191, root, join(root, 'backups'), root);
     const empty = parseJsonc(readFileSync(target, 'utf8'));
-    expect(empty.enabled_providers).toEqual(['other', 'modeldocker', 'other']);
+    expect(empty.enabled_providers).toEqual([]);
     expect(empty.provider).toEqual({ other: { models: { keep: {} } } }); expect(empty).not.toHaveProperty('model');
   });
   it.each([[], ['modeldock', 'modeldock-retired']].map(enabled => ({ enabled })))('keeps an explicit empty OpenCode allowlist after clearing selection from $enabled', ({ enabled }) => {
@@ -527,15 +531,54 @@ describe('tool adapters', () => {
     applyConfig(nativeFixture([]), 'opencode', 19191, root, join(root, 'backups'), root);
     expect(parseJsonc(readFileSync(target, 'utf8'))).toHaveProperty('enabled_providers', []);
   });
-  it.each([{}, { enabled_providers: [] }, { disabled_providers: [] }])('does not create absent OpenCode provider filters for %j', original => {
+  it.each([{}, { enabled_providers: [] }, { disabled_providers: [] }])('creates the exact OpenCode allowlist without creating an absent denylist for %j', original => {
     const root = mkdtempSync(join(tmpdir(), 'modeldock-opencode-filters-')); roots.push(root);
     const target = join(root, '.config', 'opencode', 'opencode.json'); mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, JSON.stringify(original));
     for (const ids of [['provider-a'], []]) {
       applyConfig(nativeFixture(ids), 'opencode', 19191, root, join(root, 'backups'), root);
       const value = parseJsonc(readFileSync(target, 'utf8'));
-      for (const field of ['enabled_providers', 'disabled_providers']) expect(Object.hasOwn(value, field)).toBe(Object.hasOwn(original, field));
+      expect(value.enabled_providers).toEqual(ids.map(id => `modeldock-${id}`));
+      expect(Object.hasOwn(value, 'disabled_providers')).toBe(Object.hasOwn(original, 'disabled_providers'));
     }
+  });
+  it.each([
+    { mode: 'auto' as const, ids: ['provider-a', 'provider-b'], enabled: ['modeldock-provider-a', 'modeldock-provider-b'] },
+    { mode: 'aggregate' as const, ids: ['provider-a', 'provider-b'], enabled: ['modeldock'] },
+    { mode: 'auto' as const, ids: [], enabled: [] },
+  ].flatMap(selection => [false, true].map(revealKey => ({ ...selection, revealKey }))))('includes the exact provider allowlist in OpenCode $mode output with revealKey=$revealKey and selection=$ids', ({ mode, ids, enabled, revealKey }) => {
+    const native = nativeFixture(ids);
+    const configured = { ...native, listBindings: () => native.listBindings().map(binding => ({ ...binding, mode })) };
+    const preview = buildConfig(configured, 'opencode', 19191, revealKey), value = JSON.parse(preview.content);
+    expect(preview.canApply).toBe(true); expect(value.enabled_providers).toEqual(enabled);
+    expect(Object.keys(value.provider)).toEqual(enabled);
+    if (value.model) expect(enabled).toContain(value.model.split('/')[0]);
+    if (!revealKey) expect(preview.content).not.toContain('SYNTHETIC_KEY_');
+  });
+  it('preserves CRLF JSONC and unselected supplier data under paths containing spaces and Chinese characters', () => {
+    const root = mkdtempSync(join(tmpdir(), 'modeldock 配置 regression-')); roots.push(root);
+    const configHome = join(root, '自定义 配置目录'), target = join(configHome, 'opencode', 'opencode.jsonc'); mkdirSync(dirname(target), { recursive: true });
+    const foreign = { options: { apiKey: 'SYNTHETIC_FOREIGN_KEY' }, models: { old: { name: '旧模型' } } };
+    const mcp = { keep: { type: 'local', command: ['synthetic-mcp', '参数 含空格'], enabled: false } };
+    const original = [
+      '{', '  // 保留原有供应商定义与注释',
+      '  "enabled_providers": ["foreign", /* 保留白名单说明 */ "modeldock-retired"],',
+      `  "provider": {"foreign": ${JSON.stringify(foreign)}},`,
+      `  "mcp": ${JSON.stringify(mcp)}`, '}', '',
+    ].join('\r\n');
+    writeFileSync(target, original);
+    for (const ids of [['provider-a'], []]) {
+      const native = nativeFixture(ids);
+      expect(applyConfig(native, 'opencode', 19191, root, join(root, '备份 目录'), root, { configHome })).toBe(target);
+      const content = readFileSync(target, 'utf8'), errors: ParseError[] = [], value = parseJsonc(content, errors, { allowTrailingComma: true });
+      expect(errors).toEqual([]); expect(value.enabled_providers).toEqual(ids.map(id => `modeldock-${id}`));
+      expect(value.provider.foreign).toEqual(foreign); expect(value.mcp).toEqual(mcp);
+      expect(content).toContain('// 保留原有供应商定义与注释'); expect(content).toContain('/* 保留白名单说明 */');
+      expect(content).toContain('\r\n'); expect(content.replace(/\r\n/g, '')).not.toContain('\n');
+      applyConfig(native, 'opencode', 19191, root, join(root, '备份 目录'), root, { configHome });
+      expect(readFileSync(target, 'utf8')).toBe(content);
+    }
+    expect(existsSync(join(root, '.config', 'opencode', 'opencode.json'))).toBe(false);
   });
   it('unblocks only the currently selected managed OpenCode suppliers and preserves all other denials and native policies', () => {
     const root = mkdtempSync(join(tmpdir(), 'modeldock-opencode-filters-')); roots.push(root);

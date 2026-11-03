@@ -118,6 +118,7 @@ function jsoncComments(text: string): { text: string; offset: number; end: numbe
 /** jsonc-parser removes leading trivia when deleting a property. Keep user
  * comments at that edit position instead of discarding them with managed data. */
 export function editJsonc(text: string, edits: Edit[]): string {
+  const eol = text.match(/\r\n|\n/)?.[0] ?? '\n';
   const before = jsoncComments(text), after = jsoncComments(applyEdits(text, edits));
   const deficit = new Map<string, number>();
   for (const comment of before) deficit.set(comment.text, (deficit.get(comment.text) ?? 0) + 1);
@@ -131,7 +132,7 @@ export function editJsonc(text: string, edits: Edit[]): string {
     prefixes[index].push(comment.text);
     deficit.set(comment.text, deficit.get(comment.text)! - 1);
   }
-  preserved.forEach((edit, index) => { if (prefixes[index].length) edit.content = `${prefixes[index].join('\n')}\n${edit.content}`; });
+  preserved.forEach((edit, index) => { if (prefixes[index].length) edit.content = `${prefixes[index].join(eol)}${eol}${edit.content}`; });
   let result = applyEdits(text, preserved);
   // Formatting edits can occasionally intersect only part of a block comment.
   // Preserve any remaining lost token safely outside the JSON structure.
@@ -142,7 +143,7 @@ export function editJsonc(text: string, edits: Edit[]): string {
     const count = remaining.get(comment.text) ?? 0;
     if (count > 0) remaining.set(comment.text, count - 1); else missing.push(comment.text);
   }
-  if (missing.length) result = `${missing.join('\n')}\n${result}`;
+  if (missing.length) result = `${missing.join(eol)}${eol}${result}`;
   return result;
 }
 /** Only call from a trusted main-process copy/export action. */
@@ -300,8 +301,8 @@ export function buildConfig(store: AdapterStore, tool: ToolId, port: number, rev
     }])) }]));
     const defaultGroup = defaultModel && groups.find(group => group.models.some(model => model.id === defaultModel.id));
     return { filename: 'modeldock-opencode.json', canApply: true,
-      content: JSON.stringify({ $schema: 'https://opencode.ai/config.json', ...(defaultGroup ? { model: `${defaultGroup.id}/${defaultModel.alias}` } : {}), provider }, null, 2),
-      instructions: connection + '合并到 OpenCode 全局配置，保留其他供应商、MCP 和现有注释。各模型的 SDK 按其协议选择。' + clientBudgetNotice(models),
+      content: JSON.stringify({ $schema: 'https://opencode.ai/config.json', ...(defaultGroup ? { model: `${defaultGroup.id}/${defaultModel.alias}` } : {}), provider, enabled_providers: Object.keys(provider) }, null, 2),
+      instructions: connection + '合并到 OpenCode 全局配置，仅启用当前勾选的供应商；其他供应商的配置和凭据保留但不启用，MCP 和现有注释保留。各模型的 SDK 按其协议选择。' + clientBudgetNotice(models),
     };
   }
   if (tool === 'copilot') {
@@ -366,12 +367,9 @@ export function applyConfig(store: AdapterStore, tool: ToolId, port: number, app
     for (const [id, provider] of Object.entries(addition.provider)) output = editJsonc(output, modify(output, ['provider', id], provider, options));
     if (addition.model) output = editJsonc(output, modify(output, ['model'], addition.model, options));
     else if (typeof current.model === 'string' && ownsOpenCodeProvider(current.model.split('/', 1)[0])) output = editJsonc(output, modify(output, ['model'], undefined, options));
-    // 修改点：同步已有供应商过滤器中的受管项，避免新增默认模型被旧白名单或禁用项隐藏。
+    // 修改点：启用范围以当前勾选为准；保留其他供应商定义，但不让旧配置重新启用未勾选来源。
     const selectedProviderIds = Object.keys(addition.provider);
-    if (current.enabled_providers !== undefined) {
-      const enabled = [...current.enabled_providers.filter((id: string) => !ownsOpenCodeProvider(id)), ...selectedProviderIds];
-      if (JSON.stringify(enabled) !== JSON.stringify(current.enabled_providers)) output = editJsonc(output, modify(output, ['enabled_providers'], enabled, options));
-    }
+    if (JSON.stringify(selectedProviderIds) !== JSON.stringify(current.enabled_providers)) output = editJsonc(output, modify(output, ['enabled_providers'], selectedProviderIds, options));
     if (current.disabled_providers !== undefined) {
       const disabled = current.disabled_providers.filter((id: string) => !ownsOpenCodeProvider(id) || !selectedProviderIds.includes(id));
       if (disabled.length !== current.disabled_providers.length) output = editJsonc(output, modify(output, ['disabled_providers'], disabled, options));
