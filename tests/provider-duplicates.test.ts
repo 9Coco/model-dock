@@ -125,6 +125,52 @@ describe('API provider identity and repeat-save protection', () => {
 });
 
 describe('explicit legacy duplicate preview and safe merge', () => {
+  it.each(['retained', 'removed'] as const)('refuses mixed local-interface membership when the %s supplier is excluded', async excludedSide => {
+    const { store } = await setup(); const first = source(store), second = duplicate(store, first, 'second', 'synthetic-key');
+    model(store, first.id, 'first'); model(store, second.id, 'second'); model(store, second.id, 'third');
+    const [initial] = store.listProviderDuplicates();
+    expect(initial.targetProviderId).toBe(second.id);
+    store.setGatewayProviderEnabled(excludedSide === 'retained' ? second.id : first.id, false);
+    const before = { providers: store.listProviders(), models: store.listModels(), bindings: store.listBindings(), exposure: store.gatewayExposure() };
+    const [group] = store.listProviderDuplicates();
+    expect(group.canMerge).toBe(false);
+    expect(group.message).toContain('本地聚合接口中的加入状态不同');
+    expect(() => store.mergeProviderDuplicates(group.providerIds, group.fingerprint)).toThrow('本地聚合接口中的加入状态不同');
+    expect({ providers: store.listProviders(), models: store.listModels(), bindings: store.listBindings(), exposure: store.gatewayExposure() }).toEqual(before);
+  });
+
+  it.each(['provider', 'model'] as const)('invalidates a merge preview after %s local-interface membership changes', async changed => {
+    const { store } = await setup(); const first = source(store), second = duplicate(store, first, 'second', 'synthetic-key');
+    const selected = model(store, first.id, 'first'); model(store, second.id, 'second');
+    const [group] = store.listProviderDuplicates();
+    if (changed === 'provider') {
+      // Keep both supplier memberships equal so this specifically verifies the
+      // preview fingerprint rather than only the mixed-membership guard.
+      store.setGatewayProviderEnabled(first.id, false); store.setGatewayProviderEnabled(second.id, false);
+    } else store.setGatewayModelEnabled(selected.id, false);
+    expect(store.listProviderDuplicates()[0].canMerge).toBe(true);
+    expect(() => store.mergeProviderDuplicates(group.providerIds, group.fingerprint)).toThrow('配置已变化');
+    expect(store.getProvider(first.id)).toBeDefined(); expect(store.getProvider(second.id)).toBeDefined();
+  });
+
+  it.each([true, false])('preserves local publication and individual model exclusions when both supplier memberships match (included=%s)', async included => {
+    const { store } = await setup(); const first = source(store), second = duplicate(store, first, 'second', 'synthetic-key');
+    const excluded = model(store, first.id, 'excluded-alias'), retained = model(store, second.id, 'retained-alias');
+    // Both rows deliberately share an upstream ID; merging must retain their
+    // distinct local aliases, IDs and individual publication selections.
+    expect(excluded.upstreamId).toBe(retained.upstreamId);
+    store.setGatewayModelEnabled(excluded.id, false);
+    store.setGatewayProviderEnabled(first.id, included); store.setGatewayProviderEnabled(second.id, included);
+    const published = () => { const exposure = store.gatewayExposure(); return store.listModels().filter(value => !exposure.excludedProviderIds.includes(value.providerId) && !exposure.excludedModelIds.includes(value.id)).map(value => value.alias); };
+    const before = published();
+    const [group] = store.listProviderDuplicates(); expect(group.canMerge).toBe(true);
+    const result = store.mergeProviderDuplicates(group.providerIds, group.fingerprint);
+    expect(published()).toEqual(before);
+    expect(store.listModels()).toEqual(expect.arrayContaining([expect.objectContaining({ id: excluded.id, providerId: result.keptProviderId, alias: excluded.alias }), expect.objectContaining({ id: retained.id, providerId: result.keptProviderId, alias: retained.alias })]));
+    expect(store.gatewayExposure().excludedModelIds).toContain(excluded.id);
+    expect(store.gatewayExposure().excludedProviderIds.includes(result.keptProviderId)).toBe(!included);
+  });
+
   it('previews without deleting records and keeps the key-bearing account with the most models', async () => {
     const { store } = await setup(); const first = source(store);
     const second = duplicate(store, first, 'second', 'synthetic-key');

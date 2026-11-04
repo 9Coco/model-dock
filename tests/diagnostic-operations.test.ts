@@ -23,7 +23,7 @@ describe('diagnostic operation classification excludes all credential and body f
     expect(diagnosticOperationResult('refreshAccountUsage', ['copilot:42'], { usage: { status: 'stale', message: secret, windows: [{ token: secret }] } }, 2)).toMatchObject({ level: 'warn', event: 'account.refresh', context: { outcome: 'stale' } });
   });
   it('ignores diagnostic queries, exports and credential copy operations to prevent loops', () => {
-    for (const name of ['queryDiagnostics', 'diagnosticsText', 'exportDiagnostics', 'openDiagnosticsDir', 'copyText', 'copyGatewayKey', 'copyConnectionKey'] as const) {
+    for (const name of ['queryDiagnostics', 'diagnosticsText', 'exportDiagnostics', 'openDiagnosticsDir', 'copyText', 'copyGatewayKey', 'copyConnectionKey', 'copyProviderKey', 'revealProviderKey', 'revealGatewayKey'] as const) {
       expect(ignoresDiagnosticOperation(name)).toBe(true);
       expect(diagnosticOperationResult(name, [secret], secret, 2)).toBeUndefined();
     }

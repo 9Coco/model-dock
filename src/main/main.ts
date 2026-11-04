@@ -34,6 +34,7 @@ import { verifyToolSelection } from './tool-selection-smoke';
 import { verifyToolRestoreAndConnections } from './tool-restore-smoke';
 import { verifyCopilotDesktop } from './copilot-desktop-smoke';
 import { verifyToolIcons } from './tool-icons-smoke';
+import { verifyProviderManagement } from './provider-management-smoke';
 import { verifySidebarScroll } from './sidebar-scroll-smoke';
 import { verifyDshConfiguration } from './dsh-config-smoke';
 import { CopilotDesktopClient } from './copilot-desktop';
@@ -58,6 +59,7 @@ import { createSystemNetworkFetch } from './system-network';
 import { resolveRuntimeConfig } from './runtime-mode';
 import { bindingConnectionPolicy } from '../shared/bindings';
 import { writeClipboardText } from './clipboard-text';
+import { localGatewayKey, providerApiKey } from './connection-keys';
 import { createVault } from './vault';
 import { buildConfig, buildCopilotDesktopPlan, buildDshPlan, applyConfig, connectionKey } from './adapters';
 import { applyDshConfig } from './dsh-config';
@@ -212,8 +214,10 @@ async function createWindow(forceShow = false) {
         const result = await window!.webContents.executeJavaScript(`({title:document.title, text:document.body.innerText, bridge:!!window.modelDock})`);
         writeFileSync(join(outputDir, 'electron-smoke.json'), JSON.stringify({ ...result, dataDir, windowSize: window!.getSize(), contentSize: window!.getContentSize() }, null, 2));
         writeFileSync(join(outputDir, 'electron-smoke.png'), await captureUi());
-        await verifyToolIcons(window!, outputDir, captureUi);
-        if (process.env.MODELDOCK_SMOKE_TOOL_ICONS_ONLY === '1') {
+        if (process.env.MODELDOCK_SMOKE_PROVIDER_MANAGEMENT_ONLY !== '1') await verifyToolIcons(window!, outputDir, captureUi);
+        if (process.env.MODELDOCK_SMOKE_PROVIDER_MANAGEMENT_ONLY === '1') {
+          await verifyProviderManagement(window!, store, outputDir, captureUi);
+        } else if (process.env.MODELDOCK_SMOKE_TOOL_ICONS_ONLY === '1') {
           // Icon validation above uses navigation only and never applies tool configuration.
         } else if (process.env.MODELDOCK_SMOKE_AGGREGATE_ONLY === '1') {
           await verifyAggregateModes(window!, store, outputDir, captureUi);
@@ -647,7 +651,7 @@ function registerIpc() {
     return result.filePath;
   });
   handle('snapshot', () => ({ providers: store.listProviders(), models: store.listModels(), bindings: store.listBindings(),
-    gateway: gateway.status(), logs: store.logs(100), dataDir, version: app.getVersion() }));
+    gateway: gateway.status(), gatewayExposure: store.gatewayExposure(), logs: store.logs(100), dataDir, version: app.getVersion() }));
   handle('getSettings', () => preferences.get());
   handle('probeAuthNetwork', () => inspectAuthNetwork(session.defaultSession, preferences.get().settings.proxyUrl,
     __MODELDOCK_SMOKE_BUILD__ && process.env.MODELDOCK_SMOKE_AUTH_MOCK === '1'
@@ -739,8 +743,13 @@ function registerIpc() {
     return status;
   });
   handle('stopGateway', async () => { await gateway.stop(); return gateway.status(); });
+  handle('setGatewayProviderEnabled', (id: string, enabled: boolean) => store.setGatewayProviderEnabled(id, enabled));
+  handle('setGatewayModelEnabled', (id: string, enabled: boolean) => store.setGatewayModelEnabled(id, enabled));
   handle('copyText', (value: unknown) => writeClipboardText(value, text => clipboard.writeText(text)));
   handle('copyGatewayKey', () => writeClipboardText(store.gatewayKey(), text => clipboard.writeText(text)));
+  handle('copyProviderKey', (id: unknown) => writeClipboardText(providerApiKey(store, id), text => clipboard.writeText(text)));
+  handle('revealProviderKey', (id: unknown) => providerApiKey(store, id));
+  handle('revealGatewayKey', () => localGatewayKey(store));
   handle('copyConnectionKey', (tool: ToolId) => writeClipboardText(connectionKey(store, toolId(tool)), text => clipboard.writeText(text)));
   handle('jetBrainsStatus', (value: unknown, refresh?: unknown) => {
     if (!isJetBrainsTool(value)) throw new Error('不是支持的 JetBrains 工具。');

@@ -4,7 +4,7 @@ import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync, chmodSy
 import { join } from 'node:path';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import type { Provider, ProviderInput, ProviderSecret, Model, ModelInput, ToolBinding, ToolId, RequestLog } from '../shared/types';
+import type { Provider, ProviderInput, ProviderSecret, Model, ModelInput, ToolBinding, ToolId, RequestLog, GatewayExposure } from '../shared/types';
 import { isReasoningEffort, MODEL_SPEC_FIELDS, modelSpecs, sanitizeReasoningEfforts } from '../shared/types';
 import { providerPresets, presetById } from '../shared/presets';
 import { resolveBindingModels } from '../shared/bindings';
@@ -304,6 +304,7 @@ export class Store {
       secrets: this.rows('SELECT * FROM secrets ORDER BY provider_id').filter(row => group.has(String(row.provider_id))),
       models: this.rows('SELECT * FROM models ORDER BY id'),
       bindings: this.rows('SELECT * FROM bindings ORDER BY id'),
+      gatewayExposure: this.gatewayExposure(),
     };
     return createHash('sha256').update(JSON.stringify(state)).digest('hex');
   }
@@ -355,6 +356,8 @@ export class Store {
         const keys = [...new Set(group.map(provider => this.readDuplicateApiKey(provider.id)).filter(Boolean))];
         if (keys.length > 1) throw new Error('这些供应商使用不同 API Key，请保留为不同账号并使用不同名称。');
         if (new Set(group.map(provider => provider.enabled)).size > 1) throw new Error('这些供应商的启用状态不同，请先统一启用状态后再合并。');
+        const exposure = this.gatewayExposure();
+        if (new Set(group.map(provider => exposure.excludedProviderIds.includes(provider.id))).size > 1) throw new Error('这些供应商在本地聚合接口中的加入状态不同，请先统一后再合并。');
         if (new Set(group.map(provider => provider.presetId ?? 'custom')).size > 1) throw new Error('这些供应商的预设不同，请先统一预设后再合并。');
         if (new Set(group.map(provider => provider.messagesAuth ?? 'bearer')).size > 1) throw new Error('这些供应商的 Messages 鉴权方式不同，请先统一后再合并。');
         if (new Set(group.map(provider => provider.claudeBaseUrl ?? '')).size > 1) throw new Error('这些供应商的 Claude Code 接口不同，请先统一后再合并。');
@@ -682,6 +685,30 @@ export class Store {
   }
   logs(limit = 100): RequestLog[] { const count = Math.min(500, Math.max(1, Number.isFinite(limit) ? Math.floor(limit) : 100)); return this.rows('SELECT * FROM logs ORDER BY rowid DESC LIMIT ?', [count]).map(row => ({ id: String(row.id), time: String(row.time), alias: String(row.alias), providerName: String(row.provider_name), endpoint: String(row.endpoint), status: Number(row.status), durationMs: Number(row.duration_ms) })); }
   private newKey(): string { return `md_${randomBytes(32).toString('hex')}`; }
+  gatewayExposure(): GatewayExposure {
+    const value = this.getManagedState<GatewayExposure>('gateway-exposure', { excludedProviderIds: [], excludedModelIds: [] });
+    if (!value || typeof value !== 'object' || !Array.isArray(value.excludedProviderIds) || !Array.isArray(value.excludedModelIds)
+      || [...value.excludedProviderIds, ...value.excludedModelIds].some(item => typeof item !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(item))) throw new Error('本地聚合接口配置无效，请检查本地数据库。');
+    return { excludedProviderIds: [...new Set(value.excludedProviderIds)], excludedModelIds: [...new Set(value.excludedModelIds)] };
+  }
+  setGatewayProviderEnabled(providerId: string, enabled: boolean): void {
+    const target = id(providerId);
+    if (typeof enabled !== 'boolean') throw new Error('聚合接口启用状态无效。');
+    if (!this.getProvider(target)) throw new Error('供应商不存在，请刷新后重试。');
+    const exposure = this.gatewayExposure();
+    exposure.excludedProviderIds = exposure.excludedProviderIds.filter(item => item !== target);
+    if (!enabled) exposure.excludedProviderIds.push(target);
+    this.setManagedState('gateway-exposure', exposure);
+  }
+  setGatewayModelEnabled(modelId: string, enabled: boolean): void {
+    const target = id(modelId);
+    if (typeof enabled !== 'boolean') throw new Error('聚合接口启用状态无效。');
+    if (!this.listModels().some(model => model.id === target)) throw new Error('模型不存在，请刷新后重试。');
+    const exposure = this.gatewayExposure();
+    exposure.excludedModelIds = exposure.excludedModelIds.filter(item => item !== target);
+    if (!enabled) exposure.excludedModelIds.push(target);
+    this.setManagedState('gateway-exposure', exposure);
+  }
   gatewayKey(): string { return this.codec.decrypt(String(this.one("SELECT value FROM settings WHERE key='gateway_key'")!.value)); }
   rotateGatewayKey(): string { const key = this.newKey(); this.mutate(() => this.db.run('UPDATE settings SET value=? WHERE key=?', [this.codec.encrypt(key), 'gateway_key'])); return key; }
   close(): void { if (!this.closed) { this.persist(); this.db.close(); this.closed = true; } }

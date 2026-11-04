@@ -34,7 +34,8 @@ interface LayoutReadback {
   viewport: { width: number; height: number };
   sidebar: IconReadback[];
   headers: IconReadback[];
-  allToolsVisibleTogether: boolean;
+  allToolsVisibleInCategory: boolean;
+  categories: { category: string; tools: string[]; allVisible: boolean }[];
   documentOverflow: boolean;
   screenshots: string[];
 }
@@ -53,9 +54,9 @@ export async function verifyToolIcons(window: BrowserWindow, outputDir: string, 
   const size = window.getSize();
   const uiSnapshot = `(async()=>{
     const root=document.documentElement,active=document.querySelector('.sidebar [aria-current="page"]');
-    return {theme:root.dataset.theme,colorScheme:root.style.colorScheme,navigation:active?Object.fromEntries([...active.attributes].filter(a=>a.name.startsWith('data-')).map(a=>[a.name,a.value])):{},settings:await window.modelDock.getSettings(),bindings:(await window.modelDock.snapshot()).bindings,scroll:Object.fromEntries([...document.querySelectorAll('[data-sidebar-scroll]')].map(el=>[el.dataset.sidebarScroll,el.scrollTop]))};
+    return {theme:root.dataset.theme,colorScheme:root.style.colorScheme,navigation:active?Object.fromEntries([...active.attributes].filter(a=>a.name.startsWith('data-')).map(a=>[a.name,a.value])):{},settings:await window.modelDock.getSettings(),bindings:(await window.modelDock.snapshot()).bindings,toolCategory:document.querySelector('[data-tool-category][aria-selected="true"]')?.dataset.toolCategory,scroll:Object.fromEntries([...document.querySelectorAll('[data-sidebar-scroll]')].map(el=>[el.dataset.sidebarScroll,el.scrollTop]))};
   })()`;
-  const original = await evaluate<{ theme?: string; colorScheme: string; navigation: Record<string, string>; settings: unknown; bindings: unknown; scroll: Record<string, number> }>(uiSnapshot);
+  const original = await evaluate<{ theme?: string; colorScheme: string; navigation: Record<string, string>; toolCategory?: string; settings: unknown; bindings: unknown; scroll: Record<string, number> }>(uiSnapshot);
   // Read the actual <img> for color logos and independently decode a mask's local
   // asset. This catches successful mask loading that would hide an image error.
   const readIcon = `async(icon)=>{
@@ -81,6 +82,9 @@ export async function verifyToolIcons(window: BrowserWindow, outputDir: string, 
   let restoredSize: number[] | undefined;
   const sizeTolerance = process.platform === 'win32' ? 1 : 0;
   async function selectTool(tool: string): Promise<void> {
+    const category = (jetBrainsIds as readonly string[]).includes(tool) ? 'jetbrains' : 'agent';
+    await evaluate(`document.querySelector('[data-tool-category="${category}"]').click()`);
+    await waitFor(`document.querySelector('[data-tool-category="${category}"]')?.getAttribute('aria-selected')==='true'`, `${category} tool category`);
     await evaluate(`document.querySelector('.sidebar [data-page="tools"][data-tool-id=${JSON.stringify(tool)}]').click()`);
     await waitFor(`!!document.querySelector('[data-tool-binding=${JSON.stringify(tool)}] .tool-logo[data-tool-icon=${JSON.stringify(tool)}]')`, `${tool} summary icon`);
   }
@@ -101,23 +105,31 @@ export async function verifyToolIcons(window: BrowserWindow, outputDir: string, 
   try {
     for (const theme of ['light', 'dark']) {
       await evaluate(`(()=>{document.documentElement.dataset.theme=${JSON.stringify(theme)};document.documentElement.style.colorScheme=${JSON.stringify(theme)};})()`);
-      // The tall view proves all eleven navigation logos can be shown together.
-      // The two ordinary viewports also prove every logo remains reachable.
+      // The tall view proves all tools fit within each category. The ordinary
+      // viewports prove both tabs and all eleven logo resources remain reachable.
       for (const [width, height] of [[1320, 1440], [1320, 880], [980, 680]]) {
         window.setSize(width, height);
         await pause(100);
-        const value = await evaluate<{ viewport: { width: number; height: number }; sidebar: IconReadback[]; allToolsVisibleTogether: boolean; documentOverflow: boolean }>(`(async()=>{
-          const read=${readIcon},buttons=[...document.querySelectorAll('.sidebar [data-page="tools"][data-tool-id]')],sidebar=[];
-          for(const button of buttons){button.scrollIntoView({block:'nearest',inline:'nearest'});sidebar.push(await read(button.querySelector('.tool-logo')));}
-          document.querySelector('[data-sidebar-scroll="tools"]').scrollTop=0;
-          const together=await Promise.all(buttons.map(button=>read(button.querySelector('.tool-logo'))));
-          return {viewport:{width:innerWidth,height:innerHeight},sidebar,allToolsVisibleTogether:together.every(icon=>icon.visible),documentOverflow:document.documentElement.scrollWidth>innerWidth};
+        const value = await evaluate<{ viewport: { width: number; height: number }; sidebar: IconReadback[]; allToolsVisibleInCategory: boolean;
+  categories: { category: string; tools: string[]; allVisible: boolean }[]; documentOverflow: boolean }>(`(async()=>{
+          const read=${readIcon},sidebar=[],categories=[];
+          for(const tab of document.querySelectorAll('[data-tool-category]')){
+            tab.click();await new Promise(resolve=>requestAnimationFrame(resolve));
+            const buttons=[...document.querySelectorAll('.tool-category-panel:not([hidden]) [data-page="tools"][data-tool-id]')];
+            for(const button of buttons){button.scrollIntoView({block:'nearest',inline:'nearest'});sidebar.push(await read(button.querySelector('.tool-logo')));}
+            document.querySelector('[data-sidebar-scroll="tools"]').scrollTop=0;
+            const together=await Promise.all(buttons.map(button=>read(button.querySelector('.tool-logo'))));
+            categories.push({category:tab.dataset.toolCategory,tools:buttons.map(button=>button.dataset.toolId),allVisible:together.every(icon=>icon.visible)});
+          }
+          return {viewport:{width:innerWidth,height:innerHeight},sidebar,categories,allToolsVisibleInCategory:categories.every(value=>value.allVisible),documentOverflow:document.documentElement.scrollWidth>innerWidth};
         })()`);
         assert.deepEqual(value.sidebar.map(icon => icon.tool), [...toolIds], 'Eleven tool navigation buttons must show their matching logos');
         value.sidebar.forEach(assertIcon);
         assert.equal(new Set(value.sidebar.map(icon => icon.source)).size, toolIds.length, 'Every tool must use its own logo resource');
         assert.equal(value.documentOverflow, false, 'Tool logos must not introduce horizontal document overflow');
-        if (height === 1440) assert.ok(value.allToolsVisibleTogether, 'Tall overview must display all eleven tools together');
+        assert.deepEqual(value.categories.map(category => category.category), ['agent', 'jetbrains'], 'Two tool category tabs remain available');
+        assert.deepEqual(value.categories.map(category => category.tools.length), [7, 4], 'Regular Agent and JetBrains categories retain their tool counts');
+        if (height === 1440) assert.ok(value.allToolsVisibleInCategory, 'Tall overview must display all tools together within each category');
         const headers: IconReadback[] = [];
         const screenshots: string[] = [];
         for (const tool of toolIds) {
@@ -137,11 +149,13 @@ export async function verifyToolIcons(window: BrowserWindow, outputDir: string, 
         }
         const brandedHeaders = headers.filter(icon => (jetBrainsIds as readonly string[]).includes(icon.tool));
         assert.ok(brandedHeaders.every(icon => Math.abs(icon.scale - brandedHeaders[0].scale) < 0.01), 'Four JetBrains logos must have the same relative size');
-        await selectTool('webstorm');
-        if (height === 1440) await evaluate(`document.querySelector('[data-sidebar-scroll="tools"]').scrollTop=0`);
-        const screenshot = height === 1440 ? `electron-tool-icons-${theme}-all-eleven.png` : `electron-tool-icons-${theme}-${width}.png`;
-        writeFileSync(join(outputDir, screenshot), await captureUi());
-        screenshots.push(screenshot);
+        for (const category of ['agent', 'jetbrains']) {
+          await selectTool(category === 'agent' ? 'codex' : 'webstorm');
+          if (height === 1440) await evaluate(`document.querySelector('[data-sidebar-scroll="tools"]').scrollTop=0`);
+          const screenshot = `electron-tool-icons-${theme}-${category}-${width}-${height}.png`;
+          writeFileSync(join(outputDir, screenshot), await captureUi());
+          screenshots.push(screenshot);
+        }
         layouts.push({ theme, width, height, ...value, headers, screenshots });
       }
     }
@@ -153,9 +167,11 @@ export async function verifyToolIcons(window: BrowserWindow, outputDir: string, 
       document.documentElement.style.colorScheme=original.colorScheme;
       const entries=Object.entries(original.navigation);
       if(entries.length){const nav=[...document.querySelectorAll('.sidebar [aria-current],.sidebar [data-page]')].find(el=>entries.every(([name,value])=>el.getAttribute(name)===value));if(nav)nav.click();}
-      for(const [name,top] of Object.entries(original.scroll)){const list=document.querySelector('[data-sidebar-scroll="'+name+'"]');if(list)list.scrollTop=top;}
     })()`);
     await pause(50);
+    await evaluate(`(()=>{const category=${JSON.stringify(original.toolCategory)};if(category)document.querySelector('[data-tool-category="'+category+'"]')?.click();})()`);
+    await pause(25);
+    await evaluate(`(()=>{const scroll=${JSON.stringify(original.scroll)};for(const [name,top] of Object.entries(scroll)){const list=document.querySelector('[data-sidebar-scroll="'+name+'"]');if(list)list.scrollTop=top;}})()`);
     const after = await evaluate<typeof original>(uiSnapshot);
     assert.deepEqual(after, original, 'Icon validation must restore theme/navigation without saving settings or changing tool selections');
     restoredSize = window.getSize();

@@ -185,11 +185,17 @@ export interface RequestLog {
   providerId?: string;
   modelId?: string;
 }
+/** Controls the general /v1 endpoint independently of each tool's own mapping. */
+export interface GatewayExposure {
+  excludedProviderIds: string[];
+  excludedModelIds: string[];
+}
 export interface Snapshot {
   providers: Provider[];
   models: Model[];
   bindings: ToolBinding[];
   gateway: GatewayStatus;
+  gatewayExposure?: GatewayExposure;
   logs: RequestLog[];
   dataDir: string;
   version: string;
@@ -230,8 +236,14 @@ export interface ModelDockApi {
   addDiscoveredModels(id: string, selections: ModelSelection[]): Promise<AddModelsResult>;
   startGateway(port?: number): Promise<GatewayStatus>;
   stopGateway(): Promise<GatewayStatus>;
+  setGatewayProviderEnabled(id: string, enabled: boolean): Promise<void>;
+  setGatewayModelEnabled(id: string, enabled: boolean): Promise<void>;
   copyText(text: string): Promise<void>;
   copyGatewayKey(): Promise<void>;
+  /** Explicit reveal/copy actions only; subscription OAuth material is never exposed. */
+  copyProviderKey(id: string): Promise<void>;
+  revealProviderKey(id: string): Promise<string>;
+  revealGatewayKey(): Promise<string>;
   copyConnectionKey(tool: ToolId): Promise<void>;
   previewConfig(tool: ToolId): Promise<ConfigPreview>;
   exportConfig(tool: ToolId): Promise<string | null>;

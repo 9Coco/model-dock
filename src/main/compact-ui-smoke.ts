@@ -144,8 +144,8 @@ export async function verifyCompactUi(window: BrowserWindow, store: Store, outpu
     assert.ok(value.icons.length >= 12, `Functional Material icons must render: ${name}`);
     assert.equal(value.legacySvg, 0, 'Functional controls must use the selected Material family');
     assert.deepEqual(value.remoteFonts, [], 'Material SVG icons must not load Google icon fonts at runtime');
-    const expected: Record<string, string> = { providers: 'hub', mcp: 'dns', skills: 'menu_book', auth: 'key', usage: 'monitoring', models: 'stacks', service: 'monitor_heart', settings: 'tune' };
-    assert.deepEqual(value.navigation.map(item => item.page).sort(), Object.keys(expected).sort(), 'Eight functional sidebar destinations must retain their semantic icons');
+    const expected: Record<string, string> = { providers: 'hub', auth: 'key', usage: 'monitoring', models: 'stacks', service: 'monitor_heart', settings: 'tune' };
+    assert.deepEqual(value.navigation.map(item => item.page).sort(), Object.keys(expected).sort(), 'Functional sidebar destinations retain their semantic icons');
     for (const item of value.navigation) {
       assert.equal(item.symbol, expected[item.page], `Correct navigation icon: ${item.page}`);
       assert.equal(item.filled, item.active ? 1 : 0, `Selected navigation uses Google's fill 1 geometry: ${item.page}`);
@@ -302,7 +302,7 @@ export async function verifyCompactUi(window: BrowserWindow, store: Store, outpu
   // SVG geometry must remain available when browser network loading is disabled.
   // Only this isolated Electron session is affected; main-process quota mocks
   // and the real user's app/credentials are outside this read-only check.
-  const offlinePages = ['providers', 'mcp', 'skills', 'usage', 'models', 'service', 'settings', 'tools'];
+  const offlinePages = ['providers', 'usage', 'models', 'service', 'settings', 'tools'];
   window.webContents.session.enableNetworkEmulation({ offline: true });
   try {
     window.setSize(980, 680);

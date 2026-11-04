@@ -19,8 +19,9 @@ async function fixture(source: (signal: AbortSignal) => BodyInit, contentType = 
   const store = {
     listProviders: () => [provider], getProvider: (id: string) => id === provider.id ? provider : undefined,
     listModels: () => [model], listBindings: () => [binding], gatewayKey: () => 'local-fixture-key', setGatewayPort: () => {},
+    gatewayExposure: () => ({ excludedProviderIds: [], excludedModelIds: [] }),
     getSecret: () => ({ accessToken: 'synthetic-upstream-token' }), addLog: (log: Pick<RequestLog, 'status'>) => { logs.unshift(log); },
-  } satisfies Pick<Store, 'listProviders' | 'getProvider' | 'listModels' | 'listBindings' | 'gatewayKey' | 'setGatewayPort' | 'getSecret' | 'addLog'>;
+  } satisfies Pick<Store, 'listProviders' | 'getProvider' | 'listModels' | 'listBindings' | 'gatewayKey' | 'setGatewayPort' | 'getSecret' | 'addLog' | 'gatewayExposure'>;
   const gateway = new Gateway(store as unknown as Store, {
     prepareRequest: async (...args) => prepareUpstream(...args),
     fetch: async (url, options) => {
@@ -127,6 +128,7 @@ describe('Copilot native Responses from a Codex subscription', () => {
     const original = encoded([privateMetadata, created, itemDone(message, 0), completed([])]);
     const f = await fixture(() => original);
     const reply = await f.post(true, undefined, f.unscoped);
+    expect(reply.status).toBe(200);
     const events = eventsFrom(await reply.text());
     expect(events.map(event => event.type)).toContain('response.metadata');
     expect(events.at(-1)?.response.output).toEqual([]);

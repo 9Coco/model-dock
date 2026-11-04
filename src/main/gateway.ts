@@ -250,7 +250,10 @@ export class Gateway {
   }
   private allowedModels(tool?: ToolId): Model[] {
     const models = this.store.listModels().filter(model => this.available(model, tool === 'claude-code' || tool === 'trae' && model.wireApi === 'messages'));
-    if (!tool) return models;
+    if (!tool) {
+      const exposure = this.store.gatewayExposure();
+      return models.filter(model => !exposure.excludedProviderIds.includes(model.providerId) && !exposure.excludedModelIds.includes(model.id));
+    }
     const binding = this.store.listBindings().find(item => item.id === tool);
     return binding ? resolveBindingModels(binding, models, this.store.listProviders()) : [];
   }
@@ -344,6 +347,10 @@ export class Gateway {
       if (!requested) throw new GatewayError(400, '请指定模型别名。');
       const model = this.store.listModels().find(item => item.alias === requested);
       if (!model || !model.enabled) throw new GatewayError(404, '模型别名不存在或未启用。');
+      if (!route.tool) {
+        const exposure = this.store.gatewayExposure();
+        if (exposure.excludedProviderIds.includes(model.providerId) || exposure.excludedModelIds.includes(model.id)) throw new GatewayError(403, '此模型未加入本地聚合接口。');
+      }
       alias = model.alias;
       modelId = model.id;
       if (selectedModels && !selectedModels.some(item => item.id === model.id)) throw new GatewayError(403, '此模型未授权给该工具。');
