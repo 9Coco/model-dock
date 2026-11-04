@@ -3,6 +3,7 @@ import { ChevronDown, Copy, Download, FileText, FolderOpen, RefreshCw, Search, S
 import type { ModelDockApi } from '../shared/types';
 import type { DiagnosticEntry, DiagnosticLevel, DiagnosticQuery, DiagnosticSnapshot } from '../shared/diagnostic-types';
 import { BusyIcon, EmptyState, Modal, type Notify } from './components';
+import { useContextMenu, type ContextMenuItem, type ContextMenuOpenEvent } from './ContextMenu';
 
 const levelNames: Record<DiagnosticLevel, string> = { info: '信息', warn: '警告', error: '错误' };
 const levels = ['all', 'info', 'warn', 'error'] as const;
@@ -20,9 +21,11 @@ export function DiagnosticsPanel({ api, notify }: { api?: ModelDockApi; notify: 
   const [failure, setFailure] = useState<{ key: string; message: string } | null>(null);
   const [pendingKey, setPendingKey] = useState(''), [busy, setBusy] = useState('');
   const [selected, setSelected] = useState<DiagnosticEntry | null>(null);
+  const contextMenu = useContextMenu({ onError: problem => notify(problem instanceof Error ? problem.message : '诊断日志操作失败。', 'error') });
   const mounted = useRef(false), serial = useRef(0), actionLocked = useRef(false);
   const query = useMemo<DiagnosticQuery>(() => ({ level: level === 'all' ? undefined : level, search: filteredSearch || undefined, limit }), [level, filteredSearch, limit]);
   const queryKey = JSON.stringify(query);
+  useEffect(() => { contextMenu.close(); }, [queryKey, selected, contextMenu.close]);
   const scope = useRef({ query, key: queryKey }); scope.current = { query, key: queryKey };
   const snapshot = result?.key === queryKey ? result.snapshot : null;
   const error = failure?.key === queryKey ? failure.message : '';
@@ -59,6 +62,18 @@ export function DiagnosticsPanel({ api, notify }: { api?: ModelDockApi; notify: 
     : !snapshot?.available ? { title: '诊断日志暂不可用', description: snapshot?.message || error || '请稍后刷新，或打开日志目录检查。' }
       : { title: search || level !== 'all' ? '没有符合筛选的诊断记录' : '还没有诊断记录', description: search || level !== 'all' ? '调整级别或搜索关键词后再查看。' : '应用运行时会记录关键操作的结果；点击刷新读取最新记录。' };
   const actionDisabled = !api || !!busy || loading || waitingForSearch || !snapshot?.available || !entries.length;
+  const entryContextMenu = (event: ContextMenuOpenEvent, entry: DiagnosticEntry) => {
+    const items: ContextMenuItem[] = [
+      { id: 'diagnostic-details', label: '查看日志详情', icon: <FileText size={14} />, onSelect: () => setSelected(entry) },
+      { id: 'diagnostic-copy', label: '复制此条日志', icon: <Copy size={14} />, disabled: actionDisabled, onSelect: () => run('copy-entry', async () => {
+        await api!.copyText(JSON.stringify(entry, null, 2)); if (mounted.current) notify('此条诊断日志已复制。');
+      }) },
+      { id: 'diagnostic-copy-event', label: '复制事件名称', icon: <Copy size={14} />, disabled: actionDisabled, onSelect: () => run('copy-event', async () => {
+        await api!.copyText(entry.event); if (mounted.current) notify('诊断事件名称已复制。');
+      }) },
+    ];
+    contextMenu.open(event, items, entry.message);
+  };
 
   return <section className="panel diagnostics-panel" data-panel="diagnostics">
     <div className="diagnostics-heading">
@@ -77,7 +92,7 @@ export function DiagnosticsPanel({ api, notify }: { api?: ModelDockApi; notify: 
     </div>
     {error && <p className="diagnostics-error" role="alert">{error}</p>}
     <div className="diagnostics-content" aria-busy={loading || waitingForSearch}>
-      {loading ? <div className="diagnostics-loading" role="status"><BusyIcon active><FileText size={18} /></BusyIcon>正在读取诊断日志…</div> : entries.length ? <ul className="diagnostics-list" aria-label="诊断日志记录">{entries.map(entry => <li key={entry.entryId}><button type="button" className="diagnostics-row" data-action="diagnostics-detail" data-diagnostic-id={entry.entryId} onClick={() => setSelected(entry)} aria-label={`查看${levelNames[entry.level]}日志：${entry.message}`}><time dateTime={entry.timestamp} title={entry.timestamp}>{time(entry.timestamp)}</time><span className={`diagnostic-level ${entry.level}`}>{levelNames[entry.level]}</span><span className="diagnostics-message"><strong>{entry.message}</strong><code>{entry.event}</code></span><ChevronDown size={15} /></button></li>)}</ul> : <EmptyState compact icon={<FileText size={23} />} {...noLogs} />}
+      {loading ? <div className="diagnostics-loading" role="status"><BusyIcon active><FileText size={18} /></BusyIcon>正在读取诊断日志…</div> : entries.length ? <ul className="diagnostics-list" aria-label="诊断日志记录">{entries.map(entry => <li key={entry.entryId}><button type="button" className="diagnostics-row" data-action="diagnostics-detail" data-diagnostic-id={entry.entryId} onClick={() => setSelected(entry)} onContextMenu={event => entryContextMenu(event, entry)} aria-label={`查看${levelNames[entry.level]}日志：${entry.message}`}><time dateTime={entry.timestamp} title={entry.timestamp}>{time(entry.timestamp)}</time><span className={`diagnostic-level ${entry.level}`}>{levelNames[entry.level]}</span><span className="diagnostics-message"><strong>{entry.message}</strong><code>{entry.event}</code></span><ChevronDown size={15} /></button></li>)}</ul> : <EmptyState compact icon={<FileText size={23} />} {...noLogs} />}
     </div>
     <div className="diagnostics-footer">
       <p><ShieldCheck size={13} /><span>仅记录诊断元数据，不包含密钥、令牌或聊天正文。</span></p>
@@ -91,5 +106,6 @@ export function DiagnosticsPanel({ api, notify }: { api?: ModelDockApi; notify: 
       </div>
       <div className="modal-footer diagnostics-detail-footer"><span>仅包含已脱敏的诊断信息。</span><button type="button" className="button secondary" onClick={() => setSelected(null)}>关闭</button></div>
     </Modal>}
+    {contextMenu.menu}
   </section>;
 }

@@ -7,6 +7,7 @@ import type { ToolBinding, ToolId } from '../shared/types';
 import { isJetBrainsTool } from '../shared/jetbrains';
 import { codexHistoryKey } from './adapters';
 import { claudeConfigDirectory, claudeHistoryKey } from './claude-config';
+import { junieConfigTargets, junieHistoryKey, replaceJunieConfigFile } from './junie-config';
 import { openCodeConfigDirectory } from './opencode-paths';
 import { DSH_LEGACY_SCRIPT } from './dsh-runtime';
 import { copilotSyncUndoKey, copilotSyncUndoStatus, undoCopilotDesktop, type CopilotSyncOptions } from './copilot-sync';
@@ -24,6 +25,7 @@ export interface ToolSyncUndoStore {
 export interface ToolSyncUndoOptions {
   appData: string; homeDirectory?: string; codexHome?: string; configHome?: string;
   claudeConfigDir?: string; dshHome?: string; copilotHome?: string;
+  junieHome?: string;
   copilotOptions?: CopilotSyncOptions;
   /** Private failure-injection seam, never accepted from a renderer. */
   replaceFile?: (path: string, content: string | null, mode: number) => void;
@@ -104,6 +106,10 @@ export class ToolSyncUndoManager {
     if (tool === 'claude-code') {
       const target = join(claudeConfigDirectory(home, this.options.claudeConfigDir), 'settings.json');
       return { target, paths: [target], stateKeys: [claudeHistoryKey(target)] };
+    }
+    if (tool === 'junie') {
+      const { configPath, profilePath, acpPath } = junieConfigTargets(home, { junieHome: this.options.junieHome });
+      return { target: configPath, paths: [configPath, profilePath, acpPath], stateKeys: [junieHistoryKey(configPath)] };
     }
     if (tool === 'opencode') {
       const directory = openCodeConfigDirectory(home, this.options.configHome), jsoncPath = join(directory, 'opencode.jsonc'), jsonPath = join(directory, 'opencode.json');
@@ -218,7 +224,7 @@ export class ToolSyncUndoManager {
   private restoreFiles(saved: FileRecord, consume: boolean): void {
     this.assertApplied(saved);
     const writtenFiles: number[] = [], writtenStates: number[] = [];
-    const writer = this.options.replaceFile ?? replaceFile;
+    const writer = this.options.replaceFile ?? (saved.tool === 'junie' ? replaceJunieConfigFile : replaceFile);
     let bindingAttempted = false;
     try {
       for (const [index, before] of saved.beforeFiles.entries()) if (before.content !== saved.appliedFiles[index].content) {

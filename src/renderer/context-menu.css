@@ -1,0 +1,60 @@
+.app-context-menu {
+  position: fixed;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: max-content;
+  min-width: min(210px, calc(100vw - 16px));
+  max-width: min(320px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 12px 36px #00000030, 0 2px 8px #00000018;
+  outline: none;
+  user-select: none;
+}
+.app-context-menu-label {
+  max-width: 100%;
+  padding: 7px 10px 8px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.app-context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: 0 0 auto;
+  width: 100%;
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 5px;
+  color: var(--ink);
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: left;
+  cursor: pointer;
+}
+.app-context-menu-item > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.app-context-menu-item:hover:not(:disabled), .app-context-menu-item:focus { background: var(--surface-hover); outline: none; }
+.app-context-menu-item:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
+.app-context-menu-item.danger { color: var(--danger); }
+.app-context-menu-item.danger:hover:not(:disabled), .app-context-menu-item.danger:focus { background: var(--danger-soft); }
+.app-context-menu-item:disabled { color: var(--muted); cursor: default; opacity: .45; }
+.app-context-menu-icon { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 17px; width: 17px; min-height: 17px; }
+.app-context-menu-icon svg { width: 16px; height: 16px; }
+.app-context-menu-separator { flex-shrink: 0; height: 1px; margin: 4px 5px; background: var(--line); }
+[aria-haspopup="menu"][tabindex="0"]:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }

@@ -2,8 +2,9 @@ import assert from 'node:assert/strict';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { BrowserWindow } from 'electron';
+import type { ConfigPreview, Snapshot, ToolBinding } from '../shared/types';
 
-const toolIds = ['codex', 'claude-code', 'opencode', 'dsh', 'vscode', 'copilot', 'webstorm', 'intellij-idea', 'rider', 'pycharm'] as const;
+const toolIds = ['codex', 'claude-code', 'junie', 'opencode', 'dsh', 'vscode', 'copilot', 'webstorm', 'intellij-idea', 'rider', 'pycharm'] as const;
 const jetBrainsIds = ['webstorm', 'intellij-idea', 'rider', 'pycharm'] as const;
 
 interface IconReadback {
@@ -56,7 +57,7 @@ export async function verifyToolIcons(window: BrowserWindow, outputDir: string, 
     const root=document.documentElement,active=document.querySelector('.sidebar [aria-current="page"]');
     return {theme:root.dataset.theme,colorScheme:root.style.colorScheme,navigation:active?Object.fromEntries([...active.attributes].filter(a=>a.name.startsWith('data-')).map(a=>[a.name,a.value])):{},settings:await window.modelDock.getSettings(),bindings:(await window.modelDock.snapshot()).bindings,toolCategory:document.querySelector('[data-tool-category][aria-selected="true"]')?.dataset.toolCategory,scroll:Object.fromEntries([...document.querySelectorAll('[data-sidebar-scroll]')].map(el=>[el.dataset.sidebarScroll,el.scrollTop]))};
   })()`;
-  const original = await evaluate<{ theme?: string; colorScheme: string; navigation: Record<string, string>; toolCategory?: string; settings: unknown; bindings: unknown; scroll: Record<string, number> }>(uiSnapshot);
+  const original = await evaluate<{ theme?: string; colorScheme: string; navigation: Record<string, string>; toolCategory?: string; settings: unknown; bindings: ToolBinding[]; scroll: Record<string, number> }>(uiSnapshot);
   // Read the actual <img> for color logos and independently decode a mask's local
   // asset. This catches successful mask loading that would hide an image error.
   const readIcon = `async(icon)=>{
@@ -79,6 +80,8 @@ export async function verifyToolIcons(window: BrowserWindow, outputDir: string, 
   }`;
   const layouts: LayoutReadback[] = [];
   let restored = false;
+  let junieBindingToRestore: ToolBinding | undefined;
+  let juniePreview: { canApply: boolean; keyRedacted: boolean; fullEndpoint: boolean; ideEntryExplained: boolean; externalSyncInvoked: false } | undefined;
   let restoredSize: number[] | undefined;
   const sizeTolerance = process.platform === 'win32' ? 1 : 0;
   async function selectTool(tool: string): Promise<void> {
@@ -106,7 +109,7 @@ export async function verifyToolIcons(window: BrowserWindow, outputDir: string, 
     for (const theme of ['light', 'dark']) {
       await evaluate(`(()=>{document.documentElement.dataset.theme=${JSON.stringify(theme)};document.documentElement.style.colorScheme=${JSON.stringify(theme)};})()`);
       // The tall view proves all tools fit within each category. The ordinary
-      // viewports prove both tabs and all ten logo resources remain reachable.
+      // viewports prove both tabs and all eleven logo resources remain reachable.
       for (const [width, height] of [[1320, 1440], [1320, 880], [980, 680]]) {
         window.setSize(width, height);
         await pause(100);
@@ -123,12 +126,12 @@ export async function verifyToolIcons(window: BrowserWindow, outputDir: string, 
           }
           return {viewport:{width:innerWidth,height:innerHeight},sidebar,categories,allToolsVisibleInCategory:categories.every(value=>value.allVisible),documentOverflow:document.documentElement.scrollWidth>innerWidth};
         })()`);
-        assert.deepEqual(value.sidebar.map(icon => icon.tool), [...toolIds], 'Ten tool navigation buttons must show their matching logos');
+        assert.deepEqual(value.sidebar.map(icon => icon.tool), [...toolIds], 'Eleven tool navigation buttons must show their matching logos');
         value.sidebar.forEach(assertIcon);
         assert.equal(new Set(value.sidebar.map(icon => icon.source)).size, toolIds.length, 'Every tool must use its own logo resource');
         assert.equal(value.documentOverflow, false, 'Tool logos must not introduce horizontal document overflow');
         assert.deepEqual(value.categories.map(category => category.category), ['agent', 'jetbrains'], 'Two tool category tabs remain available');
-        assert.deepEqual(value.categories.map(category => category.tools.length), [6, 4], 'Regular Agent and JetBrains categories retain their tool counts');
+        assert.deepEqual(value.categories.map(category => category.tools.length), [7, 4], 'Regular Agent and JetBrains categories retain their tool counts');
         if (height === 1440) assert.ok(value.allToolsVisibleInCategory, 'Tall overview must display all tools together within each category');
         const headers: IconReadback[] = [];
         const screenshots: string[] = [];
@@ -141,7 +144,11 @@ export async function verifyToolIcons(window: BrowserWindow, outputDir: string, 
           assert.equal(header.source, sidebar.source, `Header and sidebar must use the same logo resource: ${tool}`);
           if ((jetBrainsIds as readonly string[]).includes(tool)) assert.ok(Math.abs(header.scale - sidebar.scale) < 0.01, `JetBrains header/sidebar logo proportions must match: ${tool}`);
           headers.push(header);
-          if (height === 880 && (jetBrainsIds as readonly string[]).includes(tool)) {
+          if (tool === 'junie') {
+            const entries = await evaluate<{ cli: boolean; ide: boolean; mode: boolean; preview: boolean; restore: boolean }>(`(()=>{const guide=document.querySelector('[data-junie-entry-guide]');return {cli:guide?.textContent.includes('junie --model custom:modeldock')===true,ide:guide?.textContent.includes('Junie · ModelDock')===true,mode:!!document.querySelector('[data-tool-binding="junie"] [data-action="tool-use-aggregate"]'),preview:!!document.querySelector('[data-tool-binding="junie"] [data-action="preview-tool-config"]'),restore:!!document.querySelector('[data-tool-binding="junie"] [data-action="restore-official-tool-config"]')}})()`);
+            assert.deepEqual(entries, { cli: true, ide: true, mode: true, preview: true, restore: true }, 'Junie exposes its terminal and separate IDE ACP entry with the shared connection controls');
+          }
+          if (height === 880 && ((jetBrainsIds as readonly string[]).includes(tool) || tool === 'junie')) {
             const screenshot = `electron-tool-icons-${theme}-${tool}-detail.png`;
             writeFileSync(join(outputDir, screenshot), await captureUi());
             screenshots.push(screenshot);
@@ -159,7 +166,38 @@ export async function verifyToolIcons(window: BrowserWindow, outputDir: string, 
         layouts.push({ theme, width, height, ...value, headers, screenshots });
       }
     }
+    // Preview only: the temporary binding lives in this fresh synthetic profile.
+    // No apply/export action or external configuration write is invoked.
+    const fixture = await evaluate<Snapshot>('window.modelDock.snapshot()');
+    const model = fixture.models.find(item => item.enabled && ['responses', 'chat-completions'].includes(item.wireApi)
+      && fixture.providers.some(provider => provider.id === item.providerId && provider.enabled && provider.kind === 'openai-compatible' && provider.hasSecret && provider.authStatus === 'ready'));
+    assert.ok(model, 'Junie preview requires an existing synthetic API fixture');
+    junieBindingToRestore = fixture.bindings.find(binding => binding.id === 'junie');
+    assert.ok(junieBindingToRestore, 'Junie is present in the isolated bindings');
+    const temporary = { ...junieBindingToRestore, enabled: true, mode: 'direct', providerIds: [model.providerId], modelIds: [], defaultModelId: model.id };
+    await evaluate(`window.modelDock.saveBinding(${JSON.stringify(temporary)})`);
+    await evaluate(`document.querySelector('[aria-label="刷新本机配置"]').click()`);
+    await selectTool('junie');
+    await waitFor(`document.querySelector('[data-tool-binding="junie"] [data-action="tool-default-model"]')?.value===${JSON.stringify(model.id)}`, 'Junie synthetic selection rendered');
+    const preview = await evaluate<ConfigPreview>(`window.modelDock.previewConfig('junie')`);
+    const content = JSON.parse(preview.content);
+    assert.equal(content.profile.id, model.upstreamId);
+    assert.equal(content.profile.apiKey, '__PROVIDER_API_KEY__');
+    assert.equal(content.profile.apiType, model.wireApi === 'responses' ? 'OpenAIResponses' : 'OpenAICompletion');
+    assert.ok(content.profile.baseUrl.endsWith(model.wireApi === 'responses' ? '/responses' : '/chat/completions'));
+    assert.ok(preview.instructions.includes('Junie · ModelDock'));
+    await evaluate(`document.querySelector('[data-tool-binding="junie"] [data-action="preview-tool-config"]').click()`);
+    await waitFor(`document.querySelector('[role="dialog"] .config-code')?.textContent.includes('__PROVIDER_API_KEY__')===true`, 'Junie React preview redacts credentials');
+    writeFileSync(join(outputDir, 'electron-junie-config-preview.png'), await captureUi());
+    await evaluate(`document.querySelector('[aria-label="关闭对话框"]').click()`);
+    await waitFor(`!document.querySelector('[role="dialog"]')`, 'Junie preview closed');
+    juniePreview = { canApply: preview.canApply, keyRedacted: true, fullEndpoint: true, ideEntryExplained: true, externalSyncInvoked: false };
   } finally {
+    if (junieBindingToRestore) {
+      await evaluate(`window.modelDock.saveBinding(${JSON.stringify(junieBindingToRestore)})`);
+      await evaluate(`document.querySelector('[aria-label="刷新本机配置"]').click()`);
+      await pause(80);
+    }
     window.setSize(size[0], size[1]);
     await evaluate(`(()=>{
       const original=${JSON.stringify({ theme: original.theme, colorScheme: original.colorScheme, navigation: original.navigation, scroll: original.scroll })};
@@ -178,5 +216,5 @@ export async function verifyToolIcons(window: BrowserWindow, outputDir: string, 
     assert.ok(restoredSize.every((value, index) => Math.abs(value - size[index]) <= sizeTolerance), 'Icon validation must restore the window size within Win32 DPI rounding');
     restored = true;
   }
-  writeFileSync(join(outputDir, 'tool-icons-validation.json'), JSON.stringify({ tools: [...toolIds], jetBrainsTools: [...jetBrainsIds], layouts, originalUiRestored: restored, windowSize: { before: size, after: restoredSize, tolerancePixels: sizeTolerance }, savedSettingsUnchanged: true, toolSelectionsUnchanged: true, configurationSyncInvoked: false }, null, 2));
+  writeFileSync(join(outputDir, 'tool-icons-validation.json'), JSON.stringify({ tools: [...toolIds], jetBrainsTools: [...jetBrainsIds], layouts, juniePreview, originalUiRestored: restored, windowSize: { before: size, after: restoredSize, tolerancePixels: sizeTolerance }, savedSettingsUnchanged: true, toolSelectionsUnchanged: true, configurationSyncInvoked: false }, null, 2));
 }

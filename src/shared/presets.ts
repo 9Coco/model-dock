@@ -14,6 +14,8 @@ export function isLocalTraeRelayUrl(value: string): boolean {
 
 /** Provider templates set connection defaults, never entitlement or a fake catalog. */
 export const providerPresets: ProviderPreset[] = [
+  { id: 'openai', name: 'OpenAI 官方 API', category: 'api', kind: 'openai-compatible', baseUrl: 'https://api.openai.com/v1', defaultWireApi: 'responses',
+    note: '使用 OpenAI 平台 API Key 和 API 额度；默认 Responses，也可为兼容模型选择 Chat Completions。获取模型列表后选择需要的模型，实际可用性以账号权限和调用结果为准。', docsUrl: 'https://developers.openai.com/api/docs/quickstart' },
   { id: 'anthropic', name: 'Anthropic / Claude 兼容 API', category: 'api', kind: 'openai-compatible', baseUrl: 'https://api.anthropic.com', defaultWireApi: 'messages',
     note: '使用 Anthropic Messages 接口；第三方中转请填写其兼容接口基址和 API Key，不能使用仅支持 OpenAI 的地址。', docsUrl: 'https://code.claude.com/docs/en/llm-gateway-connect' },
   { id: 'deepseek', name: 'DeepSeek', category: 'api', kind: 'openai-compatible', baseUrl: 'https://api.deepseek.com', defaultWireApi: 'responses',

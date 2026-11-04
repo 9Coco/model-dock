@@ -1,6 +1,7 @@
 # Tool icon attribution
 
 These marks identify compatible tools in ModelDock. They do not imply endorsement.
+The Junie compatibility entry uses Google's generic Material Symbols Rounded terminal icon, not an official Junie brand mark. Its unchanged SVG comes from the same pinned Google source as the app's Material icons, under Apache-2.0; see `LICENSE-material-symbols.txt` and `manifest.json`.
 Third-party source geometry is unchanged. Monochrome marks use theme colors and CSS masks; JetBrains product icons retain their official colors and proportions. The Claude Code letter C is original ModelDock artwork.
 Retrieved 2026-10-06. On 2026-10-07 the existing local SVGs and license texts were
 verified to match official UTF-8 source contents at the fixed revisions below.
