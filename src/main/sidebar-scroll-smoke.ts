@@ -14,7 +14,7 @@ interface SidebarReadback {
   viewport: { width: number; height: number; dpr: number }; lists: ListReadback[];
   fixed: { name: string; visible: boolean; box: Box }[]; documentOverflow: boolean; sidebarOverflow: boolean;
 }
-type UiState = { theme?: string; colorScheme: string; navigation: Record<string, string>; scroll: Record<string, number> };
+type UiState = { theme?: string; colorScheme: string; navigation: Record<string, string>; toolCategory?: string; scroll: Record<string, number> };
 interface WheelEventReadback { section: string; deltaX: number; deltaY: number; mode: number; trusted: boolean; targetTag: string }
 interface WheelReadback { section: string; moved: boolean; otherUnchanged: boolean; overflow: boolean; beforeTop: number; afterTop: number; events: WheelEventReadback[] }
 
@@ -35,17 +35,17 @@ export async function verifySidebarScroll(window: BrowserWindow, store: Store, o
   }
   const stateScript = `(()=>{const root=document.documentElement,active=document.querySelector('.sidebar [aria-current="page"]');return {
     theme:root.dataset.theme,colorScheme:root.style.colorScheme,navigation:active?Object.fromEntries([...active.attributes].filter(a=>a.name.startsWith('data-')).map(a=>[a.name,a.value])):{},
-    scroll:Object.fromEntries([...document.querySelectorAll('[data-sidebar-scroll]')].map(el=>[el.dataset.sidebarScroll,el.scrollTop]))};})()`;
+    toolCategory:document.querySelector('[data-tool-category][aria-selected="true"]')?.dataset.toolCategory,scroll:Object.fromEntries([...document.querySelectorAll('[data-sidebar-scroll]')].map(el=>[el.dataset.sidebarScroll,el.scrollTop]))};})()`;
   const readScript = `(()=>{
     const box=element=>{const r=element.getBoundingClientRect();return {top:r.top,bottom:r.bottom,left:r.left,right:r.right,width:r.width,height:r.height};};
     const visible=element=>{if(!element)return false;const r=box(element),css=getComputedStyle(element);return css.display!=='none'&&css.visibility==='visible'&&r.width>0&&r.height>0&&r.top>=-1&&r.bottom<=innerHeight+1&&r.left>=-1&&r.right<=innerWidth+1;};
     const lists=[...document.querySelectorAll('[data-sidebar-scroll]')].map(list=>{
-      const r=box(list),label=document.querySelector('[data-sidebar-label="'+list.dataset.sidebarScroll+'"]'),last=[...list.querySelectorAll('button.nav-item')].at(-1),lastBox=last?box(last):null;
+      const r=box(list),label=document.querySelector('[data-sidebar-label="'+list.dataset.sidebarScroll+'"]'),last=[...list.querySelectorAll('button.nav-item')].filter(row=>box(row).height>0).at(-1),lastBox=last?box(last):null;
       return {name:list.dataset.sidebarScroll,box:r,top:list.scrollTop,clientHeight:list.clientHeight,scrollHeight:list.scrollHeight,overflowY:getComputedStyle(list).overflowY,horizontalOverflow:list.scrollWidth>list.clientWidth+1,
         label:box(label),labelVisible:visible(label),lastVisible:!!lastBox&&visible(last)&&lastBox.top>=r.top-1&&lastBox.bottom<=r.bottom+1,
-        rows:[...list.querySelectorAll('button.nav-item')].map(row=>({height:box(row).height,font:parseFloat(getComputedStyle(row).fontSize),lineHeight:getComputedStyle(row).lineHeight}))};
+        rows:[...list.querySelectorAll('button.nav-item')].filter(row=>box(row).height>0).map(row=>({height:box(row).height,font:parseFloat(getComputedStyle(row).fontSize),lineHeight:getComputedStyle(row).lineHeight}))};
     });
-    const fixed=[['brand','.sidebar .brand'],['functions','.sidebar-functions'],['footer','.sidebar-bottom'],['settings','.sidebar-bottom [data-page="settings"]']].map(([name,selector])=>{const element=document.querySelector(selector);return {name,visible:visible(element),box:element?box(element):{top:0,bottom:0,left:0,right:0,width:0,height:0}};});
+    const fixed=[['brand','.sidebar .brand'],['tool-tabs','.tool-category-tabs'],['functions','.sidebar-functions'],['footer','.sidebar-bottom'],['settings','.sidebar-bottom [data-page="settings"]']].map(([name,selector])=>{const element=document.querySelector(selector);return {name,visible:visible(element),box:element?box(element):{top:0,bottom:0,left:0,right:0,width:0,height:0}};});
     const sidebar=document.querySelector('.sidebar');return {viewport:{width:innerWidth,height:innerHeight,dpr:devicePixelRatio},lists,fixed,documentOverflow:document.documentElement.scrollWidth>innerWidth+1,sidebarOverflow:sidebar.scrollWidth>sidebar.clientWidth+1};
   })()`;
   const config = () => ({ providers: store.listProviders(), bindings: store.listBindings(), models: store.listModels() });
@@ -59,7 +59,11 @@ export async function verifySidebarScroll(window: BrowserWindow, store: Store, o
   const restoreUi = async () => {
     await evaluate(`(()=>{const original=${JSON.stringify(originalUi)};if(original.theme===undefined)delete document.documentElement.dataset.theme;else document.documentElement.dataset.theme=original.theme;document.documentElement.style.colorScheme=original.colorScheme;
       const entries=Object.entries(original.navigation),target=[...document.querySelectorAll('.sidebar button')].find(el=>entries.length&&entries.every(([name,value])=>el.getAttribute(name)===value));target?.click();
-      for(const [name,top] of Object.entries(original.scroll)){const list=document.querySelector('[data-sidebar-scroll="'+name+'"]');if(list)list.scrollTop=top;}})()`);
+      })()`);
+    await pause(50);
+    await evaluate(`(()=>{const category=${JSON.stringify(originalUi.toolCategory)};if(category)document.querySelector('[data-tool-category="'+category+'"]')?.click();})()`);
+    await pause(30);
+    await evaluate(`(()=>{const scroll=${JSON.stringify(originalUi.scroll)};for(const [name,top] of Object.entries(scroll)){const list=document.querySelector('[data-sidebar-scroll="'+name+'"]');if(list)list.scrollTop=top;}})()`);
   };
   async function clickVisible(selector: string): Promise<void> {
     const point = await evaluate<{ x: number; y: number; hittable: boolean }>(`(()=>{const button=document.querySelector(${JSON.stringify(selector)}),r=button.getBoundingClientRect(),x=Math.round(r.left+r.width/2),y=Math.round(r.top+r.height/2);return {x,y,hittable:button.contains(document.elementFromPoint(x,y))};})()`);
@@ -92,10 +96,21 @@ export async function verifySidebarScroll(window: BrowserWindow, store: Store, o
     await waitFor(`!!document.querySelector('.sidebar [data-source-id="${last.id}"]')`, 'synthetic provider list refreshed');
     for (const theme of ['dark', 'light']) for (const requestedSize of [[1320, 880], [980, 680]]) {
       window.setSize(requestedSize[0], requestedSize[1]);
-      await evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)};document.documentElement.style.colorScheme=${JSON.stringify(theme)};document.querySelectorAll('[data-sidebar-scroll]').forEach(list=>list.scrollTop=0)`);
+      await evaluate(`document.querySelector('[data-tool-category="agent"]').click();document.documentElement.dataset.theme=${JSON.stringify(theme)};document.documentElement.style.colorScheme=${JSON.stringify(theme)};document.querySelectorAll('[data-sidebar-scroll]').forEach(list=>list.scrollTop=0)`);
       await pause(100);
       const start = await evaluate<SidebarReadback>(readScript); validate(start);
       assert.ok(start.lists[1].scrollHeight > start.lists[1].clientHeight, 'Many synthetic providers must exercise provider scrolling');
+      assert.equal(start.lists[0].rows.length, 7, 'Regular Agent category shows seven tools');
+      await clickVisible('[data-tool-category="jetbrains"]');
+      await waitFor(`document.querySelector('[data-tool-category="jetbrains"]')?.getAttribute('aria-selected')==='true'`, 'JetBrains category');
+      await evaluate(`document.querySelector('[data-sidebar-scroll="tools"]').scrollTop=1e6`);
+      const jetBrains = await evaluate<SidebarReadback>(readScript); validate(jetBrains);
+      assert.equal(jetBrains.lists[0].rows.length, 4, 'JetBrains category shows four IDEs');
+      assert.ok(jetBrains.lists[0].lastVisible, 'Last JetBrains IDE is reachable inside the tool viewport');
+      writeFileSync(join(outputDir, `electron-sidebar-jetbrains-${theme}-${requestedSize[0]}.png`), await captureUi());
+      await clickVisible('[data-tool-category="agent"]');
+      await waitFor(`document.querySelector('[data-tool-category="agent"]')?.getAttribute('aria-selected')==='true'`, 'regular Agent category');
+
       await evaluate(`document.querySelector('[data-sidebar-scroll="tools"]').scrollTop=1e6`);
       const toolsBottom = await evaluate<SidebarReadback>(readScript);
       assert.equal(toolsBottom.lists[1].top, start.lists[1].top, 'Scrolling tools must not move providers');

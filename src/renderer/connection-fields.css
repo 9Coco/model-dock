@@ -1,0 +1,21 @@
+.copy-value { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 100%; }
+.copy-value code { min-width: 0; overflow-wrap: anywhere; font-size: 11px; }
+.copy-value .icon-button { flex: 0 0 auto; width: 25px; height: 25px; }
+.secret-field { display: flex; align-items: center; gap: 3px; min-width: 0; }
+.secret-field input { width: 100%; min-width: 0; flex: 1; height: 30px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--ink); font-family: var(--font-mono, monospace); font-size: 11px; }
+.secret-field .icon-button { flex: 0 0 auto; width: 28px; height: 28px; }
+.connection-fields { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(220px, 1fr); gap: 12px 22px; padding: 14px 16px; margin: 12px 0; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.connection-fields > div { min-width: 0; }
+.connection-fields h3 { margin: 0 0 6px; font-size: 11px; color: var(--muted); font-weight: 500; }
+.connection-fields .copy-value { width: 100%; justify-content: space-between; min-height: 30px; }
+.connection-fields p { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.6; }
+.provider-row-meta .copy-value { flex: 1; min-width: 0; }
+.provider-row-meta .copy-value code { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: inherit; }
+.provider-row-meta .copy-value .icon-button { width: 22px; height: 22px; }
+.model-name .copy-value { display: flex; }
+.model-name .copy-value code, .table-provider .copy-value code { margin: 0; }
+.provider-details-link { padding: 0; margin: 0; border: 0; text-align: left; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.provider-details-link:hover { color: var(--accent); text-decoration: underline; }
+@media (max-width: 1050px) { .connection-fields { grid-template-columns: minmax(0, 1fr); gap: 10px; } }
+
+.secret-field .icon-button[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); }

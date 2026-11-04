@@ -147,6 +147,12 @@ child.on('exit', code => {
     if(existsSync(errorFile)) throw new Error(readFileSync(errorFile,'utf8'));
     const value = JSON.parse(readFileSync(resolve(output, 'electron-smoke.json'), 'utf8'));
     if (!value.bridge || !value.text.includes('ModelDock')) throw new Error('Renderer/preload bridge unavailable');
+    if (env.MODELDOCK_SMOKE_PROVIDER_MANAGEMENT_ONLY === '1') {
+      const result = JSON.parse(readFileSync(resolve(output, 'provider-management-validation.json'), 'utf8'));
+      if (!result.ok || !result.exactNativeClipboardCopies || !result.aggregateProviderModelMembershipPersists || !result.toolBindingsUnchanged) throw new Error('Provider management validation failed');
+      console.log(JSON.stringify({ exitCode: code, bridge: value.bridge, providerManagement: true, output }));
+      process.exit(code || 0);
+    }
     if (env.MODELDOCK_SMOKE_TOOL_ICONS_ONLY === '1') {
       const icons = JSON.parse(readFileSync(resolve(output, 'tool-icons-validation.json'), 'utf8'));
       if (icons.tools.length !== 11 || icons.jetBrainsTools.length !== 4 || !icons.originalUiRestored || !icons.savedSettingsUnchanged || !icons.toolSelectionsUnchanged || icons.configurationSyncInvoked !== false) throw new Error('Tool icon validation failed');

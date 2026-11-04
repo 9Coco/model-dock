@@ -1,0 +1,26 @@
+.aggregate-management .aggregate-strip { margin-bottom: 0; }
+.aggregate-management .aggregate-strip > div > span { display: block; margin-top: 5px; font-size: 11px; color: var(--muted); }
+.aggregate-heading { flex-wrap: wrap; gap: 10px; margin-top: 20px; }
+.aggregate-heading h2 { margin-right: auto; }
+.aggregate-heading .search-box { width: 215px; }
+.aggregate-scope-note { font-size: 11px; line-height: 1.7; color: var(--muted); margin: -2px 0 14px; }
+.aggregate-provider-list { display: grid; gap: 10px; }
+.aggregate-provider-card { border: 1px solid var(--line); border-radius: 8px; background: var(--surface); overflow: hidden; }
+.aggregate-provider-heading { display: flex; align-items: center; gap: 10px; padding: 12px 14px; }
+.aggregate-provider-expand { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; padding: 0; border: 0; background: transparent; color: var(--ink); cursor: pointer; text-align: left; }
+.aggregate-provider-expand > span { display: grid; gap: 5px; min-width: 0; }
+.aggregate-provider-expand strong { font-size: 13px; overflow-wrap: anywhere; }
+.aggregate-provider-expand small { font-size: 11px; color: var(--muted); }
+.aggregate-provider-expand > svg { transform: rotate(-90deg); }
+.aggregate-provider-expand > svg.expanded { transform: rotate(0deg); }
+.aggregate-provider-heading > .badge { flex-shrink: 0; }
+.aggregate-provider-models { border-top: 1px solid var(--line); }
+.aggregate-model-table { width: 100%; border-collapse: collapse; text-align: left; }
+.aggregate-model-table th { padding: 10px 12px; font-size: 10px; color: var(--muted); font-weight: 500; background: var(--surface-hover); }
+.aggregate-model-table td { padding: 9px 12px; border-top: 1px solid var(--line); font-size: 11px; }
+.aggregate-model-table td:first-child { width: 45px; }
+.aggregate-model-table input { accent-color: var(--accent); cursor: pointer; }
+.aggregate-model-table .copy-value { display: flex; justify-content: space-between; }
+.aggregate-model-table .badge { font-size: 10px; white-space: nowrap; }
+.provider-category-tabs { margin-bottom: 14px; flex-wrap: wrap; }
+@media (max-width: 1020px) { .aggregate-provider-heading { gap: 7px; padding: 10px; flex-wrap: wrap; } .aggregate-provider-expand { min-width: 180px; } .aggregate-provider-heading > .badge { font-size: 10px; } .aggregate-model-table td, .aggregate-model-table th { padding-left: 8px; padding-right: 8px; } }

@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Activity, ArrowDownToLine, ArrowRight, ArrowUpRight, BookOpen, Box, Check,
+  Activity, ArrowDownToLine, ArrowRight, ArrowUpRight, Box, Check,
   CheckCheck, ChevronDown, CircleHelp, Clock3, Copy, Database, Download,
   FileCode2, FolderOpen, Globe2, KeyRound, Layers3, LoaderCircle,
   Pencil, Plug2, Plus, Power, Radio, RefreshCw, RotateCcw, Search,
-  Server, Settings2, ShieldCheck, Sparkles, Terminal, Trash2, Unplug,
+  Eye, Server, Settings2, ShieldCheck, Sparkles, Terminal, Trash2, Unplug,
   Waypoints, X, Zap,
 } from './MaterialIcon';
 import type {
@@ -27,8 +27,9 @@ import { canStartToolSync, ToolAutoSync, type ToolAutoSyncOptions, type ToolAuto
 import type { ToolSyncUndoStatus } from '../shared/tool-sync-types';
 import { Toggle, Modal, EmptyState, BusyIcon } from './components';
 import { AuthPanel } from './AuthPanel';
-import { McpPanel } from './McpPanel';
-import SkillsPanel from './SkillsPanel';
+import { ToolNavigation } from './ToolNavigation';
+import { CopyValue, SecretField } from './ConnectionFields';
+import { AggregatePanel } from './AggregatePanel';
 import brandIcon from '../../assets/modeldock.svg?no-inline';
 import { SettingsPanel } from './SettingsPanel';
 import { applyTheme } from './theme';
@@ -42,7 +43,7 @@ import { providerIdentity } from '../shared/provider-duplicates';
 import { modelDisplayLabel, modelLocalAlias, suggestModelAlias } from '../shared/model-names';
 import { firstConnectionModel } from '../shared/connection-types';
 
-type Page = 'providers' | 'tools' | 'service' | 'auth' | 'mcp' | 'skills' | 'settings';
+type Page = 'providers' | 'tools' | 'service' | 'auth' | 'settings';
 type Toast = { id: number; message: string; tone: 'success' | 'error' | 'info' };
 type ProviderDraft = ProviderInput & { apiKey: string; note: string };
 type ModelDraft = ModelInput;
@@ -50,7 +51,7 @@ type ToolDelivery = { signature: string; kind: 'applied' | 'exported' | 'undone'
 const pageMeta: Record<Page, { label: string }> = {
   providers: { label: '供应商管理' },
   tools: { label: '工具接入' }, service: { label: '服务与日志' },
-  auth: { label: '授权中心' }, mcp: { label: 'MCP 管理' }, skills: { label: 'Skills 管理' },
+  auth: { label: '授权中心' },
   settings: { label: '设置' },
 };
 const providerKinds: Record<ProviderKind, { title: string; short: string; description: string; symbol: string }> = {
@@ -106,10 +107,13 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
   const pendingActions = useRef(new Set<string>());
   const testRevisions = useRef<Record<string, number>>({});
   const snapshotRevision = useRef(0);
+  const [secretVisibilityRevision, setSecretVisibilityRevision] = useState(0);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [search, setSearch] = useState('');
-  const [sourceCategory, setSourceCategory] = useState<'api' | 'subscription'>('api');
+  const [sourceCategory, setSourceCategory] = useState<'local' | 'api' | 'subscription'>('local');
   const [providerDraft, setProviderDraft] = useState<ProviderDraft | null>(null);
+  const [draftKeyVisible, setDraftKeyVisible] = useState(false);
+  useEffect(() => { setDraftKeyVisible(false); }, [providerDraft?.id, !!providerDraft]);
   const [copilotAccountChoices, setCopilotAccountChoices] = useState<AuthAccount[]>([]);
   const [copilotAccountError, setCopilotAccountError] = useState('');
   useEffect(() => {
@@ -319,6 +323,7 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
       const isNew = !providerDraft.id;
       const payload: ProviderInput = { ...providerDraft, name: providerDraft.name.trim(), baseUrl: providerDraft.baseUrl.trim(), apiKey: providerDraft.apiKey || undefined, ...(providerDraft.kind === 'openai-compatible' ? { claudeBaseUrl: providerDraft.claudeBaseUrl?.trim() ?? '' } : {}) };
       const provider = await bridge!.saveProvider(payload);
+      setSecretVisibilityRevision(value => value + 1);
       setToolDeliveries(previous => Object.fromEntries(Object.entries(previous).filter(([, delivery]) => !delivery?.providerIds.includes(provider.id))));
       testRevisions.current[provider.id] = (testRevisions.current[provider.id] ?? 0) + 1;
       setTests(previous => { const next = { ...previous }; delete next[provider.id]; return next; });
@@ -741,7 +746,7 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
   const toolProviders = data.providers.filter(provider => `${provider.name} ${provider.baseUrl}`.toLowerCase().includes(search.toLowerCase()));
   const currentDirectProvider = !currentAggregate ? data.providers.find(provider => provider.id === currentSourceIds[0]) : undefined;
   const currentTargetUrl = currentAggregate ? `http://127.0.0.1:${data.gateway.port}/tool/${selectedTool}${selectedTool === 'claude-code' ? '' : '/v1'}` : currentDirectProvider ? nativeDirectBaseUrl(selectedTool, currentDirectProvider, currentModels) ?? '' : '';
-  const detailTitle = page === 'tools' ? `${toolInfo[selectedTool].name} ${currentSingleEntry ? '接入配置' : '供应商'}` : page === 'providers' ? selectedProvider?.name ?? '聚合供应商' : pageMeta[page].label;
+  const detailTitle = page === 'tools' ? `${toolInfo[selectedTool].name} ${currentSingleEntry ? '接入配置' : '供应商'}` : page === 'providers' ? selectedProvider?.name ?? '本地接口与供应商' : pageMeta[page].label;
   const draftPreset = providerDraft ? presetById(providerDraft.presetId) : undefined;
   const duplicateProviderGroups = useMemo(() => {
     const counts = new Map<string, number>();
@@ -781,8 +786,8 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
       {forTool && <label className="provider-inline-select" title={selected ? '取消选择此供应商' : unavailableReason || '选择此供应商'}><input type="checkbox" data-action="select-tool-provider" data-tool-id={selectedTool} data-provider-id={provider.id} checked={selected} disabled={!bridge || currentToolBusy || !selected && !!unavailableReason} aria-label={currentSingleEntry && currentAggregate ? `聚合接口内部使用 ${provider.name}` : `为 ${toolInfo[selectedTool].name} 选择 ${provider.name}`} onChange={event => void saveInlineBinding(selectedTool, event.target.checked ? [...currentSourceIds, provider.id] : currentSourceIds.filter(id => id !== provider.id))} /><span className="sr-only">{provider.name}</span></label>}
       <span className={`provider-monogram ${provider.kind}`}>{providerKinds[provider.kind].symbol}</span>
       <div className="provider-row-main">
-        <div className="provider-row-title"><h3>{provider.name}</h3><span className={`badge ${!provider.enabled || (provider.kind === 'openai-compatible' && !provider.baseUrl) ? 'neutral' : provider.authStatus === 'ready' ? 'positive' : provider.authStatus === 'error' ? 'negative' : 'warning'}`}><span className="status-dot" />{providerStatus(provider)}</span></div>
-        <div className="provider-row-meta"><span className="provider-address" title={provider.baseUrl}>{provider.baseUrl || (provider.kind === 'openai-compatible' ? '服务地址待填写' : providerKinds[provider.kind].title)}</span><span>{data.models.filter(model => model.providerId === provider.id).length} 个模型</span></div>
+        <div className="provider-row-title"><h3>{forTool || selectedProviderId === provider.id ? provider.name : <button type="button" className="provider-details-link" data-action="open-provider" onClick={() => selectProvider(provider.id)}>{provider.name}</button>}</h3><span className={`badge ${!provider.enabled || (provider.kind === 'openai-compatible' && !provider.baseUrl) ? 'neutral' : provider.authStatus === 'ready' ? 'positive' : provider.authStatus === 'error' ? 'negative' : 'warning'}`}><span className="status-dot" />{providerStatus(provider)}</span></div>
+        <div className="provider-row-meta"><CopyValue value={provider.baseUrl} label={`${provider.name} URL`} onCopy={copy} /><span>{data.models.filter(model => model.providerId === provider.id).length} 个模型</span></div>
         {forTool && provider.kind !== 'openai-compatible' && !unavailableReason && <div className="provider-selection-hint">订阅来源由本机入口管理授权</div>}{forTool && !!unavailableReason && <div className="provider-selection-hint">{unavailableReason}{selected ? '，已保存的选择可取消' : ''}</div>}
         {testing ? <div className="test-result testing" role="status"><span>正在测试：{runningTestModels[provider.id]?.upstreamId}…</span></div> : testResult && <div data-connection-result data-success={testResult.ok} data-outcome={testResult.outcome} data-status-code={testResult.statusCode} data-tested-model={testResult.testedModel} data-wire-api={testResult.wireApi} data-duration-ms={testResult.durationMs} className={`test-result ${testResult.ok ? 'ok' : 'failed'}`} role={testResult.ok ? 'status' : 'alert'}><span>上次测试：{testResult.testedModel ? `${testResult.testedModel} · ` : ''}{testResult.message}</span><small>{testResult.statusCode !== undefined && `HTTP ${testResult.statusCode}`}{testResult.statusCode !== undefined && testResult.durationMs !== undefined && ' · '}{testResult.durationMs !== undefined && `${Math.round(testResult.durationMs)} ms`}</small></div>}
       </div>
@@ -804,10 +809,10 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
     </article>;
   };
   const modelTable = (models: Model[]) => <div className="table-scroll"><table className="models-table">
-    <thead><tr><th>模型 / 接口 ID</th><th>供应商 / 上游模型</th><th>接口</th><th>上下文</th><th>能力</th><th>启用</th><th><span className="sr-only">操作</span></th></tr></thead>
+    <thead><tr><th>聚合模型名称 / 接口 ID</th><th>供应商 / 原生模型名称</th><th>接口</th><th>上下文</th><th>能力</th><th>启用</th><th><span className="sr-only">操作</span></th></tr></thead>
     <tbody>{models.map(model => <tr key={model.id} data-model-id={model.id}>
-      <td><div className="model-name"><span className="model-icon"><Box size={17} /></span><div><strong>{modelLabel(model)}</strong><code title={model.alias}>{model.alias}</code></div></div></td>
-      <td><div className="table-provider"><strong>{data.providers.find(provider => provider.id === model.providerId)?.name ?? '供应商已移除'}</strong><code title={model.upstreamId}>{model.upstreamId}</code></div></td>
+      <td><div className="model-name"><span className="model-icon"><Box size={17} /></span><div><strong>{modelLabel(model)}</strong><CopyValue value={model.alias} label={`聚合模型名称 ${model.alias}`} onCopy={copy} /></div></div></td>
+      <td><div className="table-provider"><strong>{data.providers.find(provider => provider.id === model.providerId)?.name ?? '供应商已移除'}</strong><CopyValue value={model.upstreamId} label={`上游模型名称 ${model.upstreamId}`} onCopy={copy} /></div></td>
       <td><span className="protocol-tag">{protocolLabel(model)}</span></td><td><span className="context-tag">{contextLabel(model.contextWindow)}</span></td>
       <td><div className="capability-tags">{model.tools && <span title="工具调用"><Terminal size={13} /></span>}{model.vision && <span title="图片输入"><Sparkles size={13} /></span>}{!model.tools && !model.vision && <span className="text-capability">文本</span>}</div></td>
       <td><Toggle checked={model.enabled} onChange={enabled => void toggleModel(model, enabled)} label={`${model.enabled ? '停用' : '启用'} ${model.alias}`} disabled={busy[`model-${model.id}`]} /></td>
@@ -828,29 +833,23 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
     <aside className="sidebar">
       <button className="brand" onClick={() => selectTool('codex')} aria-label="ModelDock 首页"><span className="brand-mark"><img src={brandIcon} alt="" data-app-brand-icon /></span><span>ModelDock</span></button>
       <div className="sidebar-navigation" data-sidebar-navigation>
-      <nav className="sidebar-group sidebar-tools" data-sidebar-scroll="tools" aria-label="工具导航"><div className="sidebar-group-label" data-sidebar-label="tools"><span>工具</span><span>{toolIds.length}</span></div>
-          {toolIds.map(id => <button key={id} data-page="tools" data-tool-id={id} className={`nav-item agent-nav ${page === 'tools' && selectedTool === id ? 'active' : ''}`} aria-current={page === 'tools' && selectedTool === id ? 'page' : undefined} onClick={() => selectTool(id)}><ToolIcon tool={id} /><span>{id === 'dsh' ? 'DSH' : id === 'copilot' ? 'Copilot app' : toolInfo[id].name}</span>{bindingFor(id).enabled && <span className="status-dot green" />}</button>)}
-      </nav>
+      <ToolNavigation tools={toolIds.map(id => ({ id, name: id === 'dsh' ? 'DSH' : id === 'copilot' ? 'Copilot app' : toolInfo[id].name, connected: bindingFor(id).enabled }))} selectedTool={selectedTool} active={page === 'tools'} onSelect={selectTool} />
         {/* 修改点：全局供应商的新增入口固定在左侧分组，不随详情页变化。 */}
         <nav className="sidebar-group sidebar-scroll sidebar-providers" data-sidebar-scroll="providers" aria-label="模型供应商导航"><div className="sidebar-group-label sidebar-provider-heading" data-sidebar-label="providers"><span>模型供应商</span>{addProviderActions}</div>
-          <button data-page="providers" data-source="aggregate" className={`nav-item source-nav ${page === 'providers' && !selectedProviderId ? 'active' : ''}`} aria-current={page === 'providers' && !selectedProviderId ? 'page' : undefined} onClick={() => selectProvider(null)}><Waypoints size={18} /><span>聚合供应商</span><span className="nav-count">{data.providers.length}</span></button>
+          <button data-page="providers" data-source="aggregate" className={`nav-item source-nav ${page === 'providers' && !selectedProviderId ? 'active' : ''}`} aria-current={page === 'providers' && !selectedProviderId ? 'page' : undefined} onClick={() => selectProvider(null)}><Waypoints size={18} /><span>本地接口与供应商</span><span className="nav-count">{data.providers.length}</span></button>
           {data.providers.map(provider => <button key={provider.id} data-source-id={provider.id} className={`nav-item source-nav ${page === 'providers' && selectedProviderId === provider.id ? 'active' : ''}`} aria-current={page === 'providers' && selectedProviderId === provider.id ? 'page' : undefined} title={provider.name} onClick={() => selectProvider(provider.id)}><span className={`nav-monogram ${provider.kind}`}>{providerKinds[provider.kind].symbol}</span><span>{provider.name}</span><span className={`status-dot ${provider.authStatus === 'ready' && provider.enabled ? 'green' : ''}`} /></button>)}
         </nav>
       </div>
       <nav className="sidebar-functions" aria-label="功能导航">
-        <button data-page="mcp" className={`nav-item ${page === 'mcp' ? 'active' : ''}`} aria-current={page === 'mcp' ? 'page' : undefined} onClick={() => navigate('mcp')}><Server size={18} /><span>MCP 管理</span></button>
-        <button data-page="skills" className={`nav-item ${page === 'skills' ? 'active' : ''}`} aria-current={page === 'skills' ? 'page' : undefined} onClick={() => navigate('skills')}><BookOpen size={18} /><span>Skills 管理</span></button>
         <button data-page="auth" className={`nav-item ${page === 'auth' ? 'active' : ''}`} aria-current={page === 'auth' ? 'page' : undefined} onClick={() => navigate('auth')}><KeyRound size={18} /><span>授权中心</span></button>
         <button data-page="service" className={`nav-item ${page === 'service' ? 'active' : ''}`} aria-current={page === 'service' ? 'page' : undefined} onClick={() => navigate('service')}><Activity size={18} /><span>服务与日志</span><span className={`status-dot ${data.gateway.running ? 'green' : ''}`} /></button>
       </nav>
       <div className="sidebar-bottom"><div className="sidebar-local-info"><strong>本地工作空间</strong><small title={`${data.version ? `v${data.version}` : '桌面预览'} · 127.0.0.1`}>{data.version ? `v${data.version}` : '桌面预览'} · 127.0.0.1</small></div><div className="sidebar-bottom-actions"><button data-page="settings" className={`sidebar-icon sidebar-settings ${page === 'settings' ? 'active' : ''}`} aria-current={page === 'settings' ? 'page' : undefined} title="设置" aria-label="打开设置" onClick={() => navigate('settings')}><Settings2 size={18} /></button><button className="sidebar-icon" title="打开数据目录" aria-label="打开数据目录" onClick={() => void run('open-dir', () => bridge!.openDataDir())}><FolderOpen size={17} /></button></div></div>
     </aside>
     <div className="main-shell">
-      <header className="topbar"><div className="breadcrumbs"><strong>{detailTitle}</strong></div><div className="topbar-right"><span className={`bridge-status ${isConnected ? 'connected' : ''}`} title={isConnected ? '桌面已连接' : loadError || '桌面未连接'}><span className="status-dot" />{!bridge ? '界面预览' : loadError ? '连接异常' : !snapshot ? '读取配置中' : '已连接'}</span><span className={`local-status ${data.gateway.running ? 'running' : ''}`}><Radio size={14} />{data.gateway.running ? '服务运行中' : '服务未启动'}</span><button className="icon-button" aria-label="刷新本机配置" title="刷新" onClick={() => void run('refresh', refresh)}><RefreshCw size={15} className={busy.refresh ? 'spin' : ''} /></button></div></header>
+      <header className="topbar"><div className="breadcrumbs"><strong>{detailTitle}</strong></div><div className="topbar-right"><span className={`bridge-status ${isConnected ? 'connected' : ''}`} title={isConnected ? '桌面已连接' : loadError || '桌面未连接'}><span className="status-dot" />{!bridge ? '界面预览' : loadError ? '连接异常' : !snapshot ? '读取配置中' : '已连接'}</span><span className={`local-status ${data.gateway.running ? 'running' : ''}`}><Radio size={14} />{data.gateway.running ? '服务运行中' : '服务未启动'}</span><button className="icon-button" aria-label="刷新本机配置" title="刷新" onClick={() => { setSecretVisibilityRevision(value => value + 1); void run('refresh', refresh); }}><RefreshCw size={15} className={busy.refresh ? 'spin' : ''} /></button></div></header>
       <main className="main-content">
         {(!bridge || loadError) && <div className="bridge-banner"><Unplug size={17} /><span>{!bridge ? '当前为界面预览。桌面桥未连接，未读取任何本机账号或模型。' : `暂时无法读取本机配置：${loadError}`}</span>{!!bridge && <button onClick={() => void refresh()}>重试<RefreshCw size={13} /></button>}</div>}
-        {page === 'mcp' && <McpPanel api={bridge} notify={notify} />}
-        {page === 'skills' && <SkillsPanel api={bridge} notify={notify} />}
         {page === 'auth' && <AuthPanel api={bridge} notify={notify} onChanged={refresh} onCopilotLogin={loginCopilot} onLogin={id => run('auth-center-login', async () => { const latest = await bridge!.snapshot(); setSnapshot(latest); const provider = latest.providers.find(item => item.id === id); if (!provider) throw new Error('账号来源不存在，请刷新。'); await login(provider); })} />}
         {page === 'settings' && <SettingsPanel api={bridge} snapshot={preferences} onSave={savePreferences} notify={notify} dataDir={data.dataDir} version={data.version} />}
 
@@ -884,20 +883,23 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
 
         {page === 'providers' && (selectedProvider ? <>
           <div className="provider-list">{providerRow(selectedProvider)}</div>
+          <section className="connection-fields" data-provider-connection={selectedProvider.id} key={`${selectedProvider.id}-${secretVisibilityRevision}`}><div><h3>URL</h3><CopyValue value={selectedProvider.baseUrl} label="供应商 URL" onCopy={copy} /></div><div><h3>API Key</h3>{selectedProvider.kind === 'openai-compatible' ? <SecretField available={!!bridge && selectedProvider.hasSecret} reveal={() => bridge!.revealProviderKey(selectedProvider.id)} copy={() => bridge!.copyProviderKey(selectedProvider.id)} notify={notify} /> : <p>订阅授权由本机管理。<button className="text-button" onClick={() => { setSourceCategory('local'); selectProvider(null); }}>查看本地调用参数</button></p>}</div>{selectedProvider.claudeBaseUrl && <div><h3>Claude Code URL</h3><CopyValue value={selectedProvider.claudeBaseUrl} label="Claude Code URL" onCopy={copy} /></div>}</section>
           <div className="provider-details"><div><span>接入方式</span><strong>{presetById(selectedProvider.presetId)?.name ?? providerKinds[selectedProvider.kind].title}</strong></div><div><span>可用模型</span><strong>{data.models.filter(model => model.providerId === selectedProvider.id && model.enabled).length} 个已启用</strong></div><div><span>备注</span><strong>{selectedProvider.note || '暂无备注'}</strong></div></div>
           <section className="panel provider-models"><div className="section-heading"><h2>供应商模型<span className="count-tag">{data.models.filter(model => model.providerId === selectedProvider.id).length}</span></h2><div className="row-actions"><button data-action="discover-models" className="button small primary" disabled={!selectedProvider.hasSecret || !selectedProvider.baseUrl} onClick={() => setModelDiscovery({ provider: selectedProvider })}><Download size={15} />获取模型列表</button><button data-action="manual-add-model" className="button small secondary" onClick={() => addModel(selectedProvider.id)}><Plus size={15} />手动添加</button></div></div>{data.models.some(model => model.providerId === selectedProvider.id) ? modelTable(data.models.filter(model => model.providerId === selectedProvider.id)) : <EmptyState compact icon={<Layers3 size={25} />} title="还没有模型" description="保存 API Key 或登录账号后，可获取模型列表或手动添加模型，再测试连接。" action={<button className="button primary" disabled={!selectedProvider.hasSecret || !selectedProvider.baseUrl} onClick={() => setModelDiscovery({ provider: selectedProvider })}><Download size={15} />获取模型列表</button>} />}</section>
         </> : <>
-          <div className="aggregate-strip"><Waypoints size={21} /><div><strong>本地统一入口</strong><code>{data.gateway.baseUrl || `http://127.0.0.1:${data.gateway.port}/v1`}</code></div><span className={`badge ${data.gateway.running ? 'positive' : 'neutral'}`}>{data.gateway.running ? '运行中' : '未启动'}</span><button className="button small secondary" onClick={() => navigate('service')}><Settings2 size={14} />管理服务</button></div>
+          <div className="source-category-tabs provider-category-tabs" role="tablist" aria-label="供应商分类"><button role="tab" data-provider-category="local" aria-selected={sourceCategory === 'local'} className={sourceCategory === 'local' ? 'selected' : ''} onClick={() => { setSourceCategory('local'); setSearch(''); }}><Waypoints size={15} />本地聚合接口</button><button role="tab" data-provider-category="api" aria-selected={sourceCategory === 'api'} className={sourceCategory === 'api' ? 'selected' : ''} onClick={() => { setSourceCategory('api'); setSearch(''); }}><KeyRound size={15} />API 供应商<span>{data.providers.filter(provider => provider.kind === 'openai-compatible').length}</span></button><button role="tab" data-provider-category="subscription" aria-selected={sourceCategory === 'subscription'} className={sourceCategory === 'subscription' ? 'selected' : ''} onClick={() => { setSourceCategory('subscription'); setSearch(''); }}><Sparkles size={15} />订阅供应商<span>{data.providers.filter(provider => provider.kind !== 'openai-compatible').length}</span></button></div>
+          {sourceCategory === 'local' ? <AggregatePanel secretRevision={secretVisibilityRevision} data={data} api={bridge} search={search} onSearch={setSearch} onChanged={refresh} onProvider={selectProvider} onService={() => navigate('service')} copy={copy} notify={notify} /> : <>
           {!!duplicateProviderGroups && <div className="provider-duplicate-banner"><Copy size={17} /><div><strong>发现 {duplicateProviderGroups} 组同名、同地址的供应商</strong><span>核对凭据后可合并重复记录，保留模型和工具选择。</span></div><button type="button" className="button small secondary" data-action="review-provider-duplicates" onClick={() => setShowProviderDuplicates(true)}>整理重复供应商</button></div>}
-          <div className="source-category-tabs" role="tablist" aria-label="供应商分类"><button role="tab" aria-selected={sourceCategory === 'api'} className={sourceCategory === 'api' ? 'selected' : ''} onClick={() => { setSourceCategory('api'); setSearch(''); }}><KeyRound size={15} />API 供应商<span>{data.providers.filter(provider => provider.kind === 'openai-compatible').length}</span></button><button role="tab" aria-selected={sourceCategory === 'subscription'} className={sourceCategory === 'subscription' ? 'selected' : ''} onClick={() => { setSourceCategory('subscription'); setSearch(''); }}><Sparkles size={15} />订阅供应商<span>{data.providers.filter(provider => provider.kind !== 'openai-compatible').length}</span></button><label className="search-box"><Search size={15} /><input aria-label="搜索供应商" placeholder="搜索供应商" value={search} onChange={event => setSearch(event.target.value)} /></label></div>
+          <div className="section-heading"><h2>{sourceCategory === 'api' ? 'API 供应商' : '订阅供应商'}</h2><label className="search-box"><Search size={15} /><input aria-label="搜索供应商" placeholder="搜索供应商" value={search} onChange={event => setSearch(event.target.value)} /></label></div>
           {filteredProviders.length ? <div className="provider-list">{filteredProviders.map(provider => providerRow(provider))}</div> : <EmptyState compact icon={categoryProviders.length ? <Search size={25} /> : <Plug2 size={25} />} title={categoryProviders.length ? '没有匹配的供应商' : sourceCategory === 'api' ? '还没有 API 供应商' : '还没有订阅供应商'} description={categoryProviders.length ? '试试其他名称或服务地址。' : sourceCategory === 'api' ? '在左侧选择“添加 API”，填写自己的地址与 API Key。' : '在左侧选择“添加订阅”，使用本人的 Codex、GitHub Copilot 或 Grok Build 账号授权。'} />}
+          </>}
         </>)}
 
         {page === 'service' && <>
           <section className="gateway-panel" data-gateway-panel>
             <div className="gateway-top"><span className={`gateway-icon ${data.gateway.running ? 'on' : ''}`}><Server size={26} /></span><div><h2>本地模型服务</h2><p>连接你的供应商，为工具提供一个统一入口。</p></div><span className={`badge ${data.gateway.running ? 'positive' : 'neutral'}`} data-gateway-service-status={data.gateway.running ? 'running' : 'stopped'}><span className="status-dot" />{data.gateway.running ? '正在运行' : '已停止'}</span></div>
             <div className="gateway-body">
-              <div className="gateway-entry"><label>本机 API 入口</label><div className="endpoint-field"><code>{data.gateway.baseUrl || '启动服务后显示入口'}</code><button className="icon-button" disabled={!data.gateway.baseUrl} title="复制 API 入口" aria-label="复制 API 入口" onClick={() => void copy(data.gateway.baseUrl, 'API 入口已复制。')}><Copy size={16} /></button></div><div className="entry-meta"><span><ShieldCheck size={13} />仅监听 127.0.0.1</span><span><KeyRound size={13} />使用本地密钥验证</span><button className="text-button" onClick={() => void run('copy-key', async () => { await bridge!.copyGatewayKey(); notify('本地密钥已复制，界面中不会显示密钥。'); })}>复制本地密钥<Copy size={12} /></button></div></div>
+              <div className="gateway-entry"><label>本机 API 入口</label><div className="endpoint-field"><code>{data.gateway.baseUrl || '启动服务后显示入口'}</code><button className="icon-button" disabled={!data.gateway.baseUrl} title="复制 API 入口" aria-label="复制 API 入口" onClick={() => void copy(data.gateway.baseUrl, 'API 入口已复制。')}><Copy size={16} /></button></div><div className="entry-meta"><span><ShieldCheck size={13} />仅监听 127.0.0.1</span><span><KeyRound size={13} />使用本地密钥验证</span><button className="text-button" onClick={() => void run('copy-key', async () => { await bridge!.copyGatewayKey(); notify('本地 API Key 已复制。'); })}>复制本地密钥<Copy size={12} /></button></div></div>
               <div className="gateway-control"><label htmlFor="service-port">服务端口</label><div className="port-control"><input id="service-port" aria-label="服务端口" type="number" min="1024" max="65535" disabled={data.gateway.running || !!busy.gateway || !!busy['gateway-settings']} value={port} onChange={event => setPort(event.target.value)} /><button className={`button ${data.gateway.running ? 'secondary' : 'primary'}`} disabled={!bridge || !!busy.gateway || !!busy['gateway-settings']} onClick={() => void (data.gateway.running ? stopGateway() : startGateway())}><BusyIcon active={!!busy.gateway}><Power size={16} /></BusyIcon>{data.gateway.running ? '停止服务' : '启动服务'}</button></div></div>
             </div>
             <div className="gateway-autostart settings-row" data-action="gateway-autostart"><div className="settings-row-copy"><strong>随应用启动本地服务</strong><small>每次启动 ModelDock 时自动开启服务，使用已保存端口 {preferences?.settings.gatewayPort ?? data.gateway.port}。下次应用启动时生效。</small></div><div className="settings-control"><Toggle label="随应用启动本地服务" checked={preferences?.settings.autoStartGateway ?? false} disabled={!bridge || !preferences || !!busy.gateway || !!busy['gateway-settings']} onChange={autoStartGateway => void changeGatewayAutostart(autoStartGateway)} /></div></div>
@@ -932,7 +934,7 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
             <label className="form-field">API 服务地址<input type="url" placeholder="填写控制台提供的 API 根地址" value={providerDraft.baseUrl} onChange={event => setProviderDraft({ ...providerDraft, baseUrl: event.target.value })} /><small>{!providerDraft.baseUrl ? '地址可以稍后填写；当前可保存为草稿，补全后再检测连接。' : '预设地址可编辑，请使用与你的账号或套餐对应的入口。'}</small></label>
             <label className="form-field">Claude Code 接口地址（可选）<input data-field="claude-base-url" type="url" placeholder="留空使用官方对应入口或本机服务" value={providerDraft.claudeBaseUrl ?? ''} onChange={event => setProviderDraft({ ...providerDraft, claudeBaseUrl: event.target.value })} /><small>填写时须是支持 Anthropic Messages 的服务地址，使用同一 API Key。留空按已知官方入口映射，其他来源使用本机服务转换；上方已有 OpenAI 地址保留。</small></label>
             {draftPreset && <div className="preset-help"><CircleHelp size={16} /><div><p>{draftPreset.note}</p>{draftPreset.docsUrl && <a href={draftPreset.docsUrl} target="_blank" rel="noopener noreferrer">查看供应商说明<ArrowUpRight size={12} /></a>}</div></div>}
-            <label className="form-field">API Key<span className="input-with-icon"><KeyRound size={15} /><input type="password" autoComplete="new-password" placeholder={providerDraft.id ? '留空保留已保存的 API Key' : '粘贴此服务的 API Key'} value={providerDraft.apiKey} onChange={event => setProviderDraft({ ...providerDraft, apiKey: event.target.value })} /></span>{providerDraft.id && <small>已有密钥不回填；输入新密钥即可替换。</small>}</label>
+            <label className="form-field">API Key<span className="input-with-icon"><KeyRound size={15} /><input type={draftKeyVisible ? 'text' : 'password'} autoComplete="new-password" placeholder={providerDraft.id ? '留空保留已保存的 API Key' : '粘贴此服务的 API Key'} value={providerDraft.apiKey} onChange={event => setProviderDraft({ ...providerDraft, apiKey: event.target.value })} /><button type="button" className="icon-button" aria-label={draftKeyVisible ? '隐藏输入的 API Key' : '显示输入的 API Key'} aria-pressed={draftKeyVisible} onClick={() => setDraftKeyVisible(!draftKeyVisible)}><Eye size={15} /></button></span>{providerDraft.id && <small>已有密钥不回填；输入新密钥即可替换。</small>}</label>
             <label className="form-field">Messages 鉴权方式<select data-field="messages-auth" value={providerDraft.messagesAuth ?? 'bearer'} onChange={event => setProviderDraft({ ...providerDraft, messagesAuth: event.target.value as 'api-key' | 'bearer' })}><option value="api-key">API Key（x-api-key）</option><option value="bearer">Bearer Token（Authorization）</option></select><small>仅用于 Anthropic Messages 接口，请按供应商要求选择；其他 OpenAI 接口不受影响。Anthropic 新模板默认 API Key，自定义及未设置的历史来源默认 Bearer Token。</small></label>
           </> : <div className="form-info"><KeyRound size={19} /><div><strong>{draftPreset?.name ?? providerKinds[providerDraft.kind].title}</strong><p>{draftPreset?.note} {providerDraft.kind === 'copilot' && providerDraft.copilotAccountId ? '保存后即可使用此账号的订阅模型。' : '保存后点击「登录账号」，在官方页面完成授权。'}</p></div></div>}
           <label className="form-field">备注<input placeholder="可选，记录账号或服务的用途" maxLength={300} value={providerDraft.note} onChange={event => setProviderDraft({ ...providerDraft, note: event.target.value })} /></label>
