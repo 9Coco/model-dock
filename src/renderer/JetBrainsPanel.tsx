@@ -10,6 +10,8 @@ import './jetbrains.css';
 interface Props {
   tool: ToolId;
   aggregate: boolean;
+  plugin: 'ai-assistant' | 'air';
+  onPluginChange(plugin: 'ai-assistant' | 'air'): Promise<void>;
   api?: ModelDockApi;
   models: Model[];
   defaultModel?: Model;
@@ -31,10 +33,11 @@ interface Props {
 }
 
 /** 修改点：IDE 密钥始终经主进程复制到剪贴板，不进入 renderer 或 XML。 */
-export function JetBrainsPanel({ tool, aggregate, api, models, defaultModel, gateway, connection, completion, completionModels, completionSelection, onCompletionModelSelect, status, autoSync, busy, notify, onRefresh, onStatusRefresh, onPreview, onExport, onApply }: Props) {
+export function JetBrainsPanel({ tool, aggregate, plugin, onPluginChange, api, models, defaultModel, gateway, connection, completion, completionModels, completionSelection, onCompletionModelSelect, status, autoSync, busy, notify, onRefresh, onStatusRefresh, onPreview, onExport, onApply }: Props) {
   const [action, setAction] = useState('');
   if (!isJetBrainsTool(tool)) return null;
   const direct = !aggregate;
+  const air = plugin === 'air';
   const url = connection?.baseUrl || (direct ? '' : `http://127.0.0.1:${gateway.port}/tool/${tool}/v1`);
   const modelId = connection?.modelId || defaultModel?.alias || '先选择来源和默认模型';
   const ready = !!api && !!models.length && !!defaultModel && (!direct || connection?.kind === 'direct-api');
@@ -49,8 +52,29 @@ export function JetBrainsPanel({ tool, aggregate, api, models, defaultModel, gat
   };
   const copy = (value: string, label: string) => run(`copy-${label}`, async () => { await api!.copyText(value); notify(`${label}已复制。`); });
   const parameter = (label: string, value: string, buttonLabel?: string) => <div className="jetbrains-parameter"><dt>{label}</dt><dd><code>{value}</code>{buttonLabel && <button className="text-button" disabled={!api || disabled || !ready} onClick={() => void copy(value, label)} aria-label={buttonLabel}><Copy size={14} />复制</button>}</dd></div>;
-  return <section className="panel jetbrains-connection" data-jetbrains-connection={tool} data-jetbrains-connection-kind={direct ? 'direct-api' : 'local-managed'} data-jetbrains-entry-count={ready ? 1 : 0}>
-    <div className="section-heading"><h2>{JETBRAINS_TOOLS[tool].name} 接入参数</h2><div className="jetbrains-top-actions"><button className="button small primary" data-action="apply-tool-config" disabled={!api || disabled || !status?.canApply} title={status?.message ?? '正在确认 IDE 配置和运行状态'} onClick={() => void onApply()}><CheckCheck size={14} />同步 IDE 设置</button><button className="button small secondary" data-action="jetbrains-refresh-status" disabled={!api || disabled} onClick={() => void run('status', async () => { await onStatusRefresh(); })}><BusyIcon active={action === 'status'}><RefreshCw size={14} /></BusyIcon>检查 IDE 状态</button></div></div>
+  return <section className="panel jetbrains-connection" data-jetbrains-connection={tool} data-jetbrains-plugin={plugin} data-jetbrains-connection-kind={direct ? 'direct-api' : 'local-managed'} data-jetbrains-entry-count={ready ? 1 : 0}>
+    <div className="section-heading"><h2>{JETBRAINS_TOOLS[tool].name} 接入参数</h2>{!air && <div className="jetbrains-top-actions"><button className="button small primary" data-action="apply-tool-config" disabled={!api || disabled || !status?.canApply} title={status?.message ?? '正在确认 IDE 配置和运行状态'} onClick={() => void onApply()}><CheckCheck size={14} />同步 IDE 设置</button><button className="button small secondary" data-action="jetbrains-refresh-status" disabled={!api || disabled} onClick={() => void run('status', async () => { await onStatusRefresh(); })}><BusyIcon active={action === 'status'}><RefreshCw size={14} /></BusyIcon>检查 IDE 状态</button></div>}</div>
+    <div className="jetbrains-plugin-choice">
+      <label htmlFor={`jetbrains-plugin-${tool}`}>配置插件</label>
+      <select id={`jetbrains-plugin-${tool}`} aria-label="JetBrains 插件" data-action="jetbrains-plugin-select" value={plugin} disabled={!api || disabled} onChange={event => { const next = event.target.value as 'ai-assistant' | 'air'; void run('plugin', () => onPluginChange(next)); }}><option value="ai-assistant">AI Assistant</option><option value="air">Air</option></select>
+      <p>为当前 IDE 保存目标插件，供应商和模型选择沿用此 IDE 的设置。切换插件不会立即写入 IDE。</p>
+    </div>
+    {air ? <div className="jetbrains-air-config" data-air-connection={tool}>
+      <p className="jetbrains-intro">在 Air 中添加提供商后，粘贴下面的 URL 和 Key。ModelDock 保存你的接入选择，并提供参数复制；账户由 Air 自己创建和保存。{direct ? '当前直连所选 API 供应商，使用其 API Key 和原生模型名称。' : '当前使用 ModelDock 聚合入口和本地模型名称，使用时保持 ModelDock 运行。'}</p>
+      <dl className="jetbrains-parameters">
+        {parameter('设置位置', '设置 → AI → Air → Accounts')}
+        {parameter('提供商', 'OpenAI（自定义 URL）')}
+        {parameter('URL', url || '请先选择直连供应商', '复制 JetBrains URL')}
+        <div className="jetbrains-parameter"><dt>API Key</dt><dd><span>{direct ? '所选供应商的 API Key' : '固定本机连接密钥'}</span><button className="text-button" data-action="jetbrains-copy-key" disabled={!ready || disabled} onClick={() => void run('key', async () => { await api!.copyConnectionKey(tool); notify('Key 已复制，请在 Air 的 Accounts 中添加或编辑 ModelDock 提供商并粘贴。'); })}><KeyRound size={14} />复制 Key</button></dd></div>
+        {parameter('参考模型 ID', modelId, '复制 Air 模型 ID')}
+      </dl>
+      <ol className="jetbrains-air-setup" data-air-manual-setup>
+        <li>打开「设置 → AI → Air → Accounts」，点击「More Providers → OpenAI」。</li>
+        <li>填写提供商名称（例如 ModelDock），粘贴上方 URL 和 Key，在 Air 中测试连接并保存。</li>
+        <li>在 Air 会话中选择此提供商、兼容的 Agent 和模型。</li>
+      </ol>
+      <p className="jetbrains-key-note" data-air-manual-selection>ModelDock 不会替你切换 Agent、模型或登录方式。Air 中的账户变更也请通过 Accounts 完成。</p>
+    </div> : <>
     <p className="jetbrains-intro">更改来源、连接方式或模型后，会自动备份并更新聊天 URL、HTTP 版本、核心 / 轻量模型，以及独立 AI 补全的地址、模型和提示架构。IDE 运行时保存最新选择，退出后同步；也可点击「同步 IDE 设置」重新应用。聊天与 AI 补全分别保存 Key，需要在 IDE 各自确认。{direct ? '当前 API 直连所选供应商，使用该来源的 API Key 和真实模型 ID。' : '当前使用一个 ModelDock 聚合入口和映射模型别名，使用时保持 ModelDock 运行。'}</p>
     {autoSync && <p role="status" className="jetbrains-key-note" data-jetbrains-auto-sync={autoSync.phase}>{autoSync.message}</p>}
     <dl className="jetbrains-parameters">
@@ -80,17 +104,18 @@ export function JetBrainsPanel({ tool, aggregate, api, models, defaultModel, gat
         : `${followingUnsupported ? '当前聊天默认模型没有已确认的原生 FIM 能力，跟随它无法启用补全。' : ''}同步会更新地址和模型，并停用独立 AI 补全。${completion.reason} 选择支持 FIM 的模型后，再在 IDE 补全区确认 Key 和启用。`
         : '先选择来源和模型，再同步 AI 补全参数。'}</p>
     </div>
-    <p className="jetbrains-key-note">API Key 首次接入时需在每个 IDE 手工粘贴一次；切换连接方式或来源后请更新密钥，ModelDock 不写入 IDE 的密码存储。点击 IDE 的「测试连接」后，再选择模型并发送一条消息确认推理可用。</p>
+    </>}
+    <p className="jetbrains-key-note">{air ? 'Air 和 AI Assistant 分别保存密钥。首次接入 Air 或切换来源后，请在 Air Accounts 中粘贴对应 Key；ModelDock 不读取或写入 IDE 密码存储。复制参数不代表 Agent 已完成授权或真实模型调用已通过。' : 'API Key 首次接入时需在每个 IDE 手工粘贴一次；切换连接方式或来源后请更新密钥，ModelDock 不写入 IDE 的密码存储。点击 IDE 的「测试连接」后，再选择模型并发送一条消息确认推理可用。'}</p>
     <div className="jetbrains-actions">
-      {!direct && <button className="button small secondary" data-action="jetbrains-prepare-connection" title="只启动本机服务；IDE 设置由上方同步按钮写入" disabled={!ready || disabled} onClick={() => void run('prepare', async () => { const result = await api!.startGateway(gateway.port); await onRefresh(); if (!result.running) throw new Error(result.lastError || '本机连接未能启动。'); notify('本机服务已启动；退出 IDE 后可同步设置，API Key 仍需在 IDE 中确认。'); })}><BusyIcon active={action === 'prepare'}><Plug2 size={14} /></BusyIcon>准备本机连接</button>}
+      {!direct && <button className="button small secondary" data-action="jetbrains-prepare-connection" title={air ? '只启动 ModelDock 本机服务；随后在 Air 中添加提供商并粘贴参数' : '只启动本机服务；IDE 设置由上方同步按钮写入'} disabled={!ready || disabled} onClick={() => void run('prepare', async () => { const result = await api!.startGateway(gateway.port); await onRefresh(); if (!result.running) throw new Error(result.lastError || '本机连接未能启动。'); notify(air ? '本机服务已启动，请在 Air Accounts 中添加提供商并粘贴 URL 和 Key。' : '本机服务已启动；退出 IDE 后可同步设置，API Key 仍需在 IDE 中确认。'); })}><BusyIcon active={action === 'prepare'}><Plug2 size={14} /></BusyIcon>准备本机连接</button>}
       <button className="button small secondary" data-action="preview-tool-config" disabled={!api || disabled || !models.length} onClick={() => void onPreview()}><FileCode2 size={14} />预览接入参数</button>
       <button className="button small secondary" data-action="export-tool-config" disabled={!ready || disabled} onClick={() => void onExport()}><ArrowDownToLine size={14} />导出参考参数</button>
     </div>
-    <div className="jetbrains-profile" data-jetbrains-running={status?.running ?? 'unknown'}>
+    {!air && <div className="jetbrains-profile" data-jetbrains-running={status?.running ?? 'unknown'}>
       <strong>{status?.foundProfile ? `配置目录${status.version ? ` · ${status.version}` : ''}` : 'IDE 配置状态'}</strong>
       {status?.configDir && <code>{status.configDir}</code>}
       <p role="status">{status?.message ?? '正在检查配置目录及 IDE 运行状态；也可使用以上参数手工接入。'}</p>
-    </div>
-    <p className="jetbrains-scope-note">仅在确认 IDE 已退出且 profile 兼容时写入设置。等待期间保留最新选择；关闭 ModelDock 后不自动重放待办。同步覆盖 AI Assistant 聊天与独立 AI 补全参数；两处 Key 仍需在 IDE 确认。导出的 JSON 是填写参考，不能直接导入 IDE。Junie、Claude Agent、Codex 和 Gemini CLI 的独立授权仍在 IDE 内管理。</p>
+    </div>}
+    <p className="jetbrains-scope-note">{air ? 'Air 通过原生 Accounts 界面配置，ModelDock 不直接修改 Air 的账户文件或密码存储。此模式只保存接入选择并提供复制、预览和导出参考参数；旧 AI Assistant 的核心/轻量模型及 AI 补全保持原样。Agent 的授权、能力和模型选择由 Air 与该 Agent 管理。' : '仅在确认 IDE 已退出且 profile 兼容时写入设置。等待期间保留最新选择；关闭 ModelDock 后不自动重放待办。同步覆盖 AI Assistant 聊天与独立 AI 补全参数；两处 Key 仍需在 IDE 确认。导出的 JSON 是填写参考，不能直接导入 IDE。Junie、Claude Agent、Codex 和 Gemini CLI 的独立授权仍在 IDE 内管理。'}</p>
   </section>;
 }

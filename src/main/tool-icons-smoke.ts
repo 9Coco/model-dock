@@ -3,7 +3,7 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { BrowserWindow } from 'electron';
 
-const toolIds = ['codex', 'claude-code', 'opencode', 'dsh', 'vscode', 'copilot', 'trae', 'webstorm', 'intellij-idea', 'rider', 'pycharm'] as const;
+const toolIds = ['codex', 'claude-code', 'opencode', 'dsh', 'vscode', 'copilot', 'webstorm', 'intellij-idea', 'rider', 'pycharm'] as const;
 const jetBrainsIds = ['webstorm', 'intellij-idea', 'rider', 'pycharm'] as const;
 
 interface IconReadback {
@@ -106,7 +106,7 @@ export async function verifyToolIcons(window: BrowserWindow, outputDir: string, 
     for (const theme of ['light', 'dark']) {
       await evaluate(`(()=>{document.documentElement.dataset.theme=${JSON.stringify(theme)};document.documentElement.style.colorScheme=${JSON.stringify(theme)};})()`);
       // The tall view proves all tools fit within each category. The ordinary
-      // viewports prove both tabs and all eleven logo resources remain reachable.
+      // viewports prove both tabs and all ten logo resources remain reachable.
       for (const [width, height] of [[1320, 1440], [1320, 880], [980, 680]]) {
         window.setSize(width, height);
         await pause(100);
@@ -123,12 +123,12 @@ export async function verifyToolIcons(window: BrowserWindow, outputDir: string, 
           }
           return {viewport:{width:innerWidth,height:innerHeight},sidebar,categories,allToolsVisibleInCategory:categories.every(value=>value.allVisible),documentOverflow:document.documentElement.scrollWidth>innerWidth};
         })()`);
-        assert.deepEqual(value.sidebar.map(icon => icon.tool), [...toolIds], 'Eleven tool navigation buttons must show their matching logos');
+        assert.deepEqual(value.sidebar.map(icon => icon.tool), [...toolIds], 'Ten tool navigation buttons must show their matching logos');
         value.sidebar.forEach(assertIcon);
         assert.equal(new Set(value.sidebar.map(icon => icon.source)).size, toolIds.length, 'Every tool must use its own logo resource');
         assert.equal(value.documentOverflow, false, 'Tool logos must not introduce horizontal document overflow');
         assert.deepEqual(value.categories.map(category => category.category), ['agent', 'jetbrains'], 'Two tool category tabs remain available');
-        assert.deepEqual(value.categories.map(category => category.tools.length), [7, 4], 'Regular Agent and JetBrains categories retain their tool counts');
+        assert.deepEqual(value.categories.map(category => category.tools.length), [6, 4], 'Regular Agent and JetBrains categories retain their tool counts');
         if (height === 1440) assert.ok(value.allToolsVisibleInCategory, 'Tall overview must display all tools together within each category');
         const headers: IconReadback[] = [];
         const screenshots: string[] = [];
@@ -141,7 +141,7 @@ export async function verifyToolIcons(window: BrowserWindow, outputDir: string, 
           assert.equal(header.source, sidebar.source, `Header and sidebar must use the same logo resource: ${tool}`);
           if ((jetBrainsIds as readonly string[]).includes(tool)) assert.ok(Math.abs(header.scale - sidebar.scale) < 0.01, `JetBrains header/sidebar logo proportions must match: ${tool}`);
           headers.push(header);
-          if (height === 880 && (tool === 'trae' || (jetBrainsIds as readonly string[]).includes(tool))) {
+          if (height === 880 && (jetBrainsIds as readonly string[]).includes(tool)) {
             const screenshot = `electron-tool-icons-${theme}-${tool}-detail.png`;
             writeFileSync(join(outputDir, screenshot), await captureUi());
             screenshots.push(screenshot);

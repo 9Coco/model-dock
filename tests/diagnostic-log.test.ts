@@ -44,6 +44,17 @@ describe('persistent diagnostic metadata', () => {
     expect(snapshot.entries[1].context.durationMs).toBe(13);
   });
 
+  it('keeps historical records readable without recognizing removed tool metadata', () => {
+    const f = fixture();
+    f.log.write('info', 'app.start');
+    writeFileSync(f.file, JSON.stringify(entry({ operation: 'applyConfig', toolId: 'trae', statusCode: 200 })) + '\n', { mode: 0o600 });
+    const historical = new DiagnosticsLog(f.root).query().entries;
+    expect(historical).toHaveLength(1);
+    expect(historical[0].context).toMatchObject({ operation: 'applyConfig', statusCode: 200 });
+    expect(historical[0].context.toolId).toBeUndefined();
+    f.log.write('info', 'config.apply', undefined, { operation: 'applyConfig', toolId: 'codex' });
+    expect(f.log.query().entries[0].context.toolId).toBe('codex');
+  });
   it('creates a missing data directory without exposing new folders', () => {
     const f = fixture(), data = join(f.root, 'new-data', 'profile');
     const log = new DiagnosticsLog(data); log.write('info', 'app.start');

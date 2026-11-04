@@ -30,6 +30,5 @@ this directory ship with the app.
 
 - **WebStorm, IntelliJ IDEA, JetBrains Rider and PyCharm product icons**: JetBrains s.r.o.; downloaded 2026-10-09 from the [official brand page](https://www.jetbrains.com/company/brand/) and its linked SVG files. Preserved unmodified, displayed in their original colors, and scaled proportionally. Product names and logos are JetBrains trademarks. These assets follow the JetBrains Brand Guidelines and are excluded from ModelDock's MIT artwork license. See `LICENSE-jetbrains-brand.txt` for attribution and authoritative links, and `manifest.json` for source URLs and SHA-256 records.
 
-- **Trae compatibility label**: Original letter T SVG by ModelDock contributors, authored 2026-11-03. This is a text label, not the official TRAE brand mark. License: MIT, `LICENSE-modeldock.txt`; local SHA-256 recorded in `manifest.json`.
 
 All product names and marks belong to their respective owners.

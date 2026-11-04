@@ -4,7 +4,7 @@ import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync, chmodSy
 import { join } from 'node:path';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import type { Provider, ProviderInput, ProviderSecret, Model, ModelInput, ToolBinding, ToolId, RequestLog, GatewayExposure } from '../shared/types';
+import type { Provider, ProviderInput, ProviderSecret, Model, ModelInput, ToolBinding, ToolId, RequestLog, GatewayExposure, JetBrainsPlugin } from '../shared/types';
 import { isReasoningEffort, MODEL_SPEC_FIELDS, modelSpecs, sanitizeReasoningEfforts } from '../shared/types';
 import { providerPresets, presetById } from '../shared/presets';
 import { resolveBindingModels } from '../shared/bindings';
@@ -34,7 +34,7 @@ interface ProviderRemovalData {
   bindingsBefore: Record<string, unknown>[];
   bindingsAfter: Record<string, unknown>[];
 }
-const TOOL_NAMES: Record<ToolId, string> = { codex: 'Codex', opencode: 'OpenCode', dsh: 'DeepSeek Harness', vscode: 'VS Code', copilot: 'GitHub Copilot', 'claude-code': 'Claude Code', trae: 'Trae CN', webstorm: 'WebStorm', 'intellij-idea': 'IntelliJ IDEA', rider: 'Rider', pycharm: 'PyCharm' };
+const TOOL_NAMES: Record<ToolId, string> = { codex: 'Codex', opencode: 'OpenCode', dsh: 'DeepSeek Harness', vscode: 'VS Code', copilot: 'GitHub Copilot', 'claude-code': 'Claude Code', webstorm: 'WebStorm', 'intellij-idea': 'IntelliJ IDEA', rider: 'Rider', pycharm: 'PyCharm' };
 const kinds = new Set(['openai-compatible', 'codex', 'grok', 'copilot']);
 let sqlPromise: Promise<SqlJsStatic> | undefined;
 
@@ -90,7 +90,7 @@ export class Store {
     }
     // 修改点：旧版其他工具允许 direct 多入口，转为等价的 auto 元数据；不改外部配置或所选来源。
     for (const row of store.rows("SELECT id,provider_ids FROM bindings WHERE mode='direct'")) {
-      if (!Object.hasOwn(TOOL_NAMES, String(row.id)) || row.id === 'codex' || row.id === 'claude-code' || row.id === 'trae') continue;
+      if (!Object.hasOwn(TOOL_NAMES, String(row.id)) || row.id === 'codex' || row.id === 'claude-code') continue;
       const ids = row.provider_ids === null ? [] : JSON.parse(String(row.provider_ids));
       if (Array.isArray(ids) && ids.length > 1) db.run("UPDATE bindings SET mode='auto' WHERE id=?", [String(row.id)]);
     }
@@ -583,7 +583,18 @@ export class Store {
       this.db.run('UPDATE bindings SET mode=?,connection_choices=? WHERE id=?', [mode, JSON.stringify(updated.connectionChoices), binding.id]);
     }
   }
-  private allBindings(): ToolBinding[] { return this.rows('SELECT * FROM bindings ORDER BY rowid').map(row => ({ id: row.id as ToolId, name: String(row.name), enabled: Boolean(row.enabled), mode: row.mode === 'direct' ? 'direct' : row.mode === 'auto' ? 'auto' : 'aggregate', providerIds: row.provider_ids === null ? undefined : JSON.parse(String(row.provider_ids)), modelIds: JSON.parse(String(row.model_ids)), ...(row.model_selection === 'selected' || row.model_selection === 'all' ? { modelSelection: row.model_selection } : {}), defaultModelId: String(row.default_model_id), ...(row.connection_choices ? { connectionChoices: JSON.parse(String(row.connection_choices)) } : {}), note: String(row.note), ...(row.id === 'vscode' ? { vscodeSyncScope: row.vscode_sync_scope === 'managed' ? 'managed' as const : 'selected' as const } : {}), ...(row.id === 'copilot' ? { copilotSyncScope: row.copilot_sync_scope === 'managed' ? 'managed' as const : 'selected' as const } : {}), ...(row.id === 'dsh' ? { dshSyncScope: row.dsh_sync_scope === 'managed' ? 'managed' as const : 'selected' as const } : {}), ...(row.id === 'claude-code' ? { claudeDisableTelemetry: row.claude_disable_telemetry !== 0 } : {}) })); }
+  getJetBrainsPlugin(tool: ToolId): JetBrainsPlugin {
+    if (!isJetBrainsTool(tool)) throw new Error('此工具不支持 JetBrains 插件选择。');
+    const value = this.getManagedState<unknown>(`jetbrains-plugin:${tool}`, 'ai-assistant');
+    if (value !== 'ai-assistant' && value !== 'air') throw new Error('JetBrains 插件选择无效。');
+    return value;
+  }
+  setJetBrainsPlugin(tool: ToolId, plugin: JetBrainsPlugin): void {
+    if (!isJetBrainsTool(tool) || !this.one('SELECT id FROM bindings WHERE id=?', [tool])) throw new Error('此工具不支持 JetBrains 插件选择。');
+    if (plugin !== 'ai-assistant' && plugin !== 'air') throw new Error('JetBrains 插件选择无效。');
+    if (this.getJetBrainsPlugin(tool) !== plugin) this.setManagedState(`jetbrains-plugin:${tool}`, plugin);
+  }
+  private allBindings(): ToolBinding[] { return this.rows('SELECT * FROM bindings ORDER BY rowid').filter(row => Object.hasOwn(TOOL_NAMES, String(row.id))).map(row => ({ id: row.id as ToolId, ...(isJetBrainsTool(row.id) && this.getJetBrainsPlugin(row.id) === 'air' ? { jetBrainsPlugin: 'air' as const } : {}), name: String(row.name), enabled: Boolean(row.enabled), mode: row.mode === 'direct' ? 'direct' : row.mode === 'auto' ? 'auto' : 'aggregate', providerIds: row.provider_ids === null ? undefined : JSON.parse(String(row.provider_ids)), modelIds: JSON.parse(String(row.model_ids)), ...(row.model_selection === 'selected' || row.model_selection === 'all' ? { modelSelection: row.model_selection } : {}), defaultModelId: String(row.default_model_id), ...(row.connection_choices ? { connectionChoices: JSON.parse(String(row.connection_choices)) } : {}), note: String(row.note), ...(row.id === 'vscode' ? { vscodeSyncScope: row.vscode_sync_scope === 'managed' ? 'managed' as const : 'selected' as const } : {}), ...(row.id === 'copilot' ? { copilotSyncScope: row.copilot_sync_scope === 'managed' ? 'managed' as const : 'selected' as const } : {}), ...(row.id === 'dsh' ? { dshSyncScope: row.dsh_sync_scope === 'managed' ? 'managed' as const : 'selected' as const } : {}), ...(row.id === 'claude-code' ? { claudeDisableTelemetry: row.claude_disable_telemetry !== 0 } : {}) })); }
   listBindings(): ToolBinding[] { const bindings = this.allBindings(); return Object.keys(TOOL_NAMES).flatMap(tool => bindings.filter(binding => binding.id === tool)); }
   /** Restore a captured sync choice exactly, without replacing unrelated tool metadata. */
   restoreBindingSelection(binding: ToolBinding): void {
@@ -602,6 +613,7 @@ export class Store {
     ]));
   }
   saveBinding(binding: ToolBinding): void {
+    if (binding.jetBrainsPlugin !== undefined && (!isJetBrainsTool(binding.id) || binding.jetBrainsPlugin !== this.getJetBrainsPlugin(binding.id))) throw new Error('插件选择已变化，请刷新后重新保存。');
     if (!Object.hasOwn(TOOL_NAMES, binding.id) || typeof binding.enabled !== 'boolean' || !Array.isArray(binding.modelIds) || typeof binding.defaultModelId !== 'string') throw new Error('工具绑定无效。');
     if (binding.modelSelection !== undefined && !['all', 'selected'].includes(binding.modelSelection)) throw new Error('模型选择方式无效。');
     const previousSelection = this.one('SELECT model_selection FROM bindings WHERE id=?', [binding.id])?.model_selection;

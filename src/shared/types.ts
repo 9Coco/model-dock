@@ -6,7 +6,7 @@ import type { DiscoveryResult, ModelSelection, AddModelsResult } from './catalog
 import type { ConnectionResult, ConnectionTestInput } from './connection-types';
 export type { ConnectionResult, ConnectionTestInput } from './connection-types';
 export type ProviderKind = 'openai-compatible' | 'codex' | 'grok' | 'copilot';
-export type ToolId = 'codex' | 'opencode' | 'dsh' | 'vscode' | 'copilot' | 'claude-code' | 'trae' | 'webstorm' | 'intellij-idea' | 'rider' | 'pycharm';
+export type ToolId = 'codex' | 'opencode' | 'dsh' | 'vscode' | 'copilot' | 'claude-code' | 'webstorm' | 'intellij-idea' | 'rider' | 'pycharm';
 export type WireApi = 'chat-completions' | 'responses' | 'messages';
 export type ToolMode = 'direct' | 'aggregate' | 'auto';
 /** Thinking levels recognized by client tools (VS Code picker labels these; unknown levels are not written to client configs). */
@@ -134,7 +134,10 @@ export interface ToolConnectionChoices {
   direct?: { providerId: string; defaultModelId: string; completionModelId?: string };
   aggregate?: { providerIds: string[]; modelIds: string[]; defaultModelId: string; modelSelection?: 'all' | 'selected'; completionModelId?: string };
 }
+export type JetBrainsPlugin = 'ai-assistant' | 'air';
 export interface ToolBinding {
+  /** Destination plugin per IDE; source and connection-mode selections stay intact. */
+  jetBrainsPlugin?: JetBrainsPlugin;
   /** Independent drafts for strict single-entry clients; no credentials. */
   connectionChoices?: ToolConnectionChoices;
   id: ToolId;
@@ -231,6 +234,7 @@ export interface ModelDockApi {
   saveModel(input: ModelInput): Promise<Model>;
   deleteModel(id: string): Promise<void>;
   saveBinding(binding: ToolBinding): Promise<void>;
+  setJetBrainsPlugin(tool: import('./jetbrains').JetBrainsToolId, plugin: JetBrainsPlugin): Promise<void>;
   testProvider(id: string, input?: ConnectionTestInput): Promise<ConnectionResult>;
   discoverModels(id: string): Promise<DiscoveryResult>;
   addDiscoveredModels(id: string, selections: ModelSelection[]): Promise<AddModelsResult>;

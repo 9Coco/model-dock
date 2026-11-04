@@ -143,19 +143,6 @@
       "license": "JetBrains Brand Guidelines and trademark terms",
       "licenseRecord": "jetbrains-brand",
       "rendering": "Unmodified SVG rendered as a full-color image with proportional sizing"
-    },
-    {
-      "file": "trae.svg",
-      "label": "Trae compatibility label - original letter T",
-      "sourceType": "original",
-      "author": "ModelDock contributors",
-      "createdAt": "2026-11-03",
-      "sourcePath": "src/renderer/assets/tool-icons/trae.svg",
-      "sha256": "b6b15f8c02d294222a89b14b0f7eb83394576a6a3289a066741326ed231a7dad",
-      "viewBox": "0 0 24 24",
-      "license": "MIT",
-      "licenseRecord": "modeldock",
-      "note": "Original letter T geometry; not the official TRAE brand mark."
     }
   ],
   "licenses": [
