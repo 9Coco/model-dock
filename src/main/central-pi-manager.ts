@@ -210,6 +210,9 @@ export class CentralPiManager {
     const { signal } = state.controller;
     const inheritedPath = process.env.PATH ?? '';
     const candidates = [...inheritedPath.split(delimiter), join(homedir(), '.local', 'bin'), process.env.NVM_BIN];
+    // Pi's official Windows installer now keeps its pinned launcher here.
+    // An already-running desktop app can still have the pre-install PATH.
+    if (windows) candidates.push(join(homedir(), '.pi', 'agent', 'bin'));
     if (windows && process.env.APPDATA) candidates.push(join(process.env.APPDATA, 'npm'));
     const dirs = [...new Set(candidates.filter((p): p is string => !!p && isAbsolute(p)))];
     const central = await executable(dirs, windows ? ['central.exe'] : ['central']);
