@@ -1,4 +1,4 @@
-import type { Model, Provider, ToolBinding } from './types';
+import type { Model, Provider, ToolBinding, JetBrainsPlugin } from './types';
 import { resolveBindingModels, bindingConnectionPolicy } from './bindings';
 export const JETBRAINS_TOOLS = {
   webstorm: { name: 'WebStorm', selectorPrefix: 'WebStorm' },
@@ -6,6 +6,9 @@ export const JETBRAINS_TOOLS = {
   rider: { name: 'Rider', selectorPrefix: 'Rider' },
   pycharm: { name: 'PyCharm', selectorPrefix: 'PyCharm' },
 } as const;
+export type { JetBrainsPlugin } from './types';
+export const JETBRAINS_PLUGIN_LABELS: Record<JetBrainsPlugin, string> = { 'ai-assistant': 'AI Assistant', air: 'Air' };
+export const jetBrainsPluginFor = (binding: Pick<ToolBinding, 'jetBrainsPlugin'>): JetBrainsPlugin => binding.jetBrainsPlugin === 'air' ? 'air' : 'ai-assistant';
 export type JetBrainsToolId = keyof typeof JETBRAINS_TOOLS;
 export const JETBRAINS_TOOL_IDS = Object.keys(JETBRAINS_TOOLS) as JetBrainsToolId[];
 export function isJetBrainsTool(value: unknown): value is JetBrainsToolId {
@@ -14,6 +17,7 @@ export function isJetBrainsTool(value: unknown): value is JetBrainsToolId {
 /** 修改点：未确认 IDE 退出时只提供接入参数，不写正在运行的设置文件。 */
 export interface JetBrainsStatus {
   tool: JetBrainsToolId;
+  plugin?: JetBrainsPlugin;
   configDir: string | null;
   version: string | null;
   foundProfile: boolean;

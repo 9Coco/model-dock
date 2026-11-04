@@ -24,3 +24,14 @@
 .jetbrains-connection > .section-heading { flex-wrap: wrap; gap: 10px; }
 .jetbrains-top-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; min-width: 0; }
 .jetbrains-top-actions > .button { min-height: 32px; padding: 6px 10px; }
+
+.jetbrains-plugin-choice { display: grid; grid-template-columns: auto minmax(145px, 210px); align-items: center; gap: 8px 12px; margin: 8px 0 16px; padding: 12px; background: var(--surface-soft); border: 1px solid var(--line); border-radius: 7px; }
+.jetbrains-plugin-choice > label { font-size: 12px; font-weight: 600; color: var(--ink); }
+.jetbrains-plugin-choice > select { min-width: 0; width: 100%; min-height: 32px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 5px; color: var(--ink); background: var(--surface); font: inherit; font-size: 12px; }
+.jetbrains-plugin-choice > p { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.jetbrains-air-config .jetbrains-intro { margin-top: 0; }
+.tool-workspace.with-model-sidebar .jetbrains-plugin-choice { grid-template-columns: minmax(0, 1fr); }
+@media (max-width: 900px) { .jetbrains-plugin-choice { grid-template-columns: minmax(0, 1fr); } }
+
+.jetbrains-air-setup { margin: 14px 0; padding-left: 22px; color: var(--ink); font-size: 12px; line-height: 1.8; }
+.jetbrains-air-setup li + li { margin-top: 5px; }

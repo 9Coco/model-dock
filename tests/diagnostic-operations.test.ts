@@ -30,6 +30,11 @@ describe('diagnostic operation classification excludes all credential and body f
     expect(isQuietDiagnosticOperation('snapshot')).toBe(true);
     expect(diagnosticOperationResult('snapshot', [], { providers: [{ apiKey: secret }] }, 2)).toBeUndefined();
   });
+  it('omits a removed tool from current operation metadata while retaining supported tools', () => {
+    expect(diagnosticOperationContext('applyConfig', ['trae'])).toEqual({ operation: 'applyConfig' });
+    expect(diagnosticOperationContext('saveBinding', [{ id: 'trae' }])).toEqual({ operation: 'saveBinding' });
+    expect(diagnosticOperationContext('applyConfig', ['codex'])).toEqual({ operation: 'applyConfig', toolId: 'codex' });
+  });
   it('never incorporates unvalidated object identifiers or upstream configuration', () => {
     expect(diagnosticOperationContext('saveProvider', [{ id: secret, name: secret, baseUrl: `https://${secret}.example.test`, apiKey: secret }])).toEqual({ operation: 'saveProvider', providerId: undefined });
     expect(diagnosticOperationResult('applyConfig', ['opencode'], { filename: secret, content: secret }, 4)).toMatchObject({ event: 'config.apply', context: { toolId: 'opencode', outcome: 'success' } });

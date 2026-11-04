@@ -100,7 +100,7 @@ export async function verifySidebarScroll(window: BrowserWindow, store: Store, o
       await pause(100);
       const start = await evaluate<SidebarReadback>(readScript); validate(start);
       assert.ok(start.lists[1].scrollHeight > start.lists[1].clientHeight, 'Many synthetic providers must exercise provider scrolling');
-      assert.equal(start.lists[0].rows.length, 7, 'Regular Agent category shows seven tools');
+      assert.equal(start.lists[0].rows.length, 6, 'Regular Agent category shows six tools');
       await clickVisible('[data-tool-category="jetbrains"]');
       await waitFor(`document.querySelector('[data-tool-category="jetbrains"]')?.getAttribute('aria-selected')==='true'`, 'JetBrains category');
       await evaluate(`document.querySelector('[data-sidebar-scroll="tools"]').scrollTop=1e6`);

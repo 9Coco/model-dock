@@ -33,7 +33,7 @@ export interface GatewayOptions {
   runWithDiagnostics?: (context: DiagnosticContext, action: () => Promise<void>) => Promise<void>;
 }
 const BODY_LIMIT = 8 * 1024 * 1024;
-const toolIds = new Set(['codex', 'opencode', 'dsh', 'vscode', 'copilot', 'claude-code', 'trae', 'webstorm', 'intellij-idea', 'rider', 'pycharm']);
+const toolIds = new Set(['codex', 'opencode', 'dsh', 'vscode', 'copilot', 'claude-code', 'webstorm', 'intellij-idea', 'rider', 'pycharm']);
 const upstreamHeaderNames = new Set(['authorization', 'x-api-key', 'anthropic-version', 'anthropic-beta', 'content-type', 'accept', 'user-agent', 'originator', 'version', 'chatgpt-account-id', 'openai-beta', 'openai-organization', 'openai-project', 'session_id', 'conversation_id', 'x-request-id', 'x-grok-cli-version', 'x-grok-client-version', 'x-grok-client-identifier', 'x-grok-client-mode', 'x-xai-token-auth', 'x-authenticateresponse', 'x-grok-conv-id', 'copilot-integration-id', 'editor-version', 'editor-plugin-version', 'x-github-api-version', 'x-initiator']);
 const responseHeaderNames = new Set(['content-type', 'x-request-id', 'retry-after']);
 const nativeErrorTypes = new Set(['invalid_request_error', 'authentication_error', 'permission_error', 'not_found_error', 'request_too_large', 'rate_limit_error', 'api_error', 'overloaded_error', 'timeout_error']);
@@ -226,13 +226,6 @@ export class Gateway {
       const actual = Buffer.from(key);
       return actual.length === expected.length && timingSafeEqual(actual, expected);
     };
-    // TRAE's native Anthropic client may send x-api-key. Keep that compatibility
-    // on its Messages route only; conflicting credentials never fall back.
-    const apiKey = request.headers['x-api-key'];
-    if (endpoint === '/tool/trae/v1/messages' && apiKey !== undefined) {
-      return typeof apiKey === 'string' && matches(apiKey)
-        && (authorization === undefined || matches(bearer));
-    }
     return matches(bearer);
   }
   private route(path: string): { endpoint: string; tool?: ToolId } {
@@ -249,7 +242,7 @@ export class Gateway {
     try { validateUpstreamUrl(nativeMessages && provider.kind === 'openai-compatible' ? nativeClaudeBaseUrl(provider) ?? provider.baseUrl : provider.baseUrl, this.state.port); return true; } catch { return false; }
   }
   private allowedModels(tool?: ToolId): Model[] {
-    const models = this.store.listModels().filter(model => this.available(model, tool === 'claude-code' || tool === 'trae' && model.wireApi === 'messages'));
+    const models = this.store.listModels().filter(model => this.available(model, tool === 'claude-code'));
     if (!tool) {
       const exposure = this.store.gatewayExposure();
       return models.filter(model => !exposure.excludedProviderIds.includes(model.providerId) && !exposure.excludedModelIds.includes(model.id));
@@ -313,7 +306,7 @@ export class Gateway {
       endpoint = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
       anthropic = endpoint.endsWith('/v1/messages');
       // Unknown paths and query parameters can contain secrets; only known route names are retained.
-      const knownRoute = endpoint.replace(/^\/tool\/(?:codex|opencode|dsh|vscode|copilot|claude-code|trae|webstorm|intellij-idea|rider|pycharm)/, '');
+      const knownRoute = endpoint.replace(/^\/tool\/(?:codex|opencode|dsh|vscode|copilot|claude-code|webstorm|intellij-idea|rider|pycharm)/, '');
       if (['/v1/models', '/v1/chat/completions', '/v1/responses', '/v1/messages', '/v1/completions'].includes(knownRoute)) diagnosticEndpoint = knownRoute;
       if (!this.authenticated(request, endpoint)) throw new GatewayError(401, '需要有效的 ModelDock API Key。');
       const route = this.route(endpoint);
@@ -333,9 +326,8 @@ export class Gateway {
       const completion = route.endpoint === '/v1/completions';
       if (request.method !== 'POST' || !['/v1/chat/completions', '/v1/responses', '/v1/messages', '/v1/completions'].includes(route.endpoint)
         || completion && !isJetBrainsTool(route.tool)) throw new GatewayError(404, '接口不存在。');
-      if (anthropic && route.tool && route.tool !== 'claude-code' && route.tool !== 'trae'
-        || route.tool === 'claude-code' && !anthropic
-        || route.tool === 'trae' && !['/v1/chat/completions', '/v1/messages', '/v1/responses'].includes(route.endpoint)) throw new GatewayError(404, '此工具不使用该协议入口。');
+      if (anthropic && route.tool && route.tool !== 'claude-code'
+        || route.tool === 'claude-code' && !anthropic) throw new GatewayError(404, '此工具不使用该协议入口。');
       const body = await readBody(request);
       if (body.stream !== undefined && typeof body.stream !== 'boolean') throw new GatewayError(400, 'stream 必须是布尔值。');
       const binding = route.tool ? this.store.listBindings().find(item => item.id === route.tool) : undefined;
@@ -355,7 +347,6 @@ export class Gateway {
       modelId = model.id;
       if (selectedModels && !selectedModels.some(item => item.id === model.id)) throw new GatewayError(403, '此模型未授权给该工具。');
       const expectedWire = route.endpoint === '/v1/responses' ? 'responses' : 'chat-completions';
-      if (route.tool === 'trae' && model.wireApi !== (anthropic ? 'messages' : expectedWire)) throw new GatewayError(400, 'TRAE 模型协议与此入口不一致，请使用该模型配置的原生协议。');
       // 修改点：JetBrains AI Assistant 使用 Chat，Responses 来源在本机显式转换。
       chatResponses = isJetBrainsTool(route.tool) && route.endpoint === '/v1/chat/completions' && model.wireApi === 'responses';
       if (!anthropic && !chatResponses && !completion && model.wireApi !== expectedWire) throw new GatewayError(400, '该模型使用不同协议，请选择对应的接口；本版本不进行跨协议转换。');
@@ -363,10 +354,8 @@ export class Gateway {
       const nativeCompletion = completion && provider ? nativeJetBrainsCompletion(model, provider) : undefined;
       if (completion && !nativeCompletion) throw new GatewayError(400, '此模型尚未确认原生 FIM 补全能力；请为 AI 补全选择兼容模型，不使用聊天协议代替。');
       const responsesBridge = anthropic && route.tool === 'claude-code' && provider && preferClaudeResponsesBridge(provider, model);
-      // TRAE exports the protocol saved for each model. In particular, a
-      // Responses model must not silently switch to a provider's Claude URL.
       const nativeMessages = anthropic && !responsesBridge && provider?.kind === 'openai-compatible'
-        && (model.wireApi === 'messages' || route.tool !== 'trae' && Boolean(nativeClaudeBaseUrl(provider)));
+        && (model.wireApi === 'messages' || Boolean(nativeClaudeBaseUrl(provider)));
       if (provider && provider.kind !== 'openai-compatible' && ('previous_response_id' in body || 'conversation' in body)) {
         throw new GatewayError(400, '订阅来源不支持服务端会话续接；请移除 previous_response_id / conversation，并在 input 中发送完整会话历史。');
       }
@@ -483,7 +472,7 @@ export class Gateway {
         return;
       }
       const sse = upstream.headers.get('content-type')?.includes('text/event-stream');
-      if ((tool === 'copilot' || tool === 'trae') && provider.kind === 'codex' && path === '/v1/responses') {
+      if (tool === 'copilot' && provider.kind === 'codex' && path === '/v1/responses') {
         if (!upstream.body) throw new GatewayError(502, 'Codex 响应为空。');
         // Codex requests always ask the subscription backend to stream. In practice
         // it also serves SSE with an octet-stream (or absent) Content-Type.

@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { lstatSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { extractFile, getRawHeader, listPackage, statFile } from '@electron/asar';
@@ -89,9 +89,8 @@ function verifyPackage(directory) {
   for (const name of ['modeldock.png', 'modeldock-tray.png', 'modeldock.ico', 'modeldock.svg']) {
     verifyCopiedFile(join(root, 'assets', name), join(resources, 'icons', name));
   }
-  for (const name of ['package.json', 'extension.cjs', 'modeldock-trae-bridge.vsix']) {
-    verifyCopiedFile(join(root, 'assets/trae-bridge', name), join(resources, 'trae-bridge', name));
-  }
+  assert(!existsSync(join(resources, 'trae-bridge')), 'Removed client bridge is present in the package.');
+  assert(!names.some(name => name.startsWith('assets/trae-bridge/')), 'Removed client bridge is present inside ASAR.');
 
   const wasmName = 'node_modules/sql.js/dist/sql-wasm.wasm';
   assert(names.includes(wasmName) && statFile(archive, normalize(wasmName), false).unpacked === true,

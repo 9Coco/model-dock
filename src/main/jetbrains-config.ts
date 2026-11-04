@@ -22,6 +22,8 @@ export interface JetBrainsHistoryStore {
 }
 export interface JetBrainsConfigOptions {
   profileRoot?: string; cacheRoot?: string; platform?: NodeJS.Platform; port?: number;
+  /** Selected IDE plugin; Air provides a manual guide and never writes IDE state. */
+  plugin?: 'ai-assistant' | 'air';
   /** 修改点：仅主进程测试使用，渲染进程不能提供路径或进程检测回调。 */
   processProbe?: (pid: number) => 'running' | 'stopped' | 'unknown';
   /** Installed product roots / public OS snapshot, only injectable in the main process. */
@@ -79,8 +81,10 @@ function defaultProcessProbe(pid: number): 'running' | 'stopped' | 'unknown' {
   catch (error) { const code = (error as NodeJS.ErrnoException).code; return code === 'ESRCH' ? 'stopped' : code === 'EPERM' ? 'running' : 'unknown'; }
 }
 export function jetBrainsStatus(tool: JetBrainsToolId, homeDirectory = homedir(), options: JetBrainsConfigOptions = {}): JetBrainsConfigStatus {
-  const base: JetBrainsConfigStatus = { tool, configDir: null, version: null, foundProfile: false, running: 'unknown', canApply: false, message: '' };
-  if (!products[tool]) return { ...base, message: '不支持的 JetBrains 产品。' };
+  const plugin = options.plugin ?? 'ai-assistant';
+  const base: JetBrainsConfigStatus = { tool, plugin, configDir: null, version: null, foundProfile: false, running: 'unknown', canApply: false, message: '' };
+  if (!products[tool] || !['ai-assistant', 'air'].includes(plugin)) return { ...base, message: '不支持的 JetBrains 产品或插件。' };
+  if (plugin === 'air') return airGuideStatus(tool, homeDirectory, options);
   let located = base;
   try {
     const paths = roots(homeDirectory, options); safeDirectory(paths.profileRoot);
@@ -140,6 +144,7 @@ function selection(store: JetBrainsConfigStore, tool: JetBrainsToolId, port: num
   return { models, core, key, baseUrl, directApi, coreId: modelId(core), modelId, completion };
 }
 export function buildJetBrainsConfig(store: JetBrainsConfigStore, tool: JetBrainsToolId, port: number, revealKey = false, homeDirectory = homedir(), options: JetBrainsConfigOptions = {}): ConfigPreview {
+  if (selectedPlugin(store, tool, options) === 'air') return buildAirConfig(store, tool, port, revealKey, homeDirectory, options);
   const selected = selection(store, tool, port, revealKey), status = jetBrainsStatus(tool, homeDirectory, options);
   return { filename: `modeldock-${tool}-connection-guide.json`, canApply: status.canApply,
     content: JSON.stringify(selected ? { tool: products[tool].name, provider: 'OpenAI-compatible', baseUrl: selected.baseUrl, apiKey: selected.key, httpVersion: 'HTTP/1.1', toolCalling: selected.core.tools,
@@ -485,6 +490,7 @@ function completionSafeRestoreChanges(history: History | null, target: string, c
   return changes;
 }
 export function applyJetBrainsConfig(store: JetBrainsConfigStore, tool: JetBrainsToolId, backups: string, homeDirectory = homedir(), options: JetBrainsConfigOptions = {}): string {
+  if (selectedPlugin(store, tool, options) === 'air') throw new Error(airManualGuidance);
   const stateStore = historyStore(store), status = stopped(tool, homeDirectory, options), target = status.configDir!;
   const selected = selection(store, tool, options.port ?? 18181, false), recorded = readHistory(stateStore, tool, target);
   const restoreContext = selected === null ? completionRestoreContext(recorded, target) : undefined;
@@ -534,8 +540,50 @@ export function applyJetBrainsConfig(store: JetBrainsConfigStore, tool: JetBrain
   return transact(stateStore, tool, target, backups, history, next, changes, homeDirectory, options);
 }
 export function restoreJetBrainsConfig(store: JetBrainsHistoryStore, tool: JetBrainsToolId, backups: string, homeDirectory = homedir(), options: JetBrainsConfigOptions = {}): string {
+  if (selectedPlugin(store as Partial<JetBrainsConfigStore>, tool, options) === 'air') throw new Error(airManualGuidance);
   const stateStore = historyStore(store), status = stopped(tool, homeDirectory, options), target = status.configDir!;
   const recorded = readHistory(stateStore, tool, target), context = completionRestoreContext(recorded, target);
   const history = recover(stateStore, tool, target, recorded, homeDirectory, options), changes = completionSafeRestoreChanges(history, target, context);
   return history || changes.length ? transact(stateStore, tool, target, backups, history, null, changes, homeDirectory, options) : target;
+}
+
+// A fresh Air provider without its separate PasswordSafe key is filtered out by
+// the native repository. A copied metadata row cannot provide an editable setup
+// step, so Air integration deliberately supplies a manual guide without writes.
+const airManualGuidance = 'Air 请在 设置 → AI → Air → Accounts → More Providers → OpenAI 中添加，填写 URL 和 API Key。未保存 Key 的账户不会显示；ModelDock 不写入 Air 密码库，不能离线同步或还原账户。';
+function selectedPlugin(store: Partial<JetBrainsConfigStore>, tool: JetBrainsToolId, options: JetBrainsConfigOptions): 'ai-assistant' | 'air' {
+  return options.plugin ?? store.listBindings?.().find(binding => binding.id === tool)?.jetBrainsPlugin ?? 'ai-assistant';
+}
+function airGuideStatus(tool: JetBrainsToolId, home: string, options: JetBrainsConfigOptions): JetBrainsConfigStatus {
+  const base: JetBrainsConfigStatus = { tool, plugin: 'air', configDir: null, version: null, foundProfile: false, running: 'unknown', canApply: false, message: airManualGuidance };
+  try {
+    const paths = roots(home, options); safeDirectory(paths.profileRoot);
+    if (!existsSync(paths.profileRoot)) return base;
+    const candidates = readdirSync(paths.profileRoot).filter(name => new RegExp(`^${products[tool].selector}(\\d{4}\\.\\d+)(?:\\.\\d+)?$`).test(name));
+    const windows = paths.platform === 'win32' ? detectWindowsJetBrainsProfile(tool, { ...paths, home, candidates, installationRoots: options.installationRoots,
+      snapshot: options.windowsProcessSnapshot, refresh: options.refreshProcessEvidence }, readConfig) : undefined;
+    const selector = windows?.selector ?? (candidates.length === 1 ? candidates[0] : undefined);
+    if (!selector) return { ...base, foundProfile: candidates.length > 0 };
+    const configDir = join(paths.profileRoot, selector); safeDirectory(configDir); safeDirectory(join(configDir, 'options'));
+    let running = windows?.running ?? 'unknown';
+    if (!windows && (paths.platform === 'linux' || options.processProbe)) {
+      const pid = readConfig(join(paths.cacheRoot, selector, '.pid'))?.trim();
+      if (pid && /^\d{1,10}$/.test(pid) && Number.isSafeInteger(Number(pid)) && Number(pid) > 0) running = (options.processProbe ?? defaultProcessProbe)(Number(pid));
+    }
+    return { ...base, configDir, version: selector.slice(products[tool].selector.length), foundProfile: true, running };
+  } catch { return base; }
+}
+function buildAirConfig(store: JetBrainsConfigStore, tool: JetBrainsToolId, port: number, revealKey: boolean, home: string, options: JetBrainsConfigOptions): ConfigPreview {
+  const selected = selection(store, tool, port, revealKey);
+  return { filename: `modeldock-${tool}-air-connection-guide.json`, canApply: false,
+    content: JSON.stringify(selected ? { tool: products[tool].name, plugin: 'Air', settingsPath: '设置 → AI → Air → Accounts → More Providers → OpenAI', provider: 'OpenAI', name: `ModelDock · ${products[tool].name}`, baseUrl: selected.baseUrl,
+      apiKey: selected.key, models: selected.models.map(model => ({ id: selected.modelId(model), name: model.displayName || selected.modelId(model), wireApi: model.wireApi })), suggestedModel: selected.coreId,
+      manualSetup: true, agentAndModelSelection: '在兼容的 Air Agent 会话中选择模型；本文件不设置 Agent 或模型偏好。' } : {}, null, 2),
+    instructions: '此 JSON 是 Air 的手动填写参考，不能直接导入 IDE。打开 设置 → AI → Air → Accounts → More Providers → OpenAI，填写名称、URL 与当前连接 API Key，并测试连接。'
+      + 'Air 的账户必须在它自己的 Accounts 界面内创建；只写账户元数据而没有 PasswordSafe Key 的条目不会显示，ModelDock 不读写该密码库，也不声称已自动配置 Air 账户。'
+      + '创建后在兼容的 Air Agent 会话中选择该账户和模型。Agent 使用各自的协议和模型能力，不保证任何所选模型都被所有 Agent 支持。'
+      + '切换到 Air 只保留当前 IDE 的插件偏好和接入参数；不会修改、清空或还原 Air 与 AI Assistant 的原生设置。'
+      + (selected?.directApi ? '当前使用所选 API 的原生 URL、真实模型 ID 和 API Key。' : '当前使用本机 ModelDock 入口和模型别名；OAuth 凭据仍留在 ModelDock，使用时保持其运行。')
+      + '参数复制或导出不代表 Air Agent 或真实供应商推理验收。' + airGuideStatus(tool, home, options).message,
+  };
 }

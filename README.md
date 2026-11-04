@@ -6,6 +6,20 @@ ModelDock 是跨平台本地模型管理台：全局维护模型来源与别名�
 
 自有代码及原创应用标记采用 [MIT 许可](LICENSE)，第三方图标和依赖保留各自的 Apache-2.0、CC-BY-4.0、MIT 或其他许可，详见 [第三方声明](THIRD_PARTY_NOTICES.md)。欢迎按 [贡献指南](CONTRIBUTING.md) 提交修复；敏感问题请遵循 [安全报告流程](SECURITY.md)。
 
+## 0.3.61：JetBrains 插件切换
+
+WebStorm、IntelliJ IDEA、Rider、PyCharm 的接入参数页分别提供「AI Assistant / Air」选择。默认保留 AI Assistant，每个 IDE 独立保存目标插件；供应商、直连 / 聚合模式及模型选择沿用该 IDE 已保存的范围。切换目标只保存选择并取消旧的待同步请求，不立即写入 IDE。
+
+- AI Assistant：继续管理聊天地址、核心 / 轻量模型及独立 AI 补全。设置位置为「工具 → AI Assistant → 提供商与 API 密钥」；来源或模型变更仍按原流程等待 IDE 退出后自动同步，可手动同步和恢复。
+- Air：显示「AI → Air → Accounts」的接入步骤，支持复制 URL、Key 和参考模型，以及预览和导出参考参数。请在 Air 的「More Providers → OpenAI」中创建提供商、填写名称与 URL / Key、测试连接并保存，再在会话中选择兼容的 Agent 和模型。
+- 本机插件检查确认，Air 原生 Accounts 列表会过滤缺少 PasswordSafe 密钥的配置项。单独写入 `other.xml` 的账户元数据不能得到可编辑的完整账户，因此 ModelDock 不提供 Air 文件同步或恢复，也不写入密码库。Air 账户通过其原生界面创建、编辑和删除。
+- Air 和 Assistant 的密钥分别保存。首次接入或切换来源后，请在 Air Accounts 中更新 Key。Air 页面不显示旧 Assistant 的核心 / 轻量模型及 AI 补全分配；ModelDock 的参考模型不会自动为 Agent 完成授权或模型选择。
+- ModelDock 不直接修改 Air 账户文件、PasswordSafe 或 Agent 登录状态；参数复制、模型列表或连接测试不代表真实 Agent 推理已通过。
+
+## 0.3.60 接入调整
+
+- 移除 Trae 工具页、自动同步、连接助手和对应的本地接口。已有 Trae 客户端模型、账号和设置不做修改。
+
 ## 0.3.59 界面调整
 
 - 工具侧栏分为「常规 Agent」和「JetBrains」两个标签，切换分类不会修改工具接入设置。
@@ -22,21 +36,11 @@ ModelDock 是跨平台本地模型管理台：全局维护模型来源与别名�
 - 授权生命周期对照 CC Switch 的设备码实现：xAI 校验 OIDC issuer，续期显式携带原权限 scope；ID Token 只保存在主进程加密凭据中，界面取得账号元数据。临时续期网络失败保留原授权状态；明确拒绝或过期停止轮询。导入凭据前取消旧登录、刷新和额度查询，提交刷新前检查原凭据，防止晚回复覆盖新授权。
 - 模型：填写 API Key 后从供应商获取真实模型列表，搜索、勾选并批量添加。不同供应商可用相同模型简称及显示名称，列表和工具中按「套餐名 - 模型名」展示；系统维护唯一的聚合接口 ID。支持真实上游 ID、协议、上下文、工具、视觉与思考强度能力。默认来源未授权、模型列表为空，能力由实际配置确定。
 - Codex 兼容模型目录带独立的 `client_version` 和对应版本请求头，使用原生 `slug` 作为上游 ID，解析显示名称、上下文和明确的能力字段。默认候选隐藏 `hide / none` 条目，已保存和手动添加的模型保留；目录可见性不代表实际模型权限。API / Grok 来源不携带 Codex 目录版本参数。
-- 工具：Codex、Claude Code、OpenCode、DSH、VS Code Copilot Chat、Copilot app、Trae CN 与 WebStorm、IntelliJ IDEA、Rider、PyCharm 的 AI Assistant。Codex、Claude Code、Trae CN 与四个 JetBrains IDE 每次只配置一个入口：供应商直连只选择一家支持原生协议的 API，使用供应商地址、API Key 和真实模型 ID；使用聚合接口只连接一个 ModelDock 本机地址，来源与模型多选均在聚合接口内部配置，模型映射列表在右侧独立滚动。直连与聚合的选择分别保存，往返切换保留原聚合模型范围。订阅及不兼容的直连来源只能在兼容的聚合入口内使用，不会暗中退回单家本机协议桥。已有工具支持还原官方配置，JetBrains 可恢复同步前设置；工具交互触发自动同步并先备份，应用启动不会写外部客户端配置。OpenCode、DSH、VS Code 和 Copilot 保留原有多入口与连接方式。
+- 工具：Codex、Claude Code、OpenCode、DSH、VS Code Copilot Chat、Copilot app 与 WebStorm、IntelliJ IDEA、Rider、PyCharm 的 AI Assistant。Codex、Claude Code 与四个 JetBrains IDE 每次只配置一个入口：供应商直连只选择一家支持原生协议的 API，使用供应商地址、API Key 和真实模型 ID；使用聚合接口只连接一个 ModelDock 本机地址，来源与模型多选均在聚合接口内部配置，模型映射列表在右侧独立滚动。直连与聚合的选择分别保存，往返切换保留原聚合模型范围。订阅及不兼容的直连来源只能在兼容的聚合入口内使用，不会暗中退回单家本机协议桥。已有工具支持还原官方配置，JetBrains 可恢复同步前设置；工具交互触发自动同步并先备份，应用启动不会写外部客户端配置。OpenCode、DSH、VS Code 和 Copilot 保留原有多入口与连接方式。
 - 本地网关：固定监听 `127.0.0.1`，默认 `18181`；本地 Key 鉴权、标准模型目录、Chat Completions/Responses、流式转发、请求日志。
 - SQLite：保存来源、模型、绑定与日志；敏感凭据由主进程加密，预览和快照不包含上游密钥。
 - 配置接入：原有六类工具均支持预览 / 导出，并在用户修改勾选或模型偏好后自动同步，写入前备份。VS Code 默认只保留所选自定义供应商，可关闭此选项来保留原有自定义来源；其他 vendor 与 JSONC 注释保留。OpenCode 保留其他供应商、MCP 和非受管 JSONC 注释；Codex 的 TOML 重写保留配置字段，但不保证原注释。Copilot app 通过运行实例的原生接口同步来源、模型和凭据，预览是同步计划参考，不需要再手工导入。DSH 写入 home 插件覆盖与凭据 refs，同步前保存加密恢复记录，清空后恢复原覆盖。
 - 托盘：关闭主窗口可留在后台运行；退出应用会停止网关。
-
-## Trae CN 一键适配
-
-0.3.58 新增 Trae CN 工具页，当前适配 Windows 上的 Trae CN 3.4.14 默认用户资料。先打开并登录 Trae，在 ModelDock 的 Trae CN 页面选择 API 供应商直连，或开启「使用聚合接口」并勾选模型。选择变化会在 400 毫秒后合并同步，也可点「重新同步」。首次同步通过 Trae 的正常扩展安装入口安装随包附带的 ModelDock 连接扩展；如 Trae 提示扩展需要重新加载，完成后再同步。
-
-- 每个模型保持原生 Chat Completions、Responses 或 Messages 协议。直连写入所选 API 的地址、真实模型 ID 和 API Key；聚合写入工具专属本机地址、别名和本地连接 Key，使用时需保持 ModelDock 运行。订阅访问凭据留在 ModelDock 主进程。
-- 通过运行中的 Trae 模型服务创建和更新自定义模型，不直接改写其数据库，也不把同步计划当作 `settings.json` 导入。同步后在 Trae 模型选择器选择相应的 `ModelDock · …` 模型；不主动切换已有会话；若移除当前模型，需在 Trae 中另选模型。MCP、Skills 和独立补全设置不在此次适配范围内。
-- 只管理加密记录中已确认由本机 ModelDock 创建的模型 ID，保留其他自定义模型和内置模型。「移除 ModelDock 模型」仅移除这些受管模型。预览隐藏凭据；显式导出直连计划会包含该供应商 API Key。
-- 写入前保存加密恢复记录；发现受管模型的可见参数被外部修改时拒绝覆盖。当前 Trae 接口没有可验证的密钥修改标记，无法识别仅换密钥的外部操作，因此自动撤销暂不可用。受管模型的参数与密钥请通过 ModelDock 修改；需要独立维护的模型可直接在 Trae 新建。
-- 安装和同步只发生在用户触发的操作中，应用启动和页面导航不写入 Trae。原生接口是版本相关的实现；不兼容、身份不明确或请求结果无法确认时停止写入并提示原因，不自动重试可能已完成的操作。
 
 ## JetBrains AI Assistant 模型接入
 

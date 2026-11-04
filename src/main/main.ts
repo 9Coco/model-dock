@@ -34,14 +34,12 @@ import { verifyToolSelection } from './tool-selection-smoke';
 import { verifyToolRestoreAndConnections } from './tool-restore-smoke';
 import { verifyCopilotDesktop } from './copilot-desktop-smoke';
 import { verifyToolIcons } from './tool-icons-smoke';
+import { verifyJetBrainsPluginSwitch } from './jetbrains-plugin-smoke';
 import { verifyProviderManagement } from './provider-management-smoke';
 import { verifySidebarScroll } from './sidebar-scroll-smoke';
 import { verifyDshConfiguration } from './dsh-config-smoke';
 import { CopilotDesktopClient } from './copilot-desktop';
 import { applyCopilotDesktop } from './copilot-sync';
-import { buildTraePlan } from './trae-config';
-import { applyTraeModels, type TraeSyncOptions } from './trae-sync';
-import { openTraeNativeClient } from './trae-native';
 import { ToolSyncUndoManager } from './tool-sync-undo';
 import { verifyToolAutoSync } from './tool-auto-sync-smoke';
 import { removeProviderAndSync } from './provider-removal';
@@ -130,7 +128,7 @@ if (runtimeConfig.dataDir) {
   app.setPath('userData', runtimeConfig.dataDir);
   app.setPath('sessionData', runtimeConfig.dataDir);
 }
-const toolIds = new Set(['codex', 'opencode', 'dsh', 'vscode', 'copilot', 'claude-code', 'trae', 'webstorm', 'intellij-idea', 'rider', 'pycharm']);
+const toolIds = new Set(['codex', 'opencode', 'dsh', 'vscode', 'copilot', 'claude-code', 'webstorm', 'intellij-idea', 'rider', 'pycharm']);
 function toolId(value: unknown): ToolId {
   if (typeof value !== 'string' || !toolIds.has(value)) throw new Error('无法识别的工具。');
   return value as ToolId;
@@ -214,8 +212,10 @@ async function createWindow(forceShow = false) {
         const result = await window!.webContents.executeJavaScript(`({title:document.title, text:document.body.innerText, bridge:!!window.modelDock})`);
         writeFileSync(join(outputDir, 'electron-smoke.json'), JSON.stringify({ ...result, dataDir, windowSize: window!.getSize(), contentSize: window!.getContentSize() }, null, 2));
         writeFileSync(join(outputDir, 'electron-smoke.png'), await captureUi());
-        if (process.env.MODELDOCK_SMOKE_PROVIDER_MANAGEMENT_ONLY !== '1') await verifyToolIcons(window!, outputDir, captureUi);
-        if (process.env.MODELDOCK_SMOKE_PROVIDER_MANAGEMENT_ONLY === '1') {
+        if (process.env.MODELDOCK_SMOKE_PROVIDER_MANAGEMENT_ONLY !== '1' && process.env.MODELDOCK_SMOKE_JETBRAINS_PLUGIN_ONLY !== '1') await verifyToolIcons(window!, outputDir, captureUi);
+        if (process.env.MODELDOCK_SMOKE_JETBRAINS_PLUGIN_ONLY === '1') {
+          await verifyJetBrainsPluginSwitch(window!, store, outputDir, captureUi);
+        } else if (process.env.MODELDOCK_SMOKE_PROVIDER_MANAGEMENT_ONLY === '1') {
           await verifyProviderManagement(window!, store, outputDir, captureUi);
         } else if (process.env.MODELDOCK_SMOKE_TOOL_ICONS_ONLY === '1') {
           // Icon validation above uses navigation only and never applies tool configuration.
@@ -535,12 +535,6 @@ function registerIpc() {
   const beforeToolSelections = new Map<ToolId, ToolBinding>();
   const featureHome = __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home') : app.getPath('home');
   const copilot = copilotTarget();
-  const traeProfilePath = resolve(__MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-appdata', 'Trae CN') : join(app.getPath('appData'), 'Trae CN'));
-  const traeTarget = process.platform === 'win32' ? traeProfilePath.toLowerCase() : traeProfilePath;
-  const traeOptions: TraeSyncOptions = { openClient: async target => {
-    if (__MODELDOCK_SMOKE_BUILD__) throw new Error('隔离界面测试不连接真实 Trae；请使用 Trae 专用原生验收。');
-    return openTraeNativeClient({ userDataPath: target, bridgeAssetsPath: app.isPackaged ? join(process.resourcesPath, 'trae-bridge') : join(app.getAppPath(), 'assets', 'trae-bridge') });
-  } };
   const undoManager = new ToolSyncUndoManager(store, {
     appData: __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-appdata') : app.getPath('appData'),
     homeDirectory: featureHome,
@@ -549,7 +543,6 @@ function registerIpc() {
     claudeConfigDir: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.claude') : process.env.CLAUDE_CONFIG_DIR,
     dshHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.dsh') : process.env.DSH_HOME?.trim() ? resolve(process.env.DSH_HOME.trim()) : join(featureHome, '.dsh'),
     copilotHome: copilot.home, copilotOptions: { openClient: copilot.openClient },
-    traeTarget, traeOptions,
   });
   const assertEditable = () => {
     if (providerRemovalPending) throw new Error('供应商正在删除并同步，请稍后修改配置。');
@@ -562,6 +555,7 @@ function registerIpc() {
     let synchronized = false;
     try {
     const binding = store.listBindings().find(item => item.id === id);
+    if (isJetBrainsTool(id) && store.getJetBrainsPlugin(id) === 'air') throw new Error('请在 Air Accounts 的 More Providers → OpenAI 中添加提供商并填写 URL 和 Key；Air 不支持无密钥的离线账户同步。');
     const preview = buildConfig(store, id, gateway.status().port, true, __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home') : app.getPath('home'), { jetBrainsOptions: jetBrainsOptions() });
     if (!preview.canApply) throw new Error('此工具使用导出配置入口。');
     const usesGateway = binding && bindingConnectionPolicy(binding, store.listModels(), store.listProviders()).groups.some(group => group.connection === 'local-managed' && group.modelIds.length > 0);
@@ -573,8 +567,6 @@ function registerIpc() {
     if (id === 'copilot') {
       const target = copilotTarget();
       operation = () => applyCopilotDesktop(store, buildCopilotDesktopPlan(store, gateway.status().port, true), target.home, { openClient: target.openClient, syncScope: binding?.copilotSyncScope ?? 'selected', recordUndo: !providerRemovalPending });
-    } else if (id === 'trae') {
-      operation = () => applyTraeModels(store, buildTraePlan(store, gateway.status().port, true), traeTarget, { ...traeOptions, recordUndo: !providerRemovalPending });
     } else if (id === 'dsh') {
       const configuredDshHome = process.env.DSH_HOME?.trim();
       const dshHome = __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home', '.dsh')
@@ -714,6 +706,12 @@ function registerIpc() {
     store.saveBinding({ ...binding, id });
     if (!isJetBrainsTool(id) && before && !beforeToolSelections.has(id)) beforeToolSelections.set(id, structuredClone(before));
   });
+  handle('setJetBrainsPlugin', (value: ToolId, plugin: unknown) => {
+    assertEditable();
+    const id = toolId(value);
+    if (!isJetBrainsTool(id) || plugin !== 'ai-assistant' && plugin !== 'air') throw new Error('JetBrains 插件选择无效。');
+    store.setJetBrainsPlugin(id, plugin);
+  });
   handle('toolSyncUndoStatus', (value: ToolId) => undoManager.status(toolId(value)));
   handle('undoToolSync', async (value: ToolId) => {
     assertEditable();
@@ -755,7 +753,7 @@ function registerIpc() {
     if (!isJetBrainsTool(value)) throw new Error('不是支持的 JetBrains 工具。');
     if (refresh !== undefined && typeof refresh !== 'boolean') throw new Error('IDE 状态刷新参数无效。');
     const home = __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home') : app.getPath('home');
-    return jetBrainsStatus(value, home, { ...jetBrainsOptions(), refreshProcessEvidence: refresh === true });
+    return jetBrainsStatus(value, home, { ...jetBrainsOptions(), plugin: store.getJetBrainsPlugin(value), refreshProcessEvidence: refresh === true });
   });
   handle('previewConfig', (tool: ToolId) => buildConfig(store, toolId(tool), gateway.status().port, false, __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home') : app.getPath('home'), { jetBrainsOptions: jetBrainsOptions() }));
   handle('exportConfig', async (tool: ToolId) => {
@@ -786,7 +784,6 @@ function registerIpc() {
         claudeConfigDir: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.claude') : process.env.CLAUDE_CONFIG_DIR,
         jetBrainsOptions: jetBrainsOptions(),
         dshHome, dshOptions, copilotHome: target.home, copilotOptions: { openClient: target.openClient },
-        traeTarget, traeOptions,
       }));
       undoManager.clear(id); beforeToolSelections.delete(id);
       return location;
