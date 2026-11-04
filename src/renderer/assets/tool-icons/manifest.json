@@ -6,6 +6,23 @@
   "renderingChanges": "Monochrome marks use CSS masks and theme colors. The four JetBrains icons preserve original source geometry and colors, and use the same image resources in sidebar and detail views with proportional sizing.",
   "icons": [
     {
+      "file": "junie.svg",
+      "label": "Junie compatibility label - terminal symbol",
+      "sourceType": "material-symbol",
+      "owner": "Google LLC",
+      "repository": "https://github.com/google/material-design-icons",
+      "commit": "737e3324305806514d7909874fa1818ae1808232",
+      "sourcePath": "symbols/web/terminal/materialsymbolsrounded/terminal_24px.svg",
+      "source": "https://raw.githubusercontent.com/google/material-design-icons/737e3324305806514d7909874fa1818ae1808232/symbols/web/terminal/materialsymbolsrounded/terminal_24px.svg",
+      "sha256": "ba924a0c39561794685040e624daa32ac86a130323eeec67093611518cf03560",
+      "upstreamUtf8Sha256": "ba924a0c39561794685040e624daa32ac86a130323eeec67093611518cf03560",
+      "exactTextMatch": true,
+      "viewBox": "0 -960 960 960",
+      "license": "Apache-2.0",
+      "licenseRecord": "material-symbols",
+      "note": "Generic terminal symbol for the Junie CLI compatibility entry; not an official JetBrains or Junie brand mark."
+    },
+    {
       "file": "codex.svg",
       "label": "Codex / OpenAI identification mark",
       "repository": "https://github.com/microsoft/vscode-codicons",
@@ -146,6 +163,13 @@
     }
   ],
   "licenses": [
+    {
+      "id": "material-symbols",
+      "file": "LICENSE-material-symbols.txt",
+      "spdx": "Apache-2.0",
+      "source": "https://raw.githubusercontent.com/google/material-design-icons/737e3324305806514d7909874fa1818ae1808232/LICENSE",
+      "sha256": "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd"
+    },
     {
       "id": "codicons",
       "file": "LICENSE-codicons.txt",

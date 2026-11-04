@@ -12,6 +12,7 @@ const fixtureSymbols = [
   'verifyModelMetadata', 'model-metadata-validation.json',
   'verifyCompactUi', 'verifySidebarScroll', 'verifyGatewayStartup', 'createGatewayStartupSmokeVault', 'gateway-startup-ready.json', 'authQuotaFixture',
   'SYNTHETIC_COPILOT_QUOTA_TOKEN', 'MOCK_ACCESS_AUTH_NETWORK',
+  'verifyContextMenus', 'context-menu-validation.json', 'synthetic-context-menu-key',
 ];
 
 function assert(condition, message) {

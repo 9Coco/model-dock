@@ -6,6 +6,7 @@ import { QUOTA_CACHE_TTL_MS, quotaAmountLabel, quotaCacheExpired, quotaDateLabel
 import { BusyIcon, Modal, type Notify } from './components';
 import { ToolIcon } from './ToolIcon';
 import { AccountAvatar } from './AccountAvatar';
+import { useContextMenu, type ContextMenuItem, type ContextMenuOpenEvent } from './ContextMenu';
 
 const kinds: AuthAccountKind[] = ['copilot', 'codex', 'grok'];
 const titles: Record<AuthAccountKind, string> = { copilot: 'GitHub Copilot', codex: 'ChatGPT / OpenAI', grok: 'xAI / Grok' };
@@ -40,6 +41,8 @@ export function AuthPanel({ api, notify, onLogin, onCopilotLogin, onChanged }: {
   const [confirm, setConfirm] = useState<{ account: AuthAccount; action: 'logout' | 'delete' } | null>(null);
   const [menuId, setMenuId] = useState<string | null>(null);
   const [detailAccount, setDetailAccount] = useState<AuthAccount | null>(null);
+  const contextMenu = useContextMenu({ onError: failure => notify(failure instanceof Error ? failure.message : '账号操作失败。', 'error') });
+  useEffect(() => { contextMenu.close(); }, [draft, confirm, detailAccount, contextMenu.close]);
   const menuRoot = useRef<HTMLDivElement | null>(null), menuTrigger = useRef<HTMLButtonElement | null>(null);
   const listRequest = useRef<Promise<void> | null>(null);
   const inFlight = useRef(new Set<string>());
@@ -157,6 +160,21 @@ export function AuthPanel({ api, notify, onLogin, onCopilotLogin, onChanged }: {
   });
 
   const closeAccountMenu = () => { setMenuId(null); menuTrigger.current?.focus(); };
+  const reauthorizeAccount = (account: AuthAccount) => run('login-' + account.providerId, async () => {
+    if (account.kind === 'copilot') await loginCopilot(); else await onLogin(account.providerId);
+  });
+  const accountContextMenu = (event: ContextMenuOpenEvent, account: AuthAccount) => {
+    const changing = !!busy['login-' + account.providerId] || !!busy['confirm-' + account.providerId];
+    const items: ContextMenuItem[] = [
+      { id: 'account-details', label: '账号详情', icon: <Info size={14} />, onSelect: () => setDetailAccount(account) },
+      { id: 'account-refresh-quota', label: '刷新额度', icon: <RefreshCw size={14} />, disabled: !api || changing || !!busy['usage-' + account.providerId] || account.authStatus === 'missing' || account.authStatus === 'signing-in', onSelect: () => refreshQuota(account, true) },
+      { id: 'account-reauth', label: account.authStatus === 'ready' ? '重新授权' : '登录', icon: <KeyRound size={14} />, disabled: !api || changing || account.authStatus === 'signing-in', onSelect: () => reauthorizeAccount(account) },
+      { id: 'account-management', separator: true },
+      { id: 'account-logout', label: '清除本地授权', icon: <LogOut size={14} />, disabled: !api || changing || account.authStatus === 'missing', onSelect: () => setConfirm({ account, action: 'logout' }) },
+      { id: 'account-delete', label: account.kind === 'copilot' ? '移除账号' : '删除账号来源', icon: <Trash2 size={14} />, danger: true, disabled: !api || changing, onSelect: () => setConfirm({ account, action: 'delete' }) },
+    ];
+    if (contextMenu.open(event, items, account.email ?? account.displayName ?? account.providerName)) setMenuId(null);
+  };
   const inspectedAccount = detailAccount ? accounts.find(account => account.providerId === detailAccount.providerId) ?? null : null;
   return <section className="feature-panel auth-panel auth-compact">
     <div className="feature-toolbar auth-compact-toolbar"><p>账户额度与授权</p><button className="button small secondary" data-action="reload-auth-accounts" onClick={() => void run('reload', load)} disabled={busy.reload}><BusyIcon active={!!busy.reload}><RefreshCw size={13} /></BusyIcon>刷新列表</button></div>
@@ -173,7 +191,7 @@ export function AuthPanel({ api, notify, onLogin, onCopilotLogin, onChanged }: {
         {group.length === 0 ? <div className="auth-empty-row" data-auth-empty={kind}><UserRound size={14} /><span>尚未添加账号</span><small>{kind === 'copilot' ? '登录 GitHub 后查看额度' : '登录或导入已有授权'}</small></div> : group.map(account => {
           const stale = quotaCacheExpired(account.usage, now), opened = menuId === account.providerId;
           const queried = account.usage.queriedAt ? quotaQueryAge(account.usage.queriedAt, now).replace(/查询$/, '') : '未查询';
-          return <article className="account-row" key={account.providerId} data-auth-account={account.providerId} data-account-id={account.providerId} data-quota-status={stale ? 'stale' : account.usage.status}>
+          return <article className="account-row" key={account.providerId} tabIndex={0} onContextMenu={event => accountContextMenu(event, account)} aria-label={'账号 ' + (account.email ?? account.displayName ?? account.providerName)} data-auth-account={account.providerId} data-account-id={account.providerId} data-quota-status={stale ? 'stale' : account.usage.status}>
             <div className="account-identity" title={account.email ?? account.displayName ?? account.providerName}>
               <AccountAvatar account={account} />
               <i className={'auth-identity-dot ' + account.authStatus} role="img" aria-label={statuses[account.authStatus]} title={statuses[account.authStatus]} />
@@ -197,10 +215,10 @@ export function AuthPanel({ api, notify, onLogin, onCopilotLogin, onChanged }: {
               <small className={'auth-row-age' + (stale ? ' quota-stale' : '')} title={(stale ? '缓存结果 · ' : '') + (account.usage.queriedAt ? quotaDateLabel(account.usage.queriedAt) + '（香港时间）' : '尚未查询') + (stale ? ' · ' + account.usage.message : '')}>{busy['usage-' + account.providerId] ? '查询中' : queried}</small>
               <button className="icon-button" data-action="refresh-account-quota" data-account-id={account.providerId} aria-label={'刷新 ' + account.providerName + ' 额度'} title="刷新账户额度" disabled={busy['usage-' + account.providerId] || account.authStatus === 'missing' || account.authStatus === 'signing-in'} onClick={() => void refreshQuota(account, true)}><BusyIcon active={!!busy['usage-' + account.providerId]}><RefreshCw size={14} /></BusyIcon></button>
               <div className="auth-account-menu-root" ref={opened ? menuRoot : undefined}>
-                <button className="icon-button" data-action="account-menu" data-account-id={account.providerId} aria-label={'账号操作 ' + account.providerName} aria-haspopup="menu" aria-expanded={opened} onClick={event => { menuTrigger.current = event.currentTarget; setMenuId(opened ? null : account.providerId); }}><Ellipsis size={16} /></button>
+                <button className="icon-button" data-action="account-menu" data-account-id={account.providerId} aria-label={'账号操作 ' + account.providerName} aria-haspopup="menu" aria-expanded={opened} onClick={event => { contextMenu.close(); menuTrigger.current = event.currentTarget; setMenuId(opened ? null : account.providerId); }}><Ellipsis size={16} /></button>
                 {opened && <div className="auth-account-menu" data-auth-account-menu={account.providerId} role="menu" aria-label={account.providerName + '操作'}>
                   <button role="menuitem" data-action="account-details" onClick={() => { closeAccountMenu(); setDetailAccount(account); }}><Info size={14} />账号详情</button>
-                  <button role="menuitem" data-action="account-reauth" disabled={busy['login-' + account.providerId] || account.authStatus === 'signing-in'} onClick={() => { closeAccountMenu(); void run('login-' + account.providerId, async () => { if (kind === 'copilot') await loginCopilot(); else await onLogin(account.providerId); }); }}><KeyRound size={14} />{account.authStatus === 'ready' ? '重新授权' : '登录'}</button>
+                  <button role="menuitem" data-action="account-reauth" disabled={busy['login-' + account.providerId] || account.authStatus === 'signing-in'} onClick={() => { closeAccountMenu(); void reauthorizeAccount(account); }}><KeyRound size={14} />{account.authStatus === 'ready' ? '重新授权' : '登录'}</button>
                   <button role="menuitem" data-action="account-logout" aria-label={'注销 ' + account.providerName} disabled={account.authStatus === 'missing'} onClick={() => { closeAccountMenu(); setConfirm({ account, action: 'logout' }); }}><LogOut size={14} />清除本地授权</button>
                   <button role="menuitem" className="danger" data-action="account-delete" aria-label={'删除 ' + account.providerName} onClick={() => { closeAccountMenu(); setConfirm({ account, action: 'delete' }); }}><Trash2 size={14} />{kind === 'copilot' ? '移除账号' : '删除账号来源'}</button>
                 </div>}
@@ -223,5 +241,6 @@ export function AuthPanel({ api, notify, onLogin, onCopilotLogin, onChanged }: {
     </dl><p>{inspectedAccount.usage.message}</p>{inspectedAccount.usage.resetCreditsMessage && <p>{inspectedAccount.usage.resetCreditsMessage}</p>}{inspectedAccount.usage.windows.map(window => <p key={window.id}>{window.label}：{quotaAmountLabel(window) ?? '剩余 ' + quotaPercentLabel(window.remainingPercent)} · {quotaResetLabel(window.resetAt, now)}{window.measurement === 'protobuf-default' ? ' · 按协议默认值解析' : ''}</p>)}</div><div className="modal-footer"><button className="button secondary" onClick={() => setDetailAccount(null)}>关闭</button></div></Modal>}
     {draft && <Modal title={'添加 ' + titles[draft.kind] + ' 账号'} subtitle="创建独立订阅来源，然后在浏览器完成本人账号授权。" onClose={() => setDraft(null)}><div className="modal-body"><label className="form-field">账号名称<input value={draft.name} maxLength={120} autoFocus onChange={event => setDraft(current => current ? { ...current, name: event.target.value } : null)} onKeyDown={event => { if (event.key === 'Enter') void add(); }} /></label></div><div className="modal-footer"><button className="button small secondary" onClick={() => setDraft(null)}>取消</button><button className="button small primary" disabled={busy['add-account']} onClick={() => void add()}><BusyIcon active={!!busy['add-account']}><KeyRound size={16} /></BusyIcon>创建并登录</button></div></Modal>}
     {confirm && <Modal title={confirm.action === 'logout' ? '清除本地授权' : confirm.account.kind === 'copilot' ? '移除 GitHub 账号' : '删除账号来源'} onClose={() => setConfirm(null)}><div className="modal-body"><p>{confirm.account.kind === 'copilot' ? '移除“' + confirm.account.providerName + '”在 ModelDock 中的 GitHub 授权和额度缓存。GitHub 账号与原客户端的登录状态保持不变。' : confirm.action === 'logout' ? '清除“' + confirm.account.providerName + '”在 ModelDock 中的授权和额度缓存。原客户端登录状态不会改变，来源和模型配置保留。' : '删除“' + confirm.account.providerName + '”及其模型，工具中的相关来源引用也会移除。原客户端文件不会改变。'}</p></div><div className="modal-footer"><button className="button small secondary" onClick={() => setConfirm(null)}>取消</button><button className="button primary danger" disabled={busy['confirm-' + confirm.account.providerId]} onClick={() => void confirmAction()}>确认{confirm.action === 'logout' ? '注销' : '移除'}</button></div></Modal>}
+    {contextMenu.menu}
   </section>;
 }

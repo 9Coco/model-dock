@@ -4,7 +4,7 @@ import { claudeModelsForProvider, nativeClaudeBaseUrl } from './claude';
 import { isJetBrainsTool, nativeJetBrainsBaseUrl } from './jetbrains';
 
 /** 修改点：这些客户端只消费一个入口，来源多选只属于聚合入口内部。 */
-export function isSingleEntryTool(tool: ToolId): boolean { return tool === 'codex' || tool === 'claude-code' || isJetBrainsTool(tool); }
+export function isSingleEntryTool(tool: ToolId): boolean { return tool === 'codex' || tool === 'claude-code' || tool === 'junie' || isJetBrainsTool(tool); }
 export function directModelsForProvider(tool: ToolId, provider: Provider, models: readonly Model[]): Model[] {
   if (!provider.enabled || provider.kind !== 'openai-compatible') return [];
   const available = models.filter(model => model.enabled && model.providerId === provider.id).map(model => traeRelayClientModel(tool, model, provider));

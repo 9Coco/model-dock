@@ -6,7 +6,7 @@ import type { DiscoveryResult, ModelSelection, AddModelsResult } from './catalog
 import type { ConnectionResult, ConnectionTestInput } from './connection-types';
 export type { ConnectionResult, ConnectionTestInput } from './connection-types';
 export type ProviderKind = 'openai-compatible' | 'codex' | 'grok' | 'copilot';
-export type ToolId = 'codex' | 'opencode' | 'dsh' | 'vscode' | 'copilot' | 'claude-code' | 'webstorm' | 'intellij-idea' | 'rider' | 'pycharm';
+export type ToolId = 'codex' | 'opencode' | 'dsh' | 'vscode' | 'copilot' | 'claude-code' | 'junie' | 'webstorm' | 'intellij-idea' | 'rider' | 'pycharm';
 export type WireApi = 'chat-completions' | 'responses' | 'messages';
 export type ToolMode = 'direct' | 'aggregate' | 'auto';
 /** Thinking levels recognized by client tools (VS Code picker labels these; unknown levels are not written to client configs). */
@@ -22,7 +22,7 @@ export function sanitizeReasoningEfforts(value: unknown): ReasoningEffort[] {
   for (const entry of value) if (isReasoningEffort(entry) && !levels.includes(entry)) levels.push(entry);
   return levels;
 }
-export type ProviderPresetId = 'custom' | 'anthropic' | 'deepseek' | 'volcengine-agent' | 'volcengine-token' | 'qwen-token' | 'trae-cn-relay' | 'jetbrains-central' | 'codex-subscription' | 'grok-build' | 'copilot-subscription';
+export type ProviderPresetId = 'custom' | 'openai' | 'anthropic' | 'deepseek' | 'volcengine-agent' | 'volcengine-token' | 'qwen-token' | 'trae-cn-relay' | 'jetbrains-central' | 'codex-subscription' | 'grok-build' | 'copilot-subscription';
 export interface ProviderPreset {
   id: ProviderPresetId;
   name: string;

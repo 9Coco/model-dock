@@ -6,6 +6,24 @@ ModelDock 是跨平台本地模型管理台：全局维护模型来源与别名�
 
 自有代码及原创应用标记采用 [MIT 许可](LICENSE)，第三方图标和依赖保留各自的 Apache-2.0、CC-BY-4.0、MIT 或其他许可，详见 [第三方声明](THIRD_PARTY_NOTICES.md)。欢迎按 [贡献指南](CONTRIBUTING.md) 提交修复；敏感问题请遵循 [安全报告流程](SECURITY.md)。
 
+## 0.3.66 · 右键快捷操作
+
+供应商侧栏和卡片、模型列表、工具导航和详情、本地聚合接口、请求日志、授权账号及诊断日志都支持右键菜单。可直接复制地址、模型名称和 API Key，打开编辑或详情，获取模型列表、测试连接、同步/撤销/还原工具配置；删除和清除授权仍先确认。聚合列表中的发布操作只改变本地通用入口，工具专用映射仍在对应工具内管理。
+
+输入框使用原生撤销、重做、剪切、复制、粘贴和全选菜单；密码输入不允许通过原生剪切/复制取得遮罩或密钥，API Key 通过明确的复制操作读取。订阅来源没有复制授权令牌的菜单项，Air 不提供文件应用/撤销/还原。选中的普通文字保留原生复制，文档链接可右键打开或复制地址。
+
+键盘可用 `Shift+F10` 或菜单键打开当前对象菜单，再用方向键、Home/End 和 Enter 选择，Esc 关闭并返回原焦点。菜单适配亮暗主题和窗口边缘，点击外部、滚动页面或切换页面时关闭；打开菜单本身不执行操作。
+
+## 0.3.65 · Junie 终端与 IDE 配置
+
+在「常规 Agent → Junie」选择直连供应商，或开启「使用聚合接口」，再选择默认模型。更改后会按现有同步流程备份并更新 Junie 的终端配置，以及 IDE 中独立的「Junie · ModelDock」ACP 入口。支持 Chat Completions 和 Responses，使用所选模型的原生协议；直连仅使用一家 API 的真实地址、模型 ID 和 Key，聚合使用 ModelDock 本机入口、模型别名和本地 Key。
+
+- **终端**：安装 Junie CLI 后，运行 `junie --model custom:modeldock`，也可在 `/model` 的 Custom 标签选择。只把当前默认模型写入 `$JUNIE_HOME/models/modeldock.json`（默认 `~/.junie`），并合并 `config.json` 的默认选择；其他模型、账号、MCP、Hooks、项目配置及已有设置保留。项目配置、命令行与 Junie 自己保存的选择可能影响默认模型，以显式命令为准。[Junie 自定义模型](https://junie.jetbrains.com/docs/custom-llm-models.html) · [Junie 配置优先级](https://junie.jetbrains.com/docs/junie-cli-configuration.html)
+- **IDE**：在支持 ACP 的 JetBrains IDE 中打开 AI Chat，选择「Junie · ModelDock」并开启新会话。ModelDock 仅在 `~/.jetbrains/acp.json` 合并自己的代理，保留其他代理和 MCP 设置；代理明确使用同一个 `custom:modeldock`。Windows 使用已安装 Junie 的原生程序路径，避免批处理转义；Junie 更新并删除旧程序后，重新同步即可刷新路径。[IDE ACP 接入](https://www.jetbrains.com/help/ai-assistant/acp.html) · [Junie ACP 模式](https://junie.jetbrains.com/docs/junie-cli-acp.html)
+- **IDE 内置 Junie**：其 BYOK 激活目前仅接受 OpenAI 或 Anthropic 官方 Key，仍在 IDE 的「Settings → Tools → AI Assistant → Providers & API keys」中设置。ModelDock 的自定义模型通过上述独立 ACP 入口使用；不修改内置 Junie 的授权和 PasswordSafe。[内置 Agent 激活](https://www.jetbrains.com/help/ai-assistant/activate-agents.html)
+
+预览隐藏密钥，导出和应用才写入所需 API Key；订阅授权令牌留在 ModelDock。同步包含加密备份、三文件事务回滚、撤销上次同步和还原同步前设置。受管模型或代理被外部修改时拒绝覆盖。使用聚合时保持 ModelDock 运行；切换默认模型后开启新会话。Junie 模型配置不包含 MCP、Skills 或会话导入。
+
 ## 0.3.63 · 在 VS Code 使用 JetBrains AI 额度
 
 在「模型供应商 → 添加 API → JetBrains AI 会员反代」启动本机中转。ModelDock 通过 JetBrains Central CLI 启动 Pi 的独立会话，由 Pi 将模型请求交给 Central。使用时保持 ModelDock 运行，JetBrains IDE 可以关闭。ModelDock 提供的 Chat Completions 地址为 `http://127.0.0.1:18081/v1`。

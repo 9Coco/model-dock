@@ -12,6 +12,7 @@ import type { CopilotDesktopPlan } from './copilot-desktop';
 import { dshPatchPreview, type DshPlan, type DshProviderProfile } from './dsh-config';
 import { openCodeConfigDirectory } from './opencode-paths';
 import { applyClaudeConfig, buildClaudeConfig } from './claude-config';
+import { applyJunieConfig, buildJunieConfig } from './junie-config';
 import { anthropicEndpoint } from './anthropic-endpoint';
 import { isJetBrainsTool } from '../shared/jetbrains';
 import { applyJetBrainsConfig, buildJetBrainsConfig, type JetBrainsConfigOptions } from './jetbrains-config';
@@ -268,10 +269,11 @@ export function buildDshPlan(store: AdapterStore, port: number, revealKey = fals
   }
   return { syncScope, providers, credentials, ...(defaultModel ? { defaultModel } : {}), ...(mappings.length ? { legacyDispatch: { version: 1 as const, mappings } } : {}) };
 }
-export function buildConfig(store: AdapterStore, tool: ToolId, port: number, revealKey = false, homeDirectory = homedir(), options: { jetBrainsOptions?: JetBrainsConfigOptions } = {}): ConfigPreview {
+export function buildConfig(store: AdapterStore, tool: ToolId, port: number, revealKey = false, homeDirectory = homedir(), options: { jetBrainsOptions?: JetBrainsConfigOptions; junieHome?: string } = {}): ConfigPreview {
   if (isJetBrainsTool(tool)) return buildJetBrainsConfig(store, tool, port, revealKey, homeDirectory, options.jetBrainsOptions);
   // 修改点：Claude Code 按原生 Messages 入口或本机协议桥生成配置，不能落入其他工具适配分支。
   if (tool === 'claude-code') return buildClaudeConfig(store, revealKey, port);
+  if (tool === 'junie') return buildJunieConfig(store, revealKey, port, homeDirectory, { junieHome: options.junieHome });
   const selection = selected(store, tool, true);
   const { binding } = selection;
   if (binding.vscodeSyncScope !== undefined && !['managed', 'selected'].includes(binding.vscodeSyncScope)) throw new Error('VS Code 同步范围无效。');
@@ -335,9 +337,10 @@ export function buildConfig(store: AdapterStore, tool: ToolId, port: number, rev
       + (responses.some(model => model.contextWindow === 0) ? '上下文未知的模型省略可选上下文字段；可在模型编辑中填写实际上下文后重新生成配置。' : ''),
   };
 }
-export function applyConfig(store: AdapterStore, tool: ToolId, port: number, appData: string, backups: string, homeDirectory = homedir(), options: { codexHome?: string; configHome?: string; claudeConfigDir?: string; jetBrainsOptions?: JetBrainsConfigOptions } = {}): string {
+export function applyConfig(store: AdapterStore, tool: ToolId, port: number, appData: string, backups: string, homeDirectory = homedir(), options: { codexHome?: string; configHome?: string; claudeConfigDir?: string; junieHome?: string; jetBrainsOptions?: JetBrainsConfigOptions } = {}): string {
   if (isJetBrainsTool(tool)) return applyJetBrainsConfig(store, tool, backups, homeDirectory, { ...options.jetBrainsOptions, port });
   if (tool === 'claude-code') return applyClaudeConfig(store, backups, homeDirectory, { claudeConfigDir: options.claudeConfigDir, port });
+  if (tool === 'junie') return applyJunieConfig(store, backups, homeDirectory, { junieHome: options.junieHome, port });
   if (tool === 'copilot') throw new Error('Copilot 桌面配置需要通过运行中的原生接口同步。');
   if (tool === 'dsh') throw new Error('DSH 配置需要通过原生插件与凭据同步入口应用。');
   const config = buildConfig(store, tool, port, true);

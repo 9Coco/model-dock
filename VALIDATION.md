@@ -1,5 +1,22 @@
 # ModelDock 验证记录
 
+## 2026-11-04 / 0.3.66 · 右键快捷菜单
+
+- 供应商侧栏/卡片、模型、工具导航/详情、本地聚合接口、请求日志、授权账号、诊断日志和链接加入右键操作，复用原有业务动作与删除/清除授权确认。API Key 只通过明确复制动作读取，订阅没有复制令牌入口；Air 不显示文件应用、撤销、还原。输入框和选中的正文交给原生编辑菜单，密码控件禁用剪切/复制。
+- Windows 实际 Electron 隔离窗口通过完整交互验证：精确系统剪贴板内容、编辑和详情打开、危险操作确认取消后数据/凭据保留、账号令牌不暴露、诊断 JSON 脱敏、Shift+F10/方向键/End/Esc 和焦点恢复、页面外点击关闭、5.3 秒快照轮询保持菜单、真实页面滚动关闭。全部使用合成资料，没有真实供应商推理、登录或外部客户端配置写入。
+- 980×680 浅色/深色窗口边缘定位与横向溢出检查通过，实际查看模型、账号和页面底部诊断菜单截图。修复菜单聚焦可能引发外层滚动和无位移延迟 scroll 通知误关闭问题，保留截图后点击及真实滚动关闭回归。
+- 右键边界 3 项、原生菜单模板/生命周期 6 项全通过；原生编辑项通过 Electron role 与模板验证，未逐项人工点击操作系统弹出菜单。类型检查、生产构建、测试入口剔除和 Windows x64 资源/图标/ASAR 完整性检查通过。最终全套 85 文件：1815 通过、36 跳过、20 个已有平台条件失败（Linux UID、POSIX 权限、Windows 符号链接），失败项目与本轮修改前记录一致，不宣称全套通过。
+- 用户运行中的 D:\ModelDock-0.3.55\ModelDock.exe 保持原样。独立构建为 release/windows-0.3.66-2026-11-04T13-48-29-103Z-22392/win-unpacked。证据：work/context-menu、work/context-menu-windows-verified。
+
+## 2026-11-04 / 0.3.65 · Junie CLI 与 IDE ACP
+
+- 新增独立 Junie 工具与 strict 直连/聚合选择。当前默认模型以完整 Chat Completions / Responses 推理端点和原生 apiType 写入 JUNIE_HOME/models/modeldock.json，仅合并 config.json 的 model 字段，同时在 ~/.jetbrains/acp.json 合并自有「Junie · ModelDock」代理；保留其他代理、MCP、Hooks、模型、账号及设置。内置 Junie 只接受官方 OpenAI/Anthropic Key 的 BYOK 授权，仍由 IDE 手工管理，不冒充其原生配置。
+- 新增 Junie 配置 17 项、ACP helper 4 项和真实网关/统一撤销集成 4 项，全通过。覆盖 Windows managed 原生程序发现、中文/特殊字符路径、完整 URL 与协议、Key 与模型别名边界、精确模型权限、外部修改拒绝、三文件备份/事务回滚/恢复、JUNIE_HOME、UTF-8 BOM、目录链接/硬链接拒绝和 Windows 私有 ACL。同步撤销复用私有文件写入器，第二次同步后的撤销仍验证当前用户/SYSTEM 权限。包含其他工具撤销的 4 文件 43 项定向通过。
+- Windows 实际 Electron：11 个工具导航、7 个普通 Agent、4 个 IDE 的图标与 6 组亮暗布局通过；实际点击 Junie 配置预览，完整端点、apiType 和 Key 占位正确。隔离 fake home 不安装启动器，因此如实记录 canApply=false，没有将界面预览当作应用或推理。
+- 本机官方 Junie 3893.6 通过核心模块生成的完整 profile，经真实 ModelDock Gateway 的 /tool/junie/v1/responses 调用严格 localhost 模拟上游：initialize、session/new、session/prompt 全部成功，返回 OK、stopReason=end_turn，关闭输入后退出码 0。3 次模拟上游请求鉴权及 alias→上游ID正确，无 shell/文件/外部工具动作；只使用 Junie 内部 answer 控制流完成答复。该测试没有真实供应商调用或费用，不等同于 IDE 实际加载 ACP 文件、真实模型或计费验收。
+- 类型检查、生产构建、生产入口、Windows x64 资源/图标/ASAR 完整性检查通过。最终全套 83 文件：1806 项通过、36 跳过、20 个已有平台条件失败（Linux UID、POSIX 权限、Windows 符号链接），没有新增持久失败，不宣称全套通过。
+- 用户运行中的 D:\ModelDock-0.3.55\ModelDock.exe 保持原样。独立构建为 release/windows-0.3.65-2026-11-04T13-23-33-620Z-38296/win-unpacked。证据目录：work/junie、work/junie-ui-windows、work/junie-native-acp。Windows ACP 引用当前安装版本原生程序，若 Junie 升级后清理旧版本，在 ModelDock 重新同步刷新路径。
+
 ## 2026-11-04 / 0.3.63 · Windows 会员反代专项复核
 
 - 修复 Windows 官方 Pi 安装目录发现：ModelDock 已运行时再安装 Pi，旧 PATH 不含 `%USERPROFILE%\.pi\agent\bin`，原来会误报未安装；新增该目录回退并用修复前失败、修复后通过的隔离用例验证。

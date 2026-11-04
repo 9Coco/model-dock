@@ -37,7 +37,7 @@ async function fixture(legacy = false) {
 describe('removed Trae integration', () => {
   it('does not create a Trae tool in a new store', async () => {
     const f = await fixture();
-    expect(f.store.listBindings()).toHaveLength(10);
+    expect(f.store.listBindings()).toHaveLength(11);
     expect(f.store.listBindings().some(binding => String(binding.id) === 'trae')).toBe(false);
     f.store.close();
     const db = await database(join(f.dir, 'modeldock.sqlite'));
@@ -46,7 +46,7 @@ describe('removed Trae integration', () => {
 
   it('preserves but excludes historical drafts and never synchronizes them on source removal', async () => {
     const f = await fixture(true);
-    expect(f.store.listBindings()).toHaveLength(10);
+    expect(f.store.listBindings()).toHaveLength(11);
     expect(f.store.listBindings().some(binding => String(binding.id) === 'trae')).toBe(false);
     const normal = f.store.listBindings().find(binding => binding.id === 'opencode')!;
     expect(() => f.store.saveBinding({ ...normal, id: 'trae' as ToolId })).toThrow('工具绑定无效');

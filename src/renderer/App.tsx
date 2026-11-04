@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import {
   Activity, ArrowDownToLine, ArrowRight, ArrowUpRight, Box, Check,
   CheckCheck, ChevronDown, CircleHelp, Clock3, Copy, Database, Download,
@@ -44,6 +44,7 @@ import type { DiscoveryResult } from '../shared/catalog-types';
 import { canonicalProviderUrl, providerIdentity } from '../shared/provider-duplicates';
 import { modelDisplayLabel, modelLocalAlias, suggestModelAlias } from '../shared/model-names';
 import { firstConnectionModel } from '../shared/connection-types';
+import { useContextMenu, type ContextMenuItem } from './ContextMenu';
 
 type Page = 'providers' | 'tools' | 'service' | 'auth' | 'settings';
 type Toast = { id: number; message: string; tone: 'success' | 'error' | 'info' };
@@ -63,6 +64,7 @@ const providerKinds: Record<ProviderKind, { title: string; short: string; descri
   grok: { title: 'Grok Build 订阅', short: 'GROK', description: '使用自己的 Grok Build 账号登录', symbol: 'G' },
 };
 const toolInfo: Record<ToolId, { name: string; subtitle: string; description: string; instruction: string }> = {
+  junie: { name: 'Junie', subtitle: '终端 / IDE 的 ACP 入口', description: '将已有供应商模型用于 Junie CLI 和 IDE。', instruction: '选择直连供应商或聚合接口，同步当前默认模型。终端运行 junie --model custom:modeldock；IDE 的 AI Chat 中选择 Junie · ModelDock，并开启新会话。' },
   'claude-code': { name: 'Claude Code', subtitle: '终端 / VS Code 内置代理', description: '直连一家 API 供应商，或使用 ModelDock 聚合接口。', instruction: '工具只连接一个供应商地址或一个聚合接口；聚合接口内部配置供应商和模型映射。终端会话重启后生效；VS Code 内置 Claude 代理通过命令面板重启本机代理主机后刷新配置和模型。' },
   dsh: { name: 'DeepSeek Harness', subtitle: 'DSH · 桌面与终端', description: '在 Harness 中复用供应商模型。', instruction: '勾选供应商后自动同步到 DSH 配置，已有文件自动备份。' },
   copilot: { name: 'GitHub Copilot', subtitle: '独立桌面应用', description: '将所选供应商同步到正在运行的 Copilot app。', instruction: '请先打开 Copilot app。勾选后自动同步到应用原生模型注册表，无需重启；在应用的模型选择器中选择导入的模型。' },
@@ -71,7 +73,7 @@ const toolInfo: Record<ToolId, { name: string; subtitle: string; description: st
   ...Object.fromEntries(Object.entries(JETBRAINS_TOOLS).map(([id, info]) => [id, { name: info.name, subtitle: 'JetBrains AI Assistant', description: '将已有 API 和账号订阅用于 AI Assistant。', instruction: '更改来源、模式或模型后自动同步；IDE 运行时先保存，退出后同步最新选择。API Key 需在 IDE 中粘贴确认。' }])) as Record<'webstorm' | 'intellij-idea' | 'rider' | 'pycharm', { name: string; subtitle: string; description: string; instruction: string }>,
   codex: { name: 'Codex', subtitle: '桌面 / CLI / IDE', description: '让 Codex 使用你的本地模型入口。', instruction: '预览后可应用到 Codex 配置，原有账号登录保留。' },
 };
-const toolIds: ToolId[] = ['codex', 'claude-code', 'opencode', 'dsh', 'vscode', 'copilot', 'webstorm', 'intellij-idea', 'rider', 'pycharm'];
+const toolIds: ToolId[] = ['codex', 'claude-code', 'junie', 'opencode', 'dsh', 'vscode', 'copilot', 'webstorm', 'intellij-idea', 'rider', 'pycharm'];
 const emptySnapshot: Snapshot = {
   providers: [], models: [], bindings: [], logs: [], dataDir: '', version: '',
   gateway: { running: false, host: '127.0.0.1', port: 18181, baseUrl: '', requests: 0, lastError: '' },
@@ -180,7 +182,7 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
   const toolSignature = (binding: ToolBinding) => JSON.stringify({ binding: Object.fromEntries(Object.entries(binding).sort(([left], [right]) => left.localeCompare(right))), models: toolModels(binding), providers: data.providers.filter(provider => sourceIdsFor(binding).includes(provider.id)), port: data.gateway.port });
   const toolOperationPending = (id: ToolId) => pendingActions.current.has('delete') || [`tool-binding-${id}`, `apply-tool-${id}`, `export-tool-${id}`, `preview-${id}`, `restore-tool-${id}`, `undo-tool-${id}`].some(key => pendingActions.current.has(key));
   const anyToolOperationPending = () => !!toolAuto.current?.pending().length || [...pendingActions.current].some(key => /^(tool-binding-|apply-tool-|export-tool-|preview-|restore-tool-|undo-tool-)/.test(key));
-  const canApplyTool = (id: ToolId) => isJetBrainsTool(id) ? jetBrainsStatuses[id]?.canApply === true && (jetBrainsStatuses[id]?.plugin ?? 'ai-assistant') === jetBrainsPluginFor(bindingFor(id)) : id === 'codex' || id === 'claude-code' || id === 'opencode' || id === 'dsh' || id === 'vscode' || id === 'copilot';
+  const canApplyTool = (id: ToolId) => isJetBrainsTool(id) ? jetBrainsStatuses[id]?.canApply === true && (jetBrainsStatuses[id]?.plugin ?? 'ai-assistant') === jetBrainsPluginFor(bindingFor(id)) : id === 'codex' || id === 'claude-code' || id === 'junie' || id === 'opencode' || id === 'dsh' || id === 'vscode' || id === 'copilot';
   const addModel = (providerId: string) => {
     setModelOfficialParametersApplied(false);
     modelTouchedParameters.current.clear();
@@ -214,6 +216,9 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
     setToasts(previous => [...previous.slice(-3), { id, message, tone }]);
     window.setTimeout(() => setToasts(previous => previous.filter(item => item.id !== id)), 6500);
   }, []);
+  const contextMenu = useContextMenu({ onError: error => notify(errorText(error), 'error') });
+  const contextDataVersion = useMemo(() => JSON.stringify([data.providers, data.models, data.bindings]), [data.providers, data.models, data.bindings]);
+  useEffect(() => { contextMenu.close(); }, [page, selectedTool, selectedProviderId, providerDraft, modelDraft, modelDiscovery, preview, confirm, busy, contextDataVersion, contextMenu.close]);
   useEffect(() => {
     if (!initialSettings && bridge?.getSettings) void bridge.getSettings().then(setPreferences).catch(error => notify(errorText(error), 'error'));
     // 修改点：等待主题与 React 布局跨过首帧，再通知主进程显示窗口。
@@ -400,8 +405,8 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
     setTestModelIds(previous => ({ ...previous, [providerId]: modelId }));
     setTests(previous => { const next = { ...previous }; delete next[providerId]; return next; });
   };
-  const testProvider = async (provider: Provider) => {
-    const model = connectionTestModel(provider.id);
+  const testProvider = async (provider: Provider, selectedModel?: Model) => {
+    const model = selectedModel ?? connectionTestModel(provider.id);
     if (!model) { notify('此供应商还没有模型，请先添加模型后再测试连接。', 'info'); return; }
     await run(`test-${provider.id}`, async () => {
       const revision = (testRevisions.current[provider.id] ?? 0) + 1;
@@ -572,8 +577,8 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
   const restoreOfficialConfig = (tool: ToolId) => {
     if (toolOperationPending(tool) || isJetBrainsTool(tool) && !jetBrainsStatuses[tool]?.canApply) return;
     const plugin = isJetBrainsTool(tool) ? jetBrainsPluginFor(bindingFor(tool)) : 'ai-assistant';
-    const description = isJetBrainsTool(tool) ? plugin === 'air' ? '将还原本次 ModelDock 同步前的 Air 账户参数，保留 AI Assistant 设置；Air 的 API Key 需在 Accounts 中自行确认或移除。' : '将恢复本次 ModelDock 同步前的 AI Assistant 模型设置。API Key 保存在 IDE 凭据存储中，需要在 IDE 内自行确认或更换。' : tool === 'codex' ? '将切回 Codex 官方 OpenAI / ChatGPT 模型入口，关闭自定义模型连接与聚合入口。' : `将清理 ${toolInfo[tool].name} 的自定义模型来源并恢复官方模型入口。`;
-    setConfirm({ title: isJetBrainsTool(tool) ? `还原 ${toolInfo[tool].name} 同步前设置？` : `还原 ${toolInfo[tool].name} 官方配置？`, description: `${description} 需要修改的现有配置会先备份，账号登录、MCP、Skills、会话和其他设置保留。此工具在 ModelDock 中的供应商与模型选择会清空，全局供应商和模型保留。`, actionKey: `restore-tool-${tool}`, actionLabel: '确认还原', action: async () => {
+    const description = isJetBrainsTool(tool) ? plugin === 'air' ? '将还原本次 ModelDock 同步前的 Air 账户参数，保留 AI Assistant 设置；Air 的 API Key 需在 Accounts 中自行确认或移除。' : '将恢复本次 ModelDock 同步前的 AI Assistant 模型设置。API Key 保存在 IDE 凭据存储中，需要在 IDE 内自行确认或更换。' : tool === 'codex' ? '将切回 Codex 官方 OpenAI / ChatGPT 模型入口，关闭自定义模型连接与聚合入口。' : tool === 'junie' ? '将恢复 Junie 同步前的默认选择，移除 ModelDock 管理的自定义模型与 IDE ACP 入口；内置 Junie 的账号和设置保留。' : `将清理 ${toolInfo[tool].name} 的自定义模型来源并恢复官方模型入口。`;
+    setConfirm({ title: isJetBrainsTool(tool) || tool === 'junie' ? `还原 ${toolInfo[tool].name} 同步前设置？` : `还原 ${toolInfo[tool].name} 官方配置？`, description: `${description} 需要修改的现有配置会先备份，账号登录、MCP、Skills、会话和其他设置保留。此工具在 ModelDock 中的供应商与模型选择会清空，全局供应商和模型保留。`, actionKey: `restore-tool-${tool}`, actionLabel: '确认还原', action: async () => {
       if (pendingActions.current.has('delete') || [`tool-binding-${tool}`, `apply-tool-${tool}`, `export-tool-${tool}`, `preview-${tool}`].some(key => pendingActions.current.has(key))) throw new Error('工具配置正在同步，请稍候再还原。');
       if (isJetBrainsTool(tool) && !(await loadJetBrainsStatus(tool))?.canApply) throw new Error('请先退出 IDE，并确认配置状态后再还原。');
       if (isJetBrainsTool(tool)) jetBrainsAuto.current?.cancel(tool);
@@ -586,7 +591,7 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
       setPreview(previous => previous?.tool === tool ? null : previous);
       await refresh();
       if (isJetBrainsTool(tool)) await loadJetBrainsStatus(tool);
-      notify(`${toolInfo[tool].name} ${isJetBrainsTool(tool) ? '已恢复同步前的设置；API Key 请在 IDE 中确认' : '已还原官方配置'}。`);
+      notify(`${toolInfo[tool].name} ${isJetBrainsTool(tool) ? '已恢复同步前的设置；API Key 请在 IDE 中确认' : tool === 'junie' ? '已恢复同步前的设置' : '已还原官方配置'}。`);
     } });
   };
   const saveVscodeScope = async (vscodeSyncScope: 'managed' | 'selected') => {
@@ -636,8 +641,8 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
   const syncToolConfig = async (tool: ToolId, binding: ToolBinding, automatic: boolean) => {
     setToolDeliveries(previous => { const remaining = { ...previous }; delete remaining[tool]; return remaining; });
     setToolSyncErrors(previous => { const remaining = { ...previous }; delete remaining[tool]; return remaining; });
-    if ((tool === 'codex' || tool === 'claude-code') && sourceIdsFor(binding).length > 0 && !toolModels(binding).length && binding.enabled) {
-      setToolSyncErrors(previous => ({ ...previous, [tool]: tool === 'claude-code' ? '选择已保存，但所选来源没有启用的兼容模型，本次没有更改外部配置。请添加兼容模型后重新同步。' : '选择已保存，但所选供应商没有可用于 Codex 的 Responses 模型，本次没有更改外部配置。请添加并启用 Responses 模型后重新同步。' }));
+    if ((tool === 'codex' || tool === 'claude-code' || tool === 'junie') && sourceIdsFor(binding).length > 0 && !toolModels(binding).length && binding.enabled) {
+      setToolSyncErrors(previous => ({ ...previous, [tool]: tool !== 'codex' ? '选择已保存，但所选来源没有启用的兼容模型，本次没有更改外部配置。请添加兼容模型后重新同步。' : '选择已保存，但所选供应商没有可用于 Codex 的 Responses 模型，本次没有更改外部配置。请添加并启用 Responses 模型后重新同步。' }));
       return;
     }
     try {
@@ -849,6 +854,130 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
 
   const addProviderActions = <div className="add-provider-actions" role="group" aria-label="添加模型供应商"><button data-action="add-api-provider" className="button small primary" onClick={() => setProviderDraft(freshProvider('deepseek'))}><Plus size={15} />添加 API</button><button data-action="add-subscription-provider" className="button small secondary" onClick={() => setProviderDraft(freshProvider('codex-subscription'))}><Sparkles size={15} />添加订阅</button></div>;
   const providerStatus = (provider: Provider) => !provider.enabled ? '已停用' : provider.kind === 'openai-compatible' && !provider.baseUrl ? '待填地址' : provider.authStatus === 'ready' ? '凭据已保存' : provider.authStatus === 'signing-in' ? '正在登录' : provider.authStatus === 'error' ? '需要检查' : '待授权';
+  const deleteModel = (model: Model) => setConfirm({ title: `删除「${modelLabel(model)}」？`, description: '模型会从该供应商移除，使用它的工具配置需要重新保存。', action: async () => { await bridge!.deleteModel(model.id); await refresh(); notify('模型已删除。', 'info'); } });
+  const providerMenu = (provider: Provider, aggregate = false): ContextMenuItem[] => {
+    const disabled = !bridge;
+    const items: ContextMenuItem[] = [
+      { id: 'provider-open', label: '打开供应商', icon: <ArrowRight size={15} />, onSelect: () => selectProvider(provider.id) },
+      { id: 'provider-edit', label: '编辑供应商', icon: <Pencil size={15} />, disabled, onSelect: () => editProvider(provider) },
+      { id: 'provider-discover', label: '获取模型列表', icon: <Download size={15} />, disabled: disabled || !provider.hasSecret || !provider.baseUrl, onSelect: () => setModelDiscovery({ provider }) },
+      { id: 'provider-add-model', label: '手动添加模型', icon: <Plus size={15} />, disabled, onSelect: () => addModel(provider.id) },
+      { id: 'provider-test', label: '测试连接', icon: <Activity size={15} />, disabled: disabled || !!busy[`test-${provider.id}`] || !connectionTestModel(provider.id), onSelect: () => testProvider(provider) },
+      { id: 'provider-copy-separator', separator: true },
+      { id: 'provider-copy-url', label: '复制服务地址', icon: <Copy size={15} />, disabled: !provider.baseUrl, onSelect: () => copy(provider.baseUrl, '供应商地址已复制。') },
+    ];
+    if (provider.kind === 'openai-compatible') items.push({ id: 'provider-copy-key', label: '复制 API Key', icon: <KeyRound size={15} />, disabled: disabled || !provider.hasSecret,
+      onSelect: () => run('copy-provider-key', async () => { await bridge!.copyProviderKey(provider.id); notify('API Key已复制。'); }) });
+    else items.push({ id: 'provider-login', label: provider.hasSecret ? '重新登录账号' : '登录账号', icon: <KeyRound size={15} />, disabled: disabled || !!busy[`login-${provider.id}`], onSelect: () => login(provider) });
+    if (aggregate) {
+      const included = !data.gatewayExposure?.excludedProviderIds.includes(provider.id);
+      items.push({ id: 'provider-publish', label: included ? '从本地聚合接口移除' : '加入本地聚合接口', icon: <Waypoints size={15} />, disabled: disabled || !!busy['aggregate-context'],
+        onSelect: () => run('aggregate-context', async () => { await bridge!.setGatewayProviderEnabled(provider.id, !included); await refresh(); }) });
+    }
+    items.push({ id: 'provider-delete-separator', separator: true }, { id: 'provider-delete', label: '删除供应商…', icon: <Trash2 size={15} />, danger: true,
+      disabled: disabled || !!busy.delete || anyToolOperationPending(), onSelect: () => deleteProvider(provider) });
+    return items;
+  };
+  const modelMenu = (model: Model, aggregate = false): ContextMenuItem[] => {
+    const provider = data.providers.find(item => item.id === model.providerId);
+    const disabled = !bridge;
+    const items: ContextMenuItem[] = [
+      { id: 'model-copy-id', label: '复制上游模型 ID', icon: <Copy size={15} />, onSelect: () => copy(model.upstreamId, '上游模型 ID已复制。') },
+      { id: 'model-copy-alias', label: '复制本地模型名称', icon: <Copy size={15} />, onSelect: () => copy(model.alias, '本地模型名称已复制。') },
+      { id: 'model-edit-separator', separator: true },
+      { id: 'model-edit', label: '编辑模型', icon: <Pencil size={15} />, disabled, onSelect: () => editModel(model) },
+      { id: 'model-test', label: '测试此模型', icon: <Activity size={15} />, disabled: disabled || !provider?.hasSecret || !provider.baseUrl || !!busy[`test-${model.providerId}`], onSelect: () => provider ? testProvider(provider, model) : undefined },
+      { id: 'model-toggle', label: model.enabled ? '停用模型' : '启用模型', icon: <Power size={15} />, disabled: disabled || !!busy[`model-${model.id}`], onSelect: () => toggleModel(model, !model.enabled) },
+    ];
+    if (page === 'tools' && currentModels.some(item => item.id === model.id)) items.push({ id: 'model-default', label: '设为本工具默认模型', icon: <Check size={15} />, disabled: disabled || currentToolBusy || currentDefault?.id === model.id,
+      onSelect: () => saveInlineBinding(selectedTool, currentSourceIds, model.id) });
+    if (aggregate) {
+      const published = !data.gatewayExposure?.excludedModelIds.includes(model.id);
+      items.push({ id: 'model-publish', label: published ? '不在本地接口发布' : '在本地接口发布', icon: <Waypoints size={15} />, disabled: disabled || !!busy['aggregate-context'],
+        onSelect: () => run('aggregate-context', async () => { await bridge!.setGatewayModelEnabled(model.id, !published); await refresh(); }) });
+    }
+    items.push({ id: 'model-delete-separator', separator: true }, { id: 'model-delete', label: '删除模型…', icon: <Trash2 size={15} />, danger: true,
+      disabled: disabled || !!busy.delete || anyToolOperationPending(), onSelect: () => deleteModel(model) });
+    return items;
+  };
+  const toolMenu = (tool: ToolId): ContextMenuItem[] => {
+    const pending = !bridge || toolOperationPending(tool) || globalToolWriteBusy;
+    const binding = bindingFor(tool), models = toolModels(binding);
+    const air = isJetBrainsTool(tool) && jetBrainsPluginFor(binding) === 'air';
+    const canClear = tool !== 'codex' || sourceIdsFor(binding).length === 0 || binding.modelSelection === 'selected' && !models.length;
+    const items: ContextMenuItem[] = [
+      { id: 'tool-open', label: '打开工具配置', icon: <ArrowRight size={15} />, onSelect: () => selectTool(tool) },
+      { id: 'tool-preview', label: air ? '预览 Air 参考参数' : '预览配置', icon: <FileCode2 size={15} />, disabled: pending || !models.length && !canClear, onSelect: () => showPreview(tool) },
+      { id: 'tool-export', label: air ? '导出 Air 参考参数' : '导出配置', icon: <Download size={15} />, disabled: pending || !models.length && !canClear, onSelect: () => exportTool(tool) },
+      { id: 'tool-copy-key', label: '复制连接密钥', icon: <KeyRound size={15} />, disabled: pending || !binding.enabled || !models.length,
+        onSelect: () => run('copy-tool-key', async () => { await bridge!.copyConnectionKey(tool); notify('连接密钥已复制。'); }) },
+    ];
+    if (!air) {
+      items.push({ id: 'tool-sync-separator', separator: true }, { id: 'tool-apply', label: '重新同步配置', icon: <RefreshCw size={15} />, disabled: pending || !canApplyTool(tool) || !models.length && !canClear, onSelect: () => applyTool(tool) });
+      if (!isJetBrainsTool(tool)) items.push({ id: 'tool-undo', label: '撤销上次同步', icon: <RotateCcw size={15} />, disabled: pending || !toolUndoStatuses[tool]?.available, onSelect: () => undoTool(tool) });
+      items.push({ id: 'tool-restore', label: isJetBrainsTool(tool) || tool === 'junie' ? '还原同步前设置…' : '还原官方配置…', icon: <RotateCcw size={15} />, disabled: pending || isJetBrainsTool(tool) && !canApplyTool(tool), onSelect: () => restoreOfficialConfig(tool) });
+    }
+    if (isJetBrainsTool(tool)) items.push({ id: 'tool-status', label: '检查 IDE 状态', icon: <Activity size={15} />, disabled: pending, onSelect: async () => { await refreshJetBrainsStatus(tool); } });
+    return items;
+  };
+  const pageMenu = (): ContextMenuItem[] => [
+    { id: 'page-refresh', label: '刷新', icon: <RefreshCw size={15} />, disabled: !bridge, onSelect: () => run('refresh', refresh) },
+    { id: 'page-add-api', label: '添加 API 供应商', icon: <Plus size={15} />, onSelect: () => setProviderDraft(freshProvider()) },
+    { id: 'page-add-subscription', label: '添加订阅供应商', icon: <Sparkles size={15} />, onSelect: () => setProviderDraft(freshProvider('codex-subscription')) },
+    { id: 'page-settings', label: '打开设置', icon: <Settings2 size={15} />, onSelect: () => navigate('settings') },
+    { id: 'page-open-data', label: '打开数据目录', icon: <FolderOpen size={15} />, disabled: !bridge, onSelect: () => run('open-dir', () => bridge!.openDataDir()) },
+  ];
+  const handleContextMenu = (event: ReactMouseEvent<HTMLElement>) => {
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target || target.closest('[data-context-menu]')) return;
+    // The native edit menu owns text inputs and actual selected text. Modals keep
+    // their own controls; opening a menu never navigates or invokes an operation.
+    if (target.closest('input,textarea,select,[contenteditable]:not([contenteditable="false"])') || window.getSelection()?.toString()) { contextMenu.close(); return; }
+    const link = target.closest<HTMLAnchorElement>('a[href]');
+    if (link && /^https?:\/\//.test(link.href)) {
+      contextMenu.open(event, [
+        { id: 'link-open', label: '打开链接', icon: <ArrowUpRight size={15} />, onSelect: () => link.click() },
+        { id: 'link-copy', label: '复制链接地址', icon: <Copy size={15} />, onSelect: () => copy(link.href, '链接地址已复制。') },
+      ], '链接'); return;
+    }
+    if (target.closest('[role="dialog"]')) { contextMenu.close(); return; }
+    const modelNode = target.closest('tr[data-model-id],[data-model-context-id],[data-aggregate-model]');
+    const modelId = modelNode?.getAttribute('data-model-id') ?? modelNode?.getAttribute('data-model-context-id') ?? modelNode?.getAttribute('data-aggregate-model');
+    const model = data.models.find(item => item.id === modelId);
+    if (model) { contextMenu.open(event, modelMenu(model, !!modelNode?.hasAttribute('data-aggregate-model')), modelLabel(model)); return; }
+    const providerNode = target.closest('[data-source-id],article[data-provider-id],[data-provider-connection],[data-aggregate-provider]');
+    const providerId = providerNode?.getAttribute('data-source-id') ?? providerNode?.getAttribute('data-provider-id') ?? providerNode?.getAttribute('data-provider-connection') ?? providerNode?.getAttribute('data-aggregate-provider');
+    const provider = data.providers.find(item => item.id === providerId);
+    if (provider) { contextMenu.open(event, providerMenu(provider, !!providerNode?.hasAttribute('data-aggregate-provider')), provider.name); return; }
+    const logNode = target.closest('[data-log-id]');
+    const log = data.logs.find(item => item.id === logNode?.getAttribute('data-log-id'));
+    if (log) {
+      contextMenu.open(event, [{ id: 'log-copy', label: '复制这条日志', icon: <Copy size={15} />, onSelect: () => copy([log.time, log.alias, log.providerName, log.endpoint, log.status || '失败', `${log.durationMs} ms`].join('\t'), '请求日志已复制。') },
+        { id: 'log-copy-model', label: '复制模型名称', icon: <Copy size={15} />, onSelect: () => copy(log.alias, '模型名称已复制。') }], '请求日志'); return;
+    }
+    const toolNode = target.closest('[data-tool-id],[data-tool-binding],[data-tool-workspace]');
+    const toolId = toolNode?.getAttribute('data-tool-id') ?? toolNode?.getAttribute('data-tool-binding') ?? toolNode?.getAttribute('data-tool-workspace');
+    if (toolIds.includes(toolId as ToolId)) { contextMenu.open(event, toolMenu(toolId as ToolId), toolInfo[toolId as ToolId].name); return; }
+    const value = target.closest('.copy-value')?.querySelector('code')?.getAttribute('title');
+    if (value) { contextMenu.open(event, [{ id: 'value-copy', label: '复制', icon: <Copy size={15} />, onSelect: () => copy(value, '已复制。') }], '复制内容'); return; }
+    if (target.closest('[data-aggregate-connection],.gateway-panel,.aggregate-strip')) {
+      contextMenu.open(event, [
+        { id: 'gateway-copy-url', label: '复制本地接口地址', icon: <Copy size={15} />, onSelect: () => copy(data.gateway.baseUrl || `http://127.0.0.1:${data.gateway.port}/v1`, '本地接口地址已复制。') },
+        { id: 'gateway-copy-key', label: '复制本地 API Key', icon: <KeyRound size={15} />, disabled: !bridge, onSelect: () => run('copy-gateway-key', async () => { await bridge!.copyGatewayKey(); notify('本地 API Key已复制。'); }) },
+        { id: 'gateway-toggle', label: data.gateway.running ? '停止本地服务' : '启动本地服务', icon: <Power size={15} />, disabled: !bridge || !!busy.gateway, onSelect: () => data.gateway.running ? stopGateway() : startGateway() },
+      ], '本地聚合接口'); return;
+    }
+    contextMenu.open(event, pageMenu(), 'ModelDock');
+  };
+  const handleContextKey = (event: ReactKeyboardEvent<HTMLElement>) => {
+    if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return;
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target || target.closest('[data-context-menu],input,textarea,select,[contenteditable]:not([contenteditable="false"])') || window.getSelection()?.toString()) return;
+    event.preventDefault();
+    const anchor = target.closest('tr[data-model-id],[data-model-context-id],[data-source-id],[data-provider-id],[data-tool-id],[data-tool-binding],[data-log-id]') ?? target;
+    const rect = anchor.getBoundingClientRect();
+    anchor.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: rect.left + 8, clientY: Math.min(rect.bottom, window.innerHeight - 8) }));
+  };
   const providerRow = (provider: Provider, forTool = false) => {
     const selected = forTool && currentSourceIds.includes(provider.id);
     const providerModels = data.models.filter(model => model.providerId === provider.id);
@@ -856,7 +985,7 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
     const testResult = tests[provider.id];
     const testing = !!busy[`test-${provider.id}`];
     const unavailableReason = providerUnavailableReason(provider, selectedTool);
-    return <article className={`provider-row ${selected ? 'selected' : ''} ${!provider.enabled ? 'muted-card' : ''}`} key={provider.id} data-provider-id={provider.id}>
+    return <article className={`provider-row ${selected ? 'selected' : ''} ${!provider.enabled ? 'muted-card' : ''}`} key={provider.id} data-provider-id={provider.id} tabIndex={0} aria-haspopup="menu">
       {forTool && <label className="provider-inline-select" title={selected ? '取消选择此供应商' : unavailableReason || '选择此供应商'}><input type="checkbox" data-action="select-tool-provider" data-tool-id={selectedTool} data-provider-id={provider.id} checked={selected} disabled={!bridge || currentToolBusy || !selected && !!unavailableReason} aria-label={currentSingleEntry && currentAggregate ? `聚合接口内部使用 ${provider.name}` : `为 ${toolInfo[selectedTool].name} 选择 ${provider.name}`} onChange={event => void saveInlineBinding(selectedTool, event.target.checked ? [...currentSourceIds, provider.id] : currentSourceIds.filter(id => id !== provider.id))} /><span className="sr-only">{provider.name}</span></label>}
       <span className={`provider-monogram ${provider.kind}`}>{providerKinds[provider.kind].symbol}</span>
       <div className="provider-row-main">
@@ -884,13 +1013,13 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
   };
   const modelTable = (models: Model[]) => <div className="table-scroll"><table className="models-table">
     <thead><tr><th>聚合模型名称 / 接口 ID</th><th>供应商 / 原生模型名称</th><th>接口</th><th>上下文</th><th>能力</th><th>启用</th><th><span className="sr-only">操作</span></th></tr></thead>
-    <tbody>{models.map(model => <tr key={model.id} data-model-id={model.id}>
+    <tbody>{models.map(model => <tr key={model.id} data-model-id={model.id} tabIndex={0} aria-haspopup="menu">
       <td><div className="model-name"><span className="model-icon"><Box size={17} /></span><div><strong>{modelLabel(model)}</strong><CopyValue value={model.alias} label={`聚合模型名称 ${model.alias}`} onCopy={copy} /></div></div></td>
       <td><div className="table-provider"><strong>{data.providers.find(provider => provider.id === model.providerId)?.name ?? '供应商已移除'}</strong><CopyValue value={model.upstreamId} label={`上游模型名称 ${model.upstreamId}`} onCopy={copy} /></div></td>
       <td><span className="protocol-tag">{protocolLabel(model)}</span></td><td><span className="context-tag">{contextLabel(model.contextWindow)}</span></td>
       <td><div className="capability-tags">{model.tools && <span title="工具调用"><Terminal size={13} /></span>}{model.vision && <span title="图片输入"><Sparkles size={13} /></span>}{!model.tools && !model.vision && <span className="text-capability">文本</span>}</div></td>
       <td><Toggle checked={model.enabled} onChange={enabled => void toggleModel(model, enabled)} label={`${model.enabled ? '停用' : '启用'} ${model.alias}`} disabled={busy[`model-${model.id}`]} /></td>
-      <td><div className="row-actions"><button data-action="edit-model" className="icon-button" aria-label={`编辑 ${model.alias}`} title="编辑模型" onClick={() => editModel(model)}><Pencil size={14} /></button><button className="icon-button danger-icon" aria-label={`删除 ${model.alias}`} title="删除模型" onClick={() => setConfirm({ title: `删除「${modelLabel(model)}」？`, description: '模型会从该供应商移除，使用它的工具配置需要重新保存。', action: async () => { await bridge!.deleteModel(model.id); await refresh(); notify('模型已删除。', 'info'); } })}><Trash2 size={14} /></button></div></td>
+      <td><div className="row-actions"><button data-action="edit-model" className="icon-button" aria-label={`编辑 ${model.alias}`} title="编辑模型" onClick={() => editModel(model)}><Pencil size={14} /></button><button className="icon-button danger-icon" aria-label={`删除 ${model.alias}`} title="删除模型" onClick={() => deleteModel(model)}><Trash2 size={14} /></button></div></td>
     </tr>)}</tbody>
   </table></div>;
 
@@ -901,9 +1030,9 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
           <div className="panel-footnote"><CircleHelp size={14} /><span>{currentJetBrains ? currentJetBrainsPlugin === 'air' ? 'Air 接入参数已保存。请在 Air Accounts 的 More Providers → OpenAI 中添加连接，粘贴 URL 和 Key，再选择 Agent 与模型。' : '内部来源与映射模型变化会自动同步；IDE 运行时保存最新选择，退出后更新设置。API Key 需在 IDE 中确认。' : currentCanApply ? '勾选和默认模型变化会在短暂停顿后合并同步，保留工具的其他配置，可撤销上次同步。模型参数变化或同步失败时，可点击“重新同步”。' : '勾选会立即保存来源；导出后需要在工具中导入配置。模型或选择变化后，请再次导出并导入。'}</span></div>
 
   </section>;
-  const aggregateModelSidebar = <aside className="tool-model-sidebar" aria-label={`${toolInfo[selectedTool].name} 聚合模型`}><section className="panel codex-aggregate-models" data-tool-aggregate-models={selectedTool} data-codex-aggregate-models={selectedTool === 'codex' ? true : undefined}><div className="section-heading"><h2>内部模型映射<span className="count-tag">{currentModels.length} / {aggregateCandidates.length}</span></h2><div className="tool-source-batch-actions"><button className="button small secondary" data-action={selectedTool === 'codex' ? 'select-all-codex-aggregate-models' : 'select-all-tool-aggregate-models'} disabled={!bridge || currentToolBusy || !aggregateCandidates.length} onClick={() => void saveAggregateModels(selectedTool, aggregateCandidates.map(model => model.id))}><CheckCheck size={14} />启用全部</button><button className="button small secondary" data-action={selectedTool === 'codex' ? 'clear-codex-aggregate-models' : 'clear-tool-aggregate-models'} disabled={!bridge || currentToolBusy || !currentModels.length} onClick={() => void saveAggregateModels(selectedTool, [])}><X size={14} />全部停用</button></div></div><p className="aggregate-model-note">先选择聚合接口内部供应商，再勾选允许映射到 {toolInfo[selectedTool].name} 的模型。{currentJetBrains ? '全部停用会取消待同步模型设置。' : '全部停用会清理该工具的模型入口。'}</p><code className="aggregate-model-endpoint">http://127.0.0.1:{data.gateway.port}/tool/{selectedTool}{selectedTool === 'claude-code' ? '' : '/v1'}</code>{aggregateCandidates.length ? <div className="aggregate-model-list">{aggregateCandidates.map(model => <label key={model.id} className={`aggregate-model-option ${currentModels.some(item => item.id === model.id) ? 'selected' : ''}`}><input type="checkbox" data-action={selectedTool === 'codex' ? 'select-codex-aggregate-model' : 'select-tool-aggregate-model'} data-model-id={model.id} checked={currentModels.some(item => item.id === model.id)} disabled={!bridge || currentToolBusy} onChange={event => void saveAggregateModels(selectedTool, event.target.checked ? [...currentModels.map(item => item.id), model.id] : currentModels.filter(item => item.id !== model.id).map(item => item.id))} /><span><strong>{modelLabel(model)}</strong><small>{data.providers.find(provider => provider.id === model.providerId)?.name} · {model.alias}</small></span>{model.id === currentDefault?.id && <span className="badge neutral">默认</span>}</label>)}</div> : <p className="aggregate-model-empty">选择有兼容模型的供应商后，可在这里逐个启用。</p>}</section></aside>;
+  const aggregateModelSidebar = <aside className="tool-model-sidebar" aria-label={`${toolInfo[selectedTool].name} 聚合模型`}><section className="panel codex-aggregate-models" data-tool-aggregate-models={selectedTool} data-codex-aggregate-models={selectedTool === 'codex' ? true : undefined}><div className="section-heading"><h2>内部模型映射<span className="count-tag">{currentModels.length} / {aggregateCandidates.length}</span></h2><div className="tool-source-batch-actions"><button className="button small secondary" data-action={selectedTool === 'codex' ? 'select-all-codex-aggregate-models' : 'select-all-tool-aggregate-models'} disabled={!bridge || currentToolBusy || !aggregateCandidates.length} onClick={() => void saveAggregateModels(selectedTool, aggregateCandidates.map(model => model.id))}><CheckCheck size={14} />启用全部</button><button className="button small secondary" data-action={selectedTool === 'codex' ? 'clear-codex-aggregate-models' : 'clear-tool-aggregate-models'} disabled={!bridge || currentToolBusy || !currentModels.length} onClick={() => void saveAggregateModels(selectedTool, [])}><X size={14} />全部停用</button></div></div><p className="aggregate-model-note">先选择聚合接口内部供应商，再勾选允许映射到 {toolInfo[selectedTool].name} 的模型。{currentJetBrains ? '全部停用会取消待同步模型设置。' : '全部停用会清理该工具的模型入口。'}</p><code className="aggregate-model-endpoint">http://127.0.0.1:{data.gateway.port}/tool/{selectedTool}{selectedTool === 'claude-code' ? '' : '/v1'}</code>{aggregateCandidates.length ? <div className="aggregate-model-list">{aggregateCandidates.map(model => <label key={model.id} data-model-context-id={model.id} className={`aggregate-model-option ${currentModels.some(item => item.id === model.id) ? 'selected' : ''}`}><input type="checkbox" data-action={selectedTool === 'codex' ? 'select-codex-aggregate-model' : 'select-tool-aggregate-model'} data-model-id={model.id} checked={currentModels.some(item => item.id === model.id)} disabled={!bridge || currentToolBusy} onChange={event => void saveAggregateModels(selectedTool, event.target.checked ? [...currentModels.map(item => item.id), model.id] : currentModels.filter(item => item.id !== model.id).map(item => item.id))} /><span><strong>{modelLabel(model)}</strong><small>{data.providers.find(provider => provider.id === model.providerId)?.name} · {model.alias}</small></span>{model.id === currentDefault?.id && <span className="badge neutral">默认</span>}</label>)}</div> : <p className="aggregate-model-empty">选择有兼容模型的供应商后，可在这里逐个启用。</p>}</section></aside>;
 
-  return <div className="app-shell">
+  return <div className="app-shell" onContextMenu={handleContextMenu} onKeyDown={handleContextKey}>
     <aside className="sidebar">
       <button className="brand" onClick={() => selectTool('codex')} aria-label="ModelDock 首页"><span className="brand-mark"><img src={brandIcon} alt="" data-app-brand-icon /></span><span>ModelDock</span></button>
       <div className="sidebar-navigation" data-sidebar-navigation>
@@ -930,18 +1059,19 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
         {page === 'tools' && <div className={`tool-workspace ${currentSingleEntry ? 'single-entry-workspace' : currentAggregate ? 'with-model-sidebar' : ''}`} data-tool-workspace={selectedTool}>
           <div className="tool-primary-column">
           <div className="tool-detail-summary tool-inline-summary" data-tool-binding={selectedTool} data-claude-connection-kind={currentClaudeKind} data-connection-mode={currentBinding.mode} data-selected-provider-count={currentSourceIds.length} data-selected-model-count={currentModels.length}>
-            <div className="tool-connection-heading"><span className="eyebrow">{currentSingleEntry ? currentAggregate ? 'ModelDock 聚合接口' : '供应商直连' : selectedTool === 'claude-code' ? currentClaudeLabel : currentAggregate ? '本机聚合模型入口' : currentLegacyMode ? '沿用已有连接方式' : currentJetBrainsConnection?.kind === 'local-managed' ? '单来源 · 本机协议桥' : '单来源连接'}</span>{(!currentJetBrains || currentJetBrainsPlugin !== 'air') && <button className="button small secondary" data-action="restore-official-tool-config" disabled={!bridge || currentToolBusy || currentJetBrains && !currentJetBrainsStatus?.canApply} title={currentJetBrains ? currentJetBrainsStatus?.message ?? '正在确认 IDE 状态' : undefined} onClick={() => restoreOfficialConfig(selectedTool)}><BusyIcon active={!!busy[`restore-tool-${selectedTool}`]}><RotateCcw size={14} /></BusyIcon>{currentJetBrains ? '还原同步前设置' : '还原官方配置'}</button>}</div>
+            <div className="tool-connection-heading"><span className="eyebrow">{currentSingleEntry ? currentAggregate ? 'ModelDock 聚合接口' : '供应商直连' : selectedTool === 'claude-code' ? currentClaudeLabel : currentAggregate ? '本机聚合模型入口' : currentLegacyMode ? '沿用已有连接方式' : currentJetBrainsConnection?.kind === 'local-managed' ? '单来源 · 本机协议桥' : '单来源连接'}</span>{(!currentJetBrains || currentJetBrainsPlugin !== 'air') && <button className="button small secondary" data-action="restore-official-tool-config" disabled={!bridge || currentToolBusy || currentJetBrains && !currentJetBrainsStatus?.canApply} title={currentJetBrains ? currentJetBrainsStatus?.message ?? '正在确认 IDE 状态' : undefined} onClick={() => restoreOfficialConfig(selectedTool)}><BusyIcon active={!!busy[`restore-tool-${selectedTool}`]}><RotateCcw size={14} /></BusyIcon>{currentJetBrains || selectedTool === 'junie' ? '还原同步前设置' : '还原官方配置'}</button>}</div>
             <div className="connection-mode-controls tool-aggregate-option"><label><input type="checkbox" data-action="tool-use-aggregate" data-tool-id={selectedTool} checked={currentAggregate} disabled={!bridge || currentToolBusy} onChange={event => void saveToolMode(selectedTool, event.target.checked ? 'aggregate' : 'direct')} /><span>使用聚合接口</span></label><small>{currentSingleEntry ? currentAggregate ? '工具连接一个 ModelDock 入口。内部供应商与模型映射在下方聚合配置中选择。' : '工具使用所选供应商的原生地址和 API Key；账号订阅及需要协议转换的来源请使用聚合接口。' : currentAggregate ? '统一连接 ModelDock 本机入口，可选择多家来源并逐个启用模型。' : currentLegacyMode ? '当前保留已有连接；开启聚合后可使用一个本机入口，取消聚合后可单独连接一家来源。' : '单独连接一家来源，选择另一家会替换当前来源；API 优先直连，订阅由本机管理授权。'}</small>{currentLegacyMode && <small className="legacy-connection-note">当前沿用已有连接方式和模型范围；点击此选项后采用新的单来源或聚合方式。</small>}</div>
             {currentSingleEntry && !currentAggregate && <div className="single-entry-direct-source"><label>直连供应商<select data-action="single-entry-direct-provider" data-tool-id={selectedTool} aria-label={`${toolInfo[selectedTool].name} 直连供应商`} value={currentSourceIds[0] ?? ''} disabled={!bridge || currentToolBusy} onChange={event => void saveInlineBinding(selectedTool, event.target.value ? [event.target.value] : [])}><option value="">请选择原生 API 供应商</option>{data.providers.map(provider => { const reason = providerUnavailableReason(provider, selectedTool); return <option key={provider.id} value={provider.id} disabled={!!reason}>{provider.name}{reason ? `（${reason}）` : ''}</option>; })}</select></label><p>直连只配置这一家供应商。已配置的原生模型使用真实模型 ID；供应商模型与聚合映射保持独立。</p></div>}
             {currentSingleEntry && <p className="single-entry-target" data-single-entry-target={selectedTool} data-target-kind={currentAggregate ? 'aggregate' : 'direct-api'}><span>{currentAggregate ? '唯一聚合入口' : '供应商原生入口'}</span><code>{currentTargetUrl || '选择可直连的 API 供应商后显示原生地址'}</code></p>}
-            <div className="tool-inline-heading"><ToolIcon tool={selectedTool} /><div><strong>{currentJetBrains ? currentJetBrainsPlugin === 'air' ? 'JetBrains Air' : 'JetBrains AI Assistant' : toolInfo[selectedTool].subtitle}</strong><span>{currentSingleEntry ? currentAggregate ? `1 个 ModelDock 入口 · ${currentModels.length} 个映射模型` : `${currentDirectProvider?.name ?? '尚未选择直连供应商'} · ${currentModels.length} 个原生模型` : `${currentSourceIds.length} 家供应商 · ${currentModels.length} 个可用模型`}</span></div><span className={`badge ${currentRestored || currentDelivery?.kind === 'applied' ? 'positive' : toolSyncErrors[selectedTool] || currentSourceIds.length ? 'warning' : 'neutral'}`} data-tool-application-status data-tool-application-state={currentApplicationState}>{busy[`undo-tool-${selectedTool}`] ? '正在撤销上次同步' : currentDelivery?.kind === 'undone' && !currentToolAuto ? '已撤销上次同步' : currentToolAuto?.phase === 'waiting' ? '选择已保存，稍后自动同步' : busy[`restore-tool-${selectedTool}`] ? '正在还原官方配置' : currentRestored ? currentJetBrains ? '已恢复同步前设置' : '已还原官方配置' : busy[`tool-binding-${selectedTool}`] ? '正在保存选择' : busy[`apply-tool-${selectedTool}`] ? '正在同步' : currentJetBrainsAuto ? jetBrainsAutoSyncLabel(currentJetBrainsAuto) : toolSyncErrors[selectedTool] ? '选择已保存，同步未完成' : currentCleared ? '来源已清理' : currentDelivery?.kind === 'applied' ? currentJetBrains ? currentJetBrainsPlugin === 'air' ? 'Air 参数已准备，请在原生界面确认' : jetBrainsCompletionParameters(currentBinding, data.models, data.providers, data.gateway.port).supported ? '聊天及补全参数已同步，两处 Key 需确认' : '地址/模型已同步，补全协议未确认' : '本次选择已同步' : currentDelivery?.kind === 'exported' ? currentJetBrains ? '参考参数已导出' : '已导出，待工具导入' : currentSourceIds.length ? currentJetBrains ? currentJetBrainsPlugin === 'air' ? '参数已保存，请在 Air 添加提供商' : '选择已保存，尚未同步 IDE' : currentCanApply ? '已保存，可重新同步' : '选择已保存，待导出' : '未选择供应商'}</span></div>
+            <div className="tool-inline-heading"><ToolIcon tool={selectedTool} /><div><strong>{currentJetBrains ? currentJetBrainsPlugin === 'air' ? 'JetBrains Air' : 'JetBrains AI Assistant' : toolInfo[selectedTool].subtitle}</strong><span>{currentSingleEntry ? currentAggregate ? `1 个 ModelDock 入口 · ${currentModels.length} 个映射模型` : `${currentDirectProvider?.name ?? '尚未选择直连供应商'} · ${currentModels.length} 个原生模型` : `${currentSourceIds.length} 家供应商 · ${currentModels.length} 个可用模型`}</span></div><span className={`badge ${currentRestored || currentDelivery?.kind === 'applied' ? 'positive' : toolSyncErrors[selectedTool] || currentSourceIds.length ? 'warning' : 'neutral'}`} data-tool-application-status data-tool-application-state={currentApplicationState}>{busy[`undo-tool-${selectedTool}`] ? '正在撤销上次同步' : currentDelivery?.kind === 'undone' && !currentToolAuto ? '已撤销上次同步' : currentToolAuto?.phase === 'waiting' ? '选择已保存，稍后自动同步' : busy[`restore-tool-${selectedTool}`] ? '正在还原官方配置' : currentRestored ? currentJetBrains || selectedTool === 'junie' ? '已恢复同步前设置' : '已还原官方配置' : busy[`tool-binding-${selectedTool}`] ? '正在保存选择' : busy[`apply-tool-${selectedTool}`] ? '正在同步' : currentJetBrainsAuto ? jetBrainsAutoSyncLabel(currentJetBrainsAuto) : toolSyncErrors[selectedTool] ? '选择已保存，同步未完成' : currentCleared ? '来源已清理' : currentDelivery?.kind === 'applied' ? currentJetBrains ? currentJetBrainsPlugin === 'air' ? 'Air 参数已准备，请在原生界面确认' : jetBrainsCompletionParameters(currentBinding, data.models, data.providers, data.gateway.port).supported ? '聊天及补全参数已同步，两处 Key 需确认' : '地址/模型已同步，补全协议未确认' : '本次选择已同步' : currentDelivery?.kind === 'exported' ? currentJetBrains ? '参考参数已导出' : '已导出，待工具导入' : currentSourceIds.length ? currentJetBrains ? currentJetBrainsPlugin === 'air' ? '参数已保存，请在 Air 添加提供商' : '选择已保存，尚未同步 IDE' : currentCanApply ? '已保存，可重新同步' : '选择已保存，待导出' : '未选择供应商'}</span></div>
             <div className="tool-inline-controls"><label>{currentPreferenceLabel}<select aria-label={`${toolInfo[selectedTool].name} ${currentPreferenceLabel}`} data-action="tool-default-model" disabled={!bridge || currentToolBusy || !currentModels.length} value={currentDefault?.id ?? ''} onChange={event => void saveInlineBinding(selectedTool, currentSourceIds, event.target.value)}>{!currentModels.length && <option value="">未设置</option>}{currentModels.map(model => <option key={model.id} value={model.id}>{currentSingleEntry && !currentAggregate ? `${modelLabel(model)} · ${model.upstreamId}` : selectedTool === 'claude-code' ? `${modelLabel(model)} · ${model.alias}` : modelLabel(model)}</option>)}</select></label>{!currentJetBrains && <div className="tool-inline-actions"><button className="button small secondary" data-action="preview-tool-config" disabled={!bridge || currentToolBusy || (!currentModels.length && !currentCanClear)} title="预览所选供应商的配置" onClick={() => void showPreview(selectedTool)}><BusyIcon active={!!busy[`preview-${selectedTool}`]}><FileCode2 size={14} /></BusyIcon>预览配置</button>{currentCanApply ? <button className="button small primary" data-action="apply-tool-config" disabled={!bridge || currentToolBusy || (!currentModels.length && !currentCanClear)} title={selectedTool === 'dsh' ? currentOnlySelected ? currentModels.length ? '同步所选供应商并隐藏 DSH 原有模型来源，保留账号授权并备份原文件' : '清空 DSH 显示的模型来源，保留账号授权；关闭仅显示选项可恢复原来源' : currentModels.length ? '同步 ModelDock 来源并恢复 DSH 原有模型来源，保留账号授权' : '清理 ModelDock 来源并恢复 DSH 原有模型来源' : selectedTool === 'copilot' ? currentOnlySelected ? '仅同步所选自定义模型来源，保留 GitHub 内置模型、账号、MCP 和会话历史' : currentModels.length ? '通过正在运行的 Copilot app 重新同步 ModelDock 来源' : '从 Copilot app 模型注册表移除 ModelDock 来源，保留其他来源' : currentModels.length ? '重新写入工具配置，保留其他设置并备份原文件' : selectedTool === 'vscode' && (currentBinding.vscodeSyncScope ?? 'selected') === 'selected' ? '清理此 VS Code 配置的自定义供应商，保留内置模型并备份原文件' : '从此工具配置中移除 ModelDock 管理的来源'} onClick={() => void applyTool(selectedTool)}><BusyIcon active={!!busy[`apply-tool-${selectedTool}`]}><CheckCheck size={14} /></BusyIcon>重新同步</button> : null}{currentCanApply && <button className="button small secondary" data-action="undo-tool-sync" disabled={!bridge || currentToolBusy || !toolUndoStatuses[selectedTool]?.available} title={toolUndoStatuses[selectedTool]?.reason ?? '恢复上次同步前的配置和工具选择；外部修改不会被覆盖'} onClick={() => void undoTool(selectedTool)}><BusyIcon active={!!busy[`undo-tool-${selectedTool}`]}><RotateCcw size={14} /></BusyIcon>撤销上次同步</button>}{!currentCanApply && <button className="button small primary" data-action="export-tool-config" disabled={!bridge || currentToolBusy || !currentModels.length} onClick={() => void exportTool(selectedTool)}><BusyIcon active={!!busy[`export-tool-${selectedTool}`]}><ArrowDownToLine size={14} /></BusyIcon>导出配置</button>}</div>}</div>
             {selectedTool === 'claude-code' && <div className="vscode-scope-option claude-privacy-option"><label><input type="checkbox" data-action="claude-disable-telemetry" checked={currentBinding.claudeDisableTelemetry !== false} disabled={!bridge || currentToolBusy} onChange={event => void saveClaudePrivacy(event.target.checked)} /><span>关闭遥测和非必要联网</span></label><small>默认开启，关闭遥测、错误报告和自动更新；模型请求继续使用所选来源。WebFetch 仍可能进行安全检查；此选项不隔离本地文件，也不限制 MCP 或插件联网。同步后重启 Claude Code 生效。</small></div>}
             {selectedTool === 'vscode' && <div className="vscode-scope-option"><label><input type="checkbox" data-action="vscode-only-selected" checked={(currentBinding.vscodeSyncScope ?? 'selected') === 'selected'} disabled={!bridge || currentToolBusy} onChange={event => void saveVscodeScope(event.target.checked ? 'selected' : 'managed')} /><span>仅保留所选供应商</span></label><small>开启后清理其他自定义供应商；内置模型仍由 VS Code 控制。原文件会自动备份。</small></div>}
             {selectedTool === 'copilot' && <div className="vscode-scope-option"><label><input type="checkbox" data-action="copilot-only-selected" checked={(currentBinding.copilotSyncScope ?? 'selected') === 'selected'} disabled={!bridge || currentToolBusy} onChange={event => void saveCopilotScope(event.target.checked ? 'selected' : 'managed')} /><span>仅保留所选供应商</span></label><small>开启后清理未选中的自定义模型来源；保留 GitHub 内置模型、账号、MCP 和会话历史。同步前保存恢复记录。</small></div>}
             {selectedTool === 'dsh' && <div className="vscode-scope-option"><label><input type="checkbox" data-action="dsh-only-selected" checked={(currentBinding.dshSyncScope ?? 'selected') === 'selected'} disabled={!bridge || currentToolBusy} onChange={event => void saveDshScope(event.target.checked ? 'selected' : 'managed')} /><span>仅显示所选供应商</span></label><small>开启后停用并隐藏 DSH 原有模型来源，保留账号授权；关闭此选项可恢复原来源。同步前自动备份。</small></div>}
             {!currentJetBrains && !currentSingleEntry && <p className="tool-inline-explanation">{selectedTool === 'copilot' ? '勾选、更改连接方式或首选模型后自动同步到正在运行的 Copilot app，无需重启。同步前保存恢复记录。' : currentCanApply ? '勾选、更改连接方式或默认模型后保存选择，连续点选会合并为一次同步，已有文件自动备份。' : '勾选后保存来源，需要导出配置并在工具中导入。'}{currentAggregate ? ` ${toolInfo[selectedTool].name} 使用一个本机聚合入口，按模型别名调用所选来源；未启用模型不会对该工具开放。` : currentLegacyMode ? ' 当前沿用已有连接方式；点击「使用聚合接口」可切换为聚合，再取消可切换为单来源。' : ' 一次使用一家 API 或账号订阅来源；勾选另一家会替换当前来源。API 使用上游地址和真实模型 ID，订阅及需要协议转换的来源使用本机入口和模型别名。'}{selectedTool === 'claude-code' && <> {currentClaudeKind === 'direct-api' ? 'API 使用官方或指定的 Messages 入口及原有 API Key。' : 'Messages 本机入口使用本机 Key，账号令牌保留在 ModelDock。'} 默认模型及角色映射使用对应连接的模型 ID。{currentAggregate ? ' 聚合模式同步已启用模型列表，可在 Claude Code 中切换模型。' : ' 单来源模式也同步供应商模型列表及角色映射。'} 终端会话重启后生效；VS Code 内置代理需刷新本机代理主机。</>}{currentPolicy.groups.some(group => group.connection === 'local-managed') && ' 使用本机入口期间请保持 ModelDock 运行；同步时会按需启动本地服务。'}{selectedTool === 'codex' && ' Codex 仅提供 Responses 模型。'}{selectedTool === 'dsh' && <> 默认模型用于新会话。{currentOnlySelected ? ' 仅显示当前所选来源，原有授权仍保留。选择 DeepSeek 官方 API 时，同步为旧 DeepSeek 会话保留同模型的兼容调用，不更改聊天内容或模型选择。旧模型未包含在所选 DeepSeek 来源时，请在 DSH 中切换模型或新建会话。' : ' 原有来源和 ModelDock 来源一起显示；已有会话保留原模型选择。'}</>}{selectedTool === 'vscode' && ' 同步来源后，请在 VS Code 的模型选择器中选择；不会替换已打开聊天的当前模型。'}{selectedTool === 'copilot' && <> 请在 Copilot app 的模型选择器中选择导入的模型；不会替换已打开聊天的当前模型。{currentOnlySelected ? ' 仅保留所选自定义来源。' : ' 只更新 ModelDock 来源，保留其他供应商。'}</>}</p>}
-            {currentSingleEntry && !currentJetBrains && <p className="tool-inline-explanation">更改连接方式、直连供应商或默认模型后保存选择，停止操作 400 毫秒后合并同步并备份。可撤销上次同步。{currentAggregate ? '工具只配置一个 ModelDock 入口，按内部映射模型的别名调用；使用时保持 ModelDock 运行。' : '直接使用所选供应商的原生接口与 API Key，不需要本机协议转换。'}{selectedTool === 'claude-code' ? '同时同步可切换的模型列表；终端会话重启后生效。' : 'Codex 使用 Responses 原生协议。'}</p>}
+            {currentSingleEntry && !currentJetBrains && <p className="tool-inline-explanation">更改连接方式、直连供应商或默认模型后保存选择，停止操作 400 毫秒后合并同步并备份。可撤销上次同步。{currentAggregate ? '工具只配置一个 ModelDock 入口，按内部映射模型的别名调用；使用时保持 ModelDock 运行。' : '直接使用所选供应商的原生接口与 API Key，不需要本机协议转换。'}{selectedTool === 'claude-code' ? '同时同步可切换的模型列表；终端会话重启后生效。' : selectedTool === 'junie' ? '同步当前默认模型到终端和 IDE 的 Junie · ModelDock 入口；切换默认模型会同时更新两处，新会话中生效。' : 'Codex 使用 Responses 原生协议。'}</p>}
+            {selectedTool === 'junie' && <div className="form-info junie-entry-guide" data-junie-entry-guide><Terminal size={19} /><div><strong>终端与 IDE 使用同一个默认模型</strong><p>终端：运行 <code>junie --model custom:modeldock</code>。IDE：在 AI Chat 的 Agent 选择器中选择 <b>Junie · ModelDock</b>，然后开启新会话。首次使用需安装 Junie CLI，IDE 需支持 ACP。</p><p>同步会更新 Junie 自定义模型与 ModelDock 的 ACP 入口。切换默认模型后，请开启新会话。内置 Junie 的官方账号与模型设置独立管理；其官方 OpenAI / Anthropic API Key 仍在 IDE 中设置。</p><a href="https://www.jetbrains.com/help/ai-assistant/activate-agents.html" target="_blank" rel="noopener noreferrer">内置 Junie 的官方模型与 API Key 设置 <ArrowUpRight size={12} /></a></div></div>}
             {selectedTool === 'claude-code' && <p className="tool-inline-explanation" data-claude-vscode-refresh>VS Code 内置 Claude 代理会缓存模型列表。同步后按 Ctrl+Shift+P，运行 <b>Developer: Restart Local Agent Host</b>，再打开 Claude 会话；仅新建聊天或重新打开窗口可能仍显示 No models available。Anthropic 官方 Claude Code 扩展是独立入口，仍需按其环境变量设置配置。</p>}
             {selectedTool === 'claude-code' && !currentSingleEntry && !!currentSourceIds.length && <p className="tool-inline-delivery" data-claude-endpoint><span>{currentClaudeLabel}：</span><code>{currentClaudeNativeUrl || `http://127.0.0.1:${data.gateway.port}/tool/claude-code`}</code></p>}
             {toolSyncErrors[selectedTool] && <p className="tool-inline-sync-error" role="alert" data-tool-sync-error>{toolSyncErrors[selectedTool]}</p>}
@@ -985,7 +1115,7 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
             <div className="gateway-footer"><span>供应商凭据留在本机，由 ModelDock 转发请求。</span><span><span className="tiny-dot" />{enabledModels} 个已启用模型</span></div>
           </section>
           <div className="service-metrics"><div><span>本次服务请求</span><strong>{number(data.gateway.requests)}</strong></div><div><span>已记录请求</span><strong>{number(data.logs.length)}</strong></div><div><span>已记录错误请求</span><strong className={data.logs.some(log => log.status >= 400 || !log.status) ? 'orange-text' : ''}>{data.logs.filter(log => log.status >= 400 || !log.status).length}</strong></div><div><span>数据存储</span><strong className="storage-label"><Database size={17} />本机</strong></div></div>
-          <section className="panel logs-panel"><div className="section-heading"><h2>请求日志<span className="count-tag">{data.logs.length}</span></h2><div className="log-tabs">{[{ id: 'all', label: '全部' }, { id: 'success', label: '成功' }, { id: 'error', label: '错误' }].map(item => <button key={item.id} className={logFilter === item.id ? 'selected' : ''} onClick={() => setLogFilter(item.id)}>{item.label}</button>)}</div></div>{logs.length ? <div className="table-scroll"><table className="logs-table"><thead><tr><th>时间</th><th>模型</th><th>供应商</th><th>接口</th><th>状态</th><th>耗时</th></tr></thead><tbody>{[...logs].reverse().map(log => <tr key={log.id}><td className="log-time">{new Date(log.time).toLocaleTimeString('zh-CN', { hour12: false })}</td><td><strong>{log.alias}</strong></td><td>{log.providerName}</td><td><code>{log.endpoint}</code></td><td><span className={`log-status ${log.status >= 200 && log.status < 400 ? 'ok' : 'error'}`}><span className="status-dot" />{log.status || '失败'}</span></td><td className="log-duration">{number(log.durationMs)} ms</td></tr>)}</tbody></table></div> : <EmptyState compact icon={<Activity size={25} />} title={logFilter === 'all' ? '还没有请求记录' : '暂无这类请求'} description="通过工具向本地服务发起调用后，这里会显示模型、状态与耗时。" />}<div className="panel-footnote"><ShieldCheck size={13} /><span>仅展示请求元数据，不展示提示词、回答或供应商密钥。</span></div></section>
+          <section className="panel logs-panel"><div className="section-heading"><h2>请求日志<span className="count-tag">{data.logs.length}</span></h2><div className="log-tabs">{[{ id: 'all', label: '全部' }, { id: 'success', label: '成功' }, { id: 'error', label: '错误' }].map(item => <button key={item.id} className={logFilter === item.id ? 'selected' : ''} onClick={() => setLogFilter(item.id)}>{item.label}</button>)}</div></div>{logs.length ? <div className="table-scroll"><table className="logs-table"><thead><tr><th>时间</th><th>模型</th><th>供应商</th><th>接口</th><th>状态</th><th>耗时</th></tr></thead><tbody>{[...logs].reverse().map(log => <tr key={log.id} data-log-id={log.id} tabIndex={0} aria-haspopup="menu"><td className="log-time">{new Date(log.time).toLocaleTimeString('zh-CN', { hour12: false })}</td><td><strong>{log.alias}</strong></td><td>{log.providerName}</td><td><code>{log.endpoint}</code></td><td><span className={`log-status ${log.status >= 200 && log.status < 400 ? 'ok' : 'error'}`}><span className="status-dot" />{log.status || '失败'}</span></td><td className="log-duration">{number(log.durationMs)} ms</td></tr>)}</tbody></table></div> : <EmptyState compact icon={<Activity size={25} />} title={logFilter === 'all' ? '还没有请求记录' : '暂无这类请求'} description="通过工具向本地服务发起调用后，这里会显示模型、状态与耗时。" />}<div className="panel-footnote"><ShieldCheck size={13} /><span>仅展示请求元数据，不展示提示词、回答或供应商密钥。</span></div></section>
           <DiagnosticsPanel api={bridge} notify={notify} />
         </>}
 
@@ -1072,6 +1202,7 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
     </Modal>}
 
     {confirm && <Modal title={confirm.title} onClose={() => { if (!busy[confirm.actionKey ?? "delete"]) setConfirm(null); }}><div className="modal-body"><p className="confirm-description">{confirm.description}</p></div><div className="modal-footer"><button className="button secondary" data-action="cancel-tool-restore" disabled={busy[confirm.actionKey ?? "delete"]} onClick={() => setConfirm(null)}>{confirm.actionLabel ? "取消" : "保留"}</button><button className={confirm.actionLabel ? "button primary" : "button danger"} data-action={confirm.actionLabel ? "confirm-tool-restore" : "confirm-delete"} disabled={busy[confirm.actionKey ?? "delete"]} onClick={() => void run(confirm.actionKey ?? "delete", async () => { await confirm.action(); setConfirm(null); })}><BusyIcon active={!!busy[confirm.actionKey ?? "delete"]}>{confirm.actionLabel ? <RotateCcw size={16} /> : <Trash2 size={16} />}</BusyIcon>{confirm.actionLabel ?? "确认删除"}</button></div></Modal>}
+    {contextMenu.menu}
     <div className="toast-stack" aria-live="polite">{toasts.map(toast => <div key={toast.id} className={`toast ${toast.tone}`}>{toast.tone === 'success' ? <Check size={17} /> : toast.tone === 'error' ? <Activity size={17} /> : <CircleHelp size={17} />}<span>{toast.message}</span><button aria-label="关闭提示" onClick={() => setToasts(previous => previous.filter(item => item.id !== toast.id))}><X size={14} /></button></div>)}</div>
   </div>;
 }
