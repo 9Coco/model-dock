@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import type { BrowserWindow } from 'electron';
 import type { ConfigPreview, Snapshot, ToolBinding } from '../shared/types';
 
-const toolIds = ['codex', 'claude-code', 'junie', 'opencode', 'dsh', 'vscode', 'copilot', 'webstorm', 'intellij-idea', 'rider', 'pycharm'] as const;
+const toolIds = ['codex', 'claude-code', 'junie', 'opencode', 'dsh', 'vscode', 'copilot', 'copilot-cli', 'webstorm', 'intellij-idea', 'rider', 'pycharm'] as const;
 const jetBrainsIds = ['webstorm', 'intellij-idea', 'rider', 'pycharm'] as const;
 
 interface IconReadback {
@@ -82,6 +82,8 @@ export async function verifyToolIcons(window: BrowserWindow, outputDir: string, 
   let restored = false;
   let junieBindingToRestore: ToolBinding | undefined;
   let juniePreview: { canApply: boolean; keyRedacted: boolean; fullEndpoint: boolean; ideEntryExplained: boolean; externalSyncInvoked: false } | undefined;
+  let copilotCliBindingToRestore: ToolBinding | undefined;
+  let copilotCliPreview: { canApply: boolean; keyRedacted: boolean; nativeEndpoint: boolean; qualifiedDefault: boolean; externalSyncInvoked: false } | undefined;
   let restoredSize: number[] | undefined;
   const sizeTolerance = process.platform === 'win32' ? 1 : 0;
   async function selectTool(tool: string): Promise<void> {
@@ -95,7 +97,8 @@ export async function verifyToolIcons(window: BrowserWindow, outputDir: string, 
     assert.ok(icon.ariaHidden && icon.emptyAlt && icon.visible && icon.complete && icon.decoded && icon.localResource, `Tool logo must be visible, decorative and locally decoded: ${icon.tool}`);
     assert.ok(icon.width > 0 && icon.height > 0 && icon.markWidth > 0 && icon.markHeight > 0, `Tool logo must have visible dimensions: ${icon.tool}`);
     const asset = decodeURIComponent(new URL(icon.source).pathname).split('/').pop()!;
-    assert.ok(asset.startsWith(`${icon.tool}.`) || asset.startsWith(`${icon.tool}-`), `Tool logo source must belong to its ToolId: ${icon.tool}`);
+    const identity = icon.tool === 'copilot-cli' ? 'copilot' : icon.tool;
+    assert.ok(asset.startsWith(`${identity}.`) || asset.startsWith(`${identity}-`), `Tool logo source must match its official product identity: ${icon.tool}`);
     const isJetBrains = (jetBrainsIds as readonly string[]).includes(icon.tool);
     assert.equal(icon.renderMode, isJetBrains ? 'image' : 'mask', `Tool logo must use its intended color/mask source: ${icon.tool}`);
     if (isJetBrains) {
@@ -109,7 +112,7 @@ export async function verifyToolIcons(window: BrowserWindow, outputDir: string, 
     for (const theme of ['light', 'dark']) {
       await evaluate(`(()=>{document.documentElement.dataset.theme=${JSON.stringify(theme)};document.documentElement.style.colorScheme=${JSON.stringify(theme)};})()`);
       // The tall view proves all tools fit within each category. The ordinary
-      // viewports prove both tabs and all eleven logo resources remain reachable.
+      // viewports prove both tabs and all twelve tool identities remain reachable.
       for (const [width, height] of [[1320, 1440], [1320, 880], [980, 680]]) {
         window.setSize(width, height);
         await pause(100);
@@ -126,12 +129,13 @@ export async function verifyToolIcons(window: BrowserWindow, outputDir: string, 
           }
           return {viewport:{width:innerWidth,height:innerHeight},sidebar,categories,allToolsVisibleInCategory:categories.every(value=>value.allVisible),documentOverflow:document.documentElement.scrollWidth>innerWidth};
         })()`);
-        assert.deepEqual(value.sidebar.map(icon => icon.tool), [...toolIds], 'Eleven tool navigation buttons must show their matching logos');
+        assert.deepEqual(value.sidebar.map(icon => icon.tool), [...toolIds], 'Twelve tool navigation buttons must show their matching logos');
         value.sidebar.forEach(assertIcon);
-        assert.equal(new Set(value.sidebar.map(icon => icon.source)).size, toolIds.length, 'Every tool must use its own logo resource');
+        assert.equal(new Set(value.sidebar.map(icon => icon.source)).size, toolIds.length - 1, 'Copilot CLI and desktop share the official Copilot logo; other tools retain their own resources');
+        assert.equal(value.sidebar.find(icon => icon.tool === 'copilot-cli')?.source, value.sidebar.find(icon => icon.tool === 'copilot')?.source, 'Both Copilot tools use the same official product logo');
         assert.equal(value.documentOverflow, false, 'Tool logos must not introduce horizontal document overflow');
         assert.deepEqual(value.categories.map(category => category.category), ['agent', 'jetbrains'], 'Two tool category tabs remain available');
-        assert.deepEqual(value.categories.map(category => category.tools.length), [7, 4], 'Regular Agent and JetBrains categories retain their tool counts');
+        assert.deepEqual(value.categories.map(category => category.tools.length), [8, 4], 'Regular Agent and JetBrains categories retain their tool counts');
         if (height === 1440) assert.ok(value.allToolsVisibleInCategory, 'Tall overview must display all tools together within each category');
         const headers: IconReadback[] = [];
         const screenshots: string[] = [];
@@ -148,7 +152,11 @@ export async function verifyToolIcons(window: BrowserWindow, outputDir: string, 
             const entries = await evaluate<{ cli: boolean; ide: boolean; mode: boolean; preview: boolean; restore: boolean }>(`(()=>{const guide=document.querySelector('[data-junie-entry-guide]');return {cli:guide?.textContent.includes('junie --model custom:modeldock')===true,ide:guide?.textContent.includes('Junie · ModelDock')===true,mode:!!document.querySelector('[data-tool-binding="junie"] [data-action="tool-use-aggregate"]'),preview:!!document.querySelector('[data-tool-binding="junie"] [data-action="preview-tool-config"]'),restore:!!document.querySelector('[data-tool-binding="junie"] [data-action="restore-official-tool-config"]')}})()`);
             assert.deepEqual(entries, { cli: true, ide: true, mode: true, preview: true, restore: true }, 'Junie exposes its terminal and separate IDE ACP entry with the shared connection controls');
           }
-          if (height === 880 && ((jetBrainsIds as readonly string[]).includes(tool) || tool === 'junie')) {
+          if (tool === 'copilot-cli') {
+            const entries = await evaluate<{ cli: boolean; independent: boolean; mode: boolean; preview: boolean; apply: boolean; restore: boolean }>(`(()=>{const guide=document.querySelector('[data-copilot-cli-entry-guide]');return {cli:guide?.textContent.includes('/model')===true,independent:guide?.textContent.includes('无需打开 Copilot app')===true,mode:!!document.querySelector('[data-tool-binding="copilot-cli"] [data-action="tool-use-aggregate"]'),preview:!!document.querySelector('[data-tool-binding="copilot-cli"] [data-action="preview-tool-config"]'),apply:!!document.querySelector('[data-tool-binding="copilot-cli"] [data-action="apply-tool-config"]'),restore:!!document.querySelector('[data-tool-binding="copilot-cli"] [data-action="restore-official-tool-config"]')}})()`);
+            assert.deepEqual(entries, { cli: true, independent: true, mode: true, preview: true, apply: true, restore: true }, 'Copilot CLI has an independent terminal guide and shared configuration controls');
+          }
+          if (height === 880 && ((jetBrainsIds as readonly string[]).includes(tool) || tool === 'junie' || tool === 'copilot-cli')) {
             const screenshot = `electron-tool-icons-${theme}-${tool}-detail.png`;
             writeFileSync(join(outputDir, screenshot), await captureUi());
             screenshots.push(screenshot);
@@ -192,9 +200,35 @@ export async function verifyToolIcons(window: BrowserWindow, outputDir: string, 
     await evaluate(`document.querySelector('[aria-label="关闭对话框"]').click()`);
     await waitFor(`!document.querySelector('[role="dialog"]')`, 'Junie preview closed');
     juniePreview = { canApply: preview.canApply, keyRedacted: true, fullEndpoint: true, ideEntryExplained: true, externalSyncInvoked: false };
+
+    copilotCliBindingToRestore = fixture.bindings.find(binding => binding.id === 'copilot-cli');
+    assert.ok(copilotCliBindingToRestore, 'Copilot CLI has its own isolated binding');
+    await evaluate(`window.modelDock.saveBinding(${JSON.stringify({ ...copilotCliBindingToRestore, enabled: true, mode: 'direct', providerIds: [model.providerId], modelIds: [], defaultModelId: model.id })})`);
+    await evaluate(`document.querySelector('[aria-label="刷新本机配置"]').click()`);
+    await selectTool('copilot-cli');
+    await waitFor(`document.querySelector('[data-tool-binding="copilot-cli"] [data-action="tool-default-model"]')?.value===${JSON.stringify(model.id)}`, 'Copilot CLI synthetic selection rendered');
+    const cliPreview = await evaluate<ConfigPreview>(`window.modelDock.previewConfig('copilot-cli')`);
+    const cliContent = JSON.parse(cliPreview.content) as { providers: { name: string; type: string; baseUrl: string; wireApi: string; apiKey: string }[]; models: { id: string; provider: string; wireModel: string }[]; settings: { model: string } };
+    const providerName = model.wireApi === 'responses' ? 'modeldock-responses' : 'modeldock-chat';
+    const nativeProvider = cliContent.providers.find(provider => provider.name === providerName);
+    assert.ok(nativeProvider, 'Copilot CLI preview includes the default model protocol');
+    assert.equal(nativeProvider.type, 'openai');
+    assert.equal(nativeProvider.apiKey, '__PROVIDER_API_KEY__');
+    assert.equal(nativeProvider.wireApi, model.wireApi === 'responses' ? 'responses' : 'completions');
+    assert.equal(nativeProvider.baseUrl, fixture.providers.find(provider => provider.id === model.providerId)!.baseUrl.replace(/\/+$/, ''));
+    assert.ok(cliContent.models.some(entry => entry.id === model.upstreamId && entry.wireModel === model.upstreamId && entry.provider === providerName));
+    assert.equal(cliContent.settings.model, `${providerName}/${model.upstreamId}`);
+    assert.equal(cliPreview.filename, 'modeldock-copilot-cli.json');
+    assert.ok(cliPreview.instructions.includes(`copilot --model ${cliContent.settings.model}`));
+    await evaluate(`document.querySelector('[data-tool-binding="copilot-cli"] [data-action="preview-tool-config"]').click()`);
+    await waitFor(`document.querySelector('[role="dialog"] .config-code')?.textContent.includes('__PROVIDER_API_KEY__')===true&&document.querySelector('[role="dialog"] .config-code')?.textContent.includes(${JSON.stringify(cliContent.settings.model)})===true`, 'Copilot CLI React preview shows a redacted key and qualified default');
+    writeFileSync(join(outputDir, 'electron-copilot-cli-config-preview.png'), await captureUi());
+    await evaluate(`document.querySelector('[aria-label="关闭对话框"]').click()`);
+    await waitFor(`!document.querySelector('[role="dialog"]')`, 'Copilot CLI preview closed');
+    copilotCliPreview = { canApply: cliPreview.canApply, keyRedacted: true, nativeEndpoint: true, qualifiedDefault: true, externalSyncInvoked: false };
   } finally {
-    if (junieBindingToRestore) {
-      await evaluate(`window.modelDock.saveBinding(${JSON.stringify(junieBindingToRestore)})`);
+    if (junieBindingToRestore || copilotCliBindingToRestore) {
+      for (const binding of [junieBindingToRestore, copilotCliBindingToRestore]) if (binding) await evaluate(`window.modelDock.saveBinding(${JSON.stringify(binding)})`);
       await evaluate(`document.querySelector('[aria-label="刷新本机配置"]').click()`);
       await pause(80);
     }
@@ -216,5 +250,5 @@ export async function verifyToolIcons(window: BrowserWindow, outputDir: string, 
     assert.ok(restoredSize.every((value, index) => Math.abs(value - size[index]) <= sizeTolerance), 'Icon validation must restore the window size within Win32 DPI rounding');
     restored = true;
   }
-  writeFileSync(join(outputDir, 'tool-icons-validation.json'), JSON.stringify({ tools: [...toolIds], jetBrainsTools: [...jetBrainsIds], layouts, juniePreview, originalUiRestored: restored, windowSize: { before: size, after: restoredSize, tolerancePixels: sizeTolerance }, savedSettingsUnchanged: true, toolSelectionsUnchanged: true, configurationSyncInvoked: false }, null, 2));
+  writeFileSync(join(outputDir, 'tool-icons-validation.json'), JSON.stringify({ tools: [...toolIds], jetBrainsTools: [...jetBrainsIds], layouts, juniePreview, copilotCliPreview, originalUiRestored: restored, windowSize: { before: size, after: restoredSize, tolerancePixels: sizeTolerance }, savedSettingsUnchanged: true, toolSelectionsUnchanged: true, configurationSyncInvoked: false }, null, 2));
 }

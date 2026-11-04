@@ -167,7 +167,7 @@ child.on('exit', code => {
     }
     if (env.MODELDOCK_SMOKE_TOOL_ICONS_ONLY === '1') {
       const icons = JSON.parse(readFileSync(resolve(output, 'tool-icons-validation.json'), 'utf8'));
-      if (icons.tools.length !== 11 || icons.jetBrainsTools.length !== 4 || !icons.originalUiRestored || !icons.savedSettingsUnchanged || !icons.toolSelectionsUnchanged || icons.configurationSyncInvoked !== false) throw new Error('Tool icon validation failed');
+      if (icons.tools.length !== 12 || icons.jetBrainsTools.length !== 4 || !icons.copilotCliPreview?.qualifiedDefault || !icons.copilotCliPreview?.keyRedacted || !icons.originalUiRestored || !icons.savedSettingsUnchanged || !icons.toolSelectionsUnchanged || icons.configurationSyncInvoked !== false) throw new Error('Tool icon validation failed');
       console.log(JSON.stringify({ exitCode: code, bridge: value.bridge, tools: icons.tools.length, layouts: icons.layouts.length, originalUiRestored: icons.originalUiRestored, output }));
       return;
     }

@@ -1,5 +1,15 @@
 # ModelDock 验证记录
 
+## 2026-11-04 / 0.3.67 · Copilot CLI 独立接入
+
+- 新增独立 Copilot CLI strict 直连/聚合绑定，与 Copilot app、VS Code 分开。按官方命名来源格式合并 providers.json 的 modeldock-chat / modeldock-responses 和所有当前选定模型，仅修改 JSONC settings.json 的 model；支持 COPILOT_HOME / COPILOT_PROVIDERS_CONFIG。保留其他来源、设置注释、config.json 内部状态、账号、权限、MCP、Skills 与会话。两文件采用私有权限、加密备份/所有权历史、事务回滚、统一撤销与还原。
+- 配置模块 19 项与真实 Store/Gateway/撤销集成 5 项全通过；包含两次同步后撤销的 Windows 私有 ACL 检查。6 个定向文件合计 136 项通过，覆盖全部工具聚合、源删除/持久化、退役工具隔离及 Copilot Codex Responses 边界。
+- 本机官方 Windows Copilot CLI 1.0.99-2 实际读取核心 apply 生成的 providers/settings，直连/聚合 × Chat/Responses 四组及 Codex 空终态的标准 SSE / octet-stream 两组全通过；每组 2 次模拟上游请求、一次只读内存工具及第二轮结果回传，最终精确 OK、退出 0、stderr 为空。共 12 次 localhost 模拟上游请求，其中 8 次经真实 /tool/copilot-cli/v1。没有真实账号、付费供应商请求、shell 或文件工具执行。
+- 修复前，CLI 在 Codex 的 completed.output=[] 两种 MIME 场景都报 No response was returned，未执行工具。修复后，仅对 Copilot app / CLI 的 Codex Responses 入口复用已完成项补齐，保留流式增量；新增 CLI 流式/非流式回归和两组官方原生复验通过，其他工具范围不扩展。
+- Windows 实际 Electron 通过 12 工具导航、8 常规/4 IDE、亮暗两种主题的 6 组布局、CLI 指南、真实 React 预览与密钥隐藏、完整默认名称及右键导航验证；已人工查看 CLI 浅色/深色和预览截图。界面 smoke 只保存隔离合成选择并预览，不同步真实外部配置。
+- 类型检查、生产构建、测试入口剔除和 Windows x64 资源/图标/内嵌 ASAR 完整性检查通过。最终全套 87 文件：1843 通过、36 跳过、20 个已有平台条件失败，失败名称与 0.3.66 完全相同（Linux UID、POSIX 权限、Windows 符号链接），不宣称全套通过。
+- 用户运行中的旧版保持原样。独立构建为 release/windows-0.3.67-2026-11-04T14-05-10-286Z-24392/win-unpacked。证据目录：work/copilot-cli、work/copilot-cli-ui-windows-final、work/copilot-cli-context-windows。未验证 Linux 原生 CLI、新版包安装替换或真实计费供应商推理。
+
 ## 2026-11-04 / 0.3.66 · 右键快捷菜单
 
 - 供应商侧栏/卡片、模型、工具导航/详情、本地聚合接口、请求日志、授权账号、诊断日志和链接加入右键操作，复用原有业务动作与删除/清除授权确认。API Key 只通过明确复制动作读取，订阅没有复制令牌入口；Air 不显示文件应用、撤销、还原。输入框和选中的正文交给原生编辑菜单，密码控件禁用剪切/复制。

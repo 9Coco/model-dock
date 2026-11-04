@@ -14,7 +14,7 @@ const messages = {
 };
 export class ProviderRemovalError extends Error {
   constructor(readonly category: keyof typeof messages, readonly toolId?: ToolId) {
-    const names: Partial<Record<ToolId, string>> = { vscode: 'VS Code', opencode: 'OpenCode', codex: 'Codex', copilot: 'GitHub Copilot', dsh: 'DeepSeek Harness', 'claude-code': 'Claude Code', junie: 'Junie' };
+    const names: Partial<Record<ToolId, string>> = { vscode: 'VS Code', opencode: 'OpenCode', codex: 'Codex', copilot: 'GitHub Copilot', 'copilot-cli': 'Copilot CLI', dsh: 'DeepSeek Harness', 'claude-code': 'Claude Code', junie: 'Junie' };
     super(messages[category] + (toolId && names[toolId] ? ` 同步失败的工具：${names[toolId]}。` : ''));
     this.name = 'ProviderRemovalError';
   }

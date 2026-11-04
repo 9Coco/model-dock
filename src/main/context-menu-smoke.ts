@@ -165,9 +165,11 @@ export async function verifyContextMenus(window: BrowserWindow, store: Store, ou
     }
     assert.deepEqual(store.getSecret(subscription.id),accountSecretBefore,'Cancelling account actions preserves authorization');
     await click('[data-tool-category="agent"]');
-    const toolIds = await context('.sidebar [data-tool-id="junie"]');
-    assert.ok(toolIds.includes('tool-open')&&toolIds.includes('tool-preview')); await click(action('tool-open'));
-    await waitFor(`!!document.querySelector('[data-tool-binding="junie"]')`,'tool menu opens the clicked tool');
+    for (const tool of ['junie', 'copilot-cli']) {
+      const toolIds = await context(`.sidebar [data-tool-id="${tool}"]`);
+      assert.ok(toolIds.includes('tool-open')&&toolIds.includes('tool-preview')); await click(action('tool-open'));
+      await waitFor(`!!document.querySelector('[data-tool-binding="${tool}"]')`,`tool menu opens the clicked ${tool} tool`);
+    }
     store.setJetBrainsPlugin('webstorm','air'); await click('[aria-label="刷新本机配置"]'); await click('[data-tool-category="jetbrains"]');
     const airIds = await context('.sidebar [data-tool-id="webstorm"]');
     for(const forbidden of ['tool-apply','tool-restore','tool-undo']) assert.equal(airIds.includes(forbidden),false,`Air cannot ${forbidden}`); await dismiss();

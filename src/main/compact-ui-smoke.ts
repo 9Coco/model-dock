@@ -159,7 +159,7 @@ export async function verifyCompactUi(window: BrowserWindow, store: Store, outpu
       assert.ok(icon.decorative && !icon.focusable && !icon.externalNode, `Inline decorative icon must not add a focus stop or remote reference: ${icon.symbol}`);
       assert.ok(icon.controlNamed, `An icon control must retain its text, title or ARIA name: ${icon.symbol}`);
     }
-    assert.deepEqual(value.brand.tools.map(item => item.tool), ['codex', 'claude-code', 'junie', 'opencode', 'dsh', 'vscode', 'copilot', 'webstorm', 'intellij-idea', 'rider', 'pycharm']);
+    assert.deepEqual(value.brand.tools.map(item => item.tool), ['codex', 'claude-code', 'junie', 'opencode', 'dsh', 'vscode', 'copilot', 'copilot-cli', 'webstorm', 'intellij-idea', 'rider', 'pycharm']);
     assert.ok(value.brand.app && value.brand.tools.every(item => !item.material), 'App and tool identities remain separate local brand assets');
     for (const item of value.brand.tools) {
       const colorLogo = ['webstorm', 'intellij-idea', 'rider', 'pycharm'].includes(item.tool);
