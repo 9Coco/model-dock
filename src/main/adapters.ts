@@ -5,6 +5,7 @@ import { dirname, join, resolve } from 'node:path';
 import { parse as parseToml, stringify as stringifyToml } from '@iarna/toml';
 import { parse as parseJsonc, modify, applyEdits, createScanner, SyntaxKind, type Edit, type ParseError } from 'jsonc-parser';
 import type { ConfigPreview, Model, Provider, ProviderSecret, ReasoningEffort, ToolBinding, ToolId } from '../shared/types';
+import { traeRelayClientModel } from '../shared/trae-relay-models';
 import { bindingConnectionPolicy, resolveBindingModels } from '../shared/bindings';
 import { modelDisplayLabel, modelLocalAlias } from '../shared/model-names';
 import type { CopilotDesktopPlan } from './copilot-desktop';
@@ -96,7 +97,7 @@ function connectionGroups(store: AdapterStore, tool: ToolId, binding: ToolBindin
     const apiKey = directApi && revealKey ? store.getSecret?.(provider!.id)?.apiKey : undefined;
     if (directApi && revealKey && !apiKey) throw new Error('直连供应商尚未填写 API Key。');
     return { id, name, base, directApi, key: directApi ? apiKey ?? '__PROVIDER_API_KEY__' : revealKey ? store.gatewayKey() : PLACEHOLDER,
-      models: allModels.filter(model => group.modelIds.includes(model.id)).map(model => clientModel(store, model, directApi)) };
+      models: allModels.filter(model => group.modelIds.includes(model.id)).map(model => clientModel(store, traeRelayClientModel(tool, model, providers?.find(source => source.id === model.providerId)), directApi)) };
   });
 }
 function ownsOpenCodeProvider(id: string): boolean { return id === 'modeldock' || id.startsWith('modeldock-'); }

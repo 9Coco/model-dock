@@ -6,6 +6,25 @@ ModelDock 是跨平台本地模型管理台：全局维护模型来源与别名�
 
 自有代码及原创应用标记采用 [MIT 许可](LICENSE)，第三方图标和依赖保留各自的 Apache-2.0、CC-BY-4.0、MIT 或其他许可，详见 [第三方声明](THIRD_PARTY_NOTICES.md)。欢迎按 [贡献指南](CONTRIBUTING.md) 提交修复；敏感问题请遵循 [安全报告流程](SECURITY.md)。
 
+## 0.3.63 · 在 VS Code 使用 JetBrains AI 额度
+
+在「模型供应商 → 添加 API → JetBrains AI 会员反代」启动本机中转。ModelDock 通过 JetBrains Central CLI 启动 Pi 的独立会话，由 Pi 将模型请求交给 Central。使用时保持 ModelDock 运行，JetBrains IDE 可以关闭。ModelDock 提供的 Chat Completions 地址为 `http://127.0.0.1:18081/v1`。
+
+1. 安装 JetBrains Central CLI 和 Pi CLI。本版用 Central 2.2.0 与 Pi 1.5.0 核对。在终端执行 `central login`，选择带 AI 权益的许可证，然后用 `central limit` 查看额度。[官方安装方式](https://www.jetbrains.com/help/central-cli/cli-setup.html) · [适用许可证](https://www.jetbrains.com/help/ai-assistant/licensing-and-subscriptions.html)
+2. 在 ModelDock 点「启动本机反代」，就绪后会自动填入本机密钥。保存供应商，点「获取模型列表」，添加一个候选模型并测试连接。候选来自 Pi 当前通过 Central 路由的 OpenAI 和 Anthropic 模型，具体模型权限以账号实际请求结果为准。
+3. 在供应商详情点「打开 VS Code 工具配置」。选择来源与模型，同步后在 VS Code 重新加载窗口，到 Copilot Chat 的模型选择器中选择该模型。使用聚合模式时选中相应映射。工具在 VS Code 端执行，工具结果作为下一轮输入回传。
+4. 可在供应商详情停止反代。退出 ModelDock 会一并关闭它启动的 Pi 会话。JetBrains 登录、续期与用量查询由 Central 管理。[Central 工作方式](https://www.jetbrains.com/help/central-cli/cli-in-depth.html)
+
+## 0.3.62 · TRAE 中国版本机反代
+
+在「模型供应商 → 添加 API」选择「TRAE 中国版反代」预设。托管模式需要本机 Docker 的 Linux 容器引擎。首次点击「启动本机反代」时，ModelDock 使用固定版本的 Trae2api-cn 镜像，并为当前工作区生成独立的反代密钥。服务地址为 `http://127.0.0.1:18080/v1`，与 ModelDock 默认的聚合端口 18181 分开。[反代 v1.0.10 发布说明](https://github.com/autumnsentiment/Trae2api-cn/releases/tag/v1.0.10)
+
+1. 点击「打开 TRAE 授权页」。首次使用时按网页提示下载并用本机 Python 3 运行授权助手。保持助手开启，在浏览器中登录自己的 TRAE 中国版账号。
+2. 回到 ModelDock，保存供应商并点击「获取模型列表」。选择模型并测试连接，随后在「本地聚合接口」确认要发布的模型，也可以到具体工具页选择来源。反代仅返回离线备用目录时，ModelDock 会将这些备用条目过滤。
+3. 在「反代设置」可以重新打开授权页或停止托管容器。停止后保留账号数据，下次显式启动时复用。已有其他本机反代时，选择「连接已有反代」，填写它的回环地址和反代密钥。
+
+托管反代取用 TRAE 账号的权限由上游决定。登录资料由反代保存在 ModelDock 数据目录下的 `trae-cn-relay` 子目录。Agent 使用生成的反代密钥或聚合接口密钥。需要验证会员计费时，请对一次真实对话核对 TRAE 的用量明细。[TRAE 积分规则](https://docs.trae.cn/ide_plans-and-billing)
+
 ## 0.3.61：JetBrains 插件切换
 
 WebStorm、IntelliJ IDEA、Rider、PyCharm 的接入参数页分别提供「AI Assistant / Air」选择。默认保留 AI Assistant，每个 IDE 独立保存目标插件；供应商、直连 / 聚合模式及模型选择沿用该 IDE 已保存的范围。切换目标只保存选择并取消旧的待同步请求，不立即写入 IDE。

@@ -1,4 +1,5 @@
 import type { Model, Provider, ToolBinding } from './types';
+import { traeRelayClientModel } from './trae-relay-models';
 import { claudeConnectionKind, claudeModelsForProvider } from './claude';
 import { isJetBrainsTool } from './jetbrains';
 import { directModelsForProvider, isSingleEntryTool, nativeDirectBaseUrl } from './single-entry';
@@ -26,7 +27,8 @@ export function resolveBindingModels(binding: ToolBinding, models: Model[], prov
     ? models.filter(model => model.providerId === provider.id && model.enabled)
     : claudeModelsForProvider(provider, models)).map(model => model.id)) : undefined;
   const nativeIds = binding.mode === 'direct' && isSingleEntryTool(binding.id) && providers ? new Set(providers.flatMap(provider => directModelsForProvider(binding.id, provider, models)).map(model => model.id)) : undefined;
-  let result = models.filter(model => model.enabled && (claude ? !claudeIds || claudeIds.has(model.id) : model.wireApi !== 'messages')
+  const sources = new Map(providers?.map(provider => [provider.id, provider]));
+  let result = models.map(model => traeRelayClientModel(binding.id, model, sources.get(model.providerId))).filter(model => model.enabled && (claude ? !claudeIds || claudeIds.has(model.id) : model.wireApi !== 'messages')
     && (!providers || providers.some(p => p.id === model.providerId && p.enabled)) && (!nativeIds || nativeIds.has(model.id)));
   if (providerIds !== undefined) {
     const allowed = singleSource ? providerIds.slice(0, 1) : providerIds;

@@ -6,7 +6,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import type { Provider, ProviderInput, ProviderSecret, Model, ModelInput, ToolBinding, ToolId, RequestLog, GatewayExposure, JetBrainsPlugin } from '../shared/types';
 import { isReasoningEffort, MODEL_SPEC_FIELDS, modelSpecs, sanitizeReasoningEfforts } from '../shared/types';
-import { providerPresets, presetById } from '../shared/presets';
+import { JETBRAINS_RELAY_BASE_URL, isLocalTraeRelayUrl, providerPresets, presetById, TRAE_RELAY_BASE_URL } from '../shared/presets';
 import { resolveBindingModels } from '../shared/bindings';
 import { directModelsForProvider, isSingleEntryTool, updateSingleEntryBinding } from '../shared/single-entry';
 import { isJetBrainsTool } from '../shared/jetbrains';
@@ -73,7 +73,7 @@ export class Store {
     const db = existsSync(filename) ? new SQL.Database(readFileSync(filename)) : new SQL.Database();
     const store = new Store(db, dataDir, codec);
     db.run(`PRAGMA foreign_keys=ON;
-      CREATE TABLE IF NOT EXISTS providers(id TEXT PRIMARY KEY,name TEXT NOT NULL,kind TEXT NOT NULL,base_url TEXT NOT NULL,enabled INTEGER NOT NULL,auth_status TEXT NOT NULL,note TEXT NOT NULL,preset_id TEXT NOT NULL DEFAULT 'custom',messages_auth TEXT NOT NULL DEFAULT 'bearer',claude_base_url TEXT NOT NULL DEFAULT '');
+      CREATE TABLE IF NOT EXISTS providers(id TEXT PRIMARY KEY,name TEXT NOT NULL,kind TEXT NOT NULL,base_url TEXT NOT NULL,enabled INTEGER NOT NULL,auth_status TEXT NOT NULL,note TEXT NOT NULL,preset_id TEXT NOT NULL DEFAULT 'custom',messages_auth TEXT NOT NULL DEFAULT 'bearer',claude_base_url TEXT NOT NULL DEFAULT '',trae_relay_mode TEXT);
       CREATE TABLE IF NOT EXISTS secrets(provider_id TEXT PRIMARY KEY REFERENCES providers(id) ON DELETE CASCADE,ciphertext TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS models(id TEXT PRIMARY KEY,provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,upstream_id TEXT NOT NULL,alias TEXT NOT NULL UNIQUE,display_name TEXT NOT NULL,wire_api TEXT NOT NULL,context_window INTEGER NOT NULL,tools INTEGER NOT NULL,vision INTEGER NOT NULL,enabled INTEGER NOT NULL,reasoning_efforts TEXT NOT NULL DEFAULT '[]',default_reasoning_effort TEXT,specs_json TEXT NOT NULL DEFAULT '{}');
       CREATE TABLE IF NOT EXISTS bindings(id TEXT PRIMARY KEY,name TEXT NOT NULL,enabled INTEGER NOT NULL,model_ids TEXT NOT NULL,default_model_id TEXT NOT NULL,note TEXT NOT NULL,mode TEXT NOT NULL DEFAULT 'aggregate',provider_ids TEXT,model_selection TEXT,vscode_sync_scope TEXT NOT NULL DEFAULT 'managed',copilot_sync_scope TEXT NOT NULL DEFAULT 'managed',dsh_sync_scope TEXT NOT NULL DEFAULT 'managed',claude_disable_telemetry INTEGER NOT NULL DEFAULT 1,connection_choices TEXT);
@@ -83,7 +83,7 @@ export class Store {
     if (!store.one("SELECT value FROM settings WHERE key='initialized'")) {
       // Existing databases keep their accounts exactly as stored. Templates are
       // seeded only for an empty, never-initialized store.
-      if (!store.one('SELECT id FROM providers LIMIT 1')) for (const preset of providerPresets.filter(p => p.id !== 'custom' && p.id !== 'copilot-subscription')) {
+      if (!store.one('SELECT id FROM providers LIMIT 1')) for (const preset of providerPresets.filter(p => p.id !== 'custom' && p.id !== 'copilot-subscription' && p.id !== 'trae-cn-relay' && p.id !== 'jetbrains-central')) {
         db.run('INSERT INTO providers(id,name,kind,base_url,enabled,auth_status,note,preset_id,messages_auth) VALUES(?,?,?,?,?,?,?,?,?)', [preset.id, preset.name, preset.kind, preset.baseUrl, 1, 'missing', preset.note, preset.id, preset.id === 'anthropic' ? 'api-key' : 'bearer']);
       }
       db.run('INSERT INTO settings(key,value) VALUES(?,?)', ['initialized', '1']);
@@ -116,7 +116,7 @@ export class Store {
         this.db.run("ALTER TABLE providers ADD COLUMN preset_id TEXT NOT NULL DEFAULT 'custom'");
         for (const row of this.rows('SELECT id,kind,base_url FROM providers')) {
           const baseUrl = String(row.base_url).replace(/\/+$/, '');
-          const preset = row.kind === 'codex' ? presetById('codex-subscription') : row.kind === 'grok' ? presetById('grok-build') : row.kind === 'copilot' ? presetById('copilot-subscription') : providerPresets.find(item => item.id !== 'custom' && item.baseUrl && item.kind === row.kind && item.baseUrl.replace(/\/+$/, '') === baseUrl);
+          const preset = row.kind === 'codex' ? presetById('codex-subscription') : row.kind === 'grok' ? presetById('grok-build') : row.kind === 'copilot' ? presetById('copilot-subscription') : providerPresets.find(item => item.id !== 'custom' && item.id !== 'trae-cn-relay' && item.id !== 'jetbrains-central' && item.baseUrl && item.kind === row.kind && item.baseUrl.replace(/\/+$/, '') === baseUrl);
           // Recognize confirmed presets without rewriting any endpoint or secret;
           // unmatched/custom connections retain the custom label.
           this.db.run('UPDATE providers SET preset_id=? WHERE id=?', [preset?.id ?? 'custom', String(row.id)]);
@@ -124,6 +124,7 @@ export class Store {
       }
       if (!providerColumns.includes('messages_auth')) this.db.run("ALTER TABLE providers ADD COLUMN messages_auth TEXT NOT NULL DEFAULT 'bearer'");
       if (!providerColumns.includes('claude_base_url')) this.db.run("ALTER TABLE providers ADD COLUMN claude_base_url TEXT NOT NULL DEFAULT ''");
+      if (!providerColumns.includes('trae_relay_mode')) this.db.run('ALTER TABLE providers ADD COLUMN trae_relay_mode TEXT');
       if (!bindingColumns.includes('connection_choices')) this.db.run('ALTER TABLE bindings ADD COLUMN connection_choices TEXT');
       if (!bindingColumns.includes('mode')) this.db.run("ALTER TABLE bindings ADD COLUMN mode TEXT NOT NULL DEFAULT 'aggregate'");
       // 修改点：只迁移 ModelDock 内部选项，启动时不写入 Claude Code 配置。
@@ -182,7 +183,8 @@ export class Store {
     try { const result = action(); this.db.run('COMMIT'); this.persist(); return result; } catch (error) { try { this.db.run('ROLLBACK'); } catch { /* already committed */ } throw error; }
   }
   private provider(row: Record<string, unknown>): Provider {
-    return { id: String(row.id), name: String(row.name), kind: row.kind as Provider['kind'], presetId: (row.preset_id || 'custom') as Provider['presetId'], baseUrl: String(row.base_url), enabled: Boolean(row.enabled), hasSecret: Boolean(this.one('SELECT provider_id FROM secrets WHERE provider_id=?', [String(row.id)])), authStatus: row.auth_status as Provider['authStatus'], note: String(row.note), ...(row.kind === 'openai-compatible' ? { messagesAuth: row.messages_auth === 'api-key' ? 'api-key' as const : 'bearer' as const, ...(row.claude_base_url ? { claudeBaseUrl: String(row.claude_base_url) } : {}) } : {}), ...(row.kind === 'copilot' ? { copilotAccountId: this.getSecret(String(row.id))?.copilotAccountId } : {}) };
+    const relayMode = row.trae_relay_mode === 'managed' ? 'managed' : 'manual';
+    return { ...(row.preset_id === 'trae-cn-relay' ? { relayMode } : {}), id: String(row.id), name: String(row.name), kind: row.kind as Provider['kind'], presetId: (row.preset_id || 'custom') as Provider['presetId'], baseUrl: String(row.base_url), enabled: Boolean(row.enabled), hasSecret: Boolean(this.one('SELECT provider_id FROM secrets WHERE provider_id=?', [String(row.id)])), authStatus: row.auth_status as Provider['authStatus'], note: String(row.note), ...(row.kind === 'openai-compatible' ? { messagesAuth: row.messages_auth === 'api-key' ? 'api-key' as const : 'bearer' as const, ...(row.claude_base_url ? { claudeBaseUrl: String(row.claude_base_url) } : {}) } : {}), ...(row.kind === 'copilot' ? { copilotAccountId: this.getSecret(String(row.id))?.copilotAccountId } : {}) };
   }
   listProviders(): Provider[] { return this.rows('SELECT * FROM providers ORDER BY rowid').map(row => this.provider(row)); }
   getProvider(providerId: string): Provider | undefined { const row = this.one('SELECT * FROM providers WHERE id=?', [providerId]); return row ? this.provider(row) : undefined; }
@@ -245,6 +247,21 @@ export class Store {
     const apiKey = input.apiKey === undefined ? undefined : normalizeApiKey(input.apiKey);
     if (input.claudeBaseUrl !== undefined && (typeof input.claudeBaseUrl !== 'string' || input.kind !== 'openai-compatible')) throw new Error('Claude Code 接口地址无效。');
     const claudeBaseUrl = input.claudeBaseUrl === undefined ? existing?.claudeBaseUrl ?? '' : input.claudeBaseUrl.trim() ? validateUpstreamUrl(input.claudeBaseUrl, this.gatewayPort) : '';
+    if (input.relayMode !== undefined && (preset.id !== 'trae-cn-relay' || !['managed', 'manual'].includes(input.relayMode))) throw new Error('反代连接方式无效。');
+    const relayMode = preset.id === 'trae-cn-relay' ? input.relayMode ?? existing?.relayMode ?? 'manual' : null;
+    if (preset.id === 'jetbrains-central' && (baseUrl !== JETBRAINS_RELAY_BASE_URL || claudeBaseUrl || input.messagesAuth === 'api-key')) {
+      throw new Error('JetBrains 会员反代仅使用固定本机 Chat 接口。');
+    }
+    if (preset.id === 'trae-cn-relay') {
+      if (!isLocalTraeRelayUrl(baseUrl) || (claudeBaseUrl && !isLocalTraeRelayUrl(claudeBaseUrl))) {
+        throw new Error('TRAE 本机反代只接受回环地址，例如 http://127.0.0.1:18080/v1。');
+      }
+      if (relayMode === 'managed' && (baseUrl !== TRAE_RELAY_BASE_URL || claudeBaseUrl)) throw new Error('托管反代只使用 ModelDock 的固定本机地址。');
+      if (relayMode === 'managed' && existing?.hasSecret && existing.relayMode !== 'managed' && !apiKey) throw new Error('请先启动托管反代以填入它的密钥。');
+      if (existing?.hasSecret && (existing.baseUrl !== baseUrl || (existing.claudeBaseUrl ?? '') !== claudeBaseUrl) && !apiKey) {
+        throw new Error('反代地址已更改，请重新填写这个反代的 API Key。');
+      }
+    }
     if (/\/v1\/messages\/?$/.test(claudeBaseUrl)) throw new Error('Claude Code 接口请填写基址，不包含 /v1/messages。');
     if (input.kind === 'openai-compatible') {
       const identity = providerIdentity({ kind: input.kind, name, baseUrl });
@@ -255,6 +272,7 @@ export class Store {
         if (matches.length && providerIdentity(existing) !== identity) throw new Error(duplicateMessage);
       } else if (matches.length) {
         if (input.id) throw new Error(duplicateMessage);
+        if (matches.some(provider => (provider.relayMode ?? null) !== relayMode)) throw new Error('同名同地址的供应商使用不同连接方式，请编辑已有记录或使用不同名称。');
         const ranked = this.rankDuplicateProviders(matches);
         if (!apiKey) return ranked[0];
         const configured = ranked.filter(provider => provider.hasSecret || this.providerModelCount(provider.id) > 0);
@@ -270,7 +288,7 @@ export class Store {
       }
     }
     return this.mutate(() => {
-      this.db.run('INSERT INTO providers(id,name,kind,base_url,enabled,auth_status,note,preset_id,messages_auth,claude_base_url) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,kind=excluded.kind,base_url=excluded.base_url,enabled=excluded.enabled,note=excluded.note,preset_id=excluded.preset_id,messages_auth=excluded.messages_auth,claude_base_url=excluded.claude_base_url', [providerId, name, input.kind, baseUrl, Number(input.enabled), existing?.authStatus ?? 'missing', note, preset.id, input.messagesAuth ?? existing?.messagesAuth ?? (preset.id === 'anthropic' ? 'api-key' : 'bearer'), claudeBaseUrl]);
+      this.db.run('INSERT INTO providers(id,name,kind,base_url,enabled,auth_status,note,preset_id,messages_auth,claude_base_url,trae_relay_mode) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,kind=excluded.kind,base_url=excluded.base_url,enabled=excluded.enabled,note=excluded.note,preset_id=excluded.preset_id,messages_auth=excluded.messages_auth,claude_base_url=excluded.claude_base_url,trae_relay_mode=excluded.trae_relay_mode', [providerId, name, input.kind, baseUrl, Number(input.enabled), existing?.authStatus ?? 'missing', note, preset.id, input.messagesAuth ?? existing?.messagesAuth ?? (preset.id === 'anthropic' ? 'api-key' : 'bearer'), claudeBaseUrl, relayMode]);
       if (apiKey) {
         if (input.kind !== 'openai-compatible') throw new Error('订阅供应商请使用 OAuth 登录。');
         this.putSecret(providerId, { apiKey });
@@ -358,6 +376,7 @@ export class Store {
         if (new Set(group.map(provider => provider.enabled)).size > 1) throw new Error('这些供应商的启用状态不同，请先统一启用状态后再合并。');
         const exposure = this.gatewayExposure();
         if (new Set(group.map(provider => exposure.excludedProviderIds.includes(provider.id))).size > 1) throw new Error('这些供应商在本地聚合接口中的加入状态不同，请先统一后再合并。');
+        if (new Set(group.map(provider => provider.relayMode)).size > 1) throw new Error('连接方式不同，请先编辑供应商以统一反代连接方式。');
         if (new Set(group.map(provider => provider.presetId ?? 'custom')).size > 1) throw new Error('这些供应商的预设不同，请先统一预设后再合并。');
         if (new Set(group.map(provider => provider.messagesAuth ?? 'bearer')).size > 1) throw new Error('这些供应商的 Messages 鉴权方式不同，请先统一后再合并。');
         if (new Set(group.map(provider => provider.claudeBaseUrl ?? '')).size > 1) throw new Error('这些供应商的 Claude Code 接口不同，请先统一后再合并。');
@@ -539,7 +558,11 @@ export class Store {
   }
   private putModel(input: ModelInput): Model {
     const modelId = input.id ? id(input.id) : randomUUID();
-    if (!this.getProvider(input.providerId)) throw new Error('模型引用的供应商不存在。');
+    const provider = this.getProvider(input.providerId);
+    if (!provider) throw new Error('模型引用的供应商不存在。');
+    if (provider.presetId === 'jetbrains-central' && input.wireApi !== 'chat-completions') {
+      throw new Error('JetBrains 会员反代的模型使用 Chat Completions。');
+    }
     const requestedAlias = text(input.alias, '模型别名', 400);
     if (!/^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$/.test(requestedAlias)) throw new Error('模型别名只能包含字母、数字和 . _ : / -。');
     const alias = suggestModelAlias(input.providerId, requestedAlias, this.listModels(), modelId);

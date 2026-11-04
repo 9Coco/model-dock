@@ -5,6 +5,7 @@ import { GatewayError, ResponsesCollector, SseFrames, isObject, sseData, type Js
 import { copilotCodexEvents, copilotCodexJson } from './copilot-codex-responses';
 import { Store, validateUpstreamUrl } from './store';
 import { isCopilotUpstream } from './copilot-provider';
+import { isTraeRelayProvider, traeRelayWireModel } from '../shared/trae-relay-models';
 import { resolveBindingModels } from '../shared/bindings';
 import { modelDisplayLabel } from '../shared/model-names';
 import type { Provider, ProviderSecret, Model, ToolId, GatewayStatus } from '../shared/types';
@@ -238,7 +239,7 @@ export class Gateway {
   }
   private available(model: Model, nativeMessages = false): boolean {
     const provider = this.store.getProvider(model.providerId);
-    if (model.wireApi === 'messages' && !nativeMessages || !model.enabled || !provider?.enabled || !provider.hasSecret || provider.authStatus !== 'ready' || !provider.baseUrl.trim()) return false;
+    if (model.wireApi === 'messages' && !nativeMessages && !isTraeRelayProvider(provider) || !model.enabled || !provider?.enabled || !provider.hasSecret || provider.authStatus !== 'ready' || !provider.baseUrl.trim()) return false;
     try { validateUpstreamUrl(nativeMessages && provider.kind === 'openai-compatible' ? nativeClaudeBaseUrl(provider) ?? provider.baseUrl : provider.baseUrl, this.state.port); return true; } catch { return false; }
   }
   private allowedModels(tool?: ToolId): Model[] {
@@ -337,8 +338,11 @@ export class Gateway {
       const defaultModel = binding?.defaultModelId ? selectedModels?.find(model => model.id === binding.defaultModelId) : undefined;
       const requested = typeof body.model === 'string' ? body.model : defaultModel?.alias;
       if (!requested) throw new GatewayError(400, '请指定模型别名。');
-      const model = this.store.listModels().find(item => item.alias === requested);
-      if (!model || !model.enabled) throw new GatewayError(404, '模型别名不存在或未启用。');
+      const saved = this.store.listModels().find(item => item.alias === requested);
+      if (!saved || !saved.enabled) throw new GatewayError(404, '模型别名不存在或未启用。');
+      const provider = this.store.getProvider(saved.providerId);
+      const expectedWire = route.endpoint === '/v1/responses' ? 'responses' : 'chat-completions';
+      const model = completion ? saved : traeRelayWireModel(saved, provider, anthropic ? 'messages' : expectedWire);
       if (!route.tool) {
         const exposure = this.store.gatewayExposure();
         if (exposure.excludedProviderIds.includes(model.providerId) || exposure.excludedModelIds.includes(model.id)) throw new GatewayError(403, '此模型未加入本地聚合接口。');
@@ -346,11 +350,9 @@ export class Gateway {
       alias = model.alias;
       modelId = model.id;
       if (selectedModels && !selectedModels.some(item => item.id === model.id)) throw new GatewayError(403, '此模型未授权给该工具。');
-      const expectedWire = route.endpoint === '/v1/responses' ? 'responses' : 'chat-completions';
       // 修改点：JetBrains AI Assistant 使用 Chat，Responses 来源在本机显式转换。
       chatResponses = isJetBrainsTool(route.tool) && route.endpoint === '/v1/chat/completions' && model.wireApi === 'responses';
       if (!anthropic && !chatResponses && !completion && model.wireApi !== expectedWire) throw new GatewayError(400, '该模型使用不同协议，请选择对应的接口；本版本不进行跨协议转换。');
-      const provider = this.store.getProvider(model.providerId);
       const nativeCompletion = completion && provider ? nativeJetBrainsCompletion(model, provider) : undefined;
       if (completion && !nativeCompletion) throw new GatewayError(400, '此模型尚未确认原生 FIM 补全能力；请为 AI 补全选择兼容模型，不使用聊天协议代替。');
       const responsesBridge = anthropic && route.tool === 'claude-code' && provider && preferClaudeResponsesBridge(provider, model);

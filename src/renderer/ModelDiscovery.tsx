@@ -35,6 +35,7 @@ const patchedCandidate = (model: CandidateDraft, patch: Partial<CandidateDraft>)
 };
 
 export function ModelDiscovery({ api, provider, notify, onClose, onAdded, onManualAdd, initialResult }: Props) {
+  const chatOnly = provider.presetId === 'jetbrains-central';
   const [result, setResult] = useState<DiscoveryResult | null>(initialResult ?? null);
   const [models, setModels] = useState<CandidateDraft[]>(() => (initialResult?.models ?? []).map(model => candidateDraft(model, provider.id)));
   const [loading, setLoading] = useState(!initialResult);
@@ -151,7 +152,7 @@ export function ModelDiscovery({ api, provider, notify, onClose, onAdded, onManu
           {advanced && <div className="discovery-advanced">
             <div className="discovery-advanced-copy"><strong>批量配置所选模型</strong><small>优先使用供应商返回的参数；缺少时按内置字典补全。可逐个展开「参数设置」或在这里批量修正，手动设置会覆盖补全值。无法核实的工具和图片能力默认关闭，可自行启用。</small></div>
             <div className="discovery-advanced-grid">
-              <label>调用接口<select value={bulkWireApi} disabled={adding} onChange={event => setBulkWireApi(event.target.value as WireApi | '')}><option value="">保留列表设置</option>{(provider.kind === 'openai-compatible' || provider.kind === 'copilot') && <option value="chat-completions">Chat Completions</option>}<option value="responses">Responses</option>{provider.kind === 'openai-compatible' && <option value="messages">Anthropic Messages</option>}</select></label>
+              <label>调用接口<select value={bulkWireApi} disabled={adding || chatOnly} onChange={event => setBulkWireApi(event.target.value as WireApi | '')}><option value="">保留列表设置</option>{(provider.kind === 'openai-compatible' || provider.kind === 'copilot') && <option value="chat-completions">Chat Completions</option>}<option value="responses">Responses</option>{provider.kind === 'openai-compatible' && <option value="messages">Anthropic Messages</option>}</select></label>
               <label>上下文长度<input type="number" min="0" step="1" value={bulkContext} disabled={adding} placeholder="留空保留，0 为未设置" onChange={event => setBulkContext(event.target.value)} /></label>
               <label>工具调用<select value={bulkTools} disabled={adding} onChange={event => setBulkTools(event.target.value)}><option value="">保留列表设置</option><option value="yes">启用</option><option value="no">关闭</option></select></label>
               <label>图片输入<select value={bulkVision} disabled={adding} onChange={event => setBulkVision(event.target.value)}><option value="">保留列表设置</option><option value="yes">启用</option><option value="no">关闭</option></select></label>
@@ -182,7 +183,7 @@ export function ModelDiscovery({ api, provider, notify, onClose, onAdded, onManu
                 <details className="discovery-model-settings">
                   <summary aria-label={`${model.upstreamId} 参数设置`}>参数设置{model.existingModelId ? ' · 已保存' : ''}</summary>
                   <div className="discovery-advanced-grid">
-                    <label>调用接口<select aria-label={`${model.upstreamId} 调用接口`} value={model.wireApi} disabled={locked} onChange={event => updateModel(model.upstreamId, { wireApi: event.target.value as WireApi })}>{(provider.kind === 'openai-compatible' || provider.kind === 'copilot') && <option value="chat-completions">Chat Completions</option>}<option value="responses">Responses</option>{provider.kind === 'openai-compatible' && <option value="messages">Anthropic Messages</option>}</select></label>
+                    <label>调用接口<select aria-label={`${model.upstreamId} 调用接口`} value={model.wireApi} disabled={locked || chatOnly} onChange={event => updateModel(model.upstreamId, { wireApi: event.target.value as WireApi })}>{(provider.kind === 'openai-compatible' || provider.kind === 'copilot') && <option value="chat-completions">Chat Completions</option>}<option value="responses">Responses</option>{provider.kind === 'openai-compatible' && <option value="messages">Anthropic Messages</option>}</select></label>
                     <label><span>上下文长度 <small>{metadataOrigin(model, 'contextWindow')}</small></span><input aria-label={`${model.upstreamId} 上下文长度`} type="number" min="0" step="1" value={model.contextWindow} disabled={locked} onChange={event => updateModel(model.upstreamId, { contextWindow: event.target.value === '' ? 0 : Number(event.target.value) })} /></label>
                     <label><span>输入上限 <small>{metadataOrigin(model, 'maxInputTokens')}</small></span><input aria-label={`${model.upstreamId} 输入上限`} type="number" min="0" step="1" value={model.maxInputTokens ?? 0} disabled={locked} onChange={event => updateModel(model.upstreamId, { maxInputTokens: event.target.value === '' ? 0 : Number(event.target.value) })} /></label>
                     <label><span>输出预算 <small>{metadataOrigin(model, 'maxOutputTokens')}</small></span><input aria-label={`${model.upstreamId} 输出预算`} type="number" min="0" step="1" value={model.maxOutputTokens ?? 0} disabled={locked} onChange={event => updateModel(model.upstreamId, { maxOutputTokens: event.target.value === '' ? 0 : Number(event.target.value) })} /></label>

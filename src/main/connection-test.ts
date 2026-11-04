@@ -333,6 +333,7 @@ export class ConnectionTester {
         try { prepared = await this.oauth.prepareRequest(provider, route, body); }
         catch {
           assertActive(controller.signal);
+          if (provider.presetId === 'jetbrains-central') throw new ConnectionFailure('configuration', '请先在 JetBrains 供应商详情中启动本机反代，再测试模型。');
           throw new ConnectionFailure('authentication', provider.kind === 'openai-compatible' ? '无法准备 API 凭据，请重新保存 API Key。' : '无法准备或续期订阅授权，请在授权中心检查账号或重新登录。');
         }
         assertActive(controller.signal);

@@ -6,7 +6,7 @@ import { Store } from '../src/main/store';
 import { resolveBindingModels } from '../src/shared/bindings';
 import { restoreToolBinding } from '../src/main/tool-restore-binding';
 import initSqlJs from 'sql.js';
-import type { ModelInput } from '../src/shared/types';
+import type { ProviderInput, ModelInput } from '../src/shared/types';
 
 const folders: string[] = [];
 const stores: Store[] = [];
@@ -42,6 +42,17 @@ describe('request logs without local usage storage', () => {
     finally { raw.close(); }
   });
 });
+it('keeps the TRAE relay on loopback and requires a fresh key after changing its destination', async () => {
+  const { store } = await setup();
+  const input: ProviderInput = { name: 'TRAE', kind: 'openai-compatible', presetId: 'trae-cn-relay', baseUrl: 'http://127.0.0.1:18080/v1', enabled: true, apiKey: 'synthetic-relay-key' };
+  expect(() => store.saveProvider({ ...input, baseUrl: 'https://example.org/v1' })).toThrow(/回环/);
+  expect(() => store.saveProvider({ ...input, claudeBaseUrl: 'https://example.org' })).toThrow(/回环/);
+  const saved = store.saveProvider(input);
+  expect(() => store.saveProvider({ ...saved, baseUrl: 'http://localhost:8000/v1' })).toThrow(/重新填写/);
+  expect(store.getProvider(saved.id)?.baseUrl).toBe(input.baseUrl);
+  expect(store.saveProvider({ ...saved, baseUrl: 'http://localhost:8000/v1', apiKey: 'other-synthetic-relay-key' }).baseUrl).toBe('http://localhost:8000/v1');
+});
+
 function model(providerId: string, alias = 'test/model'): ModelInput { return { providerId, alias, upstreamId: 'upstream-id', displayName: 'Test Model', wireApi: 'chat-completions', contextWindow: 64000, tools: true, vision: false, enabled: true }; }
 afterEach(() => { for (const store of stores.splice(0)) store.close(); for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true }); });
 
@@ -703,5 +714,39 @@ describe('real SQLite storage', () => {
     expect(reopened.getSecret('old-vol')?.apiKey).toBe('legacy-vol-key');
     const raw = new SQL.Database(readFileSync(join(dir, 'modeldock.sqlite')));
     expect(raw.exec("SELECT id FROM bindings WHERE id='cursor'")[0].values).toEqual([['cursor']]); raw.close();
+  });
+});
+
+describe('saved TRAE relay connection modes', () => {
+  const input: ProviderInput = { presetId: 'trae-cn-relay', kind: 'openai-compatible', baseUrl: 'http://127.0.0.1:18080/v1', name: 'Local relay fixture', enabled: true, apiKey: 'synthetic-relay-key' };
+  it('reopens the saved mode independently of the address and keeps the selection on an ordinary edit', async () => {
+    const { store, dir, codec } = await setup();
+    const managed = store.saveProvider({ ...input, relayMode: 'managed' });
+    const manual = store.saveProvider({ ...input, name: 'Manually configured', relayMode: 'manual' });
+    expect(store.saveProvider({ ...input, relayMode: 'managed' })).toEqual(managed);
+    expect(() => store.saveProvider({ ...input, relayMode: 'manual' })).toThrow('不同连接方式');
+    expect(() => store.saveProvider({ ...manual, relayMode: 'managed' })).toThrow('密钥');
+    expect(() => store.saveProvider({ ...managed, baseUrl: 'http://localhost:8000/v1', apiKey: 'synthetic-other-key' })).toThrow('固定本机地址');
+    expect(() => store.saveProvider({ ...input, name: 'Remote manual', relayMode: 'manual', baseUrl: 'https://example.org/v1' })).toThrow('回环');
+    expect(store.saveProvider({ ...input, id: managed.id, apiKey: undefined, note: 'edited' }).relayMode).toBe('managed');
+    store.close();
+    const reopened = await Store.create(dir, codec); stores.push(reopened);
+    expect(reopened.getProvider(managed.id)).toMatchObject({ relayMode: 'managed', baseUrl: input.baseUrl, note: 'edited' });
+    expect(reopened.getProvider(manual.id)).toMatchObject({ relayMode: 'manual', baseUrl: input.baseUrl });
+    expect(reopened.listProviders().filter(row => row.presetId !== 'trae-cn-relay').every(row => row.relayMode === undefined)).toBe(true);
+    expect(reopened.saveProvider({ ...managed, relayMode: 'manual' })).toMatchObject({ id: managed.id, relayMode: 'manual' });
+    expect(reopened.getSecret(managed.id)?.apiKey).toBe(input.apiKey);
+  });
+  it('treats a legacy 18080 row without a stored choice as manual after schema migration', async () => {
+    const { store, dir, codec } = await setup();
+    const provider = store.saveProvider(input);
+    store.close();
+    const filename = join(dir, 'modeldock.sqlite'), SQL = await initSqlJs();
+    const old = new SQL.Database(readFileSync(filename));
+    old.run('ALTER TABLE providers DROP COLUMN trae_relay_mode');
+    writeFileSync(filename, old.export()); old.close();
+    const reopened = await Store.create(dir, codec); stores.push(reopened);
+    expect(reopened.getProvider(provider.id)).toMatchObject({ relayMode: 'manual', baseUrl: input.baseUrl, hasSecret: true });
+    expect(reopened.getSecret(provider.id)?.apiKey).toBe(input.apiKey);
   });
 });
