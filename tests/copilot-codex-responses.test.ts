@@ -8,12 +8,12 @@ type Event = { type: string; [key: string]: unknown };
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const close of cleanup.splice(0)) await close(); });
 
-async function fixture(source: (signal: AbortSignal) => BodyInit, contentType = 'text/event-stream') {
+async function fixture(source: (signal: AbortSignal) => BodyInit, contentType = 'text/event-stream', toolId: 'copilot' | 'copilot-cli' = 'copilot') {
   const provider: Provider = { id: 'codex-subscription', name: 'Synthetic Codex', kind: 'codex',
     baseUrl: 'https://chatgpt.com/backend-api/codex', enabled: true, hasSecret: true, authStatus: 'ready', note: '' };
   const model: Model = { id: 'fixture-model', providerId: provider.id, upstreamId: 'gpt-6.1-sol', alias: 'fixture-sol',
     displayName: 'Sol', wireApi: 'responses', contextWindow: 128000, tools: true, vision: false, enabled: true };
-  const binding: ToolBinding = { id: 'copilot', name: 'Copilot', enabled: true, mode: 'aggregate', providerIds: [provider.id],
+  const binding: ToolBinding = { id: toolId, name: 'Copilot', enabled: true, mode: 'aggregate', providerIds: [provider.id],
     modelIds: [model.id], modelSelection: 'selected', defaultModelId: model.id, note: '' };
   const logs: Pick<RequestLog, 'status'>[] = [];
   const store = {
@@ -33,7 +33,7 @@ async function fixture(source: (signal: AbortSignal) => BodyInit, contentType = 
   });
   cleanup.push(async () => { await gateway.stop(); });
   await gateway.start(0);
-  const url = gateway.status().baseUrl.replace(/\/v1$/, '/tool/copilot/v1/responses');
+  const url = gateway.status().baseUrl.replace(/\/v1$/, `/tool/${toolId}/v1/responses`);
   const post = (stream = true, signal?: AbortSignal, route = url) => fetch(route, {
     method: 'POST', signal, headers: { authorization: `Bearer ${store.gatewayKey()}`, 'content-type': 'application/json' },
     body: JSON.stringify({ model: model.alias, stream, input: [{ role: 'user', content: 'synthetic fixture' }] }),
@@ -61,6 +61,14 @@ function eventsFrom(text: string): any[] {
 }
 
 describe('Copilot native Responses from a Codex subscription', () => {
+  it.each([true, false])('also completes the CLI terminal output before native tool execution (stream=%s)', async stream => {
+    const f = await fixture(() => encoded([created, itemDone(message, 0), itemDone(tool, 1), completed([])]), 'application/octet-stream', 'copilot-cli');
+    const reply = await f.post(stream);
+    expect(reply.status).toBe(200);
+    const delivered = stream ? eventsFrom(await reply.text()).at(-1)?.response : await reply.json();
+    expect(delivered).toMatchObject({ model: 'fixture-sol', output: [message, tool], usage });
+    expect(f.logs[0]?.status).toBe(200);
+  });
   it.each([true, false])('fills missing terminal output from native done items (stream=%s)', async stream => {
     for (const snapshot of [[], [reasoning], [reasoning, tool]]) {
       const events = [created, itemDone(reasoning, 0), itemDone(message, 1), itemDone(tool, 2), completed(snapshot)];

@@ -11,12 +11,15 @@ import { applyCopilotDesktop, type CopilotSyncOptions } from './copilot-sync';
 import { openCodeConfigDirectory } from './opencode-paths';
 import { restoreClaudeOfficialConfig } from './claude-config';
 import { restoreJunieOfficialConfig } from './junie-config';
+import { restoreCopilotCliOfficialConfig } from './copilot-cli-config';
 import { isJetBrainsTool } from '../shared/jetbrains';
 import { restoreJetBrainsConfig, type JetBrainsConfigOptions } from './jetbrains-config';
 
 export interface ToolRestoreStore extends DshConfigStore {}
 export interface ToolRestoreOptions {
   junieHome?: string;
+  copilotCliHome?: string;
+  copilotCliProvidersConfig?: string;
   claudeConfigDir?: string;
   jetBrainsOptions?: JetBrainsConfigOptions;
   codexHome?: string;
@@ -81,6 +84,7 @@ export async function restoreOfficialConfig(store: ToolRestoreStore, tool: ToolI
   if (isJetBrainsTool(tool)) return restoreJetBrainsConfig(store, tool, backups, homeDirectory, { ...options.jetBrainsOptions, beforeCommit: options.beforeCommit ?? options.jetBrainsOptions?.beforeCommit });
   if (tool === 'claude-code') return restoreClaudeOfficialConfig(store, backups, homeDirectory, { claudeConfigDir: options.claudeConfigDir, beforeCommit: options.beforeCommit });
   if (tool === 'junie') return restoreJunieOfficialConfig(store, backups, homeDirectory, { junieHome: options.junieHome, beforeCommit: options.beforeCommit });
+  if (tool === 'copilot-cli') return restoreCopilotCliOfficialConfig(store, backups, homeDirectory, { copilotHome: options.copilotCliHome, providersConfig: options.copilotCliProvidersConfig, beforeCommit: options.beforeCommit });
   if (tool === 'copilot') return applyCopilotDesktop(store, { providers: [] }, options.copilotHome ?? join(homeDirectory, '.copilot'), { ...options.copilotOptions, syncScope: 'selected' });
   if (tool === 'dsh') return restoreDshOfficialConfig(store, options.dshHome ?? join(homeDirectory, '.dsh'), options.dshOptions);
   if (!['codex', 'opencode', 'vscode'].includes(tool)) throw new Error('不支持的工具，未还原配置。');

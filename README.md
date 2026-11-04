@@ -6,6 +6,14 @@ ModelDock 是跨平台本地模型管理台：全局维护模型来源与别名�
 
 自有代码及原创应用标记采用 [MIT 许可](LICENSE)，第三方图标和依赖保留各自的 Apache-2.0、CC-BY-4.0、MIT 或其他许可，详见 [第三方声明](THIRD_PARTY_NOTICES.md)。欢迎按 [贡献指南](CONTRIBUTING.md) 提交修复；敏感问题请遵循 [安全报告流程](SECURITY.md)。
 
+## 0.3.67 · Copilot CLI 独立接入
+
+在「常规 Agent → Copilot CLI」选择一家 API 直连，或打开「使用聚合接口」并选择来源、模型和默认模型。支持 Chat Completions 与 Responses：直连使用供应商真实 URL、模型 ID 和 API Key；聚合使用独立的 `/tool/copilot-cli/v1` 本机入口、模型别名和本机 Key，订阅令牌不写入 CLI。
+
+同步合并官方 `providers.json` 的 ModelDock 来源和模型，只更新 `settings.json` 的默认 `model`，保留其他来源、GitHub 内置模型、账号、权限、MCP、Skills、会话和设置注释。两种协议分别显示在 `modeldock-chat` / `modeldock-responses` 下，预览可查看完整默认名称。重启 `copilot` 后通过 `/model` 选择，也可使用 `copilot --model <预览中的默认名称>`；命令行、环境变量或项目设置可能覆盖全局默认值。CLI 使用独立配置，不要求 Copilot app 运行。[官方添加模型说明](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-llm-models) · [配置目录与格式](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-config-dir-reference)
+
+默认目录为 `~/.copilot`，支持 `COPILOT_HOME` 和 `COPILOT_PROVIDERS_CONFIG`。预览隐藏密钥，应用和导出才包含所需 API Key；CLI 原生配置需要明文 Key，ModelDock 写入时限制本机文件权限，备份与恢复记录加密保存。同步支持两文件事务回滚、撤销上次同步及还原同步前设置；受管来源或模型被外部修改时拒绝覆盖。需要支持命名来源文件的新版 Copilot CLI；模型还需支持工具调用和流式响应。模型配置不包含 MCP、Skills 或会话导入。
+
 ## 0.3.66 · 右键快捷操作
 
 供应商侧栏和卡片、模型列表、工具导航和详情、本地聚合接口、请求日志、授权账号及诊断日志都支持右键菜单。可直接复制地址、模型名称和 API Key，打开编辑或详情，获取模型列表、测试连接、同步/撤销/还原工具配置；删除和清除授权仍先确认。聚合列表中的发布操作只改变本地通用入口，工具专用映射仍在对应工具内管理。
@@ -73,10 +81,10 @@ WebStorm、IntelliJ IDEA、Rider、PyCharm 的接入参数页分别提供「AI A
 - 授权生命周期对照 CC Switch 的设备码实现：xAI 校验 OIDC issuer，续期显式携带原权限 scope；ID Token 只保存在主进程加密凭据中，界面取得账号元数据。临时续期网络失败保留原授权状态；明确拒绝或过期停止轮询。导入凭据前取消旧登录、刷新和额度查询，提交刷新前检查原凭据，防止晚回复覆盖新授权。
 - 模型：填写 API Key 后从供应商获取真实模型列表，搜索、勾选并批量添加。不同供应商可用相同模型简称及显示名称，列表和工具中按「套餐名 - 模型名」展示；系统维护唯一的聚合接口 ID。支持真实上游 ID、协议、上下文、工具、视觉与思考强度能力。默认来源未授权、模型列表为空，能力由实际配置确定。
 - Codex 兼容模型目录带独立的 `client_version` 和对应版本请求头，使用原生 `slug` 作为上游 ID，解析显示名称、上下文和明确的能力字段。默认候选隐藏 `hide / none` 条目，已保存和手动添加的模型保留；目录可见性不代表实际模型权限。API / Grok 来源不携带 Codex 目录版本参数。
-- 工具：Codex、Claude Code、OpenCode、DSH、VS Code Copilot Chat、Copilot app 与 WebStorm、IntelliJ IDEA、Rider、PyCharm 的 AI Assistant。Codex、Claude Code 与四个 JetBrains IDE 每次只配置一个入口：供应商直连只选择一家支持原生协议的 API，使用供应商地址、API Key 和真实模型 ID；使用聚合接口只连接一个 ModelDock 本机地址，来源与模型多选均在聚合接口内部配置，模型映射列表在右侧独立滚动。直连与聚合的选择分别保存，往返切换保留原聚合模型范围。订阅及不兼容的直连来源只能在兼容的聚合入口内使用，不会暗中退回单家本机协议桥。已有工具支持还原官方配置，JetBrains 可恢复同步前设置；工具交互触发自动同步并先备份，应用启动不会写外部客户端配置。OpenCode、DSH、VS Code 和 Copilot 保留原有多入口与连接方式。
+- 工具：Codex、Claude Code、Junie CLI / IDE ACP、OpenCode、DSH、VS Code Copilot Chat、Copilot app、独立 Copilot CLI，以及 WebStorm、IntelliJ IDEA、Rider、PyCharm 的 AI Assistant / Air。Codex、Claude Code、Junie、Copilot CLI 与四个 JetBrains IDE 每次只配置一个入口：供应商直连只选择一家支持原生协议的 API，使用供应商地址、API Key 和真实模型 ID；使用聚合接口只连接一个 ModelDock 本机地址，来源与模型多选均在聚合接口内部配置，模型映射列表在右侧独立滚动。直连与聚合的选择分别保存，往返切换保留原聚合模型范围。订阅及不兼容的直连来源只能在兼容的聚合入口内使用，不会暗中退回单家本机协议桥。已有工具支持还原官方配置，Junie、Copilot CLI 和 JetBrains 可恢复同步前设置；工具交互触发自动同步并先备份，应用启动不会写外部客户端配置。OpenCode、DSH、VS Code 和 Copilot app 保留原有多入口与连接方式。
 - 本地网关：固定监听 `127.0.0.1`，默认 `18181`；本地 Key 鉴权、标准模型目录、Chat Completions/Responses、流式转发、请求日志。
 - SQLite：保存来源、模型、绑定与日志；敏感凭据由主进程加密，预览和快照不包含上游密钥。
-- 配置接入：原有六类工具均支持预览 / 导出，并在用户修改勾选或模型偏好后自动同步，写入前备份。VS Code 默认只保留所选自定义供应商，可关闭此选项来保留原有自定义来源；其他 vendor 与 JSONC 注释保留。OpenCode 保留其他供应商、MCP 和非受管 JSONC 注释；Codex 的 TOML 重写保留配置字段，但不保证原注释。Copilot app 通过运行实例的原生接口同步来源、模型和凭据，预览是同步计划参考，不需要再手工导入。DSH 写入 home 插件覆盖与凭据 refs，同步前保存加密恢复记录，清空后恢复原覆盖。
+- 配置接入：工具支持预览 / 导出，并按各自能力在用户修改勾选或模型偏好后自动同步，写入前备份。VS Code 默认只保留所选自定义供应商，可关闭此选项来保留原有自定义来源；其他 vendor 与 JSONC 注释保留。OpenCode 保留其他供应商、MCP 和非受管 JSONC 注释；Codex 的 TOML 重写保留配置字段，但不保证原注释。Copilot app 通过运行实例的原生接口同步来源、模型和凭据，预览是同步计划参考，不需要再手工导入；Copilot CLI 使用独立的官方来源注册表和设置文件。DSH 写入 home 插件覆盖与凭据 refs，同步前保存加密恢复记录，清空后恢复原覆盖。
 - 托盘：关闭主窗口可留在后台运行；退出应用会停止网关。
 
 ## JetBrains AI Assistant 模型接入

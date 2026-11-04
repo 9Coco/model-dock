@@ -9,7 +9,7 @@ import { bindingConnectionPolicy, resolveBindingModels } from '../src/shared/bin
 import { jetBrainsConnectionParameters, isJetBrainsTool } from '../src/shared/jetbrains';
 import type { Model, ToolId } from '../src/shared/types';
 
-const tools: ToolId[] = ['codex', 'claude-code', 'junie', 'opencode', 'dsh', 'vscode', 'copilot', 'webstorm', 'intellij-idea', 'rider', 'pycharm'];
+const tools: ToolId[] = ['codex', 'claude-code', 'junie', 'copilot-cli', 'opencode', 'dsh', 'vscode', 'copilot', 'webstorm', 'intellij-idea', 'rider', 'pycharm'];
 const stores: Store[] = [], folders: string[] = [];
 afterEach(() => { for (const store of stores.splice(0)) store.close(); for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true }); });
 async function fixture() {
