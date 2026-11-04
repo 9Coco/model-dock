@@ -1,15 +1,18 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { createServer } from 'node:http';
 import { runInNewContext } from 'node:vm';
+import { execFileSync } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { CentralPiManager } from '../src/main/central-pi-manager';
 
 const managers: CentralPiManager[] = [];
 const roots: string[] = [];
 const key = 'local-only-'.repeat(4);
+const windows = process.platform === 'win32';
+let windowsLauncher: Buffer | undefined;
 const worker = String.raw`
 const http = require('node:http');
 const { createHmac } = require('node:crypto');
@@ -26,28 +29,72 @@ http.createServer((req,res) => {
   if (req.headers.authorization !== 'Bearer '+proof) { res.writeHead(401).end(); return; }
   res.end(JSON.stringify({ id:'modeldock-central-pi', nonce:wrong?'someone-else':nonce }));
 }).listen(18081, '127.0.0.1');
+// Real Pi RPC closes its session on stdin EOF, including after Central exits.
+if (process.platform === 'win32') {
+  process.stdin.resume();
+  process.stdin.on('end', () => { if (!fs.existsSync(require('node:path').join(__dirname, 'ignore-eof'))) process.exit(0); });
+}
 `;
+
+async function installWindowsCentral(bin: string) {
+  if (!windowsLauncher) {
+    // A native EXE is important here: a .cmd pretending to be Central would test
+    // a different spawn boundary. Compile with the Windows inbox .NET compiler.
+    const source = join(bin, 'central.cs');
+    await writeFile(source, String.raw`
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Threading;
+class Central {
+  static string Quote(string value) {
+    return "\"" + System.Text.RegularExpressions.Regex.Replace(value, "(\\\\*)\"", "$1$1\\\"") .TrimEnd('\\')
+      + new string('\\', value.Reverse().TakeWhile(c => c == '\\').Count() * 2) + "\"";
+  }
+  static int Main(string[] args) {
+    var dir = AppDomain.CurrentDomain.BaseDirectory;
+    if (File.Exists(Path.Combine(dir, "error-fixture"))) { Console.Error.Write("secret-error-from-account"); return 1; }
+    if (!args.Take(3).SequenceEqual(new [] { "run", "pi", "--" })) return 90;
+    var info = new ProcessStartInfo(Environment.GetEnvironmentVariable("ComSpec"),
+      "/d /s /c pi.cmd " + String.Join(" ", args.Skip(3).Select(Quote)));
+    info.UseShellExecute = false;
+    var child = Process.Start(info);
+    while (!child.WaitForExit(65)) if (File.Exists(Path.Combine(dir, "exit-fixture"))) return 23;
+    return child.ExitCode;
+  }
+}
+`);
+    const compiler = join(process.env.SystemRoot || 'C:\\Windows', 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe');
+    execFileSync(compiler, ['/nologo', '/target:exe', '/out:' + join(bin, 'central.exe'), source], { windowsHide: true, stdio: 'pipe' });
+    windowsLauncher = await readFile(join(bin, 'central.exe'));
+  } else await writeFile(join(bin, 'central.exe'), windowsLauncher);
+  await writeFile(join(bin, 'pi.cjs'), worker);
+  await writeFile(join(bin, 'pi.cmd'), `@echo off\r\n"${process.execPath}" "%~dp0pi.cjs" %*\r\n`);
+}
 
 afterEach(async () => {
   for (const manager of managers.splice(0)) await manager.stop();
-  for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true, maxRetries: 5 });
   vi.unstubAllEnvs();
 });
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'modeldock-central-pi-test-'));
   roots.push(root);
-  const bin = join(root, 'bin');
+  const bin = join(root, windows ? 'CLI 中文 & space' : 'bin');
   await mkdir(bin);
   const home = join(root, 'home');
   await mkdir(home);
   vi.stubEnv('HOME', home);
+  if (windows) vi.stubEnv('USERPROFILE', home);
   const extension = join(root, 'the extension.mjs');
   await writeFile(extension, '');
   // Our fake Central mirrors the CLI process boundary. Its Pi is a separate
   // process; stopping the manager must release the worker's listening socket.
   const central = `#!${process.execPath}\nconst {spawn}=require('node:child_process');\nif(JSON.stringify(process.argv.slice(2,5))!==JSON.stringify(['run','pi','--'])) process.exit(90);\nconst child=spawn('pi',process.argv.slice(5),{stdio:'inherit'}); child.on('exit',(_,signal)=>process.exit(signal?1:0)); setInterval(()=>{if(require('node:fs').existsSync(require('node:path').join(__dirname,'exit-fixture'))) process.exit(23);},65);`;
-  for (const [name, script] of [['central', central], ['pi', `#!${process.execPath}\n${worker}`]]) {
+  if (windows) await installWindowsCentral(bin);
+  else for (const [name, script] of [['central', central], ['pi', `#!${process.execPath}\n${worker}`]]) {
     const path = join(bin,name); await writeFile(path, script); await chmod(path, 0o700);
   }
   const mgr = new CentralPiManager(root, extension);
@@ -60,7 +107,7 @@ async function fixture() {
   return {root, home, bin, extension, mgr};
 }
 
-describe.skipIf(process.platform === 'win32')('explicit Central Pi lifecycle', () => {
+describe('explicit Central Pi lifecycle', () => {
   it('runs one isolated Pi without a prompt, verifies its nonce and stops its child tree', async () => {
     const {root, bin, extension, mgr} = await fixture();
     expect(mgr.isRunning(key)).toBe(false);
@@ -71,8 +118,8 @@ describe.skipIf(process.platform === 'win32')('explicit Central Pi lifecycle', (
     const evidence = JSON.parse(await readFile(join(bin,'observed'), 'utf8'));
     expect(evidence).toMatchObject({ leaked:false, offline:'1', telemetry:'0' });
     expect(evidence.options).toEqual(['--mode','rpc','--no-session','--no-tools','--no-approve','--no-mcp','--no-skills','--no-prompt-templates','--no-themes','--no-context-files','--extension',extension]);
-    expect(evidence.privateDir).toMatch(/central-pi\/run-[^/]+\/agent$/);
-    expect(evidence.cwd).toMatch(/central-pi\/run-[^/]+\/work$/);
+    expect(evidence.privateDir).toMatch(/central-pi[/\\]run-[^/\\]+[/\\]agent$/);
+    expect(evidence.cwd).toMatch(/central-pi[/\\]run-[^/\\]+[/\\]work$/);
     expect(JSON.stringify(evidence)).not.toContain(key);
     await expect(mgr.start('other'.repeat(10))).rejects.toThrow('另一把');
     await Promise.all([mgr.stop(),mgr.stop()]);
@@ -164,15 +211,43 @@ describe.skipIf(process.platform === 'win32')('explicit Central Pi lifecycle', (
     for (let i=0; i<100 && (await readdir(join(root,'central-pi'))).length; i++) await delay(25);
     expect(await mgr.ownsListener(key)).toBe(false);
     expect(await readdir(join(root,'central-pi'))).toEqual([]);
+    await mgr.stop(); // Join cleanup; directory removal precedes clearing the session.
     await rm(join(bin,'exit-fixture'));
     await mgr.start(key);
   });
 
   it('reports early child failure without exposing its output, rejects header injection', async () => {
     const {mgr,bin} = await fixture();
-    await writeFile(join(bin,'central'), `#!${process.execPath}\nprocess.stderr.write('secret-error-from-account'); process.exit(1);`);
+    if (windows) await writeFile(join(bin,'error-fixture'), '');
+    else await writeFile(join(bin,'central'), `#!${process.execPath}\nprocess.stderr.write('secret-error-from-account'); process.exit(1);`);
     await expect(mgr.start('x\r\ny')).rejects.toThrow('密钥格式');
     await expect(mgr.start(key)).rejects.toThrow('central login');
     expect(mgr.isRunning(key)).toBe(false);
+  });
+
+  it.skipIf(!windows)('forcibly closes its own native Windows child tree when Pi ignores EOF', async () => {
+    const {mgr, bin, root} = await fixture();
+    await writeFile(join(bin, 'ignore-eof'), '');
+    await mgr.start(key);
+    await mgr.stop();
+    expect(mgr.isRunning(key)).toBe(false);
+    expect(await readdir(join(root, 'central-pi'))).toEqual([]);
+    // Rebinding the same port proves the Pi descendant was stopped as well.
+    await mgr.start(key);
+    expect(await mgr.ownsListener(key)).toBe(true);
+  });
+
+  it.skipIf(!windows)('finds the official Windows Central and managed Pi installs without a refreshed app PATH', async () => {
+    const {mgr, bin, home} = await fixture();
+    const centralBin = join(home, '.local', 'bin');
+    const piBin = join(home, '.pi', 'agent', 'bin');
+    await Promise.all([mkdir(centralBin, {recursive:true}), mkdir(piBin, {recursive:true})]);
+    await rename(join(bin, 'central.exe'), join(centralBin, 'central.exe'));
+    for (const file of ['pi.cmd', 'pi.cjs']) await rename(join(bin, file), join(piBin, file));
+    vi.stubEnv('PATH', join(process.env.SystemRoot || 'C:\\Windows', 'System32'));
+    vi.stubEnv('APPDATA', join(home, 'AppData', 'Roaming'));
+    await mgr.start(key);
+    expect(await mgr.ownsListener(key)).toBe(true);
+    expect(JSON.parse(await readFile(join(piBin, 'observed'), 'utf8')).options).toContain('--mode');
   });
 });

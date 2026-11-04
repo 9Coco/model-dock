@@ -9,10 +9,10 @@ import { TRAE_RELAY_BASE_URL, TRAE_RELAY_IMAGE, TRAE_RELAY_LOGIN_URL, TraeRelayM
 const key = 'a'.repeat(64);
 const containerId = 'b'.repeat(64);
 const temps: string[] = [];
-afterEach(async () => { await Promise.all(temps.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
+afterEach(async () => { await Promise.all(temps.splice(0).map(path => rm(path, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }))); });
 
-async function fixture() {
-  const dir = await mkdtemp(join(tmpdir(), 'modeldock-relay-test-'));
+async function fixture(prefix = 'modeldock-relay-test-') {
+  const dir = await mkdtemp(join(tmpdir(), prefix));
   temps.push(dir);
   const state = { id: '', owner: '', running: false, host: '127.0.0.1', image: TRAE_RELAY_IMAGE, os: 'linux', rootless: false,
     system: 'Docker Desktop', kernel: release(), network: 'bridge', hostStartup: true, listener: 'owned' };
@@ -44,6 +44,39 @@ async function fixture() {
 }
 
 describe('managed TRAE CN relay', () => {
+  it.skipIf(process.platform !== 'win32')('protects Windows login files with a private inherited ACL and preserves CSV bind-mount paths', async () => {
+    const { root, manager, calls } = await fixture('modeldock 空格, relay-');
+    expect((await manager.start(key)).state).toBe('running');
+    const create = calls().find(args => args[1] === 'create')!;
+    const mounts = create.flatMap((arg, index, args) => arg === '--mount' ? [args[index + 1]] : []);
+    expect(mounts).toEqual([
+      ...['.env', 'data'].map(name => `type=bind,"source=${join(root, name)}",target=/app/${name}`),
+      `type=bind,"source=${join(root, 'api-key')}",target=/run/modeldock-relay-key,readonly`,
+    ]);
+    expect(create[create.indexOf('--user') + 1]).toBe('999:999');
+    const script = [
+      '$ErrorActionPreference = "Stop"',
+      '$sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
+      '$paths = @($env:MODELDOC_TEST_ROOT, (Join-Path $env:MODELDOC_TEST_ROOT "api-key"), (Join-Path $env:MODELDOC_TEST_ROOT ".env"), (Join-Path $env:MODELDOC_TEST_ROOT "data"))',
+      '$result = foreach ($path in $paths) {',
+      '  $acl = [IO.File]::GetAccessControl($path)',
+      '  $rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))',
+      '  if ($rules.Count -ne 2 -or @($rules | Where-Object { $_.IdentityReference.Value -notin @($sid, "S-1-5-18") -or $_.AccessControlType -ne "Allow" -or $_.FileSystemRights -ne "FullControl" }).Count) { throw "Unexpected relay ACL" }',
+      '  [PSCustomObject]@{ protected = $acl.AreAccessRulesProtected; inherited = @($rules | Where-Object IsInherited).Count }',
+      '}',
+      'ConvertTo-Json -Compress -InputObject @($result)',
+    ].join('\n');
+    const result = await promisify(execFile)('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
+      windowsHide: true, env: { ...process.env, MODELDOC_TEST_ROOT: root },
+    });
+    expect(JSON.parse(result.stdout)).toEqual([
+      { protected: true, inherited: 0 },
+      { protected: false, inherited: 2 },
+      { protected: false, inherited: 2 },
+      { protected: false, inherited: 2 },
+    ]);
+  }, 15000);
+
   it.skipIf(process.platform === 'win32')('overrides remote Docker contexts and hosts on the actual CLI boundary', async () => {
     const { dir } = await fixture();
     const executable = join(dir, 'docker');

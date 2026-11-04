@@ -97,6 +97,12 @@ function verifyPackage(directory) {
     'SQL WASM must be present in app.asar.unpacked.');
   verifyCopiedFile(join(root, wasmName), join(resources, 'app.asar.unpacked', wasmName));
 
+  // Pi runs outside Electron and cannot load the extension from inside ASAR.
+  const extensionName = 'dist-electron/central-pi-extension.mjs';
+  assert(names.includes(extensionName) && statFile(archive, normalize(extensionName), false).unpacked === true,
+    'Central Pi extension must be present in app.asar.unpacked.');
+  verifyCopiedFile(join(root, 'scripts/central-pi-extension.mjs'), join(resources, 'app.asar.unpacked', extensionName));
+
   const executable = join(directory, 'ModelDock.exe');
   assertOrdinaryFile(executable);
   // 修改点：资源刷新后同时校验 Windows PE 内嵌 ASAR header SHA，避免保留旧记录。
@@ -111,7 +117,8 @@ function verifyPackage(directory) {
   execFileSync(process.execPath, [join(root, 'scripts/verify-exe-icon.mjs'), executable],
     { cwd: root, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   console.log(JSON.stringify({ windowsPackageVerified: true, version: manifest.version,
-    directory, productionEntryVerified: true, resourcesVerified: true, iconVerified: true, embeddedAsarIntegrityVerified: true }));
+    directory, productionEntryVerified: true, resourcesVerified: true, centralPiExtensionVerified: true,
+    iconVerified: true, embeddedAsarIntegrityVerified: true }));
 }
 
 try {

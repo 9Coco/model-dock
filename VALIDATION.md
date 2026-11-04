@@ -1,5 +1,15 @@
 # ModelDock 验证记录
 
+## 2026-11-04 / 0.3.63 · Windows 会员反代专项复核
+
+- 修复 Windows 官方 Pi 安装目录发现：ModelDock 已运行时再安装 Pi，旧 PATH 不含 `%USERPROFILE%\.pi\agent\bin`，原来会误报未安装；新增该目录回退并用修复前失败、修复后通过的隔离用例验证。
+- Central 生命周期不再整组跳过 Windows。8 项原生测试以临时 .NET EXE → `pi.cmd` → Node 子进程验证中文、空格、`&` 路径、隔离参数、身份 nonce、端口占用、并发启动/停止、stdin EOF、强制进程树关闭和退出后重启。Central/Pi 管理器、扩展与供应商共 16 项通过；这是本机合成进程和模拟协议验证，未调用真实账号。
+- 官方 Central Windows x64 2.2.0 在空白账号目录中确认版本、run 参数和未登录拒绝。官方 Pi 1.5.0 经真实 npm `pi.cmd` 在 Windows 接受管理器参数、加载 ModelDock 扩展，在随机本机端口返回健康身份及 61 项目录，stdin EOF 后退出码为 0。测试只增加合成 Central provider 并替换扩展监听端口，没有发送推理。已登录的官方 Central → Pi 分派、真实账号授权、模型推理与计费未验收。
+- TRAE 的 2 个相关测试文件为 15 项通过、3 项 Linux/POSIX 专属跳过。新增真实 Windows ACL 检查，确认当前用户/SYSTEM 私有权限及凭据文件继承；中文、空格、逗号目录的 bind-mount 参数、Linux 容器用户和 Desktop 回环端口检查通过。当前机器未找到 Docker CLI，没有实际容器启动、Docker Desktop 文件共享、网页登录或真实 TRAE 推理验收。
+- `npm run typecheck`、生产构建、生产入口检查、Windows x64 打包及资源/图标/PE 内嵌 ASAR 完整性检查通过。新增校验要求 Pi 扩展真实解包且与源码一致；独立缺失/陈旧扩展负例被拒绝，恢复后的包再次通过。
+- 最终全套单 worker：80 文件，1779 项通过、36 跳过、20 失败。20 项涉及已有 Linux UID、POSIX 权限和 Windows 符号链接条件，与此前记录的失败项目一致。本轮早期双 worker 额外遇到 14 项 SQLite `EPERM rename`，数据库单独 58 项及后续两轮单 worker 未再出现，未宣称全套通过。
+- 用户运行中的 `D:\ModelDock-0.3.55\ModelDock.exe` 保持运行。独立构建位于 `release/windows-0.3.63-2026-11-04T12-02-37-215Z-55356/win-unpacked`；没有覆盖常规运行交付目录。证据位于 `work/windows-relay-review/`。
+
 ## 2026-11-04 / 0.3.63 · JetBrains AI 会员与 VS Code
 
 - 在隔离的 Linux VS Code 1.145.0 中加载内置 Copilot Chat 0.73.0。VS Code 通过 Custom Endpoint 选中 ModelDock 导出的模型并发送消息，经实际 ModelDock 网关、实际 Pi 1.5.0 与 Anthropic SDK 转发，收到了本机模拟 Central 上游的完整流式回复。测试使用扩展接口，没有人工点击聊天面板。
