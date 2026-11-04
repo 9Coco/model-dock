@@ -3,6 +3,7 @@ import type { Model, ModelInput, Provider, WireApi } from '../shared/types';
 import { isReasoningEffort, MODEL_SPEC_FIELDS, modelSpecs, sanitizeReasoningEfforts } from '../shared/types';
 import type { AddModelsResult, DiscoveredModel, DiscoveryErrorCategory, DiscoveryResult, ModelSelection } from '../shared/catalog-types';
 import { presetById } from '../shared/presets';
+import { isTraeRelayProvider } from '../shared/trae-relay-models';
 import { modelLocalAlias, suggestModelAlias } from '../shared/model-names';
 import { lookupModelMetadata, lookupModelReasoningDefaults } from '../shared/model-metadata';
 import type { PreparedUpstream } from './oauth';
@@ -182,8 +183,14 @@ async function boundedJson(response: Response, signal: AbortSignal): Promise<{ d
   } finally { signal.removeEventListener('abort', abort); reader.releaseLock(); }
 }
 function hiddenModel(entry: unknown, provider: Provider): boolean {
-  if (provider.kind !== 'codex') return false;
   const data = object(entry);
+  if (isTraeRelayProvider(provider)) {
+    // v1.0.10 returns its offline model list even without an account. A live row may
+    // also advertise a fallback route, so exclude only rows with no other endpoint.
+    const endpoints = [data.endpoint, ...(Array.isArray(data.endpoints) ? data.endpoints : [])].filter(name => typeof name === 'string' && name);
+    return endpoints.length > 0 && endpoints.every(name => name === 'fallback');
+  }
+  if (provider.kind !== 'codex') return false;
   return data.hidden === true || data.is_hidden === true || data.visibility === 'hide' || data.visibility === 'hidden' || data.visibility === 'none';
 }
 function modelEntries(payload: unknown, provider: Provider): unknown[] {
@@ -251,12 +258,14 @@ export class ModelCatalog {
       if (!provider) throw new CatalogFailure('invalid-provider', '供应商不存在。');
       if (!provider.hasSecret) throw new CatalogFailure('missing-credentials', provider.kind === 'openai-compatible' ? '请先保存 API Key，再获取模型列表。' : '请先完成订阅授权，再获取模型列表。');
       const messagesCatalog = provider.kind === 'openai-compatible' && (presetById(provider.presetId)?.defaultWireApi === 'messages'
-        || this.store.listModels().some(model => model.providerId === providerId && model.wireApi === 'messages'));
+        || !isTraeRelayProvider(provider) && this.store.listModels().some(model => model.providerId === providerId && model.wireApi === 'messages'));
       // Preparing the request also refreshes native subscription credentials.
       const expected = messagesCatalog ? anthropicEndpoint(provider.baseUrl, '/models') : modelCatalogEndpoint(provider);
       let request: PreparedUpstream;
       try { request = await this.oauth.prepareRequest(provider, messagesCatalog ? '/v1/models' : '/models', {}); }
-      catch { throw new CatalogFailure('authentication', provider.kind === 'openai-compatible' ? '无法准备 API 凭据，请重新保存 API Key。' : '无法准备订阅授权，请在授权中心检查账号或重新登录。'); }
+      catch {
+        if (provider.presetId === 'jetbrains-central') throw new CatalogFailure('authentication', '请先在 JetBrains 供应商详情中启动本机反代，再获取模型列表。');
+        throw new CatalogFailure('authentication', provider.kind === 'openai-compatible' ? '无法准备 API 凭据，请重新保存 API Key。' : '无法准备订阅授权，请在授权中心检查账号或重新登录。'); }
       if (provider.kind === 'copilot' ? !isCopilotUpstream(request.url, '/models') : request.url !== expected) throw new CatalogFailure('invalid-provider', '模型目录请求地址与当前供应商不一致。');
       if (messagesCatalog) {
         // 修改点：custom 来源已明确选择 Messages 时使用 Anthropic 目录合同。

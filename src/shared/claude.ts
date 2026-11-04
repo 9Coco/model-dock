@@ -1,3 +1,4 @@
+import { isTraeRelayProvider } from './trae-relay-models';
 import type { Model, Provider } from './types';
 
 /** 修改点：官方套餐的两种协议使用不同入口，但共享同一供应商与 API Key。
@@ -23,6 +24,7 @@ function canonical(value: string): string | undefined {
 export function nativeClaudeBaseUrl(provider: Provider): string | undefined {
   if (provider.kind !== 'openai-compatible') return;
   if (provider.claudeBaseUrl?.trim()) return provider.claudeBaseUrl.trim();
+  if (isTraeRelayProvider(provider)) return provider.baseUrl.trim().replace(/\/+$/, '').replace(/\/v1$/, '') || undefined;
   if (provider.presetId === 'anthropic') return provider.baseUrl;
   const source = canonical(provider.baseUrl);
   return officialEndpoints[provider.presetId ?? '']?.find(([base]) => canonical(base) === source)?.[1];

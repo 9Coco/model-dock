@@ -16,6 +16,8 @@ await build({ absWorkingDir: root, entryPoints: { [entry]: 'src/main/main.ts', p
   platform: 'node', format: 'cjs', target: 'node24', outdir: join(runtimeRoot, 'dist-electron'), outExtension: { '.js': '.cjs' },
   packages: 'external', external: ['electron', 'sql.js'], define: { 'import.meta.url': '__filename', '__MODELDOCK_RUNTIME_MODE__': JSON.stringify(mode), '__MODELDOCK_SMOKE_BUILD__': JSON.stringify(mode === 'smoke') },
   treeShaking: true, minifySyntax: true, sourcemap: mode !== 'production' });
+// Pi is a separate Node process and loads this extension from the filesystem.
+cpSync(join(root, 'scripts/central-pi-extension.mjs'), join(runtimeRoot, 'dist-electron/central-pi-extension.mjs'));
 writeFileSync(join(runtimeRoot, 'dist-electron/runtime-build.json'), JSON.stringify({ version: 1, mode, entry: `${entry}.cjs`,
   sha256: createHash('sha256').update(readFileSync(join(runtimeRoot, 'dist-electron', `${entry}.cjs`))).digest('hex') }, null, 2));
 if (mode !== 'production') {

@@ -1,5 +1,19 @@
 # ModelDock 验证记录
 
+## 2026-11-04 / 0.3.63 · JetBrains AI 会员与 VS Code
+
+- 在隔离的 Linux VS Code 1.145.0 中加载内置 Copilot Chat 0.73.0。VS Code 通过 Custom Endpoint 选中 ModelDock 导出的模型并发送消息，经实际 ModelDock 网关、实际 Pi 1.5.0 与 Anthropic SDK 转发，收到了本机模拟 Central 上游的完整流式回复。测试使用扩展接口，没有人工点击聊天面板。
+- 使用真实 Pi 和两个本机模拟上游验证 OpenAI Responses、Anthropic Messages 的工具调用及结果回传。模型目录只包含当前 Pi 会话中经 Central 路由的候选。首次使用、已连接 Pi、已有配置遇到新的会话策略均在隔离目录验过。
+- Central CLI 2.2.0 在隔离的空账号环境中按预期提示登录。没有取用个人订阅、发送付费推理或验证扣费。Windows 只做发行包静态核验。
+- 类型检查、生产构建、生产入口隔离检查通过。80 个测试文件、1832 项测试通过。
+
+## 2026-11-04 / 0.3.62 · TRAE 中国版反代
+
+- 本机原生 Linux Docker 29.1.3 使用固定的 Trae2api-cn 1.0.10 镜像。以专用空白目录运行实际启动器，检查授权页、助手配置、未登录状态、错误密钥拒绝和停机后再次启动。测试容器已移除。
+- Linux Electron 隔离窗口完成 11 项表单交互检查，覆盖启动后回填、授权入口、取消重开、两种连接方式的保存以及手动反代使用相同端口。控件验证使用模拟的管理操作。
+- 通过真实 HTTP 回环测试服务器验证模型发现、备用目录过滤、密钥转发、原生 Chat / Responses / Messages 和工具回传。类型检查、生产入口检查和 77 个测试文件中的 1818 项测试通过。
+- 真实 TRAE 账号授权、个人模型可用性和积分扣费尚待实测。Windows 包在 Linux 上进行静态检查，Windows 原生 Docker 启动与授权流程尚待实测。
+
 ## 2026-11-04 / 0.3.61：JetBrains AI Assistant / Air 切换
 
 - 四个 JetBrains IDE 各自保存目标插件，默认 AI Assistant。切换目标取消旧的自动同步待办，仅保存选择，不立即修改 IDE；来源、直连 / 聚合模式及模型范围沿用当前 IDE。

@@ -22,7 +22,7 @@ export function sanitizeReasoningEfforts(value: unknown): ReasoningEffort[] {
   for (const entry of value) if (isReasoningEffort(entry) && !levels.includes(entry)) levels.push(entry);
   return levels;
 }
-export type ProviderPresetId = 'custom' | 'anthropic' | 'deepseek' | 'volcengine-agent' | 'volcengine-token' | 'qwen-token' | 'codex-subscription' | 'grok-build' | 'copilot-subscription';
+export type ProviderPresetId = 'custom' | 'anthropic' | 'deepseek' | 'volcengine-agent' | 'volcengine-token' | 'qwen-token' | 'trae-cn-relay' | 'jetbrains-central' | 'codex-subscription' | 'grok-build' | 'copilot-subscription';
 export interface ProviderPreset {
   id: ProviderPresetId;
   name: string;
@@ -46,11 +46,14 @@ export interface ProviderSecret {
   copilotAccountId?: string;
 }
 
+export type TraeRelayMode = 'managed' | 'manual';
+
 export interface Provider {
   id: string;
   name: string;
   kind: ProviderKind;
   presetId?: ProviderPresetId;
+  relayMode?: TraeRelayMode;
   baseUrl: string;
   enabled: boolean;
   hasSecret: boolean;
@@ -68,6 +71,7 @@ export interface ProviderInput {
   name: string;
   kind: ProviderKind;
   presetId?: ProviderPresetId;
+  relayMode?: TraeRelayMode;
   baseUrl: string;
   enabled: boolean;
   apiKey?: string;
@@ -238,6 +242,11 @@ export interface ModelDockApi {
   testProvider(id: string, input?: ConnectionTestInput): Promise<ConnectionResult>;
   discoverModels(id: string): Promise<DiscoveryResult>;
   addDiscoveredModels(id: string, selections: ModelSelection[]): Promise<AddModelsResult>;
+  startJetBrainsRelay(): Promise<{ baseUrl: string; apiKey: string }>;
+  stopJetBrainsRelay(): Promise<void>;
+  startTraeRelay(): Promise<{ baseUrl: string; apiKey: string }>;
+  openTraeRelayLogin(): Promise<void>;
+  stopTraeRelay(): Promise<void>;
   startGateway(port?: number): Promise<GatewayStatus>;
   stopGateway(): Promise<GatewayStatus>;
   setGatewayProviderEnabled(id: string, enabled: boolean): Promise<void>;

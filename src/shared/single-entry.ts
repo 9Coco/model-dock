@@ -1,4 +1,5 @@
 import type { Model, Provider, ToolBinding, ToolId, ToolConnectionChoices } from './types';
+import { traeRelayClientModel } from './trae-relay-models';
 import { claudeModelsForProvider, nativeClaudeBaseUrl } from './claude';
 import { isJetBrainsTool, nativeJetBrainsBaseUrl } from './jetbrains';
 
@@ -6,7 +7,7 @@ import { isJetBrainsTool, nativeJetBrainsBaseUrl } from './jetbrains';
 export function isSingleEntryTool(tool: ToolId): boolean { return tool === 'codex' || tool === 'claude-code' || isJetBrainsTool(tool); }
 export function directModelsForProvider(tool: ToolId, provider: Provider, models: readonly Model[]): Model[] {
   if (!provider.enabled || provider.kind !== 'openai-compatible') return [];
-  const available = models.filter(model => model.enabled && model.providerId === provider.id);
+  const available = models.filter(model => model.enabled && model.providerId === provider.id).map(model => traeRelayClientModel(tool, model, provider));
   if (tool === 'codex') return available.filter(model => model.wireApi === 'responses');
   if (tool === 'claude-code') return nativeClaudeBaseUrl(provider) ? claudeModelsForProvider(provider, available) : available.filter(model => model.wireApi === 'messages');
   if (isJetBrainsTool(tool)) return available.filter(model => model.wireApi === 'chat-completions' || nativeJetBrainsBaseUrl(provider) && model.wireApi === 'responses');
@@ -44,7 +45,7 @@ export function switchSingleEntryMode(binding: ToolBinding, mode: 'direct' | 'ag
   }
   if (!choices.aggregate) choices.aggregate = { providerIds: [...(binding.providerIds ?? [])], modelIds: [...binding.modelIds], defaultModelId: binding.defaultModelId, modelSelection: binding.modelSelection ?? 'all' };
   const choice = choices.aggregate;
-  const available = models.filter(model => model.enabled && (binding.id === 'claude-code' || model.wireApi !== 'messages') && choice.providerIds.includes(model.providerId) && providers.some(provider => provider.id === model.providerId && provider.enabled) && (choice.modelSelection === 'all' || choice.modelSelection === undefined && !choice.modelIds.length || choice.modelIds.includes(model.id)));
+  const available = models.filter(model => model.enabled && (binding.id === 'claude-code' || traeRelayClientModel(binding.id, model, providers.find(p => p.id === model.providerId)).wireApi !== 'messages') && choice.providerIds.includes(model.providerId) && providers.some(provider => provider.id === model.providerId && provider.enabled) && (choice.modelSelection === 'all' || choice.modelSelection === undefined && !choice.modelIds.length || choice.modelIds.includes(model.id)));
   const enabled = available.length > 0 && (!choice.defaultModelId || available.some(model => model.id === choice.defaultModelId));
   return { ...binding, mode, providerIds: [...choice.providerIds], modelIds: [...choice.modelIds], modelSelection: choice.modelSelection, defaultModelId: choice.defaultModelId, enabled, connectionChoices: choices };
 }

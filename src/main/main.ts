@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { DiagnosticsLog, describeError, sanitizeDiagnosticEndpoint } from './diagnostic-log';
 import { diagnosticOperationContext, diagnosticOperationResult, ignoresDiagnosticOperation, isQuietDiagnosticOperation } from './diagnostic-operations';
@@ -10,6 +10,9 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { Store } from './store';
 import { Gateway } from './gateway';
+import { CentralPiManager } from './central-pi-manager';
+import { JETBRAINS_RELAY_BASE_URL } from '../shared/presets';
+import { TraeRelayManager, TRAE_RELAY_BASE_URL, TRAE_RELAY_LOGIN_URL } from './trae-relay';
 import { OAuthManager } from './oauth';
 import { AuthCenter } from './auth-center';
 import { CopilotProviderManager } from './copilot-provider';
@@ -76,6 +79,7 @@ let window: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let store: Store;
 let gateway: Gateway;
+let centralPi: CentralPiManager;
 let oauth: OAuthManager;
 let accounts: AuthCenter;
 let copilotAccounts: CopilotAuthCenter;
@@ -162,7 +166,7 @@ async function createWindow(forceShow = false) {
   window.webContents.setWindowOpenHandler(({ url }) => {
     try {
       const target = new URL(url);
-      const docs = ['api-docs.deepseek.com', 'docs.volcengine.com', 'help.aliyun.com', 'developers.openai.com', 'platform.claude.com', 'ai.google.dev', 'docs.z.ai', 'platform.kimi.ai', 'platform.minimax.io', 'docs.x.ai', 'x.ai', 'opencode.ai', 'github.com', 'docs.github.com', 'code.visualstudio.com'];
+      const docs = ['api-docs.deepseek.com', 'docs.volcengine.com', 'help.aliyun.com', 'developers.openai.com', 'platform.claude.com', 'ai.google.dev', 'docs.z.ai', 'platform.kimi.ai', 'platform.minimax.io', 'docs.x.ai', 'x.ai', 'opencode.ai', 'github.com', 'docs.github.com', 'code.visualstudio.com', 'www.jetbrains.com'];
       const authPage = target.hostname === 'auth.openai.com' || target.hostname === 'auth.x.ai' || target.hostname.endsWith('.x.ai') || target.hostname === 'grok.com' || target.hostname.endsWith('.grok.com');
       if (target.protocol === 'https:' && (docs.includes(target.hostname) || authPage && (!target.port || target.port === '443')) && !target.username && !target.password) void shell.openExternal(url);
     } catch { /* malformed links are denied */ }
@@ -535,6 +539,7 @@ function registerIpc() {
   const beforeToolSelections = new Map<ToolId, ToolBinding>();
   const featureHome = __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home') : app.getPath('home');
   const copilot = copilotTarget();
+  const traeRelay = new TraeRelayManager(dataDir);
   const undoManager = new ToolSyncUndoManager(store, {
     appData: __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-appdata') : app.getPath('appData'),
     homeDirectory: featureHome,
@@ -734,6 +739,36 @@ function registerIpc() {
       throw error;
     }
     finally { toolRestorePending = false; }
+  });
+  // Per-service local keys survive restarts. Upstream account tokens stay with the respective relay.
+  function relayKey(setting: string): string {
+    let apiKey = store.getManagedState<string | null>(setting, null);
+    if (apiKey === null) {
+      apiKey = randomBytes(32).toString('hex');
+      store.setManagedState(setting, apiKey);
+    }
+    return apiKey;
+  }
+  handle('startJetBrainsRelay', async () => {
+    const apiKey = relayKey('jetbrains-central-relay-key');
+    await centralPi.start(apiKey);
+    return { baseUrl: JETBRAINS_RELAY_BASE_URL, apiKey };
+  });
+  handle('stopJetBrainsRelay', () => centralPi.stop());
+  handle('startTraeRelay', async () => {
+    const apiKey = relayKey('trae-relay-api-key');
+    const status = await traeRelay.start(apiKey);
+    if (status.state !== 'running') throw new Error(status.message);
+    return { baseUrl: TRAE_RELAY_BASE_URL, apiKey };
+  });
+  handle('openTraeRelayLogin', async () => {
+    const status = await traeRelay.status();
+    if (status.state !== 'running') throw new Error(status.state === 'stopped' ? '请先启动本机 TRAE 反代，再打开授权页。' : status.message);
+    await shell.openExternal(TRAE_RELAY_LOGIN_URL);
+  });
+  handle('stopTraeRelay', async () => {
+    const status = await traeRelay.stop();
+    if (status.state !== 'stopped') throw new Error(status.message);
   });
   handle('startGateway', async (port?: number) => {
     const status = await gateway.start(port ?? preferences.get().settings.gatewayPort);
@@ -972,8 +1007,15 @@ function initializeApplication() {
     mcp = new McpManager(store, { homeDir: featureHome, appDataDir: featureAppData, backupDir: join(dataDir, 'backups', 'mcp'), configHome: openCodeConfigHome, codexHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.codex') : process.env.CODEX_HOME });
     skills = new SkillManager(store, { homeDir: featureHome, appDataDir: featureAppData, libraryDir: join(dataDir, 'skill-library'), backupDir: join(dataDir, 'backups', 'skills'), configHome: openCodeConfigHome, claudeConfigDir: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.claude') : process.env.CLAUDE_CONFIG_DIR, ...(!__MODELDOCK_SMOKE_BUILD__ ? { codexHome: process.env.CODEX_HOME, dshHome: process.env.DSH_HOME } : {}) });
     // 修改点：Copilot 订阅与其他来源共享目录、连通性及本地网关，凭据准备在主进程分派。
-    const upstream = { prepareRequest: (provider: Provider, path: string, body: Record<string, unknown>) => provider.kind === 'copilot'
-      ? copilotProviders.prepareRequest(provider, path, body) : oauth.prepareRequest(provider, path, body) };
+    const workerDir = app.isPackaged ? join(process.resourcesPath, 'app.asar.unpacked', 'dist-electron') : __dirname;
+    centralPi = new CentralPiManager(dataDir, join(workerDir, 'central-pi-extension.mjs'));
+    const upstream = { prepareRequest: async (provider: Provider, path: string, body: Record<string, unknown>) => {
+      if (provider.presetId === 'jetbrains-central') {
+        const key = store.getSecret(provider.id)?.apiKey;
+        if (!key || !await centralPi.ownsListener(key)) throw new Error('请在供应商设置中启动 JetBrains 反代。');
+      }
+      return provider.kind === 'copilot' ? copilotProviders.prepareRequest(provider, path, body) : oauth.prepareRequest(provider, path, body);
+    } };
     catalog = new ModelCatalog(store, upstream, { fetch: runtimeFetch });
     connectionTester = new ConnectionTester(store, upstream, { fetch: runtimeFetch, diagnostics: recordDiagnostic });
     const serviceSettings = preferences.get().settings;
@@ -1009,7 +1051,7 @@ function initializeApplication() {
     if (!exitDiagnosticRecorded) { exitDiagnosticRecorded = true; recordDiagnostic('info', 'app.exit', { stage: 'shutdown' }); }
     if (!quitting) { event.preventDefault(); quitting = true; }
     if (gateway) { event.preventDefault(); const current = gateway; gateway = undefined as unknown as Gateway;
-      accounts?.dispose(); copilotProviders?.dispose(); copilotAccounts?.dispose(); oauth?.dispose(); void current.stop().finally(() => { store?.close(); tray?.destroy(); app.quit(); }); }
+      accounts?.dispose(); copilotProviders?.dispose(); copilotAccounts?.dispose(); oauth?.dispose(); void Promise.allSettled([current.stop(), centralPi?.stop()]).then(() => { store?.close(); tray?.destroy(); app.quit(); }); }
   });
   app.on('activate', () => { if (window) revealWindow(); else if (store) void createWindow(true); });
   app.on('window-all-closed', () => { if (!tray) app.quit(); });

@@ -1,5 +1,17 @@
 import type { ProviderPreset } from './types';
 
+export const TRAE_RELAY_BASE_URL = 'http://127.0.0.1:18080/v1';
+export const JETBRAINS_RELAY_BASE_URL = 'http://127.0.0.1:18081/v1';
+export const JETBRAINS_CENTRAL_SETUP_URL = 'https://www.jetbrains.com/help/central-cli/cli-setup.html';
+
+export function isLocalTraeRelayUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return ['http:', 'https:'].includes(url.protocol) && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)
+      && !url.username && !url.password && !url.search && !url.hash;
+  } catch { return false; }
+}
+
 /** Provider templates set connection defaults, never entitlement or a fake catalog. */
 export const providerPresets: ProviderPreset[] = [
   { id: 'anthropic', name: 'Anthropic / Claude 兼容 API', category: 'api', kind: 'openai-compatible', baseUrl: 'https://api.anthropic.com', defaultWireApi: 'messages',
@@ -12,6 +24,10 @@ export const providerPresets: ProviderPreset[] = [
     note: '对应你所说的火山 Token 编程套餐，使用 Coding Plan 专属地址和套餐账号的方舟 API Key；不要混用 Agent Plan 的凭据或按量调用地址。', docsUrl: 'https://docs.volcengine.com/docs/ark/coding-plan-personal-ai-other-tools?lang=zh' },
   { id: 'qwen-token', name: '千问 Token Plan', category: 'api', kind: 'openai-compatible', baseUrl: 'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1', defaultWireApi: 'chat-completions',
     note: '默认中国北京 Token Plan 个人/团队端点，使用套餐专属 Key；国际地区需改为控制台对应地址。', docsUrl: 'https://help.aliyun.com/zh/model-studio/token-plan-personal-quick-start' },
+  { id: 'trae-cn-relay', name: 'TRAE 中国版反代', category: 'api', kind: 'openai-compatible', baseUrl: TRAE_RELAY_BASE_URL, defaultWireApi: 'chat-completions',
+    note: '在本机反代中授权一个自己的 TRAE 中国版账号，保存连接后获取该反代返回的模型列表。', docsUrl: '' },
+  { id: 'jetbrains-central', name: 'JetBrains AI 会员反代', category: 'api', kind: 'openai-compatible', baseUrl: JETBRAINS_RELAY_BASE_URL, defaultWireApi: 'chat-completions',
+    note: 'ModelDock 通过 Pi 和 JetBrains Central CLI 使用你已授权的 JetBrains AI 额度。', docsUrl: JETBRAINS_CENTRAL_SETUP_URL },
   { id: 'custom', name: '自定义 API', category: 'api', kind: 'openai-compatible', baseUrl: '', defaultWireApi: 'chat-completions', note: '填写兼容接口地址、密钥，再发现或添加实际模型，并选择对应的调用协议。', docsUrl: '' },
   { id: 'codex-subscription', name: 'Codex 订阅', category: 'subscription', kind: 'codex', baseUrl: 'https://chatgpt.com/backend-api/codex', defaultWireApi: 'responses',
     note: '使用本人 ChatGPT/Codex 账号授权，凭据由 ModelDock 管理续期。', docsUrl: 'https://developers.openai.com/codex/auth/' },
