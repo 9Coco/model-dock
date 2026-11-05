@@ -21,26 +21,24 @@
 .sidebar-navigation > .sidebar-tools { flex: 0 1 auto; max-height: 45%; }
 .sidebar-navigation > .sidebar-providers { flex: 1 1 0; margin-top: 0; padding-top: 5px; }
 .sidebar-navigation .sidebar-group-label { position: sticky; top: 0; z-index: 1; background: var(--sidebar-background); }
-/* 修改点：新增供应商按钮与分组标题一起固定，保留两列完整文字和独立滚动。 */
-.sidebar-navigation > .sidebar-providers { scroll-padding-top: 72px; }
-.sidebar-provider-heading { flex-direction: column; align-items: stretch; gap: 6px; padding-left: 6px; padding-right: 6px; }
-.sidebar-provider-heading .add-provider-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; width: 100%; }
-.sidebar-provider-heading .button.small { min-width: 0; min-height: 29px; padding: 6px 4px; gap: 4px; font-size: 11px; }
-.sidebar-provider-heading .button svg { flex-shrink: 0; }
-.sidebar-provider-heading .button.primary { color: #fff; background: var(--accent); border-color: var(--accent); box-shadow: none; }
-.sidebar-provider-heading .button.primary:hover:not(:disabled) { background: var(--teal-dark); border-color: var(--teal-dark); }
-.sidebar-provider-heading .button.secondary { color: #d9e2e3; background: transparent; border-color: #48616b; }
-.sidebar-provider-heading .button.secondary:hover:not(:disabled) { background: #ffffff0d; border-color: #6b8189; }
-:root[data-theme="dark"] .sidebar-provider-heading .button.primary { background: #2785b9; border-color: #399aca; }
-:root[data-theme="dark"] .sidebar-provider-heading .button.primary:hover:not(:disabled) { background: #329bce; border-color: #60b7df; }
-:root[data-theme="dark"] .sidebar-provider-heading .button.secondary { color: var(--ink); background: var(--surface); border-color: var(--line); }
-:root[data-theme="dark"] .sidebar-provider-heading .button.secondary:hover:not(:disabled) { background: var(--surface-hover); }
+.sidebar-navigation > .sidebar-providers { scroll-padding-top: 34px; }
+.sidebar-provider-section { min-width: 0; margin-bottom: 6px; }
+.sidebar-provider-category-heading { display: flex; align-items: center; gap: 4px; min-height: 31px; padding: 1px 4px; }
+.sidebar-provider-category-heading > button:first-child { display: flex; flex: 1; align-items: center; gap: 7px; min-width: 0; padding: 5px 4px; border: 0; border-radius: 5px; background: transparent; color: var(--sidebar-provider-muted, #c3d0d5); font-size: 11px; text-align: left; }
+.sidebar-provider-category-heading > button:first-child:hover, .sidebar-provider-category-heading > button.selected { color: var(--accent); background: var(--surface-hover); }
+.sidebar-provider-category-heading .nav-count { margin-left: 0; font-size: 10px; padding: 1px 4px; }
+.sidebar-provider-category-heading .icon-button { width: 25px; height: 25px; padding: 4px; color: var(--accent); }
+.sidebar-provider-empty { margin: 3px 8px 8px; color: var(--sidebar-provider-muted, #b4c5cb); font-size: 11px; line-height: 1.5; }
+:root[data-theme="dark"] .sidebar { --sidebar-provider-muted: var(--muted); }
+.service-tabs { margin-bottom: 14px; }
 .sidebar-navigation > .sidebar-group::-webkit-scrollbar { width: 6px; }
 .sidebar-navigation > .sidebar-group::-webkit-scrollbar-thumb { background: #66727b; border: 0; }
 .sidebar-navigation > .sidebar-group::-webkit-scrollbar-track { background: transparent; }
 :root[data-theme="dark"] .sidebar { --sidebar-background: #151518; }
 :root[data-theme="dark"] .sidebar-navigation > .sidebar-group::-webkit-scrollbar-thumb { background: #55555f; }
 .feature-toolbar { margin-bottom: 10px; }
+.logs-panel > .table-scroll { max-height: min(420px, 50vh); overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.logs-table th { position: sticky; top: 0; z-index: 1; background: var(--surface-soft); box-shadow: inset 0 -1px var(--line); }
 .panel, .provider-details { border-radius: 8px; }
 .provider-row { padding-top: 12px; padding-bottom: 12px; }
 .tool-inline-summary { padding: 14px 16px; }
@@ -107,7 +105,7 @@
 :root[data-theme="dark"] ::-webkit-scrollbar-thumb { background-color: #55555f; }
 :root[data-theme="dark"] ::-webkit-scrollbar-track { background-color: transparent; }
 
-/* 修改点：三种订阅服务在同一行展示，名称和选择标记保持完整。 */
+/* 订阅与账号反代共用入口，名称和选择标记保持完整。 */
 .preset-picker.subscription-presets { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 
 /* 修改点：持久诊断日志与请求统计分开，筛选和安全详情在小窗口内完整显示。 */

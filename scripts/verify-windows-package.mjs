@@ -13,6 +13,8 @@ const fixtureSymbols = [
   'verifyCompactUi', 'verifySidebarScroll', 'verifyGatewayStartup', 'createGatewayStartupSmokeVault', 'gateway-startup-ready.json', 'authQuotaFixture',
   'SYNTHETIC_COPILOT_QUOTA_TOKEN', 'MOCK_ACCESS_AUTH_NETWORK',
   'verifyContextMenus', 'context-menu-validation.json', 'synthetic-context-menu-key',
+  'verifyRelaySubscriptions', 'relay-subscriptions-validation.json', 'synthetic-trae-relay-key', 'synthetic-jetbrains-relay-key',
+  'verifyNavigationConsolidation', 'navigation-consolidation-validation.json', 'synthetic-navigation-api-key',
 ];
 
 function assert(condition, message) {

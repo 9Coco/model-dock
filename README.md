@@ -6,6 +6,26 @@ ModelDock 是跨平台本地模型管理台：全局维护模型来源与别名�
 
 自有代码及原创应用标记采用 [MIT 许可](LICENSE)，第三方图标和依赖保留各自的 Apache-2.0、CC-BY-4.0、MIT 或其他许可，详见 [第三方声明](THIRD_PARTY_NOTICES.md)。欢迎按 [贡献指南](CONTRIBUTING.md) 提交修复；敏感问题请遵循 [安全报告流程](SECURITY.md)。
 
+## 0.3.69 · 统一服务入口与客户端授权导入
+
+- 侧栏模型供应商按 API、订阅两组展示。添加 API 位于 API 分组旁；添加订阅集中在授权中心。
+- 本地接口、接口内供应商/模型管理、服务启停和请求日志统一在「服务与日志」，通过「接口与模型 / 请求与日志」切换。
+- 订阅与反代详情提供 ModelDock 本地 URL、本地密钥、已发布模型名称和调用方式。底层上游地址与模型映射移到设置中的连接原理；本地调用使用实际通用 `/v1` 入口及已发布的模型别名，不额外创建供应商专用路由。
+- GitHub Copilot 在授权中心增加「从客户端导入」，仅在用户点击并选择来源后读取受支持的本机客户端授权，导入到 ModelDock 的加密账号存储，保持原客户端配置不变。
+
+Copilot 导入目前支持 **Copilot CLI** 与 **GitHub CLI (`gh`)** 已登录的 GitHub.com 账号。点击后只从它们的固定配置位置列出账号；选择账号并确认导入后，读取对应的 CLI 明文授权槽或系统凭据，向 GitHub 官方接口校验账号身份和 Copilot 额度。同一 GitHub 账号复用已有记录；身份不符、授权失效或订阅权限被拒绝时不保存。缺少额度字段会明确显示未知，账号导入不代表模型推理已验证。
+
+Copilot CLI 支持 `COPILOT_HOME`，读取 `config.json` 中已登记账号对应的 `copilot-cli` 钥匙串条目或明文备用槽；Linux 钥匙串锁定、同账号凭据重复或无法建立加密会话时停止导入。GitHub CLI 支持 `GH_CONFIG_DIR` 和标准配置目录，通过 `gh auth token --hostname github.com --user <所选账号> --no-refresh` 读取，避免刷新或更改原客户端授权，且不接受环境变量覆盖成另一账号。[Copilot CLI 官方认证与凭据说明](https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/authenticate-copilot-cli) · [GitHub CLI 账号令牌命令](https://cli.github.com/manual/gh_auth_token)
+
+本版不读取 Copilot 桌面端独立账号库、VS Code/JetBrains 编辑器加密凭据库或 GitHub Enterprise 授权；这些账号可使用「登录 GitHub」在 ModelDock 中独立添加。导入不修改源客户端，不修改系统钥匙串，不读取会话、MCP 或 Skills。Linux 验证使用隔离的合成授权与模拟上游；Windows/macOS 系统凭据读取及真实账号推理仍需在对应平台验证。
+
+## 0.3.68 · 订阅反代与界面整理
+
+- TRAE 中国版反代和 JetBrains AI 会员反代统一放在「添加订阅」和订阅供应商分类；已有记录按预设自动归类，连接、密钥和模型绑定保持原样。
+- 授权中心列出这两类反代，可添加订阅、进入反代设置和账号授权指引。反代密钥状态与上游账号授权分开显示，未查询的额度不显示为零。
+- Junie 导航归入 JetBrains 标签，其独立 CLI / IDE ACP 配置流程保持原样。
+- 请求日志使用独立滚动区域和固定表头，可使用键盘滚动，避免长日志推远后续内容。
+
 ## 0.3.67 · Copilot CLI 独立接入
 
 在「常规 Agent → Copilot CLI」选择一家 API 直连，或打开「使用聚合接口」并选择来源、模型和默认模型。支持 Chat Completions 与 Responses：直连使用供应商真实 URL、模型 ID 和 API Key；聚合使用独立的 `/tool/copilot-cli/v1` 本机入口、模型别名和本机 Key，订阅令牌不写入 CLI。
@@ -34,7 +54,7 @@ ModelDock 是跨平台本地模型管理台：全局维护模型来源与别名�
 
 ## 0.3.63 · 在 VS Code 使用 JetBrains AI 额度
 
-在「模型供应商 → 添加 API → JetBrains AI 会员反代」启动本机中转。ModelDock 通过 JetBrains Central CLI 启动 Pi 的独立会话，由 Pi 将模型请求交给 Central。使用时保持 ModelDock 运行，JetBrains IDE 可以关闭。ModelDock 提供的 Chat Completions 地址为 `http://127.0.0.1:18081/v1`。
+在「模型供应商 → 添加订阅 → JetBrains AI 会员反代」启动本机中转。ModelDock 通过 JetBrains Central CLI 启动 Pi 的独立会话，由 Pi 将模型请求交给 Central。使用时保持 ModelDock 运行，JetBrains IDE 可以关闭。ModelDock 提供的 Chat Completions 地址为 `http://127.0.0.1:18081/v1`。
 
 1. 安装 JetBrains Central CLI 和 Pi CLI。本版用 Central 2.2.0 与 Pi 1.5.0 核对。在终端执行 `central login`，选择带 AI 权益的许可证，然后用 `central limit` 查看额度。[官方安装方式](https://www.jetbrains.com/help/central-cli/cli-setup.html) · [适用许可证](https://www.jetbrains.com/help/ai-assistant/licensing-and-subscriptions.html)
 2. 在 ModelDock 点「启动本机反代」，就绪后会自动填入本机密钥。保存供应商，点「获取模型列表」，添加一个候选模型并测试连接。候选来自 Pi 当前通过 Central 路由的 OpenAI 和 Anthropic 模型，具体模型权限以账号实际请求结果为准。
@@ -43,7 +63,7 @@ ModelDock 是跨平台本地模型管理台：全局维护模型来源与别名�
 
 ## 0.3.62 · TRAE 中国版本机反代
 
-在「模型供应商 → 添加 API」选择「TRAE 中国版反代」预设。托管模式需要本机 Docker 的 Linux 容器引擎。首次点击「启动本机反代」时，ModelDock 使用固定版本的 Trae2api-cn 镜像，并为当前工作区生成独立的反代密钥。服务地址为 `http://127.0.0.1:18080/v1`，与 ModelDock 默认的聚合端口 18181 分开。[反代 v1.0.10 发布说明](https://github.com/autumnsentiment/Trae2api-cn/releases/tag/v1.0.10)
+在「模型供应商 → 添加订阅」选择「TRAE 中国版反代」预设。托管模式需要本机 Docker 的 Linux 容器引擎。首次点击「启动本机反代」时，ModelDock 使用固定版本的 Trae2api-cn 镜像，并为当前工作区生成独立的反代密钥。服务地址为 `http://127.0.0.1:18080/v1`，与 ModelDock 默认的聚合端口 18181 分开。[反代 v1.0.10 发布说明](https://github.com/autumnsentiment/Trae2api-cn/releases/tag/v1.0.10)
 
 1. 点击「打开 TRAE 授权页」。首次使用时按网页提示下载并用本机 Python 3 运行授权助手。保持助手开启，在浏览器中登录自己的 TRAE 中国版账号。
 2. 回到 ModelDock，保存供应商并点击「获取模型列表」。选择模型并测试连接，随后在「本地聚合接口」确认要发布的模型，也可以到具体工具页选择来源。反代仅返回离线备用目录时，ModelDock 会将这些备用条目过滤。

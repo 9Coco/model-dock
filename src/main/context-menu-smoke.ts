@@ -77,7 +77,11 @@ export async function verifyContextMenus(window: BrowserWindow, store: Store, ou
     await copyExact(sidebar,'provider-copy-url',provider.baseUrl);
     await copyExact(sidebar,'provider-copy-key','synthetic-context-menu-key');
     const subscriptionIds = await context(`.sidebar [data-source-id="${subscription.id}"]`);
-    assert.equal(subscriptionIds.includes('provider-copy-key'),false,'Subscription tokens never become copy actions'); await dismiss();
+    assert.ok(subscriptionIds.includes('provider-copy-key')&&subscriptionIds.includes('provider-auth-center'),'Subscription menus expose local invocation and authorization-center management');
+    assert.equal(subscriptionIds.includes('provider-login'),false,'Subscription login belongs to the authorization center'); await dismiss();
+    await copyExact(`.sidebar [data-source-id="${subscription.id}"]`,'provider-copy-key',store.gatewayKey());
+    const localUrl = await evaluate<string>(`window.modelDock.snapshot().then(snapshot=>snapshot.gateway.baseUrl||'http://127.0.0.1:'+snapshot.gateway.port+'/v1')`);
+    await copyExact(`.sidebar [data-source-id="${subscription.id}"]`,'provider-copy-url',localUrl);
     await context(sidebar); await click(action('provider-edit'));
     await waitFor(`document.querySelector('[role="dialog"] h2')?.textContent==='编辑供应商'`,'provider editor');
     const inputSelector = '[role="dialog"] input[autocomplete="new-password"]';
@@ -120,10 +124,15 @@ export async function verifyContextMenus(window: BrowserWindow, store: Store, ou
       await waitFor(`!document.querySelector('[role="menu"]')`,'outside click closes menu');
     }
     await click('.sidebar [data-page="service"]');
+    await click('[data-service-tab="logs"]');
     await waitFor(`!!document.querySelector('[data-log-id="${log.id}"]')`,'synthetic request log');
     await copyExact(`[data-log-id="${log.id}"]`,'log-copy',[log.time,log.alias,log.providerName,log.endpoint,log.status,`${log.durationMs} ms`].join('\t'));
     await copyExact('.gateway-panel','gateway-copy-key',store.gatewayKey());
-    const pageIds = await context('.main-content'); assert.ok(pageIds.includes('page-refresh')&&pageIds.includes('page-add-api')); await dismiss();
+    const pageIds = await context('.main-content'); assert.ok(pageIds.includes('page-refresh')&&pageIds.includes('page-add-api'));
+    assert.equal(await evaluate<string>(`document.querySelector(${JSON.stringify(action('page-add-subscription'))}).textContent`), '打开授权中心', 'Page menus route subscription management to the authorization center');
+    await click(action('page-add-subscription'));
+    await waitFor(`!!document.querySelector('.auth-panel')&&!document.querySelector('[role="dialog"]')`, 'page menu opens authorization center without adding a subscription');
+    await click('.sidebar [data-page="service"]'); await click('[data-service-tab="logs"]');
     // Diagnostics copy only the renderer's already-sanitized entry; no raw
     // network body, selected text or account credentials are introduced here.
     await waitFor(`!!document.querySelector('[data-diagnostic-id]')&&!document.querySelector('[data-action="diagnostics-refresh"]').disabled`,'diagnostic records loaded');
@@ -164,8 +173,8 @@ export async function verifyContextMenus(window: BrowserWindow, store: Store, ou
       await click('[role="dialog"] .modal-footer .secondary');
     }
     assert.deepEqual(store.getSecret(subscription.id),accountSecretBefore,'Cancelling account actions preserves authorization');
-    await click('[data-tool-category="agent"]');
     for (const tool of ['junie', 'copilot-cli']) {
+      await click(`[data-tool-category="${tool === 'junie' ? 'jetbrains' : 'agent'}"]`);
       const toolIds = await context(`.sidebar [data-tool-id="${tool}"]`);
       assert.ok(toolIds.includes('tool-open')&&toolIds.includes('tool-preview')); await click(action('tool-open'));
       await waitFor(`!!document.querySelector('[data-tool-binding="${tool}"]')`,`tool menu opens the clicked ${tool} tool`);

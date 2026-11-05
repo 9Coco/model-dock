@@ -144,7 +144,7 @@ export async function verifyCompactUi(window: BrowserWindow, store: Store, outpu
     assert.ok(value.icons.length >= 12, `Functional Material icons must render: ${name}`);
     assert.equal(value.legacySvg, 0, 'Functional controls must use the selected Material family');
     assert.deepEqual(value.remoteFonts, [], 'Material SVG icons must not load Google icon fonts at runtime');
-    const expected: Record<string, string> = { providers: 'hub', auth: 'key', usage: 'monitoring', models: 'stacks', service: 'monitor_heart', settings: 'tune' };
+    const expected: Record<string, string> = { auth: 'key', service: 'monitor_heart', settings: 'tune' };
     assert.deepEqual(value.navigation.map(item => item.page).sort(), Object.keys(expected).sort(), 'Functional sidebar destinations retain their semantic icons');
     for (const item of value.navigation) {
       assert.equal(item.symbol, expected[item.page], `Correct navigation icon: ${item.page}`);
@@ -200,7 +200,7 @@ export async function verifyCompactUi(window: BrowserWindow, store: Store, outpu
   for (const provider of store.listProviders().filter(provider => provider.kind === 'codex' || provider.kind === 'grok')) store.deleteProvider(provider.id);
   for (const account of await accounts()) if (account.kind === 'copilot') await evaluate(`window.modelDock.copilotLogoutAccount(${JSON.stringify(account.providerId)})`);
   await click('[data-page="settings"]'); await click('[data-theme-choice="dark"]'); await click('[data-page="auth"]');
-  await waitFor('document.querySelectorAll("[data-auth-kind]").length===3&&document.querySelectorAll("[data-auth-account]").length===0', 'three empty compact account groups');
+  await waitFor('document.querySelectorAll("[data-auth-kind]").length===5&&document.querySelectorAll("[data-auth-account]").length===0', 'five empty compact account groups');
   window.setSize(1320, 880);
   const pageColors: unknown[] = [await capture('auth-empty-dark-1320', true)];
   const fixtureIds: string[] = [];
@@ -246,11 +246,11 @@ export async function verifyCompactUi(window: BrowserWindow, store: Store, outpu
           progressBars:document.querySelectorAll('[data-auth-account] progress').length,
           remainingPercents:[...document.querySelectorAll('[data-auth-account] [data-remaining-percent]')].map(element=>element.dataset.remainingPercent),...colors};
       })()`);
-      assert.equal(layout.horizontalOverflow, false); assert.equal(layout.groups.length, 3); assert.equal(layout.progressBars, 4);
+      assert.equal(layout.horizontalOverflow, false); assert.equal(layout.groups.length, 5); assert.equal(layout.progressBars, 4);
       assert.deepEqual([...layout.remainingPercents].sort(), ['58', '64', '78', '82']);
       for (const group of layout.groups) {
-        assert.equal(group.rows, 1); assert.ok(group.height <= (group.kind === 'codex' ? 185 : 155), `Account group must remain compact: ${group.kind} ${group.height}px`);
-        assert.ok(group.top >= 0 && group.bottom <= layout.viewport.height + 1, `All three account groups must fit: ${group.kind} bottom=${group.bottom} viewport=${layout.viewport.height}`);
+        assert.equal(group.rows, ['copilot', 'codex', 'grok'].includes(group.kind) ? 1 : 0); assert.ok(group.height <= (group.kind === 'codex' ? 185 : 155), `Account group must remain compact: ${group.kind} ${group.height}px`);
+        assert.ok(group.top >= 0 && group.bottom <= layout.viewport.height + 1, `All account groups must fit: ${group.kind} bottom=${group.bottom} viewport=${layout.viewport.height}`);
       }
       assert.ok(layout.rowFonts.every(value => value >= 12), 'Compact rows must preserve a readable minimum 12px font');
       if (theme === 'dark') { layout.surfaces.forEach(neutral); blue(layout.accent); }
@@ -291,8 +291,8 @@ export async function verifyCompactUi(window: BrowserWindow, store: Store, outpu
   await click(add); await waitFor('!!document.querySelector("[role=dialog] input")', 'add-account modal input');
   pageColors.push(await capture('account-add-dialog-dark-980', true));
   await click('[aria-label="关闭对话框"]'); assert.equal(signature(), beforeCancel, 'Closing account draft must not create an account');
-  for (const page of ['settings', 'usage']) {
-    await click(`[data-page="${page}"]`); await waitFor(`!!document.querySelector(${JSON.stringify(page === 'settings' ? '.settings-panel .panel' : '.usage-panel')})`, page);
+  for (const page of ['settings', 'service']) {
+    await click(`[data-page="${page}"]`); await waitFor(`!!document.querySelector(${JSON.stringify(page === 'settings' ? '.settings-panel .panel' : '.gateway-panel')})`, page);
     pageColors.push(await capture(`${page}-dark-980`, true));
   }
   await click('.sidebar [data-page="tools"][data-tool-id="codex"]'); await waitFor('!!document.querySelector("[data-tool-binding=codex]")', 'tool configuration');
@@ -302,7 +302,7 @@ export async function verifyCompactUi(window: BrowserWindow, store: Store, outpu
   // SVG geometry must remain available when browser network loading is disabled.
   // Only this isolated Electron session is affected; main-process quota mocks
   // and the real user's app/credentials are outside this read-only check.
-  const offlinePages = ['providers', 'usage', 'models', 'service', 'settings', 'tools'];
+  const offlinePages = ['auth', 'service', 'settings', 'tools'];
   window.webContents.session.enableNetworkEmulation({ offline: true });
   try {
     window.setSize(980, 680);

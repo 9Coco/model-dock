@@ -21,7 +21,9 @@ export async function verifyProviderDuplicates(window: BrowserWindow, outputDir:
     return {providerIds:snapshot.providers.filter(p=>p.name==='DeepSeek').map(p=>p.id),models:snapshot.models.filter(m=>m.id==='duplicate-model-a'||m.id==='duplicate-model-b').map(m=>({id:m.id,alias:m.alias,providerId:m.providerId}))};
   })()`);
   if (before.providerIds.length !== 3 || before.models.length !== 2) throw new Error('Synthetic provider duplicate fixture unavailable');
-  await evaluate(`document.querySelectorAll('.toast-stack [aria-label="关闭提示"]').forEach(button=>button.click());document.querySelector('[data-source="aggregate"]').click();document.querySelector('[aria-label="刷新本机配置"]').click()`);
+  await evaluate(`document.querySelectorAll('.toast-stack [aria-label="关闭提示"]').forEach(button=>button.click());document.querySelector('[data-page="service"]').click();document.querySelector('[aria-label="刷新本机配置"]').click()`);
+  await waitFor(`!!document.querySelector('[data-service-tab="interface"]')`, 'merged service navigation');
+  await evaluate(`document.querySelector('[data-service-tab="interface"]').click()`);
   await waitFor(`!!document.querySelector('[data-action="review-provider-duplicates"]')`, 'review action');
   await evaluate(`document.querySelector('[data-action="review-provider-duplicates"]').click()`);
   await waitFor(`!!document.querySelector('.provider-duplicate-group [data-action="merge-provider-duplicates"]')`, 'duplicate group');
@@ -72,10 +74,12 @@ export async function verifyProviderDuplicates(window: BrowserWindow, outputDir:
     if(!provider)throw new Error('Local synthetic provider missing');
     await api.saveProvider({...provider,apiKey:'synthetic-only'});
     document.querySelector('[aria-label="关闭对话框"]')?.click();
-    document.querySelector('[data-source="aggregate"]').click();
+    document.querySelector('[data-page="service"]').click();
     return {id:provider.id,name:provider.name,totalProviders:snapshot.providers.length};
   })()`);
   await waitFor(`!document.querySelector('[role="dialog"]')`, 'review closed');
+  await waitFor(`!!document.querySelector('[data-service-tab="interface"]')`, 'merged service navigation after duplicate review');
+  await evaluate(`document.querySelector('[data-service-tab="interface"]').click()`);
   await evaluate(`document.querySelector('[data-action="add-api-provider"]').click()`);
   await waitFor(`!!document.querySelector('[role="dialog"] form input[type="password"]')`, 'provider form');
   await evaluate(`Array.from(document.querySelectorAll('[role="dialog"] .preset-picker button')).find(button=>button.textContent.includes('自定义 API')).click()`);

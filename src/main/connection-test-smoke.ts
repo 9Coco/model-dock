@@ -110,8 +110,9 @@ export async function verifyConnectionTest(window: BrowserWindow, outputDir: str
   const inlineFirst = await run(first); success(inlineFirst, first);
   const afterFirst = await counts(); assert.equal(afterFirst.models, 2); assert.deepEqual(afterFirst.disabledModelIds, [first.id], 'Testing a disabled first model must preserve its flag');
 
-  await click('[data-page="providers"][data-source="aggregate"]');
-  await waitFor(`!!document.querySelector(${JSON.stringify(badge)})`, 'aggregate inline widget');
+  await click('[data-page="service"]'); await click('[data-service-tab="interface"]');
+  await waitFor(`!!document.querySelector('[data-aggregate-management]')`, 'unified local interface');
+  await click(`[data-source-id="${provider.id}"]`);
   const aggregateBadge = await verifyBadge(first); await noDialog();
   await click('[data-tool-id="codex"]');
   await waitFor(`!!document.querySelector(${JSON.stringify(badge)})`, 'tool-page inline widget');
@@ -131,7 +132,7 @@ export async function verifyConnectionTest(window: BrowserWindow, outputDir: str
   assert.deepEqual(otherOptions, [otherFirst.id, otherSecond.id], 'Only the current supplier models may be selected');
   await choose(otherSecond);
   await click(`[data-source-id="${provider.id}"]`); const supplierReturnBadge = await verifyBadge(second);
-  await click('[data-page="providers"][data-source="aggregate"]'); const selectedAggregateBadge = await verifyBadge(second);
+  await click('[data-page="service"]'); await click('[data-service-tab="interface"]'); await click(`[data-source-id="${provider.id}"]`); const selectedAggregateBadge = await verifyBadge(second);
   await click('[data-tool-id="codex"]'); const selectedToolBadge = await verifyBadge(second);
   await click(`[data-source-id="${otherProvider.id}"]`); const otherReturnBadge = await verifyBadge(otherSecond);
   await noDialog();

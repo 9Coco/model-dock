@@ -1,0 +1,14 @@
+.connection-principles > summary { padding: 16px 18px; color: var(--ink); cursor: pointer; font-size: 14px; font-weight: 550; }
+.connection-principles-body { padding: 0 18px 18px; border-top: 1px solid var(--line); }
+.connection-principles-body p, .connection-principles-flows { color: var(--muted); font-size: 12px; line-height: 1.8; }
+.connection-principles-body h3 { margin: 20px 0 8px; color: var(--ink); font-size: 13px; }
+.connection-principles-flows { margin: 16px 0 0; }
+.connection-principles-flows > div + div { margin-top: 12px; }
+.connection-principles-flows dt { color: var(--ink); font-weight: 550; }
+.connection-principles-flows dd { margin: 3px 0 0; }
+.connection-principles-body table th, .connection-principles-body table td { padding: 10px; color: var(--muted); border-color: var(--line); font-size: 11px; }
+.connection-principles-body table code { overflow-wrap: anywhere; }
+.connection-model-mapping { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+.connection-model-mapping > summary { color: var(--ink); font-size: 13px; cursor: pointer; }
+.connection-model-mapping > summary .count-tag { margin-left: 8px; }
+.connection-model-mapping > .table-scroll { margin-top: 12px; }

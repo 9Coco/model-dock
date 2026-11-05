@@ -3,6 +3,7 @@ import { writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { clipboard, type BrowserWindow } from 'electron';
 import type { Store } from './store';
+import { providerCategory } from '../shared/presets';
 
 /** Real React/preload/clipboard validation, restricted to a fresh synthetic smoke profile. */
 export async function verifyProviderManagement(window: BrowserWindow, store: Store, outputDir: string, captureUi: () => Promise<Buffer>): Promise<void> {
@@ -84,6 +85,31 @@ export async function verifyProviderManagement(window: BrowserWindow, store: Sto
       writeFileSync(join(outputDir, `provider-management-${name}-${theme}-${width}.png`), await captureUi());
     }
   }
+  async function inspectRequestLogs(): Promise<void> {
+    for (let index = 0; index < 100; index++) store.addLog({ id: `synthetic-scroll-log-${index}`, time: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(), alias: `synthetic-model-${index}`, providerName: '界面验证订阅', endpoint: '/v1/responses', status: index % 4 ? 200 : 429, durationMs: index + 10 });
+    await refresh(); await click('[data-page="service"]'); await click('[data-service-tab="logs"]');
+    await waitFor(`document.querySelectorAll('.logs-table tbody tr').length===100`, 'one hundred synthetic request logs');
+    for (const theme of ['light', 'dark']) for (const [width, height] of [[1180, 800], [980, 680]]) {
+      window.setSize(width, height);
+      await evaluate(`(()=>{document.documentElement.dataset.theme=${JSON.stringify(theme)};document.documentElement.style.colorScheme=${JSON.stringify(theme)};document.querySelector('.logs-panel').scrollIntoView({block:'start'});document.querySelector('.logs-panel > .table-scroll').scrollTop=0;document.querySelectorAll('.toast-stack [aria-label="关闭提示"]').forEach(button=>button.click());})()`);
+      await pause(150);
+      const before = await evaluate<{ mainTop: number; headerTop: number; x: number; y: number }>(`(()=>{const scroll=document.querySelector('.logs-panel > .table-scroll'),r=scroll.getBoundingClientRect();return {mainTop:document.querySelector('.main-content').scrollTop,headerTop:scroll.querySelector('th').getBoundingClientRect().top,x:Math.round(r.left+r.width/2),y:Math.round(r.top+r.height/2)}})()`);
+      window.webContents.sendInputEvent({ type: 'mouseMove', x: before.x, y: before.y });
+      window.webContents.sendInputEvent({ type: 'mouseWheel', x: before.x, y: before.y, deltaX: 0, deltaY: -120, canScroll: true });
+      await waitFor(`document.querySelector('.logs-panel > .table-scroll').scrollTop>0`, 'native wheel scrolls request log region');
+      const wheel = await evaluate<{ mainTop: number; logTop: number }>(`({mainTop:document.querySelector('.main-content').scrollTop,logTop:document.querySelector('.logs-panel > .table-scroll').scrollTop})`);
+      assert.equal(wheel.mainTop, before.mainTop, 'Scrolling request logs does not move the surrounding service page');
+      await evaluate(`(()=>{const scroll=document.querySelector('.logs-panel > .table-scroll');scroll.scrollTop=scroll.scrollHeight})()`);
+      await pause(75);
+      const layout = await evaluate<{ height: number; scrollHeight: number; scrollTop: number; headerTop: number; sticky: string; rows: number; lastRowVisible: boolean; accessible: boolean; diagnosticsDistance: number; horizontalOverflow: boolean }>(`(()=>{const scroll=document.querySelector('.logs-panel > .table-scroll'),r=scroll.getBoundingClientRect(),last=scroll.querySelector('tbody tr:last-child').getBoundingClientRect(),panel=document.querySelector('.logs-panel').getBoundingClientRect();return {height:scroll.clientHeight,scrollHeight:scroll.scrollHeight,scrollTop:scroll.scrollTop,headerTop:scroll.querySelector('th').getBoundingClientRect().top,sticky:getComputedStyle(scroll.querySelector('th')).position,rows:scroll.querySelectorAll('tbody tr').length,lastRowVisible:last.bottom<=r.bottom+1&&last.top>=r.top,accessible:scroll.tabIndex===0&&scroll.getAttribute('role')==='region'&&!!scroll.getAttribute('aria-label'),diagnosticsDistance:document.querySelector('.diagnostics-panel').getBoundingClientRect().top-panel.top,horizontalOverflow:document.querySelector('.main-content').scrollWidth>document.querySelector('.main-content').clientWidth+1}})()`);
+      assert.ok(layout.height > 0 && layout.height <= 420 && layout.scrollHeight > layout.height, 'Request logs use a bounded independent scroll viewport');
+      assert.ok(Math.abs(layout.headerTop - before.headerTop) <= 1 && layout.sticky === 'sticky', 'Request log column headers stay fixed while scrolling');
+      assert.ok(layout.lastRowVisible && layout.accessible && !layout.horizontalOverflow, 'All logs remain reachable by keyboard and scrolling without page overflow');
+      assert.ok(layout.diagnosticsDistance < 600, 'Following diagnostics are no longer pushed down by all request rows');
+      layouts.push({ page: 'request-logs', theme, width, viewportHeight: height, wheel, ...layout });
+      writeFileSync(join(outputDir, `provider-management-request-logs-${theme}-${width}.png`), await captureUi());
+    }
+  }
   try {
     await refresh();
     assert.equal(await evaluate<number>(`document.querySelectorAll('.sidebar [data-page="mcp"],.sidebar [data-page="skills"]').length`), 0, 'MCP and Skills destinations are removed');
@@ -96,10 +122,10 @@ export async function verifyProviderManagement(window: BrowserWindow, store: Sto
       categoryTools[category] = await evaluate<string[]>(`[...document.querySelectorAll('.sidebar [role="tabpanel"]:not([hidden]) [data-page="tools"][data-tool-id]')].map(item=>item.dataset.toolId)`);
       assert.deepEqual(store.listBindings(), originalBindings, 'Category switching never writes tool bindings');
     }
-    assert.equal(new Set(Object.values(categoryTools).flat()).size, 11, 'Every supported tool appears in one category');
-    assert.equal(Object.values(categoryTools).flat().length, 11, 'Tool categories do not duplicate entries');
-    assert.equal(categoryTools.agent.length, 7, 'All seven regular Agent tools share the regular category');
-    assert.ok(Object.values(categoryTools).some(tools => tools.length === 4 && ['webstorm', 'intellij-idea', 'rider', 'pycharm'].every(tool => tools.includes(tool))), 'All four JetBrains IDEs share a category');
+    assert.equal(new Set(Object.values(categoryTools).flat()).size, originalBindings.length, 'Every supported tool appears in one category');
+    assert.equal(Object.values(categoryTools).flat().length, originalBindings.length, 'Tool categories do not duplicate entries');
+    assert.equal(categoryTools.agent.length, originalBindings.length - 5, 'Regular Agent tools exclude the JetBrains tools');
+    assert.deepEqual(new Set(categoryTools.jetbrains), new Set(['junie', 'webstorm', 'intellij-idea', 'rider', 'pycharm']), 'Junie and all four JetBrains IDEs share the JetBrains category');
     await selectProvider(provider.id);
     await masked();
     await assertClipboard('.connection-fields [aria-label="复制供应商 URL"]', provider.baseUrl);
@@ -118,33 +144,30 @@ export async function verifyProviderManagement(window: BrowserWindow, store: Sto
     await refresh(); await masked();
     await inspectLayout('provider', 'source');
     await selectProvider(subscription.id);
-    assert.equal(await evaluate<number>(`document.querySelectorAll('.connection-fields [data-action="reveal-key"]').length`), 0, 'Subscription source never reveals authorization tokens');
+    await waitFor(`!!document.querySelector('[data-subscription-connection="${subscription.id}"]')`, 'subscription local connection');
+    await assertClipboard(`[data-subscription-connection="${subscription.id}"] [data-action="copy-key"]`, store.gatewayKey());
+    await revealAndHide(`[data-subscription-connection="${subscription.id}"]`, store.gatewayKey());
+    assert.equal(await evaluate<boolean>(`document.querySelector('[data-subscription-connection="${subscription.id}"]').textContent.includes(${JSON.stringify(subscription.baseUrl)})`), false, 'Subscription connection shows local invocation parameters');
     const denied = await evaluate<boolean>(`window.modelDock.revealProviderKey(${JSON.stringify(subscription.id)}).then(()=>false,()=>true)`);
     assert.equal(denied, true, 'Subscription authorization is rejected at the main-process boundary');
     // Aggregate selectors are independent of provider detail and native tool bindings.
-    await click('.sidebar [data-source="aggregate"]');
+    await click('.sidebar [data-page="service"]'); await click('[data-service-tab="interface"]');
     await waitFor(`!!document.querySelector('[data-aggregate-management]')`, 'local aggregate panel');
     const sourceCategories: Record<string, string[]> = {};
-    for (const category of ['api', 'subscription', 'local']) {
-      await click(`[data-provider-category="${category}"]`);
-      if (category === 'local') {
-        await waitFor(`!!document.querySelector('[data-aggregate-management]')`, 'local provider tab');
-        sourceCategories[category] = await evaluate<string[]>(`[...document.querySelectorAll('[data-aggregate-provider]')].map(item=>item.dataset.aggregateProvider)`);
-        assert.equal(sourceCategories[category].length, store.listProviders().length, 'Local interface management lists both source kinds');
-      } else {
-        await waitFor(`!!document.querySelector('.provider-list [data-provider-id]')&&!document.querySelector('[data-aggregate-management]')`, `${category} provider tab`);
-        sourceCategories[category] = await evaluate<string[]>(`[...document.querySelectorAll('.provider-list [data-provider-id]')].map(item=>item.dataset.providerId)`);
-        assert.deepEqual(new Set(sourceCategories[category]), new Set(store.listProviders().filter(source => category === 'api' ? source.kind === 'openai-compatible' : source.kind !== 'openai-compatible').map(source => source.id)), 'Provider tabs show exactly their respective sources');
-      }
-      assert.deepEqual(store.listBindings(), originalBindings, 'Provider tabs never write tool bindings');
+    for (const category of ['api', 'subscription']) {
+      sourceCategories[category] = await evaluate<string[]>(`[...document.querySelectorAll('.sidebar [data-sidebar-provider-category="${category}"] [data-source-id]')].map(item=>item.dataset.sourceId)`);
+      assert.deepEqual(new Set(sourceCategories[category]), new Set(store.listProviders().filter(source => providerCategory(source) === category).map(source => source.id)), 'Sidebar groups show exactly their respective sources');
+      assert.deepEqual(store.listBindings(), originalBindings, 'Provider groups never write tool bindings');
     }
+    sourceCategories.local = await evaluate<string[]>(`[...document.querySelectorAll('[data-aggregate-provider]')].map(item=>item.dataset.aggregateProvider)`);
+    assert.equal(sourceCategories.local.length, store.listProviders().length, 'Local interface management lists both source kinds');
     await revealAndHide('[data-aggregate-connection]', store.gatewayKey());
     await assertClipboard('[data-aggregate-connection] [data-action="copy-key"]', store.gatewayKey());
     await assertClipboard('[data-aggregate-connection] [aria-label="复制本地接口 URL"]', (await evaluate<any>('window.modelDock.snapshot()')).gateway.baseUrl || `http://127.0.0.1:18181/v1`);
     await click('[data-aggregate-connection] [data-action="reveal-key"]');
     await waitFor(`document.querySelector('[data-aggregate-connection] [data-secret-field] input')?.type==='text'`, 'local key shown before navigation');
     await selectProvider(provider.id);
-    await click('.sidebar [data-source="aggregate"]');
+    await click('.sidebar [data-page="service"]'); await click('[data-service-tab="interface"]');
     await masked('[data-aggregate-connection]');
     await click(`[data-aggregate-provider="${provider.id}"] [data-action="expand-aggregate-provider"]`);
     await assertClipboard(`[data-aggregate-model="${model.id}"] [aria-label="复制本地模型名称 ${model.alias}"]`, model.alias);
@@ -169,6 +192,7 @@ export async function verifyProviderManagement(window: BrowserWindow, store: Sto
     await evaluate(`(()=>{const input=document.querySelector('[aria-label="搜索本地接口供应商或模型"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'界面验证');input.dispatchEvent(new Event('input',{bubbles:true}))})()`);
     await waitFor(`document.querySelectorAll('[data-aggregate-provider]').length===3&&document.querySelector('[data-aggregate-provider]')?.dataset.aggregateProvider===${JSON.stringify(provider.id)}`, 'aggregate search keeps fixture model in view');
     await inspectLayout('aggregate', 'aggregate');
+    await inspectRequestLogs();
     assert.deepEqual(store.listBindings(), originalBindings, 'Provider management never writes tool bindings');
     writeFileSync(join(outputDir, 'provider-management-validation.json'), JSON.stringify({ ok: true, categories: categoryTools, sourceCategories: Object.fromEntries(Object.entries(sourceCategories).map(([category, ids]) => [category, ids.length])), removedEmptySeedProviders: emptySeedProviders.length, removedMcpSkillsNavigation: true, exactNativeClipboardCopies: true, nativeModelAndAggregateAliasDistinct: true, keysMaskedUntilExplicitReveal: true, hideDiscardsPlaintext: true, backgroundPollingPreservesReveal: true, providerNavigationAndRefreshResetKey: true, gatewayNavigationResetsKey: true, subscriptionTokensRejected: true, aggregateProviderModelMembershipPersists: true, globalProviderAndModelRemainEnabled: true, toolBindingsUnchanged: true, noActualClientProfiles: true, layouts }, null, 2));
   } finally {

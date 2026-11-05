@@ -1,7 +1,17 @@
 import type { Provider } from './types';
 
 export type SubscriptionKind = 'codex' | 'grok';
-export type AuthAccountKind = SubscriptionKind | 'copilot';
+/** Relay-backed subscriptions keep their own upstream login flow. */
+export type RelayAccountKind = 'trae-cn-relay' | 'jetbrains-central';
+export type AuthAccountKind = SubscriptionKind | 'copilot' | RelayAccountKind;
+
+/** Renderer-safe choices discovered only after an explicit import action. */
+export interface CopilotImportCandidate {
+  id: string;
+  client: 'copilot-cli' | 'github-cli';
+  login: string;
+  label: string;
+}
 
 export interface QuotaWindow {
   id: string;
@@ -43,6 +53,8 @@ export interface AuthAccount {
   authStatus: Provider['authStatus'] | 'expired';
   expiresAt?: number;
   canRefresh: boolean;
-  source?: 'client-import';
+  source?: 'client-import' | 'relay';
+  /** Local relay credential presence only; never establishes upstream login. */
+  relayKeyConfigured?: boolean;
   usage: SubscriptionUsage;
 }

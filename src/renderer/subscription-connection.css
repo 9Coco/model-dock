@@ -1,0 +1,11 @@
+.subscription-connection { margin-top: 16px; padding: 15px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.subscription-connection > .section-heading { margin-bottom: 10px; }
+.subscription-connection .connection-fields { margin: 0; }
+.subscription-connection-note, .subscription-call-example p { color: var(--muted); font-size: 12px; line-height: 1.7; }
+.subscription-local-models { margin-top: 18px; }
+.subscription-local-models h3 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; }
+.subscription-local-models table th, .subscription-local-models table td { padding: 10px 12px; border-color: var(--line); }
+.subscription-local-models table .copy-value { display: flex; justify-content: space-between; }
+.subscription-call-example { margin-top: 15px; padding-top: 13px; border-top: 1px solid var(--line); font-size: 12px; }
+.subscription-call-example summary { cursor: pointer; color: var(--ink); }
+.subscription-call-example pre { margin: 12px 0; max-width: 100%; overflow: auto; padding: 12px; border-radius: 6px; color: var(--ink); background: var(--surface-soft); font-size: 11px; line-height: 1.7; }
