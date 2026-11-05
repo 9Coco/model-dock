@@ -1,18 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowDownToLine, ChevronDown, Clock3, Ellipsis, Info, KeyRound, LogOut, Plus, RefreshCw, Trash2, UserRound } from './MaterialIcon';
 import type { ModelDockApi } from '../shared/types';
-import type { AuthAccount, AuthAccountKind, SubscriptionKind, SubscriptionUsage } from '../shared/auth-types';
+import type { AuthAccount, AuthAccountKind, CopilotImportCandidate, RelayAccountKind, SubscriptionKind, SubscriptionUsage } from '../shared/auth-types';
 import { QUOTA_CACHE_TTL_MS, quotaAmountLabel, quotaCacheExpired, quotaDateLabel, quotaExpiryLabel, quotaPercent, quotaPercentLabel, quotaQueryAge, quotaRefreshDue, quotaResetLabel, quotaRetryAt, resetCreditsLabel } from '../shared/quota-display';
 import { BusyIcon, Modal, type Notify } from './components';
 import { ToolIcon } from './ToolIcon';
 import { AccountAvatar } from './AccountAvatar';
 import { useContextMenu, type ContextMenuItem, type ContextMenuOpenEvent } from './ContextMenu';
 
-const kinds: AuthAccountKind[] = ['copilot', 'codex', 'grok'];
-const titles: Record<AuthAccountKind, string> = { copilot: 'GitHub Copilot', codex: 'ChatGPT / OpenAI', grok: 'xAI / Grok' };
+const kinds: AuthAccountKind[] = ['copilot', 'codex', 'grok', 'trae-cn-relay', 'jetbrains-central'];
+const titles: Record<AuthAccountKind, string> = { copilot: 'GitHub Copilot', codex: 'ChatGPT / OpenAI', grok: 'xAI / Grok', 'trae-cn-relay': 'TRAE 中国版反代', 'jetbrains-central': 'JetBrains AI 会员反代' };
 const statuses: Record<AuthAccount['authStatus'], string> = { ready: '已授权', missing: '未授权', 'signing-in': '等待登录', error: '需重新授权', expired: '授权已过期' };
+const relayStatus = (account: AuthAccount): string => account.relayKeyConfigured ? '反代密钥已保存' : '待配置反代密钥';
 
 function AccountBrand({ kind }: { kind: AuthAccountKind }) {
+  if (kind === 'trae-cn-relay' || kind === 'jetbrains-central') return <KeyRound size={18} />;
   return kind === 'grok' ? <span className="auth-brand-xai" aria-hidden="true">xAI</span> : <ToolIcon tool={kind === 'copilot' ? 'copilot' : 'codex'} />;
 }
 
@@ -27,11 +29,16 @@ function ResetCredits({ usage, now }: { usage: SubscriptionUsage; now: number })
   </div>;
 }
 
-export function AuthPanel({ api, notify, onLogin, onCopilotLogin, onChanged }: {
+export function AuthPanel({ api, notify, onLogin, onCopilotLogin, onChanged, onManageProvider, onAddRelay, onAddSubscription, refreshRevision = 0 }: {
   api?: ModelDockApi; notify: Notify;
   onLogin: (providerId: string) => void | Promise<void>;
   onCopilotLogin?: () => void | Promise<void>;
   onChanged?: () => void | Promise<void>;
+  onManageProvider?: (providerId: string) => void;
+  onAddRelay?: (presetId: RelayAccountKind) => void;
+  onAddSubscription?: () => void;
+  /** Provider edits happen in App's modal; reload immediately after its save. */
+  refreshRevision?: number;
 }) {
   const [accounts, setAccounts] = useState<AuthAccount[]>([]);
   const [busy, setBusy] = useState<Record<string, boolean>>({});
@@ -41,8 +48,10 @@ export function AuthPanel({ api, notify, onLogin, onCopilotLogin, onChanged }: {
   const [confirm, setConfirm] = useState<{ account: AuthAccount; action: 'logout' | 'delete' } | null>(null);
   const [menuId, setMenuId] = useState<string | null>(null);
   const [detailAccount, setDetailAccount] = useState<AuthAccount | null>(null);
+  const [copilotImport, setCopilotImport] = useState<CopilotImportCandidate[] | null>(null);
+  const [copilotImportId, setCopilotImportId] = useState('');
   const contextMenu = useContextMenu({ onError: failure => notify(failure instanceof Error ? failure.message : '账号操作失败。', 'error') });
-  useEffect(() => { contextMenu.close(); }, [draft, confirm, detailAccount, contextMenu.close]);
+  useEffect(() => { contextMenu.close(); }, [draft, confirm, detailAccount, copilotImport, contextMenu.close]);
   const menuRoot = useRef<HTMLDivElement | null>(null), menuTrigger = useRef<HTMLButtonElement | null>(null);
   const listRequest = useRef<Promise<void> | null>(null);
   const inFlight = useRef(new Set<string>());
@@ -90,11 +99,19 @@ export function AuthPanel({ api, notify, onLogin, onCopilotLogin, onChanged }: {
     void request.finally(() => { if (listRequest.current === request) listRequest.current = null; });
     return request;
   }, [api]);
-  useEffect(() => { void load(); const timer = window.setInterval(() => void load(), 5000); return () => window.clearInterval(timer); }, [load]);
+  useEffect(() => { const timer = window.setInterval(() => void load(), 5000); return () => window.clearInterval(timer); }, [load]);
+  useEffect(() => {
+    let current = true;
+    // A pre-save request can still be in flight. Follow it with a fresh read
+    // rather than letting deduplication consume the explicit save revision.
+    const active = listRequest.current;
+    if (active) void active.then(() => { if (current) void load(); }); else void load();
+    return () => { current = false; };
+  }, [load, refreshRevision]);
   useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 30_000); return () => window.clearInterval(timer); }, []);
 
   const refreshQuota = useCallback(async (account: AuthAccount, manual = false) => {
-    if (!api || inFlight.current.has(account.providerId)) return;
+    if (!api || account.source === 'relay' || inFlight.current.has(account.providerId)) return;
     const key = account.providerId, began = Date.now();
     if (!manual && !quotaRefreshDue(account.usage, account.authStatus === 'ready', began, retryAfter.current.get(key))) return;
     inFlight.current.add(key); retryAfter.current.set(key, began + QUOTA_CACHE_TTL_MS);
@@ -121,6 +138,7 @@ export function AuthPanel({ api, notify, onLogin, onCopilotLogin, onChanged }: {
   }, [api, notify]);
   useEffect(() => {
     for (const account of accounts) {
+      if (account.source === 'relay') continue;
       const identity = (account.accountId ?? account.email ?? '') + '/' + (account.authStatus === 'ready');
       if (identities.current.has(account.providerId) && identities.current.get(account.providerId) !== identity) {
         retryAfter.current.delete(account.providerId); failures.current.delete(account.providerId);
@@ -151,6 +169,16 @@ export function AuthPanel({ api, notify, onLogin, onCopilotLogin, onChanged }: {
   const importLocal = (kind: SubscriptionKind) => run('import-' + kind, async () => {
     await api!.importLocalAccount(kind); notify('客户端授权已导入 ModelDock，原客户端文件保持不变。');
   });
+  const openCopilotImport = () => run('import-copilot-list', async () => {
+    const candidates = await api!.copilotImportCandidates();
+    setCopilotImport(candidates); setCopilotImportId(candidates[0]?.id ?? '');
+  });
+  const importCopilot = () => run('import-copilot-account', async () => {
+    if (!copilotImportId || !copilotImport?.some(candidate => candidate.id === copilotImportId)) return;
+    const account = await api!.importCopilotClientAccount(copilotImportId);
+    setCopilotImport(null);
+    notify(account.usage.status === 'ready' ? 'GitHub 账号授权与 Copilot 额度已导入，原客户端保持不变。' : 'GitHub 账号授权已导入。' + account.usage.message, account.usage.status === 'ready' ? 'success' : 'info');
+  });
   const confirmAction = () => confirm && run('confirm-' + confirm.account.providerId, async () => {
     const { account, action } = confirm;
     if (account.kind === 'copilot') await api!.copilotLogoutAccount(account.providerId);
@@ -161,10 +189,19 @@ export function AuthPanel({ api, notify, onLogin, onCopilotLogin, onChanged }: {
 
   const closeAccountMenu = () => { setMenuId(null); menuTrigger.current?.focus(); };
   const reauthorizeAccount = (account: AuthAccount) => run('login-' + account.providerId, async () => {
-    if (account.kind === 'copilot') await loginCopilot(); else await onLogin(account.providerId);
+    if (account.source === 'relay') onManageProvider?.(account.providerId);
+    else if (account.kind === 'copilot') await loginCopilot(); else await onLogin(account.providerId);
   });
   const accountContextMenu = (event: ContextMenuOpenEvent, account: AuthAccount) => {
     const changing = !!busy['login-' + account.providerId] || !!busy['confirm-' + account.providerId];
+    if (account.source === 'relay') {
+      contextMenu.open(event, [
+        { id: 'account-details', label: '订阅详情', icon: <Info size={14} />, onSelect: () => setDetailAccount(account) },
+        { id: 'account-manage-relay', label: '管理反代', icon: <KeyRound size={14} />, disabled: !onManageProvider || changing, onSelect: () => onManageProvider?.(account.providerId) },
+        { id: 'account-delete', label: '删除订阅来源', icon: <Trash2 size={14} />, danger: true, disabled: !api || changing, onSelect: () => setConfirm({ account, action: 'delete' }) },
+      ], account.providerName);
+      return;
+    }
     const items: ContextMenuItem[] = [
       { id: 'account-details', label: '账号详情', icon: <Info size={14} />, onSelect: () => setDetailAccount(account) },
       { id: 'account-refresh-quota', label: '刷新额度', icon: <RefreshCw size={14} />, disabled: !api || changing || !!busy['usage-' + account.providerId] || account.authStatus === 'missing' || account.authStatus === 'signing-in', onSelect: () => refreshQuota(account, true) },
@@ -177,18 +214,24 @@ export function AuthPanel({ api, notify, onLogin, onCopilotLogin, onChanged }: {
   };
   const inspectedAccount = detailAccount ? accounts.find(account => account.providerId === detailAccount.providerId) ?? null : null;
   return <section className="feature-panel auth-panel auth-compact">
-    <div className="feature-toolbar auth-compact-toolbar"><p>账户额度与授权</p><button className="button small secondary" data-action="reload-auth-accounts" onClick={() => void run('reload', load)} disabled={busy.reload}><BusyIcon active={!!busy.reload}><RefreshCw size={13} /></BusyIcon>刷新列表</button></div>
+    <div className="feature-toolbar auth-compact-toolbar"><p>订阅账号、反代与授权</p><div className="row-actions"><button className="button small primary" data-action="add-subscription-provider" disabled={!onAddSubscription} onClick={onAddSubscription}><Plus size={13} />添加订阅</button><button className="button small secondary" data-action="reload-auth-accounts" onClick={() => void run('reload', load)} disabled={busy.reload}><BusyIcon active={!!busy.reload}><RefreshCw size={13} /></BusyIcon>刷新列表</button></div></div>
     {error && <p className="feature-error" role="alert">{error}</p>}
     {kinds.map(kind => {
       const group = accounts.filter(account => account.kind === kind);
+      const relay = kind === 'trae-cn-relay' || kind === 'jetbrains-central';
       return <div className="account-group" key={kind} data-auth-kind={kind}>
         <div className="account-group-header"><h2><AccountBrand kind={kind} />{titles[kind]}<span className="count-tag">{group.length}</span></h2><div className="row-actions">
-          {kind === 'copilot' ? <button className="button small secondary" data-action="copilot-login" data-auth-add-account={kind} disabled={busy['login-copilot']} onClick={() => void run('login-copilot', loginCopilot)}><Plus size={13} />登录 GitHub</button> : <>
+          {relay ? <button className="button small secondary" data-auth-add-relay={kind} disabled={!onAddRelay} onClick={() => onAddRelay?.(kind)}><Plus size={13} />添加订阅</button> : kind === 'copilot' ? <><button className="button small secondary" data-auth-import-account="copilot" disabled={busy['import-copilot-list']} onClick={() => void openCopilotImport()} title="选择已登录的 Copilot CLI 或 GitHub CLI 账号"><BusyIcon active={!!busy['import-copilot-list']}><ArrowDownToLine size={13} /></BusyIcon>从客户端导入</button><button className="button small secondary" data-action="copilot-login" data-auth-add-account={kind} disabled={busy['login-copilot']} onClick={() => void run('login-copilot', loginCopilot)}><Plus size={13} />登录 GitHub</button></> : <>
             <button className="button small secondary" data-auth-import-account={kind} disabled={busy['import-' + kind]} onClick={() => void importLocal(kind)} title="仅在点击时导入本机客户端已有授权"><BusyIcon active={!!busy['import-' + kind]}><ArrowDownToLine size={13} /></BusyIcon>从客户端导入</button>
             <button className="button small secondary" data-auth-add-account={kind} onClick={() => setDraft({ kind, name: titles[kind] + ' 账号 ' + (group.length + 1) })}><Plus size={13} />添加账号</button>
           </>}
         </div></div>
-        {group.length === 0 ? <div className="auth-empty-row" data-auth-empty={kind}><UserRound size={14} /><span>尚未添加账号</span><small>{kind === 'copilot' ? '登录 GitHub 后查看额度' : '登录或导入已有授权'}</small></div> : group.map(account => {
+        {group.length === 0 ? <div className="auth-empty-row" data-auth-empty={kind}><UserRound size={14} /><span>{relay ? '尚未添加反代订阅' : '尚未添加账号'}</span><small>{relay ? '添加后在反代完成授权' : kind === 'copilot' ? '登录 GitHub 后查看额度' : '登录或导入已有授权'}</small></div> : group.map(account => {
+          if (account.source === 'relay') return <article className="account-row auth-relay-row" key={account.providerId} tabIndex={0} onContextMenu={event => accountContextMenu(event, account)} aria-label={'反代订阅 ' + account.providerName} data-auth-account={account.providerId} data-account-id={account.providerId} data-auth-relay={account.kind}>
+            <div className="account-identity" title={account.providerName}><AccountAvatar account={account} /><div className="auth-identity-content"><strong>{account.providerName}</strong></div></div>
+            <div className="account-quotas"><strong className="auth-relay-status" data-relay-key-configured={!!account.relayKeyConfigured}>{relayStatus(account)}</strong><p className="quota-unavailable" data-quota-message>{account.usage.message}</p></div>
+            <div className="account-actions"><button className="button small secondary" data-action="manage-auth-relay" data-account-id={account.providerId} disabled={!onManageProvider} onClick={() => onManageProvider?.(account.providerId)}><KeyRound size={13} />管理反代</button><button className="icon-button" data-action="relay-account-details" aria-label={'订阅详情 ' + account.providerName} onClick={() => setDetailAccount(account)}><Info size={14} /></button></div>
+          </article>;
           const stale = quotaCacheExpired(account.usage, now), opened = menuId === account.providerId;
           const queried = account.usage.queriedAt ? quotaQueryAge(account.usage.queriedAt, now).replace(/查询$/, '') : '未查询';
           return <article className="account-row" key={account.providerId} tabIndex={0} onContextMenu={event => accountContextMenu(event, account)} aria-label={'账号 ' + (account.email ?? account.displayName ?? account.providerName)} data-auth-account={account.providerId} data-account-id={account.providerId} data-quota-status={stale ? 'stale' : account.usage.status}>
@@ -228,18 +271,22 @@ export function AuthPanel({ api, notify, onLogin, onCopilotLogin, onChanged }: {
         })}
       </div>;
     })}
-    <p className="feature-footnote">账户额度包含其他客户端用量。访问凭据到期与套餐到期不同；账号详情可在 ⋯ 菜单查看。</p>
+    <p className="feature-footnote">账户额度包含其他客户端用量。访问凭据到期与套餐到期不同；反代密钥的保存状态不代表上游账号已登录。</p>
     {inspectedAccount && <Modal title="账号详情" onClose={() => setDetailAccount(null)}><div className="modal-body auth-account-details" data-auth-account-details={inspectedAccount.providerId}><dl>
       <div><dt>账号</dt><dd>{inspectedAccount.email ?? inspectedAccount.displayName ?? inspectedAccount.providerName}</dd></div>
       <div><dt>账号名称</dt><dd>{inspectedAccount.providerName}</dd></div>
       <div><dt>平台 / 套餐</dt><dd>{titles[inspectedAccount.kind]}{inspectedAccount.plan ? ' · ' + inspectedAccount.plan : ''}</dd></div>
-      <div><dt>授权状态</dt><dd>{statuses[inspectedAccount.authStatus]}</dd></div>
-      <div><dt>访问凭据到期</dt><dd>{quotaDateLabel(inspectedAccount.expiresAt)}</dd></div>
-      <div><dt>自动续期</dt><dd>{inspectedAccount.canRefresh ? '支持' : '未提供续期凭据'}</dd></div>
-      <div><dt>授权来源</dt><dd>{inspectedAccount.source === 'client-import' ? '客户端导入' : 'ModelDock 登录'}</dd></div>
-      <div><dt>额度查询</dt><dd>{inspectedAccount.usage.queriedAt ? quotaDateLabel(inspectedAccount.usage.queriedAt) + '（香港时间）' : '尚未查询'}</dd></div>
+      <div><dt>{inspectedAccount.source === 'relay' ? '反代配置' : '授权状态'}</dt><dd>{inspectedAccount.source === 'relay' ? relayStatus(inspectedAccount) : statuses[inspectedAccount.authStatus]}</dd></div>
+      {inspectedAccount.source !== 'relay' && <><div><dt>访问凭据到期</dt><dd>{quotaDateLabel(inspectedAccount.expiresAt)}</dd></div>
+      <div><dt>自动续期</dt><dd>{inspectedAccount.canRefresh ? '支持' : '未提供续期凭据'}</dd></div></>}
+      <div><dt>授权来源</dt><dd>{inspectedAccount.source === 'relay' ? '反代服务管理上游登录' : inspectedAccount.source === 'client-import' ? '客户端导入' : 'ModelDock 登录'}</dd></div>
+      <div><dt>额度查询</dt><dd>{inspectedAccount.source === 'relay' ? '请在反代服务或官方客户端查看' : inspectedAccount.usage.queriedAt ? quotaDateLabel(inspectedAccount.usage.queriedAt) + '（香港时间）' : '尚未查询'}</dd></div>
     </dl><p>{inspectedAccount.usage.message}</p>{inspectedAccount.usage.resetCreditsMessage && <p>{inspectedAccount.usage.resetCreditsMessage}</p>}{inspectedAccount.usage.windows.map(window => <p key={window.id}>{window.label}：{quotaAmountLabel(window) ?? '剩余 ' + quotaPercentLabel(window.remainingPercent)} · {quotaResetLabel(window.resetAt, now)}{window.measurement === 'protobuf-default' ? ' · 按协议默认值解析' : ''}</p>)}</div><div className="modal-footer"><button className="button secondary" onClick={() => setDetailAccount(null)}>关闭</button></div></Modal>}
     {draft && <Modal title={'添加 ' + titles[draft.kind] + ' 账号'} subtitle="创建独立订阅来源，然后在浏览器完成本人账号授权。" onClose={() => setDraft(null)}><div className="modal-body"><label className="form-field">账号名称<input value={draft.name} maxLength={120} autoFocus onChange={event => setDraft(current => current ? { ...current, name: event.target.value } : null)} onKeyDown={event => { if (event.key === 'Enter') void add(); }} /></label></div><div className="modal-footer"><button className="button small secondary" onClick={() => setDraft(null)}>取消</button><button className="button small primary" disabled={busy['add-account']} onClick={() => void add()}><BusyIcon active={!!busy['add-account']}><KeyRound size={16} /></BusyIcon>创建并登录</button></div></Modal>}
+    {copilotImport !== null && <Modal title="从客户端导入 GitHub Copilot" subtitle="选择已登录的 Copilot CLI 或 GitHub CLI 账号，导入本人 GitHub.com 授权。" onClose={() => { if (!busy['import-copilot-account']) setCopilotImport(null); }}><div className="modal-body" data-copilot-import>
+      {copilotImport.length ? <label className="form-field">客户端与账号<select data-field="copilot-import-account" value={copilotImportId} disabled={busy['import-copilot-account']} onChange={event => setCopilotImportId(event.target.value)}>{copilotImport.map(candidate => <option key={candidate.id} value={candidate.id}>{candidate.label}</option>)}</select></label> : <p data-copilot-import-empty>未找到可导入的 Copilot CLI 或 GitHub CLI 账号。</p>}
+      <p className="feature-footnote">导入时验证账号身份和 Copilot 额度，原客户端保持不变。未列出的桌面端或编辑器账号可使用“登录 GitHub”添加。</p>
+    </div><div className="modal-footer"><button className="button small secondary" disabled={busy['import-copilot-account']} onClick={() => setCopilotImport(null)}>取消</button><button className="button small primary" data-action="import-copilot-client-account" disabled={!copilotImportId || busy['import-copilot-account']} onClick={() => void importCopilot()}><BusyIcon active={!!busy['import-copilot-account']}><ArrowDownToLine size={14} /></BusyIcon>导入所选账号</button></div></Modal>}
     {confirm && <Modal title={confirm.action === 'logout' ? '清除本地授权' : confirm.account.kind === 'copilot' ? '移除 GitHub 账号' : '删除账号来源'} onClose={() => setConfirm(null)}><div className="modal-body"><p>{confirm.account.kind === 'copilot' ? '移除“' + confirm.account.providerName + '”在 ModelDock 中的 GitHub 授权和额度缓存。GitHub 账号与原客户端的登录状态保持不变。' : confirm.action === 'logout' ? '清除“' + confirm.account.providerName + '”在 ModelDock 中的授权和额度缓存。原客户端登录状态不会改变，来源和模型配置保留。' : '删除“' + confirm.account.providerName + '”及其模型，工具中的相关来源引用也会移除。原客户端文件不会改变。'}</p></div><div className="modal-footer"><button className="button small secondary" onClick={() => setConfirm(null)}>取消</button><button className="button primary danger" disabled={busy['confirm-' + confirm.account.providerId]} onClick={() => void confirmAction()}>确认{confirm.action === 'logout' ? '注销' : '移除'}</button></div></Modal>}
     {contextMenu.menu}
   </section>;

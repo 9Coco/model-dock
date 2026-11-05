@@ -165,6 +165,18 @@ child.on('exit', code => {
       console.log(JSON.stringify({ exitCode: code, bridge: value.bridge, providerManagement: true, output }));
       process.exit(code || 0);
     }
+    if (env.MODELDOCK_SMOKE_RELAY_SUBSCRIPTIONS_ONLY === '1') {
+      const result = JSON.parse(readFileSync(resolve(output, 'relay-subscriptions-validation.json'), 'utf8'));
+      if (!result.ok || !result.subscriptionTitlePreserved || !result.legacyRelaysClassifiedAsSubscriptions || !result.authorizationCenterManagementOpensMatchingEditor || !result.relayKeysNotInAccountViews || !result.toolBindingsUnchanged) throw new Error('Subscription relay presentation validation failed');
+      console.log(JSON.stringify({ exitCode: code, bridge: value.bridge, relaySubscriptions: true, screenshots: result.screenshots.length, output }));
+      process.exit(code || 0);
+    }
+    if (env.MODELDOCK_SMOKE_NAVIGATION_CONSOLIDATION_ONLY === '1') {
+      const result = JSON.parse(readFileSync(resolve(output, 'navigation-consolidation-validation.json'), 'utf8'));
+      if (!result.ok || !result.subscriptionAdditionOnlyInAuthCenter || !result.serviceInterfaceAndLogsConsolidated || !result.subscriptionLocalUrlKeyAliasesCopied || !result.credentialsAndToolBindingsPreserved) throw new Error('Navigation and local subscription connection validation failed');
+      console.log(JSON.stringify({ exitCode: code, bridge: value.bridge, navigationConsolidation: true, screenshots: result.screenshots.length, output }));
+      process.exit(code || 0);
+    }
     if (env.MODELDOCK_SMOKE_TOOL_ICONS_ONLY === '1') {
       const icons = JSON.parse(readFileSync(resolve(output, 'tool-icons-validation.json'), 'utf8'));
       if (icons.tools.length !== 12 || icons.jetBrainsTools.length !== 4 || !icons.copilotCliPreview?.qualifiedDefault || !icons.copilotCliPreview?.keyRedacted || !icons.originalUiRestored || !icons.savedSettingsUnchanged || !icons.toolSelectionsUnchanged || icons.configurationSyncInvoked !== false) throw new Error('Tool icon validation failed');

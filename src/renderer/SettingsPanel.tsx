@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { Activity, FolderOpen, Monitor, Moon, RefreshCw, Sun, Terminal } from './MaterialIcon';
-import type { ModelDockApi } from '../shared/types';
+import type { Model, ModelDockApi, Provider } from '../shared/types';
 import type { AppSettings, SettingsSnapshot } from '../shared/settings-types';
 import type { AuthNetworkDiagnostic } from '../shared/network-types';
 import { BusyIcon, EmptyState, Toggle, type Notify } from './components';
+import { ConnectionPrinciples } from './ConnectionPrinciples';
 
-export function SettingsPanel({ api, snapshot, onSave, notify, dataDir, version }: { api?: ModelDockApi; snapshot: SettingsSnapshot | null; onSave: (patch: Partial<AppSettings>) => Promise<void>; notify: Notify; dataDir: string; version: string }) {
+export function SettingsPanel({ api, snapshot, onSave, notify, dataDir, version, providers = [], models = [] }: { api?: ModelDockApi; snapshot: SettingsSnapshot | null; onSave: (patch: Partial<AppSettings>) => Promise<void>; notify: Notify; dataDir: string; version: string; providers?: Provider[]; models?: Model[] }) {
   const [busy, setBusy] = useState('');
   const [proxyDraft, setProxyDraft] = useState(snapshot?.settings.proxyUrl ?? '');
   const [networkDiagnostic, setNetworkDiagnostic] = useState<AuthNetworkDiagnostic | null>(null);
@@ -71,6 +72,7 @@ export function SettingsPanel({ api, snapshot, onSave, notify, dataDir, version 
       <div className="settings-row"><div className="settings-row-copy"><strong>数据目录</strong><small className="settings-meta"><code>{dataDir || '正在读取目录'}</code></small></div><div className="settings-control"><button className="button small secondary" disabled={!api || !!busy || !dataDir} onClick={() => void action('data-dir', () => api!.openDataDir())}><FolderOpen size={15} />打开目录</button></div></div>
       <div className="settings-row"><div className="settings-row-copy"><strong>ModelDock</strong><small>{version ? `v${version}` : '开发版'} · 设置保存在本机 SQLite 中</small></div><span className="settings-note">自动保存</span></div>
     </div></section>
+    <ConnectionPrinciples providers={providers} models={models} />
     {busy && <div className="settings-note" role="status"><RefreshCw size={13} className="spin" />{busy === 'open-terminal' ? '正在打开终端…' : busy === 'probe-auth-network' ? '正在检测应用网络…' : '正在应用设置…'}</div>}
   </section>;
 }

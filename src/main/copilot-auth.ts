@@ -1,6 +1,7 @@
-import type { AuthAccount, QuotaWindow, SubscriptionUsage } from '../shared/auth-types';
+import type { AuthAccount, CopilotImportCandidate, QuotaWindow, SubscriptionUsage } from '../shared/auth-types';
 import type { AuthFailureCategory, AuthProgress } from '../shared/types';
 import { safeAccountAvatarUrl } from '../shared/auth-avatar';
+import { CopilotClientImporter, type CopilotClientImportOptions } from './copilot-client-import';
 
 // Public device-flow client used by GitHub's Copilot language server. Quotas
 // follow VS Code's first-party entitlement protocol, checked 2026-10-07:
@@ -41,6 +42,7 @@ interface StoredAccount {
   expiresAt?: number;
   authStatus: 'ready' | 'error' | 'expired';
   usage: SubscriptionUsage;
+  source?: 'client-import';
 }
 interface AccountState { version: 1; accounts: StoredAccount[] }
 interface LoginSession { controller: AbortController; progress: AuthProgress }
@@ -57,6 +59,7 @@ interface CopilotAuthOptions {
   now?: () => number;
   delay?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
   onAuthorized?: (accountId: string, providerId?: string) => void | Promise<void>;
+  clientImport?: CopilotClientImportOptions;
 }
 type Json = Record<string, unknown>;
 
@@ -146,11 +149,14 @@ export class CopilotAuthCenter {
   private disposed = false;
   private readonly active = new Map<string, ActiveQuery>();
   private readonly epochs = new Map<string, number>();
+  private readonly importer: CopilotClientImporter;
+  private readonly imports = new Set<AbortController>();
 
   constructor(private readonly store: CopilotAuthStore, private readonly options: CopilotAuthOptions) {
     this.fetcher = options.fetch ?? fetch;
     this.now = options.now ?? Date.now;
     this.pause = options.delay ?? delay;
+    this.importer = new CopilotClientImporter(options.clientImport);
   }
 
   private state(): AccountState {
@@ -175,7 +181,7 @@ export class CopilotAuthCenter {
       providerId: account.id, providerName: 'GitHub Copilot', kind: 'copilot', accountId: account.id.slice(8),
       displayName: text(account.name) ?? text(account.login), email: text(account.email), avatarUrl: safeAccountAvatarUrl('copilot', account.avatarUrl), plan: text(account.plan),
       authStatus: account.expiresAt !== undefined && account.expiresAt <= this.now() ? 'expired' : account.authStatus,
-      expiresAt: account.expiresAt, canRefresh: false, usage: structuredClone(account.usage),
+      expiresAt: account.expiresAt, canRefresh: false, usage: structuredClone(account.usage), source: account.source,
     };
   }
   listAccounts(): AuthAccount[] { return this.state().accounts.map(account => this.view(account)); }
@@ -194,7 +200,44 @@ export class CopilotAuthCenter {
   }
   dispose(): void {
     this.disposed = true; this.cancel();
+    this.cancelImports();
     for (const query of this.active.values()) query.controller.abort();
+  }
+
+  private cancelImports(): void { for (const controller of this.imports) controller.abort(); this.imports.clear(); }
+  /** Only explicit user actions call these methods; construction/listAccounts
+   * never probes another client's files or operating-system credentials. */
+  clientImportCandidates(): Promise<CopilotImportCandidate[]> {
+    if (this.disposed) return Promise.reject(new Error('GitHub 授权服务已关闭'));
+    return this.importer.listCandidates();
+  }
+  async importClientAccount(candidateId: string): Promise<AuthAccount> {
+    if (this.disposed) throw new Error('GitHub 授权服务已关闭');
+    const controller = new AbortController(); this.imports.add(controller);
+    try {
+      const { candidate, accessToken } = await this.importer.readCredential(candidateId);
+      assertActive(controller.signal);
+      const user = await this.request(USER_URL, { headers: this.userHeaders(accessToken) }, controller.signal);
+      const numericId = quantity(user.id), name = text(user.login);
+      if (!numericId || !Number.isSafeInteger(numericId) || !name || name.toLowerCase() !== candidate.login.toLowerCase()) throw new SafeFailure('本机凭据与所选 GitHub 账号身份不符，未导入。', 'invalid-response');
+      // Validate the same Copilot entitlement endpoint used by regular login.
+      // A public GitHub /user response alone is not subscription validation.
+      const quota = await this.request(USAGE_URL, { headers: this.quotaHeaders(accessToken) }, controller.signal);
+      assertActive(controller.signal);
+      const windows = parseCopilotUsage(quota), id = `copilot:${numericId}`;
+      const account: StoredAccount = { id, login: name, name: text(user.name), email: text(user.email), avatarUrl: safeAccountAvatarUrl('copilot', user.avatar_url), avatarCheckedAt: this.now(), accessToken,
+        plan: text(quota.copilot_plan), authStatus: 'ready', source: 'client-import',
+        usage: { ...unqueried(), status: windows.length ? 'ready' : 'unavailable', windows, queriedAt: new Date(this.now()).toISOString(), message: windows.length ? '来自 GitHub 账户的 Copilot 额度' : '账号身份已验证，但 GitHub 未返回可显示的 Copilot 额度；不能据此确认模型可用。' } };
+      const state = this.state();
+      this.cancel(); this.invalidate(id);
+      this.put({ version: 1, accounts: [...state.accounts.filter(item => item.id !== id), account] });
+      return this.view(account);
+    } catch (error) {
+      if (error instanceof SafeFailure) throw new Error(error.message);
+      const safeMessages = ['GitHub 账户加密配置无法读取，请检查本地存储', 'GitHub 账户加密配置保存失败', '请选择本机客户端账号。', '本机客户端账号已改变，请重新选择。',
+        '未找到受支持的 GitHub 用户凭据；不读取 VS Code 或编辑器的加密账号库，请在 ModelDock 直接登录。', '无法读取此 GitHub CLI 账号，请确认已登录、钥匙串可访问且 gh 支持 --no-refresh；也可在 ModelDock 直接登录。'];
+      throw new Error(error instanceof Error && safeMessages.includes(error.message) ? error.message : '本机 GitHub 授权无法导入，请检查客户端登录和系统钥匙串，或在 ModelDock 直接登录。');
+    } finally { this.imports.delete(controller); }
   }
 
   private async request(url: string, init: RequestInit, parent: AbortSignal, purpose?: 'device-poll'): Promise<Json> {
@@ -257,7 +300,7 @@ export class CopilotAuthCenter {
   async beginLogin(providerId?: string): Promise<AuthProgress> {
     if (this.disposed) throw new Error('GitHub 授权服务已关闭');
     if (providerId !== undefined && (typeof providerId !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,119}$/.test(providerId))) throw new Error('Copilot 供应商标识无效');
-    this.cancel();
+    this.cancel(); this.cancelImports();
     const session: LoginSession = { controller: new AbortController(), progress: { providerId: providerId ?? LOGIN_ID, state: 'pending', stage: 'device-code', message: '正在申请 GitHub 设备码…' } };
     this.session = session;
     try {
@@ -319,7 +362,7 @@ export class CopilotAuthCenter {
   }
   logout(id: string): void {
     this.account(id);
-    this.cancel(); this.invalidate(id);
+    this.cancel(); this.cancelImports(); this.invalidate(id);
     const state = this.state();
     this.put({ version: 1, accounts: state.accounts.filter(account => account.id !== id) });
   }

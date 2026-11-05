@@ -5,6 +5,9 @@
 .aggregate-heading .search-box { width: 215px; }
 .aggregate-scope-note { font-size: 11px; line-height: 1.7; color: var(--muted); margin: -2px 0 14px; }
 .aggregate-provider-list { display: grid; gap: 10px; }
+.aggregate-provider-groups { display: grid; gap: 20px; }
+.aggregate-provider-group > h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; color: var(--ink); font-size: 13px; }
+.aggregate-empty-category { margin: 0; color: var(--muted); font-size: 12px; padding: 14px; border: 1px dashed var(--line); border-radius: 8px; }
 .aggregate-provider-card { border: 1px solid var(--line); border-radius: 8px; background: var(--surface); overflow: hidden; }
 .aggregate-provider-heading { display: flex; align-items: center; gap: 10px; padding: 12px 14px; }
 .aggregate-provider-expand { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; padding: 0; border: 0; background: transparent; color: var(--ink); cursor: pointer; text-align: left; }

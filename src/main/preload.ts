@@ -37,6 +37,7 @@ const api: ModelDockApi = {
   logoutAccount: id => call('logoutAccount', id), importLocalAccount: kind => call('importLocalAccount', kind),
   beginCopilotLogin: () => call('beginCopilotLogin'), copilotAuthProgress: () => call('copilotAuthProgress'),
   cancelCopilotLogin: () => call('cancelCopilotLogin'), copilotLogoutAccount: id => call('copilotLogoutAccount', id),
+  copilotImportCandidates: () => call('copilotImportCandidates'), importCopilotClientAccount: id => call('importCopilotClientAccount', id),
   mcpList: () => call('mcpList'), mcpSave: input => call('mcpSave', input), mcpDelete: id => call('mcpDelete', id),
   mcpSetTool: (id, tool, enabled) => call('mcpSetTool', id, tool, enabled), mcpImport: tool => call('mcpImport', tool),
   mcpPreview: tool => call('mcpPreview', tool), mcpApply: (tool, fingerprint) => call('mcpApply', tool, fingerprint),

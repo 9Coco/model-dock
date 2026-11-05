@@ -100,12 +100,12 @@ export async function verifySidebarScroll(window: BrowserWindow, store: Store, o
       await pause(100);
       const start = await evaluate<SidebarReadback>(readScript); validate(start);
       assert.ok(start.lists[1].scrollHeight > start.lists[1].clientHeight, 'Many synthetic providers must exercise provider scrolling');
-      assert.equal(start.lists[0].rows.length, 8, 'Regular Agent category shows eight tools');
+      assert.equal(start.lists[0].rows.length, 7, 'Regular Agent category shows seven tools');
       await clickVisible('[data-tool-category="jetbrains"]');
       await waitFor(`document.querySelector('[data-tool-category="jetbrains"]')?.getAttribute('aria-selected')==='true'`, 'JetBrains category');
       await evaluate(`document.querySelector('[data-sidebar-scroll="tools"]').scrollTop=1e6`);
       const jetBrains = await evaluate<SidebarReadback>(readScript); validate(jetBrains);
-      assert.equal(jetBrains.lists[0].rows.length, 4, 'JetBrains category shows four IDEs');
+      assert.equal(jetBrains.lists[0].rows.length, 5, 'JetBrains category shows Junie and four IDEs');
       assert.ok(jetBrains.lists[0].lastVisible, 'Last JetBrains IDE is reachable inside the tool viewport');
       writeFileSync(join(outputDir, `electron-sidebar-jetbrains-${theme}-${requestedSize[0]}.png`), await captureUi());
       await clickVisible('[data-tool-category="agent"]');

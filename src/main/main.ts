@@ -39,6 +39,8 @@ import { verifyCopilotDesktop } from './copilot-desktop-smoke';
 import { verifyToolIcons } from './tool-icons-smoke';
 import { verifyJetBrainsPluginSwitch } from './jetbrains-plugin-smoke';
 import { verifyProviderManagement } from './provider-management-smoke';
+import { verifyRelaySubscriptions } from './relay-subscriptions-smoke';
+import { verifyNavigationConsolidation } from './navigation-consolidation-smoke';
 import { verifySidebarScroll } from './sidebar-scroll-smoke';
 import { verifyDshConfiguration } from './dsh-config-smoke';
 import { CopilotDesktopClient } from './copilot-desktop';
@@ -219,13 +221,17 @@ async function createWindow(forceShow = false) {
         const result = await window!.webContents.executeJavaScript(`({title:document.title, text:document.body.innerText, bridge:!!window.modelDock})`);
         writeFileSync(join(outputDir, 'electron-smoke.json'), JSON.stringify({ ...result, dataDir, windowSize: window!.getSize(), contentSize: window!.getContentSize() }, null, 2));
         writeFileSync(join(outputDir, 'electron-smoke.png'), await captureUi());
-        if (process.env.MODELDOCK_SMOKE_PROVIDER_MANAGEMENT_ONLY !== '1' && process.env.MODELDOCK_SMOKE_JETBRAINS_PLUGIN_ONLY !== '1' && process.env.MODELDOCK_SMOKE_CONTEXT_MENU_ONLY !== '1') await verifyToolIcons(window!, outputDir, captureUi);
+        if (process.env.MODELDOCK_SMOKE_PROVIDER_MANAGEMENT_ONLY !== '1' && process.env.MODELDOCK_SMOKE_NAVIGATION_CONSOLIDATION_ONLY !== '1' && process.env.MODELDOCK_SMOKE_RELAY_SUBSCRIPTIONS_ONLY !== '1' && process.env.MODELDOCK_SMOKE_JETBRAINS_PLUGIN_ONLY !== '1' && process.env.MODELDOCK_SMOKE_CONTEXT_MENU_ONLY !== '1') await verifyToolIcons(window!, outputDir, captureUi);
         if (process.env.MODELDOCK_SMOKE_CONTEXT_MENU_ONLY === '1') {
           await verifyContextMenus(window!, store, outputDir, captureUi);
         } else if (process.env.MODELDOCK_SMOKE_JETBRAINS_PLUGIN_ONLY === '1') {
           await verifyJetBrainsPluginSwitch(window!, store, outputDir, captureUi);
         } else if (process.env.MODELDOCK_SMOKE_PROVIDER_MANAGEMENT_ONLY === '1') {
           await verifyProviderManagement(window!, store, outputDir, captureUi);
+        } else if (process.env.MODELDOCK_SMOKE_RELAY_SUBSCRIPTIONS_ONLY === '1') {
+          await verifyRelaySubscriptions(window!, store, outputDir, captureUi);
+        } else if (process.env.MODELDOCK_SMOKE_NAVIGATION_CONSOLIDATION_ONLY === '1') {
+          await verifyNavigationConsolidation(window!, store, outputDir, captureUi);
         } else if (process.env.MODELDOCK_SMOKE_TOOL_ICONS_ONLY === '1') {
           // Icon validation above uses navigation only and never applies tool configuration.
         } else if (process.env.MODELDOCK_SMOKE_AGGREGATE_ONLY === '1') {
@@ -289,12 +295,12 @@ async function createWindow(forceShow = false) {
           writeFileSync(join(outputDir,'direct-mode-validation.json'),JSON.stringify({ok:true,tool:'opencode',mode:'direct',upstreamId:'mock-model',keyRedacted:!direct.content.includes('synthetic-only')},null,2));
           await window!.webContents.executeJavaScript(`document.querySelector('[aria-label="刷新本机配置"]').click()`);
           await new Promise(resolve => setTimeout(resolve,500));
-          for (const name of ['models','tools','service'] as const) {
+          for (const name of ['auth','tools','service'] as const) {
             await window!.webContents.executeJavaScript(`document.querySelector('[data-page="${name}"]').click()`);
             await new Promise(resolve => setTimeout(resolve,200));
             writeFileSync(join(outputDir,`electron-${name}.png`),await captureUi());
           }
-          await window!.webContents.executeJavaScript(`document.querySelector('[data-source="aggregate"]').click()`);
+          await window!.webContents.executeJavaScript(`document.querySelector('[data-page="service"]').click()`);
           await new Promise(resolve => setTimeout(resolve,200));
           await window!.webContents.executeJavaScript(`document.querySelector('[data-action="add-api-provider"]').click()`);
           await new Promise(resolve => setTimeout(resolve,500));
@@ -853,6 +859,8 @@ function registerIpc() {
     return accounts.refreshUsage(id);
   });
   handle('beginCopilotLogin', () => { assertEditable(); return copilotAccounts.beginLogin(); });
+  handle('copilotImportCandidates', () => { assertEditable(); return copilotAccounts.clientImportCandidates(); });
+  handle('importCopilotClientAccount', (id: string) => { assertEditable(); return copilotAccounts.importClientAccount(id); });
   handle('copilotAuthProgress', () => copilotAccounts.progress());
   handle('cancelCopilotLogin', () => copilotAccounts.cancel());
   handle('copilotLogoutAccount', (id: string) => { assertEditable(); copilotAccounts.logout(id); copilotProviders.unlinkAccount(id);
@@ -1007,7 +1015,7 @@ function initializeApplication() {
     await applyNetworkProxy(session.defaultSession, preferences.get().settings.proxyUrl);
     startupStage = 'managers';
     accounts = new AuthCenter(store, oauth, { homeDir: featureHome, codexHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.codex') : process.env.CODEX_HOME, fetch: runtimeFetch });
-    copilotAccounts = new CopilotAuthCenter(store, { fetch: runtimeFetch, onAuthorized: (accountId, providerId) => {
+    copilotAccounts = new CopilotAuthCenter(store, { fetch: runtimeFetch, clientImport: __MODELDOCK_SMOKE_BUILD__ ? { homeDir: featureHome, env: {}, readKeychain: async () => undefined, runGithubCli: async () => { throw new Error('Smoke import uses isolated plaintext fixtures only.'); } } : undefined, onAuthorized: (accountId, providerId) => {
       if (providerId) { copilotProviders.linkAccount(providerId, accountId); catalog.invalidate(providerId); }
     }, openExternal: async url => {
       if (__MODELDOCK_SMOKE_BUILD__ && process.env.MODELDOCK_SMOKE_AUTH_MOCK === '1') return;

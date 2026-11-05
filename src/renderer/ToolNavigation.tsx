@@ -16,7 +16,7 @@ const categories: { id: ToolCategory; label: string }[] = [
   { id: 'agent', label: '常规 Agent' },
   { id: 'jetbrains', label: 'JetBrains' },
 ];
-const categoryFor = (tool: ToolId): ToolCategory => isJetBrainsTool(tool) ? 'jetbrains' : 'agent';
+const categoryFor = (tool: ToolId): ToolCategory => tool === 'junie' || isJetBrainsTool(tool) ? 'jetbrains' : 'agent';
 
 export function ToolNavigation({ tools, selectedTool, active, onSelect }: ToolNavigationProps) {
   const [category, setCategory] = useState<ToolCategory>(() => categoryFor(selectedTool));

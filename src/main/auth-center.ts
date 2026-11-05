@@ -2,10 +2,11 @@ import { readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
-import type { AuthAccount, QuotaWindow, SubscriptionKind, SubscriptionUsage } from '../shared/auth-types';
+import type { AuthAccount, QuotaWindow, RelayAccountKind, SubscriptionKind, SubscriptionUsage } from '../shared/auth-types';
 import type { Provider, ProviderInput, ProviderSecret } from '../shared/types';
 import type { OAuthManager } from './oauth';
 import { safeAccountAvatarUrl } from '../shared/auth-avatar';
+import { isRelayProvider } from '../shared/presets';
 
 // Protocol references, read 2026-10-07 (MIT-licensed CC Switch). The parsers
 // below are independent TypeScript implementations of the observed protocols.
@@ -254,7 +255,17 @@ export class AuthCenter {
   }
 
   listAccounts(): AuthAccount[] {
-    return this.store.listProviders().filter((p): p is Provider & { kind: SubscriptionKind } => p.kind === 'codex' || p.kind === 'grok').map(provider => this.account(provider));
+    return this.store.listProviders().flatMap(provider => {
+      if (provider.kind === 'codex' || provider.kind === 'grok') return [this.account(provider as Provider & { kind: SubscriptionKind })];
+      if (!isRelayProvider(provider)) return [];
+      const relayKeyConfigured = Boolean(this.store.getSecret(provider.id)?.apiKey);
+      return [{
+        providerId: provider.id, providerName: provider.name, kind: provider.presetId as RelayAccountKind,
+        source: 'relay' as const, relayKeyConfigured, authStatus: relayKeyConfigured ? 'ready' as const : 'missing' as const,
+        canRefresh: false,
+        usage: { status: 'unavailable' as const, windows: [], message: '上游授权与订阅额度由反代服务管理，请在反代完成账号登录。' },
+      }];
+    });
   }
 
   private subscription(providerId: string): Provider & { kind: SubscriptionKind } {

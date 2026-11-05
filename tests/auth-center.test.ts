@@ -42,6 +42,35 @@ function grokPayload(percent?: number, reset?: number, period = false): Uint8Arr
 }
 
 describe('authorization center quota protocols and safe account views', () => {
+  it('lists existing relay subscriptions with only local key presence and leaves API sources out', () => {
+    const store = new MemoryStore();
+    const trae = store.saveProvider({ name: 'Existing TRAE relay', kind: 'openai-compatible', presetId: 'trae-cn-relay', baseUrl: 'http://127.0.0.1:18080/v1', enabled: true });
+    const central = store.saveProvider({ name: 'Existing JetBrains relay', kind: 'openai-compatible', presetId: 'jetbrains-central', baseUrl: 'http://127.0.0.1:18081/v1', enabled: false });
+    const api = store.saveProvider({ name: 'Native API', kind: 'openai-compatible', presetId: 'deepseek', baseUrl: 'https://api.deepseek.com', enabled: true });
+    store.setSecret(trae.id, { apiKey: 'PRIVATE_RELAY_KEY', accessToken: jwt({ email: 'should-not-decode@example.test' }), refreshToken: 'PRIVATE_RELAY_REFRESH' });
+    const fetcher = vi.fn(), oauth = oauthFor(store), center = new AuthCenter(store, oauth, { fetch: fetcher });
+    const accounts = center.listAccounts(), relays = accounts.filter(account => account.source === 'relay');
+    expect(relays).toHaveLength(2);
+    expect(relays[0]).toMatchObject({ providerId: trae.id, kind: 'trae-cn-relay', relayKeyConfigured: true, authStatus: 'ready', canRefresh: false, usage: { status: 'unavailable', windows: [] } });
+    expect(relays[1]).toMatchObject({ providerId: central.id, kind: 'jetbrains-central', relayKeyConfigured: false, authStatus: 'missing', canRefresh: false });
+    expect(relays.every(account => account.usage.message.includes('反代服务管理'))).toBe(true);
+    expect(accounts.some(account => account.providerId === api.id)).toBe(false);
+    expect(JSON.stringify(relays)).not.toMatch(/PRIVATE|accessToken|refreshToken|should-not-decode|expiresAt|accountId|email/);
+    expect(fetcher).not.toHaveBeenCalled(); expect(oauth.prepareRequest).not.toHaveBeenCalled();
+    store.setSecret(trae.id, {});
+    expect(center.listAccounts().find(account => account.providerId === trae.id)).toMatchObject({ relayKeyConfigured: false, authStatus: 'missing' });
+  });
+
+  it.each(['trae-cn-relay', 'jetbrains-central'] as const)('never sends %s through OAuth quota or logout operations', presetId => {
+    const store = new MemoryStore(), provider = store.saveProvider({ name: presetId, kind: 'openai-compatible', presetId, baseUrl: 'http://127.0.0.1:18080/v1', enabled: true });
+    store.setSecret(provider.id, { apiKey: 'PRIVATE_RELAY_KEY' });
+    const fetcher = vi.fn(), oauth = oauthFor(store), center = new AuthCenter(store, oauth, { fetch: fetcher });
+    expect(() => center.refreshUsage(provider.id)).toThrow('请选择 Codex 或 Grok 订阅账户');
+    expect(() => center.logout(provider.id)).toThrow('请选择 Codex 或 Grok 订阅账户');
+    expect(store.getSecret(provider.id)).toEqual({ apiKey: 'PRIVATE_RELAY_KEY' });
+    expect(fetcher).not.toHaveBeenCalled(); expect(oauth.prepareRequest).not.toHaveBeenCalled(); expect(oauth.cancel).not.toHaveBeenCalled();
+  });
+
   it('reads optional public pictures from existing ID/access token claims without a profile request', () => {
     const store = new MemoryStore();
     store.setSecret('codex', { accessToken: jwt({ sub: 'codex-id' }), idToken: jwt({ name: 'Codex Profile', picture: 'https://avatars.githubusercontent.com/u/42?v=4' }) });

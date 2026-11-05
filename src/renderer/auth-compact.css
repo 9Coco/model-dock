@@ -49,6 +49,7 @@
 .auth-panel.auth-compact .quota-credit-list li { margin: 4px 0; font-size: 12px; line-height: 1.6; color: var(--ink); }
 .auth-panel.auth-compact .quota-credit-list li > span:last-child { color: var(--muted); }
 .auth-panel.auth-compact .quota-unavailable { margin: 0; font-size: 12px; line-height: 1.5; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.auth-panel.auth-compact .auth-relay-status { color: var(--ink); font-size: 12px; font-weight: 500; line-height: 1.5; }
 .auth-panel.auth-compact .account-actions { grid-column: auto; display: flex; align-items: center; justify-content: flex-end; align-self: center; gap: 3px; margin: 0; padding: 0; }
 .auth-panel.auth-compact .auth-row-age { display: block; margin: 0 3px 0 0; max-width: 65px; font-size: 12px; line-height: 1.5; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .auth-panel.auth-compact .auth-row-age.quota-stale { color: var(--warning); }
