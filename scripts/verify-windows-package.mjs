@@ -17,7 +17,7 @@ const fixtureSymbols = [
   'verifyNavigationConsolidation', 'navigation-consolidation-validation.json', 'synthetic-navigation-api-key',
   'observeWindowPresentation', 'window-presentation-validation.json', 'probe-focus-request',
   'verifySidebarLayout', 'sidebar-layout-validation.json', 'synthetic-sidebar-layout-key', 'revealSmokeNavigationTarget',
-  'verifyRelayClientImport', 'relay-client-import-validation.json', 'synthetic-relay-import-manual-key', 'qa-relay-client-import-stage', 'PRIVATE_RELAY_IMPORT',
+  'verifyRelayClientImport', 'relay-client-import-validation.json', 'synthetic-relay-import-manual-key', 'qa-relay-client-import-stage', 'PRIVATE_RELAY_IMPORT', 'qa-relay-quota-mode', 'PRIVATE_RELAY_QUOTA_TOKEN_RAW_BODY', 'verifyRelayQuota', 'relay-quota-validation.json', 'PRIVATE_RELAY_QUOTA_MANUAL_KEY', 'createJetBrainsIdeFixture', 'verifyJetBrainsIdeImport', 'qa-jetbrains-ide-mode', 'PRIVATE_JETBRAINS_IDE_GRAZIE_TOKEN', 'jetbrains-ide-import-validation.json',
 ];
 
 function assert(condition, message) {

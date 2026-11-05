@@ -308,13 +308,16 @@ export class Store {
     if (expected && (!isDeepStrictEqual(this.getProvider(expected.provider.id), expected.provider) || this.getSecret(expected.provider.id)?.apiKey !== expected.apiKey)) throw new Error('供应商已被修改，请重新导入。');
     if (!input.id && this.listProviders().some(provider => providerIdentity(provider) === providerIdentity(input))) throw new Error('供应商列表已变动，请重新导入。');
     const encoded = JSON.stringify(metadata);
-    if (!encoded || Buffer.byteLength(encoded) > 8192) throw new Error('客户端导入来源信息无效。');
+    if (!encoded || Buffer.byteLength(encoded) > 64 * 1024) throw new Error('客户端导入来源信息无效。');
     const original = this.db, bytes = original.export(); original.run('PRAGMA foreign_keys=ON');
     const staged = new SQL.Database(bytes); staged.run('PRAGMA foreign_keys=ON'); this.db = staged;
     let saved: Provider;
     try {
       saved = this.saveProvider(input, provider => {
         this.db.run('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', [this.managedKey(`auth-metadata:${provider.id}`), this.codec.encrypt(encoded)]);
+        // Import can change the native relay's active account without changing
+        // its URL or key. Do not carry a previous account's quota into that view.
+        this.db.run('DELETE FROM settings WHERE key=?', [this.managedKey(`auth-usage:${provider.id}`)]);
       });
     } catch (error) {
       this.db = original; staged.close(); throw error;

@@ -9,6 +9,7 @@ import { promisify } from 'node:util'
 import { TRAE_RELAY_BASE_URL } from '../shared/presets'
 import { TraeClientImportError, type TraeClientCredentials } from './trae-client-import'
 import { postTraeRelayAccount, type TraeRelayImportResult } from './trae-relay-import'
+import { queryTraeRelayUsage, TraeRelayUsageError, type TraeRelayUsageResult } from './trae-relay-usage'
 
 export { TRAE_RELAY_BASE_URL }
 const relayUrl = new URL(TRAE_RELAY_BASE_URL)
@@ -99,6 +100,7 @@ function probeHealth(): Promise<boolean> {
 const defaults = {
   docker: runDocker, portAvailable, health: probeHealth,
   importAccount: postTraeRelayAccount,
+  queryUsage: queryTraeRelayUsage,
   wait: () => new Promise<void>(resolve => setTimeout(resolve, 400)),
 }
 
@@ -347,6 +349,26 @@ export class TraeRelayManager {
     return result.catch(error => {
       if (error instanceof TraeClientImportError) throw error
       throw new TraeClientImportError('relay', error instanceof RelayFailure ? error.message : 'TRAE 本机账号导入失败，请检查托管反代后重试。')
+    })
+  }
+
+  /** Query only an already-running owned relay; never start Docker or inspect
+   * a source client's credentials as part of quota reads. */
+  queryUsage(apiKey: string): Promise<TraeRelayUsageResult> {
+    const result = this.queue.then(async () => {
+      if (!/^[a-zA-Z0-9_-]{32,128}$/.test(apiKey)) throw new RelayFailure('conflict', '本机中转密钥无效。')
+      const profile = await this.readProfile()
+      if (!profile || profile.keyHash !== keyHash(apiKey)) throw new RelayFailure('conflict', '额度查询只支持当前 ModelDock 托管的 TRAE 反代。')
+      const current = await this.container(profile)
+      if (!current?.running) throw new RelayFailure('stopped', '请先启动 ModelDock 托管的 TRAE 反代，再查询额度。')
+      const status = await this.ready(current.id, profile, false)
+      if (status.state !== 'running') throw new RelayFailure(status.state, status.message)
+      return this.io.queryUsage(apiKey)
+    })
+    this.queue = result.then(() => undefined, () => undefined)
+    return result.catch(error => {
+      if (error instanceof TraeRelayUsageError) throw error
+      throw new TraeRelayUsageError(error instanceof RelayFailure ? error.message : 'TRAE 额度查询失败，请检查托管反代与当前账号授权后重试。')
     })
   }
 }

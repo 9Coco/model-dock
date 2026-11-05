@@ -1,12 +1,12 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { ModelDockApi } from '../shared/types';
 const call = (method: string, ...args: unknown[]) => ipcRenderer.invoke('modeldock:' + method, ...args);
-const relayImportCall = async (method: 'relayClientImportCandidates' | 'importRelayClientAccount', ...args: unknown[]) => {
+const relayImportCall = async (method: 'relayClientImportCandidates' | 'importRelayClientAccount' | 'jetBrainsIdeImportCandidates' | 'importJetBrainsIdeAccount', ...args: unknown[]) => {
   try { return await call(method, ...args); }
   catch (error) {
     // Main already restricts these failures to safe user messages. Remove
     // Electron's transport prefix before crossing the renderer bridge.
-    const message = error instanceof Error ? error.message.replace(/^Error invoking remote method ['"]modeldock:(?:relayClientImportCandidates|importRelayClientAccount)['"]:\s*(?:Error:\s*)?/, '') : '';
+    const message = error instanceof Error ? error.message.replace(/^Error invoking remote method ['"]modeldock:(?:relayClientImportCandidates|importRelayClientAccount|jetBrainsIdeImportCandidates|importJetBrainsIdeAccount)['"]:\s*(?:Error:\s*)?/, '') : '';
     throw new Error(message || '客户端导入失败，请检查本机客户端登录后重试。');
   }
 };
@@ -20,7 +20,7 @@ const api: ModelDockApi = {
   },
   queryDiagnostics: query => call('queryDiagnostics', query), diagnosticsText: query => call('diagnosticsText', query),
   exportDiagnostics: query => call('exportDiagnostics', query), openDiagnosticsDir: () => call('openDiagnosticsDir'),
-  startJetBrainsRelay: () => call('startJetBrainsRelay'),
+  startJetBrainsRelay: id => call('startJetBrainsRelay', id),
   stopJetBrainsRelay: () => call('stopJetBrainsRelay'),
   startTraeRelay: () => call('startTraeRelay'),
   openTraeRelayLogin: () => call('openTraeRelayLogin'),
@@ -47,6 +47,8 @@ const api: ModelDockApi = {
   beginCopilotLogin: () => call('beginCopilotLogin'), copilotAuthProgress: () => call('copilotAuthProgress'),
   cancelCopilotLogin: () => call('cancelCopilotLogin'), copilotLogoutAccount: id => call('copilotLogoutAccount', id),
   relayClientImportCandidates: kind => relayImportCall('relayClientImportCandidates', kind), importRelayClientAccount: (kind, id) => relayImportCall('importRelayClientAccount', kind, id),
+  jetBrainsIdeImportCandidates: () => relayImportCall('jetBrainsIdeImportCandidates'), importJetBrainsIdeAccount: id => relayImportCall('importJetBrainsIdeAccount', id),
+  openJetBrainsAccountHelp: topic => call('openJetBrainsAccountHelp', topic),
   copilotImportCandidates: () => call('copilotImportCandidates'), importCopilotClientAccount: id => call('importCopilotClientAccount', id),
   mcpList: () => call('mcpList'), mcpSave: input => call('mcpSave', input), mcpDelete: id => call('mcpDelete', id),
   mcpSetTool: (id, tool, enabled) => call('mcpSetTool', id, tool, enabled), mcpImport: tool => call('mcpImport', tool),

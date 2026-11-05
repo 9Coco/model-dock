@@ -49,6 +49,11 @@ export async function verifyRelayClientImport(window: BrowserWindow, store: Stor
   async function open(kind: RelayAccountKind): Promise<string> {
     await clearToasts(); await click(`[data-auth-import-account="${kind}"]`);
     const scope = `[data-relay-client-import="${kind}"]`;
+    if (kind === 'jetbrains-central') {
+      await waitFor(`!!document.querySelector(${JSON.stringify(scope)}+' [data-jetbrains-ide-account-boundary]')`, 'JetBrains explains the IDE and Air session boundary before checking Central');
+      assert.equal(await evaluate<boolean>(`!!document.querySelector(${JSON.stringify(scope)}+' [role="alert"]')||!!document.querySelector(${JSON.stringify(scope)}+' [data-field="relay-import-candidate"]')`), false, 'Opening the JetBrains guide does not implicitly query a Central login');
+      await click('[role="dialog"] [data-action="check-central-login"]');
+    }
     await waitFor(`document.querySelector(${JSON.stringify(scope)})?.getAttribute('aria-busy')==='false'`, 'relay import choices finished loading'); return scope;
   }
   async function choose(scope: string): Promise<void> {

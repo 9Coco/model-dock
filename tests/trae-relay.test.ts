@@ -40,6 +40,7 @@ async function fixture(prefix = 'modeldock-relay-test-') {
   });
   const io = { docker, health: vi.fn(async () => true), portAvailable: vi.fn(async () => true), wait: async () => {},
     importAccount: vi.fn(async (_apiKey: string, credentials: TraeClientCredentials) => ({ imported: true as const, accountId: credentials.userId, upstreamVerified: false as const, message: 'fixture imported without upstream validation' })),
+    queryUsage: vi.fn(async (_apiKey: string) => ({ accountId: 'currently-active', usage: { status: 'ready' as const, windows: [{ id: 'fixture-credits', label: '通用积分', total: 100, remaining: 75, unit: '积分' }], message: 'fixture official balance' } })),
   };
   const root = join(dir, 'trae-cn-relay');
   const manager = new TraeRelayManager(dir, io);
@@ -47,6 +48,30 @@ async function fixture(prefix = 'modeldock-relay-test-') {
 }
 
 describe('managed TRAE CN relay', () => {
+  it('queries quota only after proving a running owned relay and does not implicitly start or use an imported account ID', async () => {
+    const { manager, io, calls, state } = await fixture();
+    await expect(manager.queryUsage(key)).rejects.toThrow('只支持'); expect(io.queryUsage).not.toHaveBeenCalled();
+    expect(calls().some(args => args[1] === 'create' || args[1] === 'start')).toBe(false);
+    await manager.start(key); await expect(manager.queryUsage('z'.repeat(64))).rejects.toThrow('只支持');
+    const owner = state.owner; state.owner = 'foreign-owner'; await expect(manager.queryUsage(key)).rejects.toThrow('不属于'); state.owner = owner;
+    io.health.mockResolvedValue(false); await expect(manager.queryUsage(key)).rejects.toThrow('healthz'); io.health.mockResolvedValue(true);
+    expect(io.queryUsage).not.toHaveBeenCalled(); expect(await manager.queryUsage(key)).toMatchObject({ accountId: 'currently-active', usage: { status: 'ready' } });
+    expect(io.queryUsage).toHaveBeenCalledExactlyOnceWith(key);
+    await manager.stop(); await expect(manager.queryUsage(key)).rejects.toThrow('先启动');
+  });
+
+  it('serializes quota reads against stop, redacts arbitrary failures and keeps its queue usable', async () => {
+    const { manager, io, calls } = await fixture(); await manager.start(key);
+    let release!: (result: Awaited<ReturnType<typeof io.queryUsage>>) => void;
+    io.queryUsage.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    const pending = manager.queryUsage(key); await vi.waitFor(() => expect(io.queryUsage).toHaveBeenCalledTimes(1));
+    const stopped = manager.stop(); expect(calls().some(args => args[1] === 'stop')).toBe(false);
+    release({ accountId: 'current-account', usage: { status: 'ready', windows: [], message: 'fixture' } }); await pending; await stopped;
+    await manager.start(key); io.queryUsage.mockRejectedValueOnce(new Error('SYNTHETIC_PRIVATE_QUOTA_TOKEN'));
+    const error = await manager.queryUsage(key).catch(error => error as Error); expect(String(error)).not.toContain('SYNTHETIC_PRIVATE');
+    expect((await manager.stop()).state).toBe('stopped');
+  });
+
   it('never imports into an absent, stopped or different-key relay and does not start one implicitly', async () => {
     const { manager, io, calls } = await fixture();
     const credentials: TraeClientCredentials = { token: 'synthetic.private.access', userId: 'fixture-user', host: 'https://api.trae.cn' };
