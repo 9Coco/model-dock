@@ -177,6 +177,18 @@ child.on('exit', code => {
       console.log(JSON.stringify({ exitCode: code, bridge: value.bridge, relayClientImport: true, screenshots: result.screenshots.length, output }));
       process.exit(code || 0);
     }
+    if (env.MODELDOCK_SMOKE_JETBRAINS_IDE_ONLY === '1') {
+      const result = JSON.parse(readFileSync(resolve(output, 'jetbrains-ide-import-validation.json'), 'utf8'));
+      if (!result.ok) throw new Error('Native JetBrains IDE account verification failed');
+      console.log(JSON.stringify({ exitCode: code, bridge: value.bridge, nativeJetBrainsIde: true, output }));
+      process.exit(code || 0);
+    }
+    if (env.MODELDOCK_SMOKE_RELAY_QUOTA_ONLY === '1') {
+      const result = JSON.parse(readFileSync(resolve(output, 'relay-quota-validation.json'), 'utf8'));
+      if (!result.ok || !result.managedTraeAutoRefresh || !result.managedTraeManualRefresh || !result.manualRelayNotQueried || !result.currentAccountSeparateFromImportProvenance || !result.unknownQuotaHasNoInventedPercent || !result.privacyVerified || !result.configurationsUnchanged) throw new Error('Relay quota and JetBrains account guidance validation failed');
+      console.log(JSON.stringify({ exitCode: code, bridge: value.bridge, relayQuota: true, screenshots: result.screenshots.length, output }));
+      process.exit(code || 0);
+    }
     if (env.MODELDOCK_SMOKE_NAVIGATION_CONSOLIDATION_ONLY === '1') {
       const result = JSON.parse(readFileSync(resolve(output, 'navigation-consolidation-validation.json'), 'utf8'));
       if (!result.ok || !result.subscriptionAdditionOnlyInAuthCenter || !result.serviceInterfaceAndLogsConsolidated || !result.subscriptionLocalUrlKeyAliasesCopied || !result.credentialsAndToolBindingsPreserved) throw new Error('Navigation and local subscription connection validation failed');

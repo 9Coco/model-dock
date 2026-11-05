@@ -17,12 +17,12 @@ export interface RelayImportAdapter {
   perform(candidate: NativeRelayCandidate, key: string): Promise<{ upstreamVerified: boolean }>;
 }
 export type RelayImportStore = Pick<Store, 'listProviders' | 'getProvider' | 'getSecret' | 'getManagedState' | 'saveRelayClientImport'>;
-interface StoredImport { version: 1; connection: string; identity: string; clientImport: RelayClientImportProvenance }
+interface StoredImport { version: 1; connection: string; identity: string; revision: string; clientImport: RelayClientImportProvenance }
 const kinds = ['trae-cn-relay', 'jetbrains-central'] as const;
-const clients = ['trae-cn', 'trae-solo-cn', 'jetbrains-central'] as const;
+const clients = ['trae-cn', 'trae-solo-cn', 'jetbrains-central', 'jetbrains-ide'] as const;
 const label = (value: unknown): string | undefined => typeof value === 'string' && value.trim() && value.length <= 160 && !/[\x00-\x1f\x7f]/.test(value) ? value.trim() : undefined;
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
-function connection(provider: Pick<Provider, 'kind' | 'presetId' | 'baseUrl' | 'relayMode' | 'claudeBaseUrl' | 'messagesAuth'>, key?: string): string {
+export function relayConnectionFingerprint(provider: Pick<Provider, 'kind' | 'presetId' | 'baseUrl' | 'relayMode' | 'claudeBaseUrl' | 'messagesAuth'>, key?: string): string {
   return digest(JSON.stringify([provider.kind, provider.presetId, provider.baseUrl, provider.relayMode ?? '', provider.claudeBaseUrl ?? '', provider.messagesAuth ?? 'bearer', key ?? '']));
 }
 function identity(candidate: NativeRelayCandidate): string { return digest(JSON.stringify([candidate.client, candidate.sourceId, candidate.accountId ?? 'current-client'])); }
@@ -32,13 +32,14 @@ function storedImport(store: Pick<Store, 'getManagedState'>, id: string): Stored
 }
 export function relayClientImportProvenance(store: Pick<Store, 'getManagedState' | 'getSecret'>, provider: Provider): RelayClientImportProvenance | undefined {
   const stored = storedImport(store, provider.id), value = stored?.clientImport;
-  if (!stored || !value || !clients.includes(value.client) || typeof value.upstreamVerified !== 'boolean' || !Number.isFinite(Date.parse(value.importedAt)) || stored.connection !== connection(provider, store.getSecret(provider.id)?.apiKey)) return;
+  if (!stored || !value || !clients.includes(value.client) || typeof value.upstreamVerified !== 'boolean' || !Number.isFinite(Date.parse(value.importedAt)) || stored.connection !== relayConnectionFingerprint(provider, store.getSecret(provider.id)?.apiKey)) return;
   return { client: value.client, importedAt: value.importedAt, upstreamVerified: value.upstreamVerified, ...(label(value.accountLabel) ? { accountLabel: label(value.accountLabel) } : {}) };
 }
 export function relayAccountView(store: Pick<Store, 'getManagedState' | 'getSecret'>, provider: Provider): AuthAccount {
   const relayKeyConfigured = Boolean(store.getSecret(provider.id)?.apiKey), clientImport = relayClientImportProvenance(store, provider);
   return { providerId: provider.id, providerName: provider.name, kind: provider.presetId as RelayAccountKind, source: 'relay', relayKeyConfigured,
     ...(clientImport ? { clientImport } : {}), authStatus: relayKeyConfigured ? 'ready' : 'missing', canRefresh: false,
+    canQueryUsage: provider.presetId === 'trae-cn-relay' && provider.relayMode === 'managed' && provider.baseUrl === TRAE_RELAY_BASE_URL && relayKeyConfigured,
     usage: { status: 'unavailable', windows: [], message: clientImport ? clientImport.upstreamVerified
       ? '已复用并校验 Central CLI 当前授权；模型权限与推理结果请通过测试连接确认。'
       : '客户端会话已交给本机反代；尚未验证云端授权、额度或模型推理。'
@@ -92,7 +93,7 @@ export class RelayClientImportManager {
       const input: ProviderInput = { ...(target ?? {}), ...(target ? { id: target.id } : {}), name, kind: 'openai-compatible', presetId: kind,
         baseUrl, apiKey: key, enabled: target?.enabled ?? true, note: target?.note ?? '', ...(kind === 'trae-cn-relay' ? { relayMode: 'managed' as const } : {}), messagesAuth: 'bearer', claudeBaseUrl: '' };
       const clientImport: RelayClientImportProvenance = { client: ticket.candidate.client, ...(label(ticket.candidate.accountLabel) ? { accountLabel: label(ticket.candidate.accountLabel) } : {}), importedAt: new Date(this.now()).toISOString(), upstreamVerified: receipt.upstreamVerified };
-      const stored: StoredImport = { version: 1, connection: connection(input, key), identity: identity(ticket.candidate), clientImport };
+      const stored: StoredImport = { version: 1, connection: relayConnectionFingerprint(input, key), identity: identity(ticket.candidate), revision: randomUUID(), clientImport };
       let saved: Provider;
       try { saved = await this.store.saveRelayClientImport(input, stored, expected); }
       catch { throw new RelayClientImportError('反代已处理客户端授权，但本地记录未能保存；原供应商记录已保留，请检查反代账号后重试。'); }

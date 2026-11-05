@@ -78,8 +78,14 @@ describe('relay provider reuse, provenance and local atomic save', () => {
     expect(account).toMatchObject({ source: 'relay', kind, relayKeyConfigured: true, canRefresh: false, clientImport: { client: candidate(kind).client, accountLabel: '合成演示账号', upstreamVerified: kind === 'jetbrains-central' } });
     expect(JSON.stringify(account)).not.toContain(KEY); expect(account.providerId).toBeTruthy();
     const provider = store.getProvider(account.providerId)!; store.saveProvider({ ...provider, name: '自定义供应商名称', note: '自定义备注', enabled: false }); seedReferences(store, provider.id);
-    const before = state(store); ticket = (await manager.preview(kind)).candidates[0]; account = await manager.import(kind, ticket.id);
-    expect(account.providerId).toBe(provider.id); expect(state(store)).toEqual(before);
+    const before = state(store), oldMetadata = store.getManagedState<Record<string, unknown>>(`auth-metadata:${provider.id}`, {});
+    ticket = (await manager.preview(kind)).candidates[0]; account = await manager.import(kind, ticket.id);
+    const { metadata: beforeMetadata, ...beforeConfiguration } = before, { metadata: afterMetadata, ...afterConfiguration } = state(store);
+    expect(account.providerId).toBe(provider.id); expect(afterConfiguration).toEqual(beforeConfiguration);
+    expect(afterMetadata.filter(row => row[0] !== provider.id)).toEqual(beforeMetadata.filter(row => row[0] !== provider.id));
+    const newMetadata = store.getManagedState<Record<string, unknown>>(`auth-metadata:${provider.id}`, {});
+    expect(newMetadata).toEqual({ ...oldMetadata, revision: expect.any(String) });
+    expect(newMetadata.revision).not.toBe(oldMetadata.revision);
     expect(store.getSecret(provider.id)).toEqual({ apiKey: KEY });
     const reopened = await Store.create(dir, codec); stores.push(reopened);
     expect(state(reopened)).toEqual(state(store)); expect(relayClientImportProvenance(reopened, reopened.getProvider(provider.id)!)).toMatchObject({ client: candidate(kind).client });

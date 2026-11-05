@@ -53,6 +53,8 @@ export interface AuthAccount {
   authStatus: Provider['authStatus'] | 'expired';
   expiresAt?: number;
   canRefresh: boolean;
+  /** Read-only quota retrieval; independent of OAuth token refresh. */
+  canQueryUsage?: boolean;
   source?: 'client-import' | 'relay';
   clientImport?: RelayClientImportProvenance;
   /** Local relay credential presence only; never establishes upstream login. */
@@ -61,7 +63,7 @@ export interface AuthAccount {
 }
 
 export interface RelayClientImportProvenance {
-  client: 'trae-cn' | 'trae-solo-cn' | 'jetbrains-central';
+  client: 'trae-cn' | 'trae-solo-cn' | 'jetbrains-central' | 'jetbrains-ide';
   accountLabel?: string;
   importedAt: string;
   /** Native account/session validation only; never model inference validation. */

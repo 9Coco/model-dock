@@ -25,6 +25,8 @@ export function observeWindowPresentation(window: BrowserWindow, outputDir: stri
   const createdAt = Date.now(), events: ProbeEvent[] = [], samples: ProbeSample[] = [], images = new Map<string, NativeImage>();
   let origin = 0, paintReady = false, rendererReady = false, showRequests = 0;
   let focusRequestedByProduct: boolean | undefined, finished: Promise<void> | undefined;
+  const readbackDelay = Math.max(2500, Number(process.env.MODELDOCK_SMOKE_WINDOW_READBACK_DELAY_MS) || 2500);
+  const probeFocus = process.env.MODELDOCK_SMOKE_WINDOW_NO_PROBE_FOCUS !== '1';
   let begin!: () => void;
   const started = new Promise<void>(done => { begin = done; });
   const event = (name: string) => events.push({ event: name, elapsedMs: Date.now() - createdAt, timestamp: new Date().toISOString(), nativeFocused: window.isFocused(), visible: window.isVisible() });
@@ -68,22 +70,33 @@ export function observeWindowPresentation(window: BrowserWindow, outputDir: stri
   }
   function startTimeline(): void {
     if (origin) return;
-    origin = Date.now(); begin();
+    origin = Date.now();
+    // Native screenshot drivers can observe startup without waking Chromium's
+    // compositor with executeJavaScript/capturePage during the first frames.
+    writeFileSync(join(outputDir, 'window-presentation-shown.json'), JSON.stringify({ mainPid: process.pid, shownAt: origin, timestamp: new Date(origin).toISOString(),
+      bounds: window.getBounds(), contentBounds: window.getContentBounds(), nativeFocused: window.isFocused(), visible: window.isVisible(),
+      electron: process.versions.electron, chrome: process.versions.chrome,
+      switches: process.argv.filter(value => /^--(?:ozone-platform|disable-features|force-color-profile)=/.test(value)),
+      noRendererReadbackBeforeMs: readbackDelay, probeFocus }, null, 2));
+    begin();
     finished = (async () => {
-      await Promise.all([0, 100, 800, 2000].map(async offset => { await pause(offset); await sample(`t${offset}`, offset); }));
+      const offsets = [0, 100, 800, 2000].map(offset => offset + readbackDelay);
+      // Keep samples serial: capturePage may change the renderer's capture
+      // lifecycle and overlapping samples would make their ordering ambiguous.
+      for (const offset of offsets) { await pause(offset - (Date.now() - origin)); await sample(`t${offset}`, offset); }
       let comparison: Record<string, unknown> | undefined;
-      if (!options.hidden) {
+      if (!options.hidden && probeFocus) {
         // This is the only deliberate focus operation made by the probe. It
         // happens after every passive baseline snapshot has been collected.
         event('probe-focus-request'); window.focus();
         await pause(100); await sample('after-focus', Date.now() - origin);
-        const before = images.get('t2000')!, after = images.get('after-focus')!, left = before.toBitmap(), right = after.toBitmap();
+        const before = images.get(`t${offsets.at(-1)}`)!, after = images.get('after-focus')!, left = before.toBitmap(), right = after.toBitmap();
         let changed = 0, absolute = 0;
         if (left.length === right.length) for (let index = 0; index < left.length; index += 4) {
           let difference = 0; for (let channel = 0; channel < 3; channel++) difference += Math.abs(left[index + channel] - right[index + channel]);
           if (difference) changed++; absolute += difference;
         }
-        const pre = samples.find(value => value.stage === 't2000')!, post = samples.find(value => value.stage === 'after-focus')!;
+        const pre = samples.find(value => value.stage === `t${offsets.at(-1)}`)!, post = samples.find(value => value.stage === 'after-focus')!;
         comparison = { sameDimensions: left.length === right.length, changedPixelPercent: left.length === right.length ? Number((changed / (left.length / 4) * 100).toFixed(6)) : null,
           meanAbsoluteRgbDifference: left.length === right.length ? Number((absolute / (left.length / 4) / 3).toFixed(6)) : null,
           computedColorsUnchanged: JSON.stringify(pre.dom.colors) === JSON.stringify(post.dom.colors), themeUnchanged: pre.dom.theme === post.dom.theme,
@@ -100,8 +113,8 @@ export function observeWindowPresentation(window: BrowserWindow, outputDir: stri
         assert.ok(ordered.every(value => value.visible), 'Every visible-startup sample stays visible');
       }
       writeFileSync(join(outputDir, 'window-presentation-validation.json'), JSON.stringify({ ok: true, mode: options.hidden ? 'hidden' : 'visible', expectedTheme: options.theme,
-        mainPid: process.pid, platform: process.platform, displayBackend: process.argv.includes('--ozone-platform=x11') ? 'x11' : 'default', paintReady, rendererReady, showRequests, focusRequestedByProduct,
-        noInputBeforeBaseline: true, nativeNoInputBeforeProbe: true, explicitProbeFocusCalls: options.hidden ? 0 : 1, captureScope: options.hidden ? 'No capture requested so the initially hidden page remains untouched' : 'Electron webContents.capturePage; excludes KDE compositor and native decorations', events, samples: ordered, comparison }, null, 2));
+        mainPid: process.pid, platform: process.platform, displayBackend: process.argv.includes('--ozone-platform=x11') ? 'x11' : process.argv.includes('--ozone-platform=wayland') ? 'wayland' : 'default', paintReady, rendererReady, showRequests, focusRequestedByProduct,
+        noInputBeforeBaseline: true, nativeNoInputBeforeProbe: true, noRendererReadbackBeforeMs: readbackDelay, explicitProbeFocusCalls: options.hidden || !probeFocus ? 0 : 1, captureScope: options.hidden ? 'No capture requested so the initially hidden page remains untouched' : 'Electron webContents.capturePage; excludes KDE compositor and native decorations', events, samples: ordered, comparison }, null, 2));
       const hold = Math.min(30_000, Math.max(0, Number(process.env.MODELDOCK_SMOKE_WINDOW_HOLD_MS) || 0));
       if (hold) await pause(hold);
     })();

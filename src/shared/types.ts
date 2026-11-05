@@ -242,7 +242,7 @@ export interface ModelDockApi {
   testProvider(id: string, input?: ConnectionTestInput): Promise<ConnectionResult>;
   discoverModels(id: string): Promise<DiscoveryResult>;
   addDiscoveredModels(id: string, selections: ModelSelection[]): Promise<AddModelsResult>;
-  startJetBrainsRelay(): Promise<{ baseUrl: string; apiKey: string }>;
+  startJetBrainsRelay(providerId?: string): Promise<{ baseUrl: string; apiKey: string }>;
   stopJetBrainsRelay(): Promise<void>;
   startTraeRelay(): Promise<{ baseUrl: string; apiKey: string }>;
   openTraeRelayLogin(): Promise<void>;
@@ -280,6 +280,9 @@ export interface ModelDockApi {
   importCopilotClientAccount(candidateId: string): Promise<AuthAccount>;
   relayClientImportCandidates(kind: RelayAccountKind): Promise<RelayClientImportPreview>;
   importRelayClientAccount(kind: RelayAccountKind, candidateId: string): Promise<AuthAccount>;
+  jetBrainsIdeImportCandidates(): Promise<RelayClientImportPreview>;
+  importJetBrainsIdeAccount(candidateId: string): Promise<AuthAccount>;
+  openJetBrainsAccountHelp(topic: 'ide' | 'central'): Promise<void>;
   mcpList(): Promise<McpServer[]>;
   mcpSave(input: McpServerInput): Promise<McpServer>;
   mcpDelete(id: string): Promise<void>;

@@ -344,7 +344,7 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
   });
   const startJetBrainsRelay = (draft?: ProviderDraft) => run('jetbrains-relay', async () => {
     const session = jetBrainsDraftSession.current;
-    const { baseUrl, apiKey } = await bridge!.startJetBrainsRelay();
+    const { baseUrl, apiKey } = await bridge!.startJetBrainsRelay(draft?.id);
     if (draft && session === jetBrainsDraftSession.current) {
       setProviderDraft(current => current?.presetId === 'jetbrains-central' && current.id === draft.id
         ? { ...current, baseUrl, apiKey } : current);

@@ -15,10 +15,11 @@ export function JetBrainsRelayGuide({ pending, savedKey, keyFilled, onStart, onS
     <Server size={18} />
     <div>
       <strong>用 JetBrains AI 额度调用模型</strong>
-      <p>安装 JetBrains Central CLI 和 Pi CLI（已验证 1.5.0），在本机终端运行 <code>central login</code> 并选择有 AI 额度的许可。运行 <code>central limit</code> 可查看余额。
-        {' '}<a href={JETBRAINS_CENTRAL_SETUP_URL} target="_blank" rel="noopener noreferrer">官方安装说明 <ArrowUpRight size={12} /></a>
+      <p>从授权中心导入 IDE 账号后，可按需启动本机中转并获取兼容模型，无需安装 Central CLI。访问授权与额度由官方服务校验。</p>
+      <p>使用 Central 来源时，需单独安装 Central CLI 和 Pi CLI，并完成 <code>central login</code>。
+        {' '}<a href={JETBRAINS_CENTRAL_SETUP_URL} target="_blank" rel="noopener noreferrer">Central 官方说明 <ArrowUpRight size={12} /></a>
       </p>
-      <p>ModelDock 通过 Pi 转发 Central 中的 OpenAI 和 Anthropic 模型。本机 Chat Completions 地址为 <code>{JETBRAINS_RELAY_BASE_URL}</code>。使用时保持 ModelDock 运行，无需打开 JetBrains IDE。</p>
+      <p>本机 Chat Completions 地址为 <code>{JETBRAINS_RELAY_BASE_URL}</code>。使用时保持 ModelDock 运行；实际兼容模型取决于所导入账号与 AI 许可证。</p>
       <div className="row-actions">
         <button type="button" className="button small primary" data-action="start-jetbrains-relay" disabled={pending} onClick={onStart}><Power size={14} />启动本机反代</button>
         <button type="button" className="button small secondary" data-action="stop-jetbrains-relay" disabled={pending} onClick={onStop}>停止反代</button>
