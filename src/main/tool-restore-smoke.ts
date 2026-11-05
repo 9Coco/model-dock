@@ -49,13 +49,17 @@ export async function verifyToolRestoreAndConnections(window: BrowserWindow, sto
   async function selectProvider(providerId: string) {
     const current = await binding('codex');
     const expected = current.mode === 'aggregate' ? [...new Set([...(current.providerIds ?? []), providerId])] : [providerId];
-    await click(`article[data-provider-id="${providerId}"] input[data-action="select-tool-provider"]`);
+    if (current.mode === 'aggregate') await click(`article[data-provider-id="${providerId}"] input[data-action="select-tool-provider"]`);
+    else {
+      await waitFor(`!!document.querySelector('[data-action="single-entry-direct-provider"]')&&!document.querySelector('[data-action="single-entry-direct-provider"]').disabled`, 'native supplier selector ready');
+      await evaluate(`(()=>{const select=document.querySelector('[data-action="single-entry-direct-provider"]');Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(select,${JSON.stringify(providerId)});select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    }
     await waitFor(`(async()=>{const binding=(await window.modelDock.snapshot()).bindings.find(item=>item.id==='codex');return JSON.stringify(binding.providerIds)===${JSON.stringify(JSON.stringify(expected))}&&!document.querySelector('[data-action="apply-tool-config"]')?.disabled;})()`, 'provider connection selection saved');
     await idle();
   }
   async function switchMode(mode: 'direct' | 'aggregate') {
-    await click(`[data-action="codex-${mode}-mode"]`);
-    await waitFor(`document.querySelector('[data-tool-binding="codex"]')?.dataset.connectionMode==='${mode}'&&!document.querySelector('[data-action="codex-${mode}-mode"]')?.disabled`, `${mode} connection mode saved`);
+    if ((await binding('codex')).mode !== mode) await click('[data-action="tool-use-aggregate"]');
+    await waitFor(`document.querySelector('[data-tool-binding="codex"]')?.dataset.connectionMode==='${mode}'&&document.querySelector('[data-action="tool-use-aggregate"]')?.checked===${mode === 'aggregate'}&&!document.querySelector('[data-action="tool-use-aggregate"]').disabled`, `${mode} connection mode saved`);
     await idle();
   }
   async function setDefault(modelId: string) {
@@ -87,13 +91,16 @@ export async function verifyToolRestoreAndConnections(window: BrowserWindow, sto
   await selectProvider(sourceB.id);
   const direct = await binding('codex');
   assert.equal(direct.mode, 'direct'); assert.deepEqual(direct.providerIds, [sourceB.id]);
-  assert.equal(await evaluate<number>('document.querySelectorAll("input[data-action=select-tool-provider]:checked").length'), 1);
+  assert.equal(await evaluate<string>('document.querySelector("[data-action=single-entry-direct-provider]").value'), sourceB.id);
+  assert.equal(await evaluate<number>('document.querySelectorAll("input[data-action=select-tool-provider]").length'), 0, 'Native direct mode has exactly one supplier selector');
   const directConfig = parseToml(readFileSync(paths.codex, 'utf8')) as any;
   assert.equal(directConfig.model_providers.modeldock.base_url, sourceB.baseUrl);
   assert.equal(directConfig.model, modelB.upstreamId);
   assert.deepEqual(new Set(catalogModels()), new Set(models.filter(model => model.providerId === sourceB.id).map(model => model.upstreamId)));
   await switchMode('aggregate');
+  assert.deepEqual((await binding('codex')).providerIds, [], 'Switching to aggregate restores its independent empty mapping');
   await selectProvider(sourceA.id);
+  await selectProvider(sourceB.id);
   const aggregate = await binding('codex');
   assert.equal(aggregate.mode, 'aggregate'); assert.equal(aggregate.modelSelection, 'selected');
   assert.deepEqual(new Set(aggregate.providerIds), new Set([sourceA.id, sourceB.id])); assert.equal(aggregate.modelIds.length, 4);
@@ -102,6 +109,10 @@ export async function verifyToolRestoreAndConnections(window: BrowserWindow, sto
   assert.equal(subset.modelIds.length, 3); assert.equal(subset.modelIds.includes(modelB.id), false);
   assert.ok(subset.modelIds.includes(subset.defaultModelId), 'Removing the default must select another enabled model');
   assert.deepEqual(new Set(catalogModels()), new Set(models.filter(model => model.id !== modelB.id).map(model => model.alias)));
+  await switchMode('direct');
+  assert.deepEqual((await binding('codex')).providerIds, [sourceB.id], 'Aggregate mapping edits preserve the independent native supplier');
+  await switchMode('aggregate');
+  assert.deepEqual((await binding('codex')).modelIds, subset.modelIds, 'Returning to aggregate preserves the exact enabled model subset');
   const snapshot = await evaluate<Snapshot>('window.modelDock.snapshot()');
   const gatewayUrl = `http://127.0.0.1:${snapshot.gateway.port}/tool/codex/v1`;
   const listed = await fetch(`${gatewayUrl}/models`, { headers: { authorization: `Bearer ${store.gatewayKey()}` } });

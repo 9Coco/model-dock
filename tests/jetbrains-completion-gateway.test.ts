@@ -15,6 +15,8 @@ const completion = (text = 'SYNTHETIC_CODE') => ({ id: 'fim_fixture', object: 't
 const frame = (value: unknown) => `data: ${typeof value === 'string' ? value : JSON.stringify(value)}\n\n`;
 // Native completion request-spec supports an optional suffix; all code here is synthetic.
 const request = (stream = false) => ({ model: 'mapped-fim', prompt: 'function synthetic() {\n  return ', suffix: ';\n}', max_tokens: 512, stop: [], temperature: 0.2, top_p: 1, stream });
+function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
+async function within<T>(promise: Promise<T>): Promise<T> { let timer: ReturnType<typeof setTimeout> | undefined; try { return await Promise.race([promise, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Expected immediate FIM event')), 2000); })]); } finally { clearTimeout(timer); } }
 
 async function fixture(handler?: (request: IncomingMessage, response: ServerResponse, body: any) => void | Promise<void>, timeoutMs = 10000) {
   const upstreams: { url: string; body: any; auth: string | undefined }[] = [];
@@ -96,16 +98,42 @@ describe('JetBrains aggregate native FIM endpoint', () => {
     const f = await fixture((_request, response) => { response.setHeader('content-type', 'application/json'); const value = scenario === 'chat' ? { ...completion(), object: 'chat.completion', choices: [{ index: 0, message: { content: 'SYNTHETIC_BAD' }, finish_reason: 'stop' }] } : scenario === 'error' ? { error: { message: 'SYNTHETIC_BAD' } } : { ...completion(), choices: [{ index: 0, text: 'SYNTHETIC_BAD', finish_reason: 'aborted' }] }; response.end(scenario === 'malformed' ? '{' : JSON.stringify(value)); });
     const result = await f.post('rider', request()); expect(result.status).toBe(502); expect(await result.text()).not.toContain('SYNTHETIC_BAD');
   });
-  it('buffers and validates a complete native FIM SSE with split UTF-8 and mapped model', async () => {
+  it('incrementally validates native FIM SSE with split UTF-8 and mapped model', async () => {
     const f = await fixture((_request, response) => {
       response.setHeader('content-type', 'text/event-stream'); const payload = Buffer.from(frame({ ...completion('合成代码'), choices: [{ index: 0, text: '合成代码', logprobs: null, finish_reason: null }], usage: undefined }) + frame({ ...completion(''), choices: [{ index: 0, text: '', logprobs: null, finish_reason: 'stop' }] }) + frame('[DONE]'));
       for (let start = 0; start < payload.length; start += 3) response.write(payload.subarray(start, start + 3)); response.end();
     });
     const result = await f.post('rider', request(true)); expect(result.status).toBe(200); const text = await result.text(); expect(text).toContain('合成代码'); expect(text).toContain('"model":"mapped-fim"'); expect(text).toContain('data: [DONE]');
   });
-  it.each(['missing-done', 'missing-finish', 'late-error', 'bad-shape'] as const)('returns HTTP 502 before publishing invalid native FIM stream %s', async scenario => {
-    const f = await fixture((_request, response) => { response.setHeader('content-type', 'text/event-stream'); response.end(scenario === 'bad-shape' ? frame({ choices: [{ text: 'SYNTHETIC_BAD' }] }) + frame('[DONE]') : frame({ ...completion('SYNTHETIC_BAD'), choices: [{ index: 0, text: 'SYNTHETIC_BAD', logprobs: null, finish_reason: scenario === 'missing-finish' ? null : 'stop' }] }) + (scenario === 'missing-done' ? '' : frame('[DONE]')) + (scenario === 'late-error' ? frame({ type: 'error' }) : '')); });
-    const result = await f.post('rider', request(true)); expect(result.status).toBe(502); expect(await result.text()).not.toContain('SYNTHETIC_BAD');
+  it.each(['missing-done', 'missing-finish', 'late-error', 'bad-shape'] as const)('fails without terminal success for invalid native FIM stream %s', async scenario => {
+    const release = deferred();
+    const f = await fixture(async (_request, response) => {
+      response.setHeader('content-type', 'text/event-stream');
+      if (scenario === 'bad-shape') { response.end(frame({ choices: [{ text: 'SYNTHETIC_BAD' }] }) + frame('[DONE]')); return; }
+      response.write(frame({ ...completion('SYNTHETIC_BAD'), choices: [{ index: 0, text: 'SYNTHETIC_BAD', logprobs: null, finish_reason: scenario === 'missing-finish' ? null : 'stop' }] }));
+      await release.promise; response.end((scenario === 'missing-done' ? '' : frame('[DONE]')) + (scenario === 'late-error' ? frame({ type: 'error' }) : ''));
+    });
+    const result = await within(f.post('rider', request(true)));
+    if (scenario === 'bad-shape') { expect(result.status).toBe(502); expect(await result.text()).not.toContain('SYNTHETIC_BAD'); }
+    else {
+      expect(result.status).toBe(200); const reader = result.body!.getReader(); let text = '', rejected = false;
+      try { const first = await within(reader.read()); text += new TextDecoder().decode(first.value); expect(text).toContain('SYNTHETIC_BAD'); release.resolve(); while (true) { const part = await within(reader.read()); if (part.done) break; text += new TextDecoder().decode(part.value); } } catch { rejected = true; } finally { release.resolve(); await reader.cancel().catch(() => {}); reader.releaseLock(); }
+      expect(rejected).toBe(true); expect(text).toContain('SYNTHETIC_BAD'); expect(text).not.toMatch(/\[DONE\]|"finish_reason":"stop"/);
+      expect(f.store.logs().at(-1)?.status).toBe(502);
+    }
+  });
+  it.each(JETBRAINS_TOOL_IDS)('%s publishes native FIM content before upstream terminal data', async tool => {
+    const release = deferred(); let completed = false;
+    const f = await fixture(async (_request, response) => {
+      response.setHeader('content-type', 'text/event-stream'); response.write(frame({ ...completion('IMMEDIATE_CODE🙂'), choices: [{ index: 0, text: 'IMMEDIATE_CODE🙂', logprobs: null, finish_reason: null }], usage: undefined }));
+      await release.promise; completed = true; response.end(frame({ ...completion(''), choices: [{ index: 0, text: '', logprobs: null, finish_reason: 'stop' }] }) + frame('[DONE]'));
+    });
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    try {
+      const result = await within(f.post(tool, request(true))); expect(result.status).toBe(200); reader = result.body!.getReader();
+      const first = new TextDecoder().decode((await within(reader.read())).value); expect(first).toContain('IMMEDIATE_CODE🙂'); expect(first).toContain('"model":"mapped-fim"'); expect(first).not.toMatch(/\[DONE\]|"finish_reason":"stop"/); expect(completed).toBe(false);
+      release.resolve(); let tail = ''; while (true) { const part = await within(reader.read()); if (part.done) break; tail += new TextDecoder().decode(part.value); } expect(tail).toContain('"finish_reason":"stop"'); expect(tail).toContain('[DONE]');
+    } finally { release.resolve(); await reader?.cancel().catch(() => {}); reader?.releaseLock(); }
   });
   it('rejects SSE for the actual non-streaming Rider contract and enforces timeout', async () => {
     const f = await fixture((_request, response) => { response.setHeader('content-type', 'text/event-stream'); response.end(frame(completion()) + frame('[DONE]')); });

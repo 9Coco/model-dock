@@ -142,6 +142,9 @@ export class JetBrainsIdeApi {
     if (topUp) { const value = quotaWindow('jetbrains-top-up', '加购额度', topUp); if (value) windows.push(value); }
     if (!windows.length) { const value = quotaWindow('jetbrains-total', 'AI 额度', current, resetAt); if (value) windows.push(value); }
     if (!windows.length) throw failure('response');
+    // Installed native Quota/Get and QuotaTariff DTOs provide amounts and a
+    // period, not a named subscription product. Do not infer AI Pro/Ultimate
+    // from a maximum, license identifier or undocumented extra response keys.
     return { status: 'ready', windows, queriedAt: new Date(this.now()).toISOString(), message: '当前 JetBrains IDE 账号的官方 AI 额度。' };
   }
 

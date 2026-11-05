@@ -6,9 +6,24 @@ ModelDock 是跨平台本地模型管理台：全局维护模型来源与别名�
 
 自有代码及原创应用标记采用 [MIT 许可](LICENSE)，第三方图标和依赖保留各自的 Apache-2.0、CC-BY-4.0、MIT 或其他许可，详见 [第三方声明](THIRD_PARTY_NOTICES.md)。欢迎按 [贡献指南](CONTRIBUTING.md) 提交修复；敏感问题请遵循 [安全报告流程](SECURITY.md)。
 
+## 0.3.76 · 统一网关适配器与及时流式转发
+
+- 所有托管账号使用 TypeScript 适配器接入现有网关。TRAE 和 JetBrains 不再启动 Docker、Python、Pi 或额外的本地反代监听；Codex、Grok、Copilot 沿用主进程的原生授权和请求转发。
+- TRAE 在授权中心从中国版 / SOLO 中国版客户端导入，登录资料经主进程加密保存。模型目录与套餐、额度直接查询上游；套餐按官方有效权益显示，无法确认时显示「套餐未知」。
+- 普通工具和 JetBrains 工具都及时转发内容、推理和工具调用增量，并传播取消请求与背压。只在最后校验终态后发送成功标志；已开始的流中途失败会明确终止，不伪造成功，也不重试推理。
+- 原本的账号名称、模型映射和工具绑定继续保留。旧 TRAE / Central 中转未保存可导入的原生授权时，需在授权中心重新连接；自定义外部 API 连接仍按保存的地址使用。
+- 协议能力必须符合账号原生接口。TRAE 当前 raw v2 只支持已核实的文本和函数工具历史；不静默丢弃输出预算、多模态或服务器会话等未验证参数，相关请求明确返回能力错误。Claude Messages 必需的输出预算尚未被该 raw 协议证实，暂不能宣称兼容。
+
+## 0.3.75 · Windows 账号导入与验证修复
+
+- Windows 可从已登录的 2026.2 IDE / 内置 Air 导入本人 JetBrains Account。只读原生 Java Preferences 的三个固定注册表值，按 JBR 的编码解码，并从 `%APPDATA%/JetBrains/<IDE2026.2>/options/other.xml` 核对当前个人 AI 许可证。确认导入时再次核对账号与许可证；不写入原客户端或 PasswordSafe。
+- 账号导入入口按当前系统能力启用；独立 Air、macOS 暂不支持。只读本机账号选择、官方授权交换、额度和模型推理分别验证。
+- 修正 Windows 测试中的 GitHub CLI 路径、PATH 分隔符、Linux UID 模拟和文件权限断言。安全检查保留；系统未授予文件符号链接权限时，仅跳过无法构造的链接场景。
+- 界面检查跟随当前单入口供应商选择与导航；侧栏按实际页面宽度验证，避免将 Windows 外窗尺寸当作内容尺寸。
+
 ## 0.3.74 · 直接复用 IDE 的 JetBrains AI 账号
 
-- 授权中心提供「从 IDE / Air 导入」，不再要求先安装 Central CLI。当前支持已核实的 Linux 2026.2 Rider、IntelliJ IDEA、WebStorm、PyCharm 账号格式及 IDE 内 Air；独立 Air、Windows/macOS 原生账号读取暂未接入。Central 保留为独立的另一种连接方式。
+- 授权中心提供「从 IDE / Air 导入」，不再要求先安装 Central CLI。支持 Windows / Linux 2026.2 Rider、IntelliJ IDEA、WebStorm、PyCharm 的本人账号及 IDE 内 Air；Windows 原生读取自 0.3.75 接入。独立 Air、macOS 原生账号读取暂不支持。Central 保留为独立的另一种连接方式。
 - 只读固定的 JetBrains Account 身份槽与已选个人 AI 许可证，确认后通过固定官方服务交换并验证授权，显示会员/加购 AI Credits。账号或许可证在预览后切换会拒绝导入；明确选择组织工作区时不回退到另一张旧许可证。
 - JBA 身份断言的历史 `exp` 是提示，不等于服务访问授权到期。原生调用链由官方服务判断该断言；ModelDock 对派生服务令牌仍执行官方 verify 和有效期检查。已用本机当前 Rider 选择完成只读现场验证：授权、额度（2 个窗口）与兼容模型目录（23 个模型）均成功，未发送推理或注册/激活试用。
 - 本机中转只接收独立的本地密钥，JBA/Grazie 授权留在主进程加密存储。模型目录与 Chat 请求通过已核实的原生 OpenAI/Azure 转发通道，使用授权档案对应的实际模型 ID；其他厂商档案暂不作为兼容模型发布。推理不自动重试；客户端断开会取消请求。
@@ -28,7 +43,7 @@ Linux 颜色兼容项有真实 Wayland 窗口与同进程位图对比；额度�
 ## 0.3.72 · TRAE 与 JetBrains 客户端授权导入
 
 - 授权中心的「TRAE 中国版反代」「JetBrains AI 会员反代」均增加「从客户端导入」，先列出本机来源，再由用户确认。成功后立即刷新订阅供应商与最近导入来源。
-- TRAE 只读已核实的 CN / SOLO CN 客户端授权槽，导入到 ModelDock 托管的本机反代。首次启动可能拉取 Docker 镜像；导入按原生反代规则新增/更新账号并切换活跃账号，保留其他账号。客户端凭据过期时需先回客户端重新登录。
+- TRAE 只读已核实的 CN / SOLO CN 客户端授权槽，经加密导入主进程，由现有网关直接连接上游。客户端凭据过期时需先回客户端重新登录，再重新导入。
 - JetBrains 复用 **Central CLI 当前已登录账号**，由原生 CLI 检查登录与会员额度权限，再启动本机 Central / Pi 桥。不复制 Central 凭据，不读取 IDE / Air 的 PasswordSafe；IDE 登录状态不能自动迁移为 Central 登录。
 - 重复导入复用同一托管反代的连接，保留名称、备注、模型、密钥和工具绑定；手动 TRAE、其他地址或不同密钥的记录保持原样。来源记录随连接变化失效。导入等待期间的用户编辑不会被覆盖；本地保存失败会保留原供应商，并明确提示检查反代的实际账号状态。
 
@@ -98,22 +113,21 @@ Copilot CLI 支持 `COPILOT_HOME`，读取 `config.json` 中已登记账号对�
 
 ## 0.3.63 · 在 VS Code 使用 JetBrains AI 额度
 
-在「模型供应商 → 添加订阅 → JetBrains AI 会员反代」启动本机中转。ModelDock 通过 JetBrains Central CLI 启动 Pi 的独立会话，由 Pi 将模型请求交给 Central。使用时保持 ModelDock 运行，JetBrains IDE 可以关闭。ModelDock 提供的 Chat Completions 地址为 `http://127.0.0.1:18081/v1`。
-
-1. 安装 JetBrains Central CLI 和 Pi CLI。本版用 Central 2.2.0 与 Pi 1.5.0 核对。在终端执行 `central login`，选择带 AI 权益的许可证，然后用 `central limit` 查看额度。[官方安装方式](https://www.jetbrains.com/help/central-cli/cli-setup.html) · [适用许可证](https://www.jetbrains.com/help/ai-assistant/licensing-and-subscriptions.html)
-2. 在 ModelDock 点「启动本机反代」，就绪后会自动填入本机密钥。保存供应商，点「获取模型列表」，添加一个候选模型并测试连接。候选来自 Pi 当前通过 Central 路由的 OpenAI 和 Anthropic 模型，具体模型权限以账号实际请求结果为准。
-3. 在供应商详情点「打开 VS Code 工具配置」。选择来源与模型，同步后在 VS Code 重新加载窗口，到 Copilot Chat 的模型选择器中选择该模型。使用聚合模式时选中相应映射。工具在 VS Code 端执行，工具结果作为下一轮输入回传。
-4. 可在供应商详情停止反代。退出 ModelDock 会一并关闭它启动的 Pi 会话。JetBrains 登录、续期与用量查询由 Central 管理。[Central 工作方式](https://www.jetbrains.com/help/central-cli/cli-in-depth.html)
+0.3.76 已用内置 TypeScript 适配器替换早期的 Central → Pi 独立会话中转。
+在授权中心连接 IDE / Air 账号，或显式导入已登录 Central CLI 的个人 AI 许可证会话。
+Central 的一次性会话导出仅用于用户主动连接，推理不运行 Central / Pi 进程；
+工作区、企业和其他尚未核实的身份会明确拒绝，不改用个人账号。
+账号连接后获取模型，再在 VS Code 或其他工具的聚合接口中选择实际兼容协议与模型。
+使用现有网关地址和本地 Key；账号授权到期后重新连接。
+[Central 原生协议说明](https://www.jetbrains.com/help/central-cli/cli-in-depth.html)
 
 ## 0.3.62 · TRAE 中国版本机反代
 
-在「模型供应商 → 添加订阅」选择「TRAE 中国版反代」预设。托管模式需要本机 Docker 的 Linux 容器引擎。首次点击「启动本机反代」时，ModelDock 使用固定版本的 Trae2api-cn 镜像，并为当前工作区生成独立的反代密钥。服务地址为 `http://127.0.0.1:18080/v1`，与 ModelDock 默认的聚合端口 18181 分开。[反代 v1.0.10 发布说明](https://github.com/autumnsentiment/Trae2api-cn/releases/tag/v1.0.10)
-
-1. 点击「打开 TRAE 授权页」。首次使用时按网页提示下载并用本机 Python 3 运行授权助手。保持助手开启，在浏览器中登录自己的 TRAE 中国版账号。
-2. 回到 ModelDock，保存供应商并点击「获取模型列表」。选择模型并测试连接，随后在「本地聚合接口」确认要发布的模型，也可以到具体工具页选择来源。反代仅返回离线备用目录时，ModelDock 会将这些备用条目过滤。
-3. 在「反代设置」可以重新打开授权页或停止托管容器。停止后保留账号数据，下次显式启动时复用。已有其他本机反代时，选择「连接已有反代」，填写它的回环地址和反代密钥。
-
-托管反代取用 TRAE 账号的权限由上游决定。登录资料由反代保存在 ModelDock 数据目录下的 `trae-cn-relay` 子目录。Agent 使用生成的反代密钥或聚合接口密钥。需要验证会员计费时，请对一次真实对话核对 TRAE 的用量明细。[TRAE 积分规则](https://docs.trae.cn/ide_plans-and-billing)
+0.3.76 已将早期 Docker / 独立端口方案替换为 TypeScript 网关适配器。
+在「授权中心 → TRAE 中国版反代 → 从客户端导入」选择本机已登录的本人账号，
+再获取实际模型并测试连接。工具使用现有 ModelDock 网关的 URL、别名和本地 Key；
+上游登录资料留在主进程的加密存储中。官方套餐和额度可从授权中心刷新。
+旧容器资料不会自动迁入或被删除；重新导入后不再依赖旧服务。
 
 ## 0.3.61：JetBrains 插件切换
 
@@ -163,7 +177,7 @@ Windows 使用已安装 IDE 的 `product-info.json`、缓存中的 `.home` 指�
 4. 同步只处理已发现的配置 profile，备份后更新 AI Assistant 地址、HTTP 版本、工具调用及核心 / 轻量模型字段，保留其他设置。IDE 运行中、运行状态未知或未找到兼容 profile 时不写文件，待办期间继续检查，也可手工填写接入参数。同步写入失败时停止自动重试并显示原因，处理后可手动重新同步。关闭 ModelDock 会丢弃尚未应用的待办；下次打开保留本机选择，但不会自动重放写入。重新打开 IDE 后确认 API Key；「设置文件已同步」不表示登录或真实账号调用已通过。
 5. 「还原同步前设置」同样要求 IDE 退出，恢复本次受管字段；IDE 凭据存储中的 Key 请在 IDE 内自行确认或更换。「导出参考参数」生成手工填写用 JSON，不能直接导入 IDE。
 
-JetBrains 聚合接口支持将 Responses 的推理文本和工具调用转换为 Chat SSE，包括火山的 `reasoning_text` / `reasoning_raw_text`。当前 Koog 客户端会将中途断流当作成功，因此这四个 IDE 经聚合接口的回复先在本机缓冲并校验完整完成状态，再交给 IDE，最多 32 MiB；首次显示回答会晚于上游首个 token。失败返回 HTTP 错误，不把裸错误 JSON 当作成功 Chat 块。其他工具的流式输出不使用此缓冲。
+JetBrains 聚合接口支持将 Responses 的推理文本和工具调用转换为 Chat SSE，包括火山的 `reasoning_text` / `reasoning_raw_text`。0.3.76 起所有客户端都即时接收增量；JetBrains 只保留少量终态尾帧，校验完整结束后再发送成功标志。32 MiB 上限用流式计数实现，不再缓存整段。首块前的失败返回 HTTP 错误，首块后的失败会中断流且不发送成功终态；旧 Koog 客户端可能仍把中断显示为完成，真实 IDE 行为需单独验收。
 
 Responses 的 `*.added` 开始事件允许仅包含类型、尚无文本；方舟的 `response.reasoning_summary_part.added` 会使用这种结构。开始事件按空内容初始化，后续增量和最终文本仍严格验证，避免把合法的流式开始错误转换为 502。完成事件缺失、错误帧、截断和超限仍拒绝；此兼容并不放宽终止判定。参考 [方舟流式输出](https://docs.volcengine.com/docs/ark/streaming-output?lang=zh)。
 

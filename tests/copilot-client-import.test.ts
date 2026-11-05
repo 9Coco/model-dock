@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { CopilotClientImporter, importedGithubToken, type CopilotClientImportOptions } from '../src/main/copilot-client-import';
 import { linuxCopilotImportHelper } from '../src/main/copilot-import-keychain';
@@ -12,9 +12,11 @@ const folders: string[] = [];
 afterEach(async () => { for (const folder of folders.splice(0)) await rm(folder, { recursive: true, force: true }); });
 async function fixture(options: Partial<CopilotClientImportOptions> = {}) {
   const homeDir = await mkdtemp(join(tmpdir(), 'modeldock-copilot-import-')); folders.push(homeDir);
-  const config = join(homeDir, '.copilot/config.json'), hosts = join(homeDir, '.config/gh/hosts.yml');
-  await mkdir(join(homeDir, '.copilot'), { recursive: true }); await mkdir(join(homeDir, '.config/gh'), { recursive: true });
-  const settings = { homeDir, env: {}, ...options };
+  const platform = options.platform ?? process.platform;
+  const config = join(homeDir, '.copilot', 'config.json');
+  const hosts = platform === 'win32' ? join(homeDir, 'AppData', 'Roaming', 'GitHub CLI', 'hosts.yml') : join(homeDir, '.config', 'gh', 'hosts.yml');
+  await mkdir(dirname(config), { recursive: true }); await mkdir(dirname(hosts), { recursive: true });
+  const settings = { homeDir, platform, env: {}, ...options };
   return { homeDir, config, hosts, importer: new CopilotClientImporter(settings), settings,
     write: (value: unknown) => writeFile(config, JSON.stringify(value)),
   };
@@ -29,8 +31,8 @@ const user = { id: 42, login: 'fixture-user', name: 'Import Fixture' };
 const quota = { copilot_plan: 'individual', quota_snapshots: { premium_interactions: { entitlement: 300, remaining: 123 } } };
 
 describe('explicit scoped Copilot client credential import', () => {
-  it('lists only github.com client/account identities without reading keychain or returning credentials', async () => {
-    const readKeychain = vi.fn(), runGithubCli = vi.fn(), f = await fixture({ readKeychain, runGithubCli });
+  it.each(['win32', 'linux'] as const)('lists only github.com identities from the %s client paths without reading keychain or returning credentials', async platform => {
+    const readKeychain = vi.fn(), runGithubCli = vi.fn(), f = await fixture({ platform, readKeychain, runGithubCli });
     expect(readKeychain).not.toHaveBeenCalled(); expect(runGithubCli).not.toHaveBeenCalled();
     await f.write({ loggedInUsers: [{ host: 'https://github.com', login: 'first-user' }, { host: 'https://enterprise.invalid', login: 'private-enterprise' }], lastLoggedInUser: { host: 'https://github.com', login: 'second-user' }, copilotTokens: { 'https://github.com:third-user': TOKEN, 'https://evilgithub.com:private': TOKEN } });
     await writeFile(f.hosts, 'github.com:\n  user: gh-user\n  users:\n    gh-user:\n      oauth_token: ' + TOKEN + '\n    second-gh: {}\nenterprise.invalid:\n  user: private-enterprise\n');
@@ -54,12 +56,13 @@ describe('explicit scoped Copilot client credential import', () => {
     expect(readKeychain).toHaveBeenCalledExactlyOnceWith('https://github.com:fixture-user');
   });
   it('uses the selected gh account with no refresh, no environment-token override and no source writes', async () => {
-    const runGithubCli = vi.fn(async (_args: string[], _env: NodeJS.ProcessEnv) => TOKEN + '\n'), f = await fixture({ runGithubCli, env: { GH_TOKEN: 'PRIVATE_OVERRIDE', GITHUB_TOKEN: 'PRIVATE_OVERRIDE_2', GH_DEBUG: 'api', PATH: '.:/usr/bin:relative' } });
+    const absoluteBin = join(tmpdir(), 'modeldock-gh-bin');
+    const runGithubCli = vi.fn(async (_args: string[], _env: NodeJS.ProcessEnv) => TOKEN + '\n'), f = await fixture({ runGithubCli, env: { GH_TOKEN: 'PRIVATE_OVERRIDE', GITHUB_TOKEN: 'PRIVATE_OVERRIDE_2', GH_DEBUG: 'api', PATH: ['.', absoluteBin, 'relative'].join(delimiter) } });
     await writeFile(f.hosts, 'github.com:\n  user: fixture-user\n'); const before = await readFile(f.hosts);
     const [candidate] = await f.importer.listCandidates(); expect((await f.importer.readCredential(candidate.id)).accessToken).toBe(TOKEN);
     const [args, env] = runGithubCli.mock.calls[0];
     expect(args).toEqual(['auth', 'token', '--hostname', 'github.com', '--user', 'fixture-user', '--no-refresh']);
-    expect(env).toMatchObject({ GH_PROMPT_DISABLED: '1', GIT_TERMINAL_PROMPT: '0', PATH: '/usr/bin' });
+    expect(env).toMatchObject({ GH_PROMPT_DISABLED: '1', GIT_TERMINAL_PROMPT: '0', PATH: absoluteBin });
     expect(env.GH_TOKEN).toBeUndefined(); expect(env.GITHUB_TOKEN).toBeUndefined(); expect(env.GH_DEBUG).toBeUndefined();
     expect(await readFile(f.hosts)).toEqual(before);
   });
@@ -70,14 +73,24 @@ describe('explicit scoped Copilot client credential import', () => {
     for (const value of ['../../secrets', 'https://evil.invalid', '', 'a'.repeat(24)]) await expect(f.importer.readCredential(value)).rejects.toThrow();
     expect(readKeychain).not.toHaveBeenCalled();
   });
-  it('rejects malformed, oversized, symlinked and conflicting client files without printing their contents', async () => {
+  it('rejects malformed, oversized and conflicting client files without printing their contents', async () => {
     const f = await fixture(); await writeFile(f.config, TOKEN + '{invalid');
     await expect(f.importer.listCandidates()).rejects.toThrow('配置格式无法识别');
     await writeFile(f.config, TOKEN.repeat(10000)); await expect(f.importer.listCandidates()).rejects.toThrow('无法安全读取');
-    await rm(f.config); const foreign = join(f.homeDir, 'foreign'); await writeFile(foreign, TOKEN); await symlink(foreign, f.config);
-    await expect(f.importer.listCandidates()).rejects.toThrow('无法安全读取');
-    await rm(f.config); await f.write({ copilotTokens: { 'https://github.com:fixture-user': TOKEN }, copilot_tokens: { 'https://github.com:fixture-user': 'gho_OTHER' } });
+    await f.write({ copilotTokens: { 'https://github.com:fixture-user': TOKEN }, copilot_tokens: { 'https://github.com:fixture-user': 'gho_OTHER' } });
     const [candidate] = await f.importer.listCandidates(); await expect(f.importer.readCredential(candidate.id)).rejects.toThrow('存在不同凭据');
+  });
+  it('rejects symlinked client files when native file symlinks are permitted', async ({ skip }) => {
+    const f = await fixture(), foreign = join(f.homeDir, 'foreign');
+    const original = JSON.stringify({ copilotTokens: { 'https://github.com:fixture-user': TOKEN } });
+    await writeFile(foreign, original);
+    try { await symlink(foreign, f.config, 'file'); }
+    catch (error) {
+      if (process.platform === 'win32' && (error as NodeJS.ErrnoException).code === 'EPERM') skip('Windows account cannot create file symlinks without Developer Mode or elevation.');
+      throw error;
+    }
+    await expect(f.importer.listCandidates()).rejects.toThrow('无法安全读取');
+    expect(await readFile(foreign, 'utf8')).toBe(original);
   });
   it('accepts only literal supported GitHub user-token families', () => {
     for (const value of [TOKEN, 'ghu_fixture', 'github_pat_fixture']) expect(importedGithubToken(value)).toBe(value);

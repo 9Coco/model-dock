@@ -54,6 +54,8 @@ export interface Provider {
   kind: ProviderKind;
   presetId?: ProviderPresetId;
   relayMode?: TraeRelayMode;
+  /** Native subscription adapter owned by the main process; never a direct API source. */
+  nativeAdapter?: 'trae' | 'jetbrains-ide' | 'jetbrains-central';
   baseUrl: string;
   enabled: boolean;
   hasSecret: boolean;

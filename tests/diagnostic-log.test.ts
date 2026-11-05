@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { DIAGNOSTIC_MESSAGES, type DiagnosticContext, type DiagnosticEntry } from '../src/shared/diagnostic-types';
 import { DiagnosticsLog, describeError, sanitizeDiagnosticEndpoint } from '../src/main/diagnostic-log';
+import { createDirectoryLink, expectModeOrInheritedWindowsAcl, filesystemPermissions, requireOpenFileDirectoryRenameCapability, requireSymlinkCapability } from './helpers/windows-review-filesystem';
 
 const faults = vi.hoisted(() => ({ write: false, read: false, open: undefined as undefined | ((path: string, before: boolean) => void) }));
 vi.mock('node:fs', async importOriginal => {
@@ -27,12 +28,12 @@ function entry(context: Record<string, unknown> = {}, overrides: Record<string, 
 
 // 修改点：诊断日志的测试验证实际文件内容和安全边界，不依赖真实账号或客户端配置。
 describe('persistent diagnostic metadata', () => {
-  it('creates private logs, preserves sessions on restart and returns newest first', () => {
+  it('creates logs with private POSIX modes or inherited Windows ACLs, preserves sessions and returns newest first', () => {
     const f = fixture();
     f.log.write('info', 'app.start', undefined, { version: '0.3.35', platform: 'linux', runtimeMode: 'production', stage: 'storage' });
     f.log.write('warn', 'provider.test', undefined, { outcome: 'network', statusCode: 503, durationMs: 12.5 });
-    expect(statSync(f.directory).mode & 0o777).toBe(0o700);
-    expect(statSync(f.file).mode & 0o777).toBe(0o600);
+    expectModeOrInheritedWindowsAcl([f.directory], 0o700, f.root);
+    expectModeOrInheritedWindowsAcl([f.file], 0o600, f.root);
     const restarted = new DiagnosticsLog(f.root);
     expect(restarted.sessionId).not.toBe(f.log.sessionId);
     expect(restarted.query().entries.map(item => item.event)).toEqual(['provider.test', 'app.start']);
@@ -59,8 +60,7 @@ describe('persistent diagnostic metadata', () => {
     const f = fixture(), data = join(f.root, 'new-data', 'profile');
     const log = new DiagnosticsLog(data); log.write('info', 'app.start');
     expect(log.query().available).toBe(true);
-    expect(statSync(data).mode & 0o777).toBe(0o700);
-    expect(statSync(join(data, 'logs')).mode & 0o777).toBe(0o700);
+    expectModeOrInheritedWindowsAcl([data, join(data, 'logs')], 0o700, f.root);
   });
 
   it('rotates within a fixed total file budget and reads archived records after restart', () => {
@@ -68,7 +68,8 @@ describe('persistent diagnostic metadata', () => {
     for (let index = 0; index < 35; index++) f.log.write('info', 'gateway.request', undefined, { statusCode: 200, durationMs: index, operation: 'request' });
     const files = readdirSync(f.directory);
     expect(files.sort()).toEqual(['diagnostics.1.jsonl', 'diagnostics.2.jsonl', 'diagnostics.jsonl']);
-    for (const file of files) { expect(statSync(join(f.directory, file)).size).toBeLessThanOrEqual(768); expect(statSync(join(f.directory, file)).mode & 0o777).toBe(0o600); }
+    for (const file of files) expect(statSync(join(f.directory, file)).size).toBeLessThanOrEqual(768);
+    expectModeOrInheritedWindowsAcl(files.map(file => join(f.directory, file)), 0o600, f.root);
     const restarted = new DiagnosticsLog(f.root, { maxFileBytes: 768, retention: 3 });
     const durations = restarted.query().entries.map(item => item.context.durationMs);
     expect(durations.length).toBeGreaterThan(2);
@@ -114,7 +115,7 @@ describe('persistent diagnostic metadata', () => {
     const descriptor = Object.getOwnPropertyDescriptor(process, 'platform')!;
     try {
       Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
-      faults.open = (path, before) => { if (before && path.endsWith('/logs')) throw Object.assign(new Error('directory descriptors unsupported'), { code: 'EISDIR' }); };
+      faults.open = (path, before) => { if (before && basename(path) === 'logs') throw Object.assign(new Error('directory descriptors unsupported'), { code: 'EISDIR' }); };
       const f = fixture(); f.log.write('info', 'app.start');
       expect(f.log.query()).toMatchObject({ available: true, entries: [expect.objectContaining({ event: 'app.start' })] });
     } finally { Object.defineProperty(process, 'platform', descriptor); faults.open = undefined; }
@@ -243,35 +244,41 @@ describe('diagnostic privacy boundaries', () => {
 });
 
 describe('diagnostic filesystem safety', () => {
-  it('rejects symlinked directories and does not create or chmod their targets', () => {
+  it('rejects symlinked directories and does not create or chmod their targets', context => {
+    requireSymlinkCapability(context, 'dir');
     const f = fixture(), outside = join(f.root, 'outside'); mkdirSync(outside, { mode: 0o755 });
-    rmSync(f.directory, { recursive: true }); symlinkSync(outside, f.directory, 'dir');
+    const originalPermissions = filesystemPermissions(outside);
+    rmSync(f.directory, { recursive: true }); createDirectoryLink(outside, f.directory);
     const log = new DiagnosticsLog(f.root);
     expect(() => log.write('info', 'app.start')).not.toThrow();
     expect(log.query().available).toBe(false);
     expect(readdirSync(outside)).toEqual([]);
-    expect(statSync(outside).mode & 0o777).toBe(0o755);
+    expect(filesystemPermissions(outside)).toEqual(originalPermissions);
   });
 
-  it('rejects symlinked ancestors before traversing or creating logs', () => {
-    const f = fixture(), outside = join(f.root, 'outside'), alias = join(f.root, 'alias'); mkdirSync(outside); symlinkSync(outside, alias, 'dir');
+  it('rejects symlinked ancestors before traversing or creating logs', context => {
+    requireSymlinkCapability(context, 'dir');
+    const f = fixture(), outside = join(f.root, 'outside'), alias = join(f.root, 'alias'); mkdirSync(outside); createDirectoryLink(outside, alias);
     const log = new DiagnosticsLog(join(alias, 'new-profile'));
     log.write('info', 'app.start');
     expect(log.query().available).toBe(false);
     expect(readdirSync(outside)).toEqual([]);
   });
 
-  it.each(['symlink', 'hardlink'] as const)('rejects %s log files without changing external contents or permissions', link => {
+  it.for(['symlink', 'hardlink'] as const)('rejects %s log files without changing external contents or permissions', (link, context) => {
+    if (link === 'symlink') requireSymlinkCapability(context, 'file');
     const f = fixture(), target = join(f.root, 'external'); writeFileSync(target, 'private target', { mode: 0o644 });
+    const originalPermissions = filesystemPermissions(target);
     if (link === 'symlink') symlinkSync(target, f.file); else linkSync(target, f.file);
     f.log.write('error', 'app.error');
     expect(f.log.query().available).toBe(false);
     expect(readFileSync(target, 'utf8')).toBe('private target');
-    expect(statSync(target).mode & 0o777).toBe(0o644);
+    expect(filesystemPermissions(target)).toEqual(originalPermissions);
     expect(f.log.exportText()).toBe('');
   });
 
-  it('rejects linked archives rather than deleting or reading them during rotation', () => {
+  it('rejects linked archives rather than deleting or reading them during rotation', context => {
+    requireSymlinkCapability(context, 'file');
     const f = fixture({ maxFileBytes: 512, retention: 3 }), outside = join(f.root, 'external'); writeFileSync(outside, 'private target');
     f.log.write('info', 'app.start'); symlinkSync(outside, join(f.directory, 'diagnostics.2.jsonl'));
     for (let index = 0; index < 3; index++) f.log.write('info', 'app.ready');
@@ -280,28 +287,39 @@ describe('diagnostic filesystem safety', () => {
     expect(readFileSync(outside, 'utf8')).toBe('private target');
   });
 
-  it('rejects a log replaced with a symlink between lstat and open', () => {
+  it('rejects a log replaced with a symlink between lstat and open', context => {
+    requireSymlinkCapability(context, 'file');
     const f = fixture(), outside = join(f.root, 'external'); writeFileSync(outside, 'private target', { mode: 0o644 }); f.log.write('info', 'app.start');
-    faults.open = (path, before) => { if (before && path.endsWith('/diagnostics.jsonl')) { faults.open = undefined; unlinkSync(f.file); symlinkSync(outside, f.file); } };
+    const originalPermissions = filesystemPermissions(outside);
+    let swapped = false;
+    faults.open = (path, before) => { if (before && path === f.file) { faults.open = undefined; unlinkSync(f.file); symlinkSync(outside, f.file); swapped = true; } };
     f.log.write('error', 'app.error');
+    expect(swapped).toBe(true);
     expect(f.log.query().available).toBe(false);
     expect(readFileSync(outside, 'utf8')).toBe('private target');
-    expect(statSync(outside).mode & 0o777).toBe(0o644);
+    expect(filesystemPermissions(outside)).toEqual(originalPermissions);
   });
 
   it('rejects a hardlink replacement after open and before write', () => {
     const f = fixture(), outside = join(f.root, 'external'); writeFileSync(outside, 'private target', { mode: 0o644 }); f.log.write('info', 'app.start');
-    faults.open = (path, before) => { if (!before && path.endsWith('/diagnostics.jsonl')) { faults.open = undefined; unlinkSync(f.file); linkSync(outside, f.file); } };
+    const originalPermissions = filesystemPermissions(outside);
+    let swapped = false;
+    faults.open = (path, before) => { if (!before && path === f.file) { faults.open = undefined; unlinkSync(f.file); linkSync(outside, f.file); swapped = true; } };
     f.log.write('error', 'app.error');
+    expect(swapped).toBe(true);
     expect(f.log.query().available).toBe(false);
     expect(readFileSync(outside, 'utf8')).toBe('private target');
-    expect(statSync(outside).mode & 0o777).toBe(0o644);
+    expect(filesystemPermissions(outside)).toEqual(originalPermissions);
   });
 
-  it('pins the log directory and rejects a directory symlink swap after file open', () => {
+  it('pins the log directory and rejects a directory symlink swap after file open', context => {
+    requireSymlinkCapability(context, 'dir');
+    requireOpenFileDirectoryRenameCapability(context);
     const f = fixture(), outside = join(f.root, 'external-dir'); mkdirSync(outside); writeFileSync(join(outside, 'diagnostics.jsonl'), 'private target'); f.log.write('info', 'app.start');
-    faults.open = (path, before) => { if (!before && path.endsWith('/diagnostics.jsonl')) { faults.open = undefined; renameSync(f.directory, join(f.root, 'old-logs')); symlinkSync(outside, f.directory, 'dir'); } };
+    let swapped = false;
+    faults.open = (path, before) => { if (!before && path === f.file) { faults.open = undefined; renameSync(f.directory, join(f.root, 'old-logs')); createDirectoryLink(outside, f.directory); swapped = true; } };
     f.log.write('error', 'app.error');
+    expect(swapped).toBe(true);
     expect(f.log.query().available).toBe(false);
     expect(readFileSync(join(outside, 'diagnostics.jsonl'), 'utf8')).toBe('private target');
     expect(readFileSync(join(f.root, 'old-logs', 'diagnostics.jsonl'), 'utf8')).not.toContain('app.error');

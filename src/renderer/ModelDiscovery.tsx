@@ -35,7 +35,7 @@ const patchedCandidate = (model: CandidateDraft, patch: Partial<CandidateDraft>)
 };
 
 export function ModelDiscovery({ api, provider, notify, onClose, onAdded, onManualAdd, initialResult }: Props) {
-  const chatOnly = provider.presetId === 'jetbrains-central';
+  const chatOnly = provider.nativeAdapter === 'jetbrains-ide';
   const [result, setResult] = useState<DiscoveryResult | null>(initialResult ?? null);
   const [models, setModels] = useState<CandidateDraft[]>(() => (initialResult?.models ?? []).map(model => candidateDraft(model, provider.id)));
   const [loading, setLoading] = useState(!initialResult);

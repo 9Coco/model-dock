@@ -4,6 +4,7 @@ import { writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import type { Store } from './store';
 import type { AuthProgress, Provider, Snapshot } from '../shared/types';
+import { beginSmokeAccountLogin } from './auth-entry-smoke';
 
 async function preserveClipboardItems(): Promise<ClipboardItem[]> {
   try {
@@ -55,7 +56,7 @@ export async function verifyAuthNetwork(window: BrowserWindow, store: Store, out
   await click('[aria-label="刷新本机配置"]');
   await waitFor(`!!document.querySelector('[data-source-id="${provider.id}"]')`, 'synthetic subscription source refreshed');
   await click(`[data-source-id="${provider.id}"]`);
-  await click(`article[data-provider-id="${provider.id}"] [aria-label="登录 ${provider.name}"]`);
+  await beginSmokeAccountLogin(window, provider.id);
   await waitFor(`document.querySelector('[data-auth-stage]')?.dataset.authStage==='device-code'&&document.querySelector('[data-auth-category]')?.dataset.authCategory==='region'`, 'safe region diagnosis shown');
   const diagnostic = await evaluate<{ stage: string; category: string; statusCode: number; text: string; hasDeviceCode: boolean; hasWait: boolean }>(`(()=>{const body=document.querySelector('.auth-body');return {stage:body.dataset.authStage,category:body.dataset.authCategory,statusCode:Number(body.dataset.authStatus),text:body.textContent??'',hasDeviceCode:!!body.querySelector('.auth-code'),hasWait:!!body.querySelector('.auth-wait')}})()`);
   assert.equal(diagnostic.stage, 'device-code'); assert.equal(diagnostic.category, 'region'); assert.equal(diagnostic.statusCode, 403);
@@ -136,7 +137,7 @@ export async function verifyPendingAuth(window: BrowserWindow, store: Store, out
   await click(`[data-source-id="${provider.id}"]`);
   window.setSize(1320, 880); await waitFor('innerWidth>1100', 'large pending viewport');
   const started = Date.now();
-  await click(`article[data-provider-id="${provider.id}"] [aria-label="登录 ${provider.name}"]`);
+  await beginSmokeAccountLogin(window, provider.id);
   await waitFor(`document.querySelector('[data-auth-code]')?.dataset.value==='MOCK-00000'&&!!document.querySelector('.auth-wait')`, 'synthetic code visible while waiting');
   await click('[data-action="auth-copy-code"]');
   const copyDeadline = Date.now() + 2000;
@@ -156,9 +157,12 @@ export async function verifyPendingAuth(window: BrowserWindow, store: Store, out
     code: string; copyAvailable: boolean; officialLinkAvailable: boolean; officialHref: string; waiting: boolean; errorVisible: boolean;
     hasSecret: boolean; authStatus: Provider['authStatus'];
   }
-  async function observe(afterMs: number): Promise<PendingObservation> {
-    const remaining = started + afterMs - Date.now();
-    if (remaining > 0) await new Promise(done => setTimeout(done, remaining));
+  async function observe(minimumPolls: number): Promise<PendingObservation> {
+    // Wait for actual mock responses, rather than assuming navigation and the
+    // account menu take a fixed portion of the one-second polling interval.
+    const deadline = Date.now() + 7000;
+    while (Number(process.env.MODELDOCK_SMOKE_AUTH_PENDING_POLLS ?? 0) < minimumPolls && Date.now() < deadline) await new Promise(done => setTimeout(done, 25));
+    assert.ok(Number(process.env.MODELDOCK_SMOKE_AUTH_PENDING_POLLS ?? 0) >= minimumPolls, 'The required pending mock responses must arrive before observing the UI');
     const progress = await evaluate<AuthProgress | null>(`window.modelDock.authProgress(${JSON.stringify(provider.id)})`);
     assert.ok(progress); assert.equal(progress.state, 'pending'); assert.equal(progress.userCode, 'MOCK-00000');
     assert.ok(progress.verificationUri);
@@ -177,10 +181,10 @@ export async function verifyPendingAuth(window: BrowserWindow, store: Store, out
     assert.doesNotMatch(JSON.stringify(progress), /PRIVATE_|accessToken|refreshToken|access_token|refresh_token|error_description/);
     return { elapsedMs: Date.now() - started, mockPolls, progress, ...ui, hasSecret: stored.hasSecret, authStatus: stored.authStatus };
   }
-  const firstPending = await observe(1050);
+  const firstPending = await observe(2);
   writeFileSync(join(outputDir, 'electron-auth-pending-1320.png'), await captureUi());
   window.setSize(980, 680); await waitFor('innerWidth<1100', 'compact pending viewport');
-  const secondPending = await observe(2150);
+  const secondPending = await observe(3);
   const layout = await evaluate<{ dialogInside: boolean; footerVisible: boolean; overflow: boolean; codeInside: boolean; linkInside: boolean }>(`(()=>{
     const dialog=document.querySelector('.modal'),body=dialog.querySelector('.auth-body'),footer=dialog.querySelector('.modal-footer'),code=body.querySelector('[data-auth-code]'),link=body.querySelector('[data-action="auth-open-verification"]');
     const inside=element=>{const bounds=element.getBoundingClientRect();return bounds.top>=0&&bounds.bottom<=innerHeight+1&&bounds.left>=0&&bounds.right<=innerWidth+1;};
@@ -208,7 +212,7 @@ export async function verifyPendingAuth(window: BrowserWindow, store: Store, out
   await click('[aria-label="刷新本机配置"]');
   await waitFor(`!!document.querySelector('[data-source-id="${cancelProvider.id}"]')`, 'cancel fixture source refreshed');
   await click(`[data-source-id="${cancelProvider.id}"]`);
-  await click(`article[data-provider-id="${cancelProvider.id}"] [aria-label="登录 ${cancelProvider.name}"]`);
+  await beginSmokeAccountLogin(window, cancelProvider.id);
   await waitFor(`document.querySelector('[data-auth-code]')?.dataset.value==='MOCK-00000'&&!!document.querySelector('.auth-wait')`, 'second grant pending before explicit cancel');
   assert.equal(store.getProvider(cancelProvider.id)?.hasSecret, false);
   const cancelPoint = await evaluate<{ x: number; y: number; label: string }>(`(()=>{const button=document.querySelector('.modal-footer .button.secondary'),box=button.getBoundingClientRect();return {x:Math.round(box.left+box.width/2),y:Math.round(box.top+box.height/2),label:button.textContent}})()`);

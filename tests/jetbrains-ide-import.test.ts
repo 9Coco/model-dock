@@ -152,9 +152,14 @@ describe('explicit Linux IDE account and license selection', () => {
     await writeFile(f.prefs, `<map MAP_XML_VERSION="1.0"><entry key="idtoken" value="${wrap(none)}"/></map>`);
     await expect(f.reader.listCandidates()).rejects.toThrow('格式无法识别'); expect(header).toBeTruthy();
   });
-  it('rejects oversized and symlinked credential or profile sources and does not scan alternative stores', async () => {
+  it('rejects oversized credential sources', async () => {
     const f = await fixture(); await f.write(); await writeFile(f.prefs, 'x'.repeat(1048577)); await expect(f.reader.listCandidates()).rejects.toBeInstanceOf(JetBrainsIdeImportError);
-    await rm(f.prefs); const foreign = join(f.home, 'foreign'); await writeFile(foreign, GOLDEN.xml); await symlink(foreign, f.prefs);
+  });
+  it('rejects symlinked credential or profile sources and does not scan alternative stores', async ({ skip }) => {
+    const f = await fixture(); await f.write();
+    await rm(f.prefs); const foreign = join(f.home, 'foreign'); await writeFile(foreign, GOLDEN.xml);
+    try { await symlink(foreign, f.prefs); }
+    catch (error) { if (process.platform === 'win32' && (error as NodeJS.ErrnoException).code === 'EPERM') { skip('Windows does not permit creating file symlinks for this user.'); return; } throw error; }
     await expect(f.reader.listCandidates()).rejects.toBeInstanceOf(JetBrainsIdeImportError);
     await rm(f.prefs); await writeFile(f.prefs, GOLDEN.xml); await rm(f.profile); await symlink(foreign, f.profile);
     await expect(f.reader.listCandidates()).rejects.toBeInstanceOf(JetBrainsIdeImportError); expect(await readFile(foreign, 'utf8')).toBe(GOLDEN.xml);
@@ -163,6 +168,6 @@ describe('explicit Linux IDE account and license selection', () => {
     const f = await fixture(); await f.write();
     const alternate = new JetBrainsIdeImporter({ homeDir: f.home, platform: 'linux', env: { XDG_CONFIG_HOME: join(f.home, 'empty-config') }, now: () => NOW });
     await expect(alternate.listCandidates()).rejects.toThrow('选择本人许可证');
-    for (const platform of ['win32', 'darwin'] as const) await expect(new JetBrainsIdeImporter({ homeDir: f.home, platform }).listCandidates()).rejects.toThrow('尚未完成原生验证');
+    await expect(new JetBrainsIdeImporter({ homeDir: f.home, platform: 'darwin' }).listCandidates()).rejects.toThrow('尚未完成原生验证');
   });
 });

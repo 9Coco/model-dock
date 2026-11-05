@@ -8,6 +8,7 @@ import { SettingsManager, quoteDesktopExec, type LoginItemAdapter, type Settings
 import { DEFAULT_SETTINGS } from '../src/shared/settings-types';
 import type { AppSettings } from '../src/shared/settings-types';
 import { Store } from '../src/main/store';
+import { requireSymlinkCapability } from './helpers/windows-review-filesystem';
 
 class MemoryStore implements SettingsStore {
   values = new Map<string, unknown>();
@@ -341,7 +342,8 @@ describe('application settings', () => {
     expect(manager.get().actualLaunchAtLogin).toBe(true);
     expect(readFileSync(autostart(), 'utf8')).toContain('Moved.AppImage');
   });
-  it.each(['legacy', 'target', 'stage'] as const)('preserves dangling %s symlinks without following them', conflict => {
+  it.for(['legacy', 'target', 'stage'] as const)('preserves dangling %s symlinks without following them', (conflict, context) => {
+    requireSymlinkCapability(context, 'file');
     const original = legacyStartup();
     const path = conflict === 'legacy' ? legacyAutostart() : conflict === 'target' ? autostart() : migrationStage();
     if (conflict === 'legacy') unlinkSync(path);

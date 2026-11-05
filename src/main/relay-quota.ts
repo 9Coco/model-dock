@@ -30,16 +30,20 @@ export class RelayQuotaCenter {
   }
   decorate(account: AuthAccount): AuthAccount {
     if (account.source !== 'relay' || !account.canQueryUsage) return account;
+    // These observations belong to the current verified query/cache only.
+    // Never retain a previous plan/identity when a cache expires by connection
+    // revision or a fresh response does not identify the subscription tier.
+    const { plan: _oldPlan, accountId: _oldId, displayName: _oldLabel, ...baseAccount } = account;
     try {
       const { connection } = this.context(account.providerId);
       const cached = this.store.getManagedState<CachedRelayQuota | null>(`auth-usage:${account.providerId}`, null);
       if (cached?.version === 1 && cached.connection === connection && cached.usage && Array.isArray(cached.usage.windows)) {
         const usage = structuredClone(cached.usage);
         if (usage.status === 'ready' && quotaCacheExpired(usage, this.now())) { usage.status = 'stale'; usage.message = '显示上次查询时的反代活跃账号额度，请刷新确认。'; }
-        return { ...account, ...(label(cached.accountId) ? { accountId: cached.accountId } : {}), ...(label(cached.accountLabel) ? { displayName: cached.accountLabel } : {}), ...(label(cached.plan, 80) ? { plan: cached.plan } : {}), usage };
+        return { ...baseAccount, ...(label(cached.accountId) ? { accountId: cached.accountId } : {}), ...(label(cached.accountLabel) ? { displayName: cached.accountLabel } : {}), ...(label(cached.plan, 80) ? { plan: cached.plan } : {}), usage };
       }
     } catch { /* A damaged cache must not hide the authorization center. */ }
-    return { ...account, usage: { status: 'not-queried', windows: [], message: '尚未查询 TRAE 反代当前账号的官方额度。' } };
+    return { ...baseAccount, usage: { status: 'not-queried', windows: [], message: '尚未查询 TRAE 反代当前账号的官方额度。' } };
   }
   refresh(providerId: string): Promise<AuthAccount> {
     let context: ReturnType<RelayQuotaCenter['context']>;

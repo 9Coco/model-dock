@@ -2,13 +2,13 @@ import { EventEmitter } from 'node:events';
 import type { ClientRequest, IncomingMessage, RequestOptions } from 'node:http';
 import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { parseTraeCreditWindows, queryTraeRelayUsage, TraeRelayUsageError, type TraeUsageRequest } from '../src/main/trae-relay-usage';
+import { parseTraeCreditWindows, parseTraePlan, queryTraeRelayUsage, TraeRelayUsageError, type TraeUsageRequest } from '../src/main/trae-relay-usage';
 
 const key = 'k'.repeat(64), privateValue = 'SYNTHETIC_PRIVATE_TRAE_USAGE_TOKEN';
 const now = () => Date.parse('2026-11-05T10:00:00Z');
 const account = (id = 'active-user', label = '当前活跃账号') => ({ success: true, active: id, accounts: [{ id, user_id: id, label, has_token: true, is_active: true }, { id: 'recent-import', user_id: 'recent-import', label: '最近导入但未激活', has_token: true, is_active: false }] });
-const pack = (quota: Record<string, unknown> = { credits_limit: 100 }, usage: Record<string, unknown> = { credits_amount: 25 }) => ({ entitlement_base_info: { entitlement_id: 'fixture-entitlement', product_type: 2, quota, end_time: 2000000000 }, usage, status: 1, expire_time: 2000000000 });
-const nativeCredits = (raw: unknown = { code: 0, user_pay_identity_str: 'Pro', user_entitlement_pack_list: [pack()] }) => ({ success: true, id: 'active-user', credits: { remaining: 3, official_remaining: 75, official_used: 25, local_debit: 72 }, raw });
+const pack = (quota: Record<string, unknown> = { credits_limit: 100 }, usage: Record<string, unknown> = { credits_amount: 25 }) => ({ entitlement_base_info: { entitlement_id: 'fixture-entitlement', product_type: 1, quota, end_time: 2000000000 }, usage, status: 1, expire_time: 2000000000 });
+const nativeCredits = (raw: unknown = { code: 0, user_entitlement_pack_list: [pack()] }) => ({ success: true, id: 'active-user', credits: { remaining: 3, official_remaining: 75, official_used: 25, local_debit: 72 }, raw });
 interface Reply { status?: number; body?: unknown; literal?: string; contentType?: string; declared?: string; fail?: boolean; hang?: boolean; abort?: boolean }
 function transport(replies: Reply[] = [{ body: account() }, { body: nativeCredits() }, { body: account() }]) {
   const calls: RequestOptions[] = [], bodies: unknown[] = [];
@@ -38,6 +38,22 @@ function transport(replies: Reply[] = [{ body: account() }, { body: nativeCredit
 afterEach(() => vi.useRealTimers());
 
 describe('TRAE native entitlement projection', () => {
+  const planPack = (type: unknown, changes: Record<string, unknown> = {}) => ({ ...pack(), ...changes, entitlement_base_info: { ...pack().entitlement_base_info, product_type: type, ...((changes.entitlement_base_info ?? {}) as Record<string, unknown>) } });
+  it.each([[0, 'Free'], [1, 'Pro'], [4, 'Pro+'], [6, 'Ultra'], [8, 'Lite'], [100, 'Express']])('maps the official base product type %s to %s without estimating from the balance', (type, plan) => {
+    for (const credits_limit of [0, 100, 999999]) expect(parseTraePlan({ user_entitlement_pack_list: [planPack(type, { entitlement_base_info: { quota: { credits_limit } } })] }, now())).toBe(plan);
+  });
+  it('keeps paid-plan priority independent of free and add-on packs, including canceled but unexpired subscriptions', () => {
+    const packs = [planPack(0), planPack(2), planPack(1, { status: 3 }), planPack(5), planPack(7), planPack(4)];
+    expect(parseTraePlan({ user_entitlement_pack_list: packs }, now())).toBe('Pro+');
+    expect(parseTraePlan({ user_entitlement_pack_list: [...packs, planPack(6)] }, now())).toBe('Ultra');
+    expect(parseTraePlan({ user_entitlement_pack_list: [...packs, planPack(100)] }, now())).toBe('Express');
+  });
+  it('keeps unsupported identities, add-ons, failed, pending, expired and future packs unknown', () => {
+    for (const type of [2, 3, 5, 7, 9, 999, '1', undefined, null]) expect(parseTraePlan({ user_pay_identity_str: 'Ultra', userPayIdentityText: 'Pro', user_entitlement_pack_list: [planPack(type)] }, now())).toBeUndefined();
+    for (const status of [0, 4, 5, 'active', undefined]) expect(parseTraePlan({ user_entitlement_pack_list: [planPack(1, { status })] }, now())).toBeUndefined();
+    for (const changes of [{ expire_time: now() / 1000 }, { entitlement_base_info: { start_time: now() / 1000 + 60 } }, { entitlement_base_info: { start_time: 'invalid' } }, { expire_time: 'invalid' }]) expect(parseTraePlan({ user_entitlement_pack_list: [planPack(1, changes)] }, now())).toBeUndefined();
+    for (const raw of [undefined, {}, { code: 1, user_entitlement_pack_list: [planPack(1)] }, { user_entitlement_pack_list: Array.from({ length: 101 }, () => planPack(1)) }]) expect(parseTraePlan(raw, now())).toBeUndefined();
+  });
   it('shows official per-pack credits independently of relay-local debit and model history', async () => {
     const io = transport(), result = await queryTraeRelayUsage(key, { send: io.send, now });
     expect(result).toMatchObject({ accountId: 'active-user', accountLabel: '当前活跃账号', plan: 'Pro', usage: { status: 'ready', queriedAt: '2026-11-05T10:00:00.000Z', windows: [{ label: '通用积分', total: 100, remaining: 75, unit: '积分', remainingPercent: 75, usedPercent: 25, measurement: 'reported' }] } });

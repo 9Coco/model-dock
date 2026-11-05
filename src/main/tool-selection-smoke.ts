@@ -71,14 +71,15 @@ export async function verifyToolSelection(window: BrowserWindow, store: Store, o
     assert.equal(await evaluate<boolean>(`!!document.querySelector('[role="dialog"]')`), false, 'Automatic write must finish on the tool page');
   }
   function assertAutomaticGroups(tool: ToolId, expectedIds: string[]): void {
+    const nativeMultiple = store.listBindings().find(binding => binding.id === tool)?.mode === 'auto';
     if (tool === 'vscode') {
       const rows = readJsonc(vscodeFile) as any[];
       const actualNames = rows.filter(row => row.vendor === 'customendpoint' && typeof row.name === 'string' && (row.name === 'ModelDock' || row.name.startsWith('ModelDock · '))).map(row => row.name);
-      const expectedNames = expectedIds.length === 1 ? ['ModelDock'] : expectedIds.map(id => `ModelDock · ${store.getProvider(id)!.name}`);
+      const expectedNames = nativeMultiple ? expectedIds.map(id => `ModelDock · ${store.getProvider(id)!.name}`) : expectedIds.length ? ['ModelDock'] : [];
       assert.deepEqual(new Set(actualNames), new Set(expectedNames), 'Checkbox change must immediately write precisely its selected provider groups');
     } else if (tool === 'opencode') {
       const providers = readJsonc(openCodeFile).provider;
-      assert.deepEqual(new Set(Object.keys(providers).filter(id => id === 'modeldock' || id.startsWith('modeldock-'))), new Set(expectedIds.length === 1 ? ['modeldock'] : expectedIds.map(id => `modeldock-${encodeURIComponent(id)}`)), 'OpenCode checkbox change must immediately update selected provider endpoints');
+      assert.deepEqual(new Set(Object.keys(providers).filter(id => id === 'modeldock' || id.startsWith('modeldock-'))), new Set(nativeMultiple ? expectedIds.map(id => `modeldock-${encodeURIComponent(id)}`) : expectedIds.length ? ['modeldock'] : []), 'OpenCode checkbox change must immediately update selected provider endpoints');
     } else if (tool === 'codex') {
       const config = parseToml(readFileSync(codexFile, 'utf8')) as any;
       if (expectedIds.length === 0) {
@@ -95,14 +96,14 @@ export async function verifyToolSelection(window: BrowserWindow, store: Store, o
   }
   async function resetBinding(tool: ToolId): Promise<void> {
     const current = await storedBinding(tool);
-    await evaluate(`window.modelDock.saveBinding(${JSON.stringify({ ...current, mode: 'auto', modelSelection: undefined, enabled: false, providerIds: [], modelIds: [], defaultModelId: '' })})`);
+    await evaluate(`window.modelDock.saveBinding(${JSON.stringify({ ...current, mode: tool === 'codex' ? 'direct' : 'auto', modelSelection: undefined, enabled: false, providerIds: [], modelIds: [], defaultModelId: '' })})`);
     await click('[aria-label="刷新本机配置"]');
     await navigate(tool);
     await waitFor(`document.querySelector('[data-tool-binding="${tool}"]')?.dataset.selectedProviderCount==='0'`, 'empty inline binding refreshed');
   }
   async function selectProvider(tool: ToolId, providerId: string, selected: boolean): Promise<void> {
     const before = await storedBinding(tool);
-    const expectedMode = tool === 'codex' && before.mode === 'aggregate' ? 'aggregate' : 'direct';
+    const expectedMode = before.mode ?? 'direct';
     const expected = selected ? tool === 'codex' && expectedMode === 'direct' ? [providerId] : [...new Set([...(before.providerIds ?? []), providerId])] : (before.providerIds ?? []).filter(id => id !== providerId);
     const selector = `article[data-provider-id="${providerId}"] input[data-action="select-tool-provider"]`;
     assert.equal(await evaluate<boolean>(`document.querySelector(${JSON.stringify(selector)})?.checked`), !selected, 'Fixture must exercise an actual checkbox change');
@@ -241,22 +242,26 @@ export async function verifyToolSelection(window: BrowserWindow, store: Store, o
     for (const [width, height] of [[1320, 880], [980, 680]]) {
       window.setSize(width, height); await waitFor(width > 1100 ? 'innerWidth>1100' : 'innerWidth<1100', 'inline selection viewport');
       await evaluate(`document.querySelector('.main-content').scrollTop=0`); await pause(75);
-      const layout = await evaluate<{ controlsVisible: boolean; checkboxesVisible: boolean; mainOverflow: boolean; modal: boolean; selectedCount: number; modelCount: number }>(`(()=>{
+      const layout = await evaluate<{ controlsVisible: boolean; checkboxesVisible: boolean; checkboxesReachable: boolean; allSourcesSelected: boolean; mainOverflow: boolean; modal: boolean; selectedCount: number; modelCount: number }>(`(()=>{
         const summary=document.querySelector('[data-tool-binding="vscode"]'),main=document.querySelector('.main-content'),controls=summary.querySelector('.tool-inline-controls');
         const inside=element=>{const bounds=element.getBoundingClientRect();return bounds.left>=0&&bounds.top>=0&&bounds.right<=innerWidth+1&&bounds.bottom<=innerHeight+1;};
         const checkboxes=Array.from(document.querySelectorAll('article[data-provider-id] input[data-action="select-tool-provider"]'));
-        return {controlsVisible:inside(controls),checkboxesVisible:checkboxes.length===2&&checkboxes.every(input=>inside(input)&&input.checked),mainOverflow:main.scrollWidth>main.clientWidth+1,modal:!!document.querySelector('[role="dialog"]'),selectedCount:Number(summary.dataset.selectedProviderCount),modelCount:Number(summary.dataset.selectedModelCount)};
+        const controlsVisible=inside(controls),checkboxesVisible=checkboxes.length===2&&checkboxes.every(inside);
+        const checkboxesReachable=checkboxes.length===2&&checkboxes.every(input=>{input.scrollIntoView({behavior:'instant',block:'center',inline:'nearest'});return inside(input)&&!input.disabled;});
+        main.scrollTop=0;
+        return {controlsVisible,checkboxesVisible,checkboxesReachable,allSourcesSelected:checkboxes.length===2&&checkboxes.every(input=>input.checked),mainOverflow:main.scrollWidth>main.clientWidth+1,modal:!!document.querySelector('[role="dialog"]'),selectedCount:Number(summary.dataset.selectedProviderCount),modelCount:Number(summary.dataset.selectedModelCount)};
       })()`);
-      assert.equal(layout.controlsVisible, true); assert.equal(layout.checkboxesVisible, true); assert.equal(layout.mainOverflow, false); assert.equal(layout.modal, false); assert.equal(layout.selectedCount, 2); assert.equal(layout.modelCount, 4);
-      layouts.push({ theme, width, ...layout });
+      writeFileSync(join(outputDir, 'tool-selection-layout-debug.json'), JSON.stringify({ theme, width, ...layout }, null, 2));
       writeFileSync(join(outputDir, `electron-tool-inline-vscode-${theme}-${width}.png`), await captureUi());
+      assert.equal(layout.controlsVisible, true, 'Inline tool controls must be in the viewport'); assert.equal(layout.checkboxesReachable, true, 'Every supplier checkbox must be reachable by vertical scrolling'); assert.equal(layout.allSourcesSelected, true); assert.equal(layout.mainOverflow, false); assert.equal(layout.modal, false); assert.equal(layout.selectedCount, 2); assert.equal(layout.modelCount, 4);
+      layouts.push({ theme, width, ...layout });
     }
   }
   await selectProvider('vscode', apiProviders[0].id, false);
   assert.equal(await evaluate<string>(`document.querySelector('[data-tool-application-status]').textContent`), '本次选择已同步');
   await apply('vscode', vscodeFile);
   const vscodeRemaining = readJsonc(vscodeFile) as any[];
-  assert.equal(vscodeRemaining.length, 2); assert.ok(vscodeRemaining.some(row => row.name === 'ModelDock')); assertForeignPreserved(vscodeRemaining.find(row => row.name === foreignVsCode.name), foreignVsCode);
+  assert.equal(vscodeRemaining.length, 2); assert.ok(vscodeRemaining.some(row => row.name === `ModelDock · ${apiProviders[1].name}`)); assertForeignPreserved(vscodeRemaining.find(row => row.name === foreignVsCode.name), foreignVsCode);
   await selectProvider('vscode', apiProviders[1].id, false); await apply('vscode', vscodeFile);
   assertForeignPreserved(readJsonc(vscodeFile), [foreignVsCode]); assert.ok(readFileSync(vscodeFile, 'utf8').includes('foreign-vscode-comment'));
 
@@ -280,7 +285,7 @@ export async function verifyToolSelection(window: BrowserWindow, store: Store, o
   const exclusiveRows = readJsonc(vscodeFile) as any[];
   assert.equal(exclusiveRows.length, 2); assertForeignPreserved(exclusiveRows.find(row => row.vendor === 'openai'), builtInVendor);
   const exclusiveCustom = exclusiveRows.filter(row => row.vendor === 'customendpoint');
-  assert.equal(exclusiveCustom.length, 1); assert.equal(exclusiveCustom[0].name, 'ModelDock');
+  assert.equal(exclusiveCustom.length, 1); assert.equal(exclusiveCustom[0].name, `ModelDock · ${apiProviders[0].name}`);
   assert.deepEqual(exclusiveCustom[0].models.map((model: any) => model.id), ['mock-tool-first', 'mock-tool-second']);
   assert.ok(exclusiveCustom[0].apiKey === 'synthetic-tool-one', 'The selected source must keep its own credential');
   assert.ok(readFileSync(vscodeFile, 'utf8').includes('exclusive-scope-comment'));
@@ -375,5 +380,5 @@ command = "synthetic-mcp-fixture"
   await apply('codex', codexFile); // A manual zero-selection retry is idempotent.
   await assertNoRendererCredentials();
   assert.ok(readdirSync(backupDir).some(name => name.startsWith('vscode-'))); assert.ok(readdirSync(backupDir).some(name => name.startsWith('opencode-'))); assert.ok(readdirSync(backupDir).some(name => name.startsWith('codex-')));
-  writeFileSync(join(outputDir, 'tool-selection-validation.json'), JSON.stringify({ sources: apiProviders.map(provider => ({ id: provider.id, name: provider.name })), fixtureModels: fixtureModels.map(model => ({ id: model.id, providerId: model.providerId, upstreamId: model.upstreamId, alias: model.alias })), legacyDefaultSelection: legacyDefaultValidation, legacyDisabledSelection: legacyDisabledValidation, inlineSelection: { mode: 'direct', dialogRequired: false, sources: 2, models: 4, defaultModelId: secondDefault.id, checkboxAutomaticallyApplies: true, defaultAutomaticallyApplies: true, manualRetryIdempotent: true }, layouts, vscode: { nativeGroups: 2, realUpstreamIds: true, independentCredentials: true, foreignGroupPreserved: true, commentsPreserved: true, deselectedGroupRemoved: true, allDeselectedManagedGroupsCleared: true, path: vscodeFile }, opencode: { nativeGroups: 2, independentCredentials: true, foreignProviderPreserved: true, mcpPreserved: true, commentsPreserved: true, allDeselectedManagedGroupsCleared: true, path: openCodeFile }, codex: { selectedSources: 3, activeEndpoint: 'modeldock', gatewayRunning: true, publishedAliases: catalog.models.map((model: any) => model.slug), defaultModel: codexApplied.model, foreignProviderPreserved: true, mcpPreserved: true, path: codexFile, allDeselectedManagedProviderRemoved: true, originalSelectionRestored: { model: codexCleared.model, modelProvider: codexCleared.model_provider, catalog: foreignCodexCatalog }, originalCatalogPreserved: true, generatedCatalogRemoved: true, zeroSelectionRetryIdempotent: true }, backupFilesCreated: true, rendererCredentialsHidden: true, realClientProfilesChanged: false, nativeClientsLoaded: false, liveProviderInferenceTested: false }, null, 2));
+  writeFileSync(join(outputDir, 'tool-selection-validation.json'), JSON.stringify({ sources: apiProviders.map(provider => ({ id: provider.id, name: provider.name })), fixtureModels: fixtureModels.map(model => ({ id: model.id, providerId: model.providerId, upstreamId: model.upstreamId, alias: model.alias })), legacyDefaultSelection: legacyDefaultValidation, legacyDisabledSelection: legacyDisabledValidation, inlineSelection: { mode: 'auto', dialogRequired: false, sources: 2, models: 4, defaultModelId: secondDefault.id, checkboxAutomaticallyApplies: true, defaultAutomaticallyApplies: true, manualRetryIdempotent: true }, layouts, vscode: { nativeGroups: 2, realUpstreamIds: true, independentCredentials: true, foreignGroupPreserved: true, commentsPreserved: true, deselectedGroupRemoved: true, allDeselectedManagedGroupsCleared: true, path: vscodeFile }, opencode: { nativeGroups: 2, independentCredentials: true, foreignProviderPreserved: true, mcpPreserved: true, commentsPreserved: true, allDeselectedManagedGroupsCleared: true, path: openCodeFile }, codex: { selectedSources: 3, activeEndpoint: 'modeldock', gatewayRunning: true, publishedAliases: catalog.models.map((model: any) => model.slug), defaultModel: codexApplied.model, foreignProviderPreserved: true, mcpPreserved: true, path: codexFile, allDeselectedManagedProviderRemoved: true, originalSelectionRestored: { model: codexCleared.model, modelProvider: codexCleared.model_provider, catalog: foreignCodexCatalog }, originalCatalogPreserved: true, generatedCatalogRemoved: true, zeroSelectionRetryIdempotent: true }, backupFilesCreated: true, rendererCredentialsHidden: true, realClientProfilesChanged: false, nativeClientsLoaded: false, liveProviderInferenceTested: false }, null, 2));
 }

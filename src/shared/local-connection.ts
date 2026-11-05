@@ -11,7 +11,7 @@ export function isPublishedGatewayModel(data: Pick<Snapshot, 'gatewayExposure'>,
   const exposure = data.gatewayExposure;
   return model.providerId === provider.id && model.enabled && provider.enabled && provider.hasSecret && provider.authStatus === 'ready'
     && !!provider.baseUrl.trim() && (!exposure || !exposure.excludedProviderIds.includes(provider.id) && !exposure.excludedModelIds.includes(model.id))
-    && (model.wireApi !== 'messages' || isTraeRelayProvider(provider));
+    && (model.wireApi !== 'messages' || isTraeRelayProvider(provider) || !!provider.nativeAdapter);
 }
 
 export function localModelStatus(data: Pick<Snapshot, 'gateway' | 'gatewayExposure'>, provider: Provider, model: Model): string {
@@ -21,6 +21,6 @@ export function localModelStatus(data: Pick<Snapshot, 'gateway' | 'gatewayExposu
   if (!model.enabled) return '模型已停用';
   if (data.gatewayExposure?.excludedProviderIds.includes(provider.id)) return '供应商未加入本地接口';
   if (data.gatewayExposure?.excludedModelIds.includes(model.id)) return '模型未发布';
-  if (model.wireApi === 'messages' && !isTraeRelayProvider(provider)) return '需支持 Messages 的工具入口';
+  if (model.wireApi === 'messages' && !isTraeRelayProvider(provider) && !provider.nativeAdapter) return '需支持 Messages 的工具入口';
   return data.gateway.running ? '已发布' : '待启动本地服务';
 }

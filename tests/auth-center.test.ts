@@ -46,6 +46,7 @@ describe('authorization center quota protocols and safe account views', () => {
     const store = new MemoryStore();
     const trae = store.saveProvider({ name: 'Existing TRAE relay', kind: 'openai-compatible', presetId: 'trae-cn-relay', baseUrl: 'http://127.0.0.1:18080/v1', enabled: true });
     const central = store.saveProvider({ name: 'Existing JetBrains relay', kind: 'openai-compatible', presetId: 'jetbrains-central', baseUrl: 'http://127.0.0.1:18081/v1', enabled: false });
+    central.nativeAdapter = 'jetbrains-central'; // Match the real Store's fail-closed legacy Central marker.
     const api = store.saveProvider({ name: 'Native API', kind: 'openai-compatible', presetId: 'deepseek', baseUrl: 'https://api.deepseek.com', enabled: true });
     store.setSecret(trae.id, { apiKey: 'PRIVATE_RELAY_KEY', accessToken: jwt({ email: 'should-not-decode@example.test' }), refreshToken: 'PRIVATE_RELAY_REFRESH' });
     const fetcher = vi.fn(), oauth = oauthFor(store), center = new AuthCenter(store, oauth, { fetch: fetcher });
@@ -53,7 +54,10 @@ describe('authorization center quota protocols and safe account views', () => {
     expect(relays).toHaveLength(2);
     expect(relays[0]).toMatchObject({ providerId: trae.id, kind: 'trae-cn-relay', relayKeyConfigured: true, authStatus: 'ready', canRefresh: false, usage: { status: 'unavailable', windows: [] } });
     expect(relays[1]).toMatchObject({ providerId: central.id, kind: 'jetbrains-central', relayKeyConfigured: false, authStatus: 'missing', canRefresh: false });
-    expect(relays.every(account => account.usage.message.includes('反代服务管理'))).toBe(true);
+    expect(relays.map(account => account.usage.message)).toEqual([
+      '此连接使用已有外部接口，请在原客户端或外部服务中管理授权。',
+      '旧连接尚未保存可用的原生授权，请在授权中心重新导入账号。',
+    ]);
     expect(accounts.some(account => account.providerId === api.id)).toBe(false);
     expect(JSON.stringify(relays)).not.toMatch(/PRIVATE|accessToken|refreshToken|should-not-decode|expiresAt|accountId|email/);
     expect(fetcher).not.toHaveBeenCalled(); expect(oauth.prepareRequest).not.toHaveBeenCalled();

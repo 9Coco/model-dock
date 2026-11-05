@@ -120,6 +120,14 @@ describe('JetBrains native IDE API', () => {
     await expect(new JetBrainsIdeApi({ fetch, now: () => NOW }).exchange({ idToken: ID, licenseId: 'fixture' })).rejects.toBeInstanceOf(JetBrainsIdeApiError);
   });
 
+  it('does not invent a subscription tier from credit amounts, license IDs or undocumented extra plan fields', async () => {
+    for (const maximum of ['0', '10', '1000']) {
+      const fetch = mockTransport(() => reply({ plan: 'AI Ultimate', current: { current: '0', maximum, license: 'fixture-AIPU-license', productType: 'AIPU', tariffName: 'AI Pro' } }));
+      const usage = await new JetBrainsIdeApi({ fetch, now: () => NOW }).quota(AI);
+      expect(usage.status).toBe('ready'); expect(usage).not.toHaveProperty('plan'); expect(JSON.stringify(usage)).not.toMatch(/Ultimate|AI Pro|AIPU/);
+    }
+  });
+
   it('projects native scalar/object credit DTOs as spent and remaining amounts, with millisecond reset time', async () => {
     const fetch = mockTransport((url, init) => {
       expect(url).toBe('https://api.jetbrains.ai/user/v5/quota/get'); expect(init.method).toBe('POST');

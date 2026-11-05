@@ -185,7 +185,19 @@ export class Store {
   }
   private provider(row: Record<string, unknown>): Provider {
     const relayMode = row.trae_relay_mode === 'managed' ? 'managed' : 'manual';
-    return { ...(row.preset_id === 'trae-cn-relay' ? { relayMode } : {}), id: String(row.id), name: String(row.name), kind: row.kind as Provider['kind'], presetId: (row.preset_id || 'custom') as Provider['presetId'], baseUrl: String(row.base_url), enabled: Boolean(row.enabled), hasSecret: Boolean(this.one('SELECT provider_id FROM secrets WHERE provider_id=?', [String(row.id)])), authStatus: row.auth_status as Provider['authStatus'], note: String(row.note), ...(row.kind === 'openai-compatible' ? { messagesAuth: row.messages_auth === 'api-key' ? 'api-key' as const : 'bearer' as const, ...(row.claude_base_url ? { claudeBaseUrl: String(row.claude_base_url) } : {}) } : {}), ...(row.kind === 'copilot' ? { copilotAccountId: this.getSecret(String(row.id))?.copilotAccountId } : {}) };
+    let nativeAdapter: Provider['nativeAdapter'];
+    if (row.preset_id === 'trae-cn-relay') {
+      try {
+        if (relayMode === 'managed' || this.getManagedState<{ nativeClient?: unknown } | null>(`auth-metadata:${String(row.id)}`, null)?.nativeClient) nativeAdapter = 'trae';
+      } catch { nativeAdapter = 'trae'; }
+    }
+    if (row.preset_id === 'jetbrains-central') {
+      try {
+        const metadata = this.getManagedState<{ nativeIde?: unknown; clientImport?: { client?: string } } | null>(`auth-metadata:${String(row.id)}`, null);
+        nativeAdapter = metadata?.nativeIde || metadata?.clientImport?.client === 'jetbrains-ide' ? 'jetbrains-ide' : 'jetbrains-central';
+      } catch { nativeAdapter = 'jetbrains-central'; }
+    }
+    return { ...(row.preset_id === 'trae-cn-relay' ? { relayMode } : {}), ...(nativeAdapter ? { nativeAdapter } : {}), id: String(row.id), name: String(row.name), kind: row.kind as Provider['kind'], presetId: (row.preset_id || 'custom') as Provider['presetId'], baseUrl: String(row.base_url), enabled: Boolean(row.enabled), hasSecret: Boolean(this.one('SELECT provider_id FROM secrets WHERE provider_id=?', [String(row.id)])), authStatus: row.auth_status as Provider['authStatus'], note: String(row.note), ...(row.kind === 'openai-compatible' ? { messagesAuth: row.messages_auth === 'api-key' ? 'api-key' as const : 'bearer' as const, ...(row.claude_base_url ? { claudeBaseUrl: String(row.claude_base_url) } : {}) } : {}), ...(row.kind === 'copilot' ? { copilotAccountId: this.getSecret(String(row.id))?.copilotAccountId } : {}) };
   }
   listProviders(): Provider[] { return this.rows('SELECT * FROM providers ORDER BY rowid').map(row => this.provider(row)); }
   getProvider(providerId: string): Provider | undefined { const row = this.one('SELECT * FROM providers WHERE id=?', [providerId]); return row ? this.provider(row) : undefined; }
@@ -241,7 +253,11 @@ export class Store {
     if (!preset) throw new Error('供应商预设不存在。');
     if (preset.kind !== input.kind) throw new Error('供应商类型与预设不一致。');
     if (typeof input.baseUrl !== 'string') throw new Error('上游地址无效。');
-    const baseUrl = input.baseUrl.trim() ? validateUpstreamUrl(input.baseUrl, this.gatewayPort) : '';
+    // These fixed values retain historical provider identity, never a network
+    // destination. Native adapters connect only to their own official origins.
+    const identityOnly = preset.id === 'jetbrains-central' && input.baseUrl.trim() === JETBRAINS_RELAY_BASE_URL
+      || preset.id === 'trae-cn-relay' && (input.relayMode ?? existing?.relayMode) === 'managed' && input.baseUrl.trim() === TRAE_RELAY_BASE_URL;
+    const baseUrl = input.baseUrl.trim() ? validateUpstreamUrl(input.baseUrl, identityOnly ? 0 : this.gatewayPort) : '';
     if (input.kind === 'copilot' && baseUrl !== 'https://api.githubcopilot.com') throw new Error('Copilot 订阅只使用官方服务地址。');
     if (existing && existing.kind !== input.kind && existing.hasSecret) throw new Error('已有凭据的供应商不能直接改变类型，请新建供应商。');
     const note = typeof input.note === 'string' ? input.note.slice(0, 1000) : '';
@@ -589,9 +605,6 @@ export class Store {
     const modelId = input.id ? id(input.id) : randomUUID();
     const provider = this.getProvider(input.providerId);
     if (!provider) throw new Error('模型引用的供应商不存在。');
-    if (provider.presetId === 'jetbrains-central' && input.wireApi !== 'chat-completions') {
-      throw new Error('JetBrains 会员反代的模型使用 Chat Completions。');
-    }
     const requestedAlias = text(input.alias, '模型别名', 400);
     if (!/^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$/.test(requestedAlias)) throw new Error('模型别名只能包含字母、数字和 . _ : / -。');
     const alias = suggestModelAlias(input.providerId, requestedAlias, this.listModels(), modelId);

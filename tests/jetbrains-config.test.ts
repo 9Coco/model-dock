@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { applyConfig, buildConfig, connectionKey } from '../src/main/adapters';
@@ -8,6 +8,7 @@ import { restoreOfficialConfig } from '../src/main/tool-restore';
 import { JETBRAINS_TOOLS, type JetBrainsToolId } from '../src/shared/jetbrains';
 import type { Model, Provider, ProviderSecret, ToolBinding } from '../src/shared/types';
 import type { WindowsJetBrainsProcess, WindowsJetBrainsProcessSnapshot } from '../src/main/jetbrains-windows';
+import { createDirectoryLink, expectModeOrInheritedWindowsAcl, requireSymlinkCapability } from './helpers/windows-review-filesystem';
 
 const roots: string[] = [];
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); for (const root of roots.splice(0)) rmSync(root, { force: true, recursive: true }); });
@@ -198,7 +199,7 @@ describe('JetBrains AI Assistant explicit offline configuration', () => {
     expect(readFileSync(passwordFile, 'utf8')).toBe('SYNTHETIC_UNTOUCHED_PASSWORD_SAFE'); expect(f.store.gatewayKey).not.toHaveBeenCalled(); expect(f.store.getSecret).not.toHaveBeenCalled();
     expect(JSON.stringify(f.journals)).not.toContain('SYNTHETIC_LOCAL_KEY'); expect(f.store.createManagedBackup).toHaveBeenCalledWith('jetbrains-sync', expect.any(Object));
     expect(readdirSync(f.backups)).toHaveLength(3);
-    if (process.platform !== 'win32') for (const path of [...fileNames.map((_, index) => f.file(index)), ...readdirSync(f.backups).map(name => join(f.backups, name))]) expect(statSync(path).mode & 0o777).toBe(0o600);
+    expectModeOrInheritedWindowsAcl([...fileNames.map((_, index) => f.file(index)), ...readdirSync(f.backups).map(name => join(f.backups, name))], 0o600, f.root);
   });
   it('restores exact preexisting XML bytes after repeated model updates', async () => {
     const f = fixture(); f.seed(); f.apply(); f.models[0].alias = 'updated-core'; f.models[0].tools = false; f.apply();
@@ -321,10 +322,26 @@ describe('JetBrains AI Assistant explicit offline configuration', () => {
     const f = fixture(); f.seed(); f.write(xml.includes('LLMThirdPartyAIProvidersSettings') ? f.file(2) : f.file(0), xml);
     const original = fileNames.map((_, index) => f.read(index)); expect(() => f.apply()).toThrow(); original.forEach((text, index) => expect(f.read(index)).toBe(text)); expect(f.states.size).toBe(0); expect(existsSync(f.backups)).toBe(false);
   });
-  it('rejects file and parent links, hard links, invalid UTF-8 and oversized XML', () => {
-    const f = fixture(), other = join(f.root, 'other.xml'); f.write(other, '<application/>'); symlinkSync(other, f.file(0)); expect(() => f.apply()).toThrow(); rmSync(f.file(0));
-    linkSync(other, f.file(0)); expect(() => f.apply()).toThrow(); rmSync(f.file(0)); f.write(f.file(0), Buffer.from([0xc0, 0xaf])); expect(() => f.apply()).toThrow();
-    f.write(f.file(0), ' '.repeat(512 * 1024 + 1)); expect(() => f.apply()).toThrow(); rmSync(join(f.target, 'options'), { recursive: true }); symlinkSync(join(f.root), join(f.target, 'options'), 'dir'); expect(() => f.apply()).toThrow();
+  it('rejects file symlinks without modifying their targets', context => {
+    requireSymlinkCapability(context, 'file');
+    const f = fixture(), other = join(f.root, 'other.xml'); f.write(other, '<application/>'); symlinkSync(other, f.file(0));
+    expect(() => f.apply()).toThrow(); expect(readFileSync(other, 'utf8')).toBe('<application/>');
+    expect(f.states.size).toBe(0); expect(existsSync(f.backups)).toBe(false);
+  });
+  it('rejects linked parent directories without creating files in their targets', context => {
+    requireSymlinkCapability(context, 'dir');
+    const f = fixture(); rmSync(join(f.target, 'options'), { recursive: true }); createDirectoryLink(f.root, join(f.target, 'options'));
+    expect(() => f.apply()).toThrow(); expect(existsSync(join(f.root, fileNames[0]))).toBe(false);
+    expect(f.states.size).toBe(0); expect(existsSync(f.backups)).toBe(false);
+  });
+  it('rejects hard links without modifying their targets', () => {
+    const f = fixture(), other = join(f.root, 'other.xml'); f.write(other, '<application/>'); linkSync(other, f.file(0));
+    expect(() => f.apply()).toThrow(); expect(readFileSync(other, 'utf8')).toBe('<application/>');
+    expect(f.states.size).toBe(0); expect(existsSync(f.backups)).toBe(false);
+  });
+  it.each([Buffer.from([0xc0, 0xaf]), Buffer.from(' '.repeat(512 * 1024 + 1))])('rejects invalid UTF-8 or oversized XML without changing it', content => {
+    const f = fixture(); f.write(f.file(0), content);
+    expect(() => f.apply()).toThrow(); expect(readFileSync(f.file(0))).toEqual(content);
     expect(f.states.size).toBe(0); expect(existsSync(f.backups)).toBe(false);
   });
   it('preserves a concurrent external edit and commits no ownership record', () => {

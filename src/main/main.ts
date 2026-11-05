@@ -10,14 +10,16 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { Store } from './store';
 import { Gateway } from './gateway';
-import { CentralPiManager } from './central-pi-manager';
-import { JETBRAINS_RELAY_BASE_URL } from '../shared/presets';
-import { TraeRelayManager, TRAE_RELAY_BASE_URL, TRAE_RELAY_LOGIN_URL } from './trae-relay';
+import { TraeApi, TraeApiError } from './trae-api';
+import { TraeNativeAccounts, TraeNativeAccountError } from './trae-native-account';
+import { TraeGatewayAdapter } from './trae-gateway-adapter';
 import { TraeClientImporter, TraeClientImportError } from './trae-client-import';
-import { CentralClientImporter, CentralClientImportError } from './central-client-import';
+import { CentralApi, CentralApiError } from './central-api';
+import { CentralClientSessionReader } from './central-client-session';
+import { CentralGatewayAdapter } from './central-gateway-adapter';
+import { CentralNativeAccounts, CentralNativeAccountError } from './central-native-account';
 import { RelayClientImportManager, RelayClientImportError, type RelayImportAdapter } from './relay-client-import';
 import { RelayQuotaCenter, RelayQuotaFailure } from './relay-quota';
-import { TraeRelayUsageError } from './trae-relay-usage';
 import { OAuthManager } from './oauth';
 import { AuthCenter } from './auth-center';
 import { CopilotProviderManager } from './copilot-provider';
@@ -91,16 +93,19 @@ import { applyWaylandColorWorkaround } from './wayland-color';
 import { JetBrainsIdeImporter, JetBrainsIdeImportError } from './jetbrains-ide-import';
 import { JetBrainsIdeApi, JetBrainsIdeApiError } from './jetbrains-ide-api';
 import { JetBrainsIdeAccounts } from './jetbrains-ide-account';
-import { JetBrainsIdeRelay } from './jetbrains-ide-relay';
+import { JetBrainsGatewayAdapter } from './jetbrains-gateway-adapter';
 import { createJetBrainsIdeFixture, verifyJetBrainsIdeImport } from './jetbrains-ide-smoke';
 
 let window: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let store: Store;
 let gateway: Gateway;
-let centralPi: CentralPiManager;
 let ideAccounts: JetBrainsIdeAccounts;
-let ideRelay: JetBrainsIdeRelay;
+let ideGatewayAdapter: JetBrainsGatewayAdapter;
+let centralNativeAccounts: CentralNativeAccounts;
+let centralGatewayAdapter: CentralGatewayAdapter;
+let traeNativeAccounts: TraeNativeAccounts;
+let traeGatewayAdapter: TraeGatewayAdapter;
 let oauth: OAuthManager;
 let accounts: AuthCenter;
 let copilotAccounts: CopilotAuthCenter;
@@ -357,9 +362,9 @@ async function createWindow(forceShow = false) {
           await new Promise(resolve => setTimeout(resolve,200));
           await window!.webContents.executeJavaScript(`document.querySelector('[data-tool-id="codex"]').click()`);
           await new Promise(resolve => setTimeout(resolve,500));
-          const modeUi = await window!.webContents.executeJavaScript(`(()=>({title:document.querySelector('.breadcrumbs')?.textContent,hasModal:!!document.querySelector('[role="dialog"]'),hasLegacyTabs:!!document.querySelector('.route-tabs'),checkboxes:document.querySelectorAll('[data-action="select-tool-provider"]').length,defaultInline:!!document.querySelector('[data-action="tool-default-model"]')}))()`);
+          const modeUi = await window!.webContents.executeJavaScript(`(()=>({title:document.querySelector('.breadcrumbs')?.textContent,hasModal:!!document.querySelector('[role="dialog"]'),hasLegacyTabs:!!document.querySelector('.route-tabs'),directProvider:!!document.querySelector('select[data-action="single-entry-direct-provider"][data-tool-id="codex"]'),aggregateProviders:!!document.querySelector('[data-aggregate-internal-sources="codex"] [data-action="select-tool-provider"]'),defaultInline:!!document.querySelector('[data-action="tool-default-model"]')}))()`);
           writeFileSync(join(outputDir,'mode-ui-debug.json'),JSON.stringify(modeUi,null,2));
-          if (modeUi.hasModal || modeUi.hasLegacyTabs || !modeUi.checkboxes || !modeUi.defaultInline) throw new Error('Inline tool provider selection unavailable');
+          if (modeUi.hasModal || modeUi.hasLegacyTabs || !(modeUi.directProvider || modeUi.aggregateProviders) || !modeUi.defaultInline) throw new Error('Inline tool provider selection unavailable');
           writeFileSync(join(outputDir,'mode-ui-validation.json'),JSON.stringify({ok:true,title:modeUi.title},null,2));
           writeFileSync(join(outputDir,'electron-tool-modes.png'),await captureUi());
           const navigation = await window!.webContents.executeJavaScript(`(async()=>{
@@ -368,7 +373,7 @@ async function createWindow(forceShow = false) {
             for(const id of ['codex','opencode','dsh','vscode','copilot']){
               document.querySelector('[data-tool-id="'+id+'"]').click();
               await new Promise(resolve=>setTimeout(resolve,80));
-              tools.push({id,title:document.querySelector('.breadcrumbs').textContent,inline:!!document.querySelector('[data-action="select-tool-provider"]')});
+              tools.push({id,title:document.querySelector('.breadcrumbs').textContent,inline:!!document.querySelector('[data-tool-workspace="'+id+'"] [data-action="select-tool-provider"],[data-tool-workspace="'+id+'"] [data-action="single-entry-direct-provider"]'),active:document.querySelector('.sidebar [data-tool-id="'+id+'"]')?.getAttribute('aria-current')==='page'});
             }
             document.querySelector('[data-source-id="'+${JSON.stringify(outcome.providerId)}+'"]').click();
             await new Promise(resolve=>setTimeout(resolve,100));
@@ -376,7 +381,7 @@ async function createWindow(forceShow = false) {
             const after=await window.modelDock.snapshot();
             return {tools,providerDetail,bindingsUnchanged:JSON.stringify(before.bindings)===JSON.stringify(after.bindings)};
           })()`);
-          if (!navigation.bindingsUnchanged || !navigation.providerDetail.hasModel || !navigation.tools.every((tool: any)=>tool.title.includes('供应商'))) throw new Error('Detail navigation changed bindings or lost provider models');
+          if (!navigation.bindingsUnchanged || !navigation.providerDetail.hasModel || !navigation.tools.every((tool: any)=>tool.inline && tool.active && tool.title.trim())) throw new Error('Detail navigation changed bindings or lost provider models');
           writeFileSync(join(outputDir,'navigation-validation.json'),JSON.stringify(navigation,null,2));
           await window!.webContents.executeJavaScript(`document.querySelector('[data-tool-id="codex"]').click();document.querySelector('.sidebar-scroll').scrollTop=0`);
           await new Promise(resolve=>setTimeout(resolve,150));
@@ -428,29 +433,36 @@ async function createWindow(forceShow = false) {
           const clientConfig = readFileSync(join(testHome, '.codex', 'config.toml'), 'utf8');
           if (!featureOutcome.mcpApplied || !featureOutcome.mcpRedacted || !clientConfig.includes('preserve-me') || !clientConfig.includes('preserved-model') || !clientConfig.includes('synthetic-mcp-secret') || !featureOutcome.skillRead || !featureOutcome.skillTools.includes('copilot') || !featureOutcome.accountsSafe) throw new Error('Feature integration validation failed: '+JSON.stringify(featureOutcome));
           writeFileSync(join(outputDir,'feature-integration.json'),JSON.stringify(featureOutcome,null,2));
+          // MCP/Skills retain the isolated main-process integration above;
+          // their retired pages are replaced by the current supported routes.
+          const featurePageSelectors = { auth: '.auth-panel', service: '[data-gateway-panel]', settings: '.settings-panel' } as const;
           const featureLayouts=[];
           for (const [width,height] of [[1320,880],[980,680]]) {
             window!.setSize(width,height);
-            for (const page of ['auth','mcp','skills']) {
+            for (const page of ['auth','service','settings'] as const) {
               await window!.webContents.executeJavaScript(`document.querySelector('[data-page="${page}"]').click()`);
               await new Promise(resolve=>setTimeout(resolve,200));
-              const layout=await window!.webContents.executeJavaScript(`(()=>{const main=document.querySelector('.main-content'),functions=document.querySelector('.sidebar-functions');return {title:document.querySelector('.breadcrumbs').textContent,documentOverflow:document.documentElement.scrollWidth>innerWidth,mainOverflow:main.scrollWidth>main.clientWidth,functionsVisible:functions.getBoundingClientRect().bottom<=innerHeight,hasError:!!document.querySelector('[role="alert"]')};})()`);
+              const layout=await window!.webContents.executeJavaScript(`(()=>{const main=document.querySelector('.main-content'),functions=document.querySelector('.sidebar-functions');return {title:document.querySelector('.breadcrumbs').textContent,active:document.querySelector('.sidebar [data-page="${page}"]')?.getAttribute('aria-current')==='page',pageReady:!!main.querySelector(${JSON.stringify(featurePageSelectors[page])}),retiredPagesAbsent:!document.querySelector('[data-page="mcp"],[data-page="skills"]'),documentOverflow:document.documentElement.scrollWidth>innerWidth,mainOverflow:main.scrollWidth>main.clientWidth,functionsVisible:functions.getBoundingClientRect().bottom<=innerHeight,hasError:!!document.querySelector('[role="alert"]')};})()`);
               featureLayouts.push({width,height,page,...layout});
               writeFileSync(join(outputDir,`electron-feature-${page}-${width}.png`),await captureUi());
-              if(layout.documentOverflow||layout.mainOverflow||!layout.functionsVisible||layout.hasError) throw new Error('Feature page overflow/error: '+JSON.stringify(layout));
+              if(!layout.active||!layout.pageReady||!layout.retiredPagesAbsent||layout.documentOverflow||layout.mainOverflow||!layout.functionsVisible||layout.hasError) throw new Error('Feature page overflow/error: '+JSON.stringify(layout));
             }
           }
           writeFileSync(join(outputDir,'feature-layout-validation.json'),JSON.stringify(featureLayouts,null,2));
           const featureDialogs=[];
-          for (const [page,label] of [['auth','添加账号'],['mcp','添加 MCP'],['skills','仓库导入']] as const) {
+          for (const [scenario,page,selector,title] of [
+            ['auth-account','auth','[data-auth-add-account="codex"]','添加 ChatGPT / OpenAI 账号'],
+            ['auth-jetbrains','auth','[data-auth-import-account="jetbrains-central"]','连接JetBrains账号'],
+            ['service-provider','service','[data-action="add-api-provider"]','添加 API 供应商'],
+          ] as const) {
             await window!.webContents.executeJavaScript(`document.querySelector('[data-page="${page}"]').click()`);
             await new Promise(resolve=>setTimeout(resolve,150));
-            await window!.webContents.executeJavaScript(`Array.from(document.querySelectorAll('button')).find(button=>button.textContent.includes(${JSON.stringify(label)})).click()`);
+            await window!.webContents.executeJavaScript(`document.querySelector(${JSON.stringify(selector)}).click()`);
             await new Promise(resolve=>setTimeout(resolve,150));
-            const dialog=await window!.webContents.executeJavaScript(`(()=>{const dialog=document.querySelector('[role="dialog"]'),rect=dialog.getBoundingClientRect(),buttons=Array.from(dialog.querySelector('.modal-footer,.modal-actions').querySelectorAll('button')).map(button=>button.getBoundingClientRect());return {title:dialog.querySelector('h2').textContent,inViewport:rect.left>=0&&rect.right<=innerWidth&&rect.top>=0&&rect.bottom<=innerHeight,footerVisible:buttons.every(rect=>rect.bottom<=innerHeight&&rect.right<=innerWidth&&rect.top>=0)};})()`);
-            if(!dialog.inViewport||!dialog.footerVisible) throw new Error('Feature dialog actions outside minimum window: '+JSON.stringify(dialog));
-            featureDialogs.push({page,...dialog});
-            writeFileSync(join(outputDir,`electron-feature-${page}-dialog-980.png`),await captureUi());
+            const dialog=await window!.webContents.executeJavaScript(`(()=>{const dialog=document.querySelector('[role="dialog"]'),rect=dialog.getBoundingClientRect(),buttons=Array.from(dialog.querySelector('.modal-footer,.modal-actions').querySelectorAll('button')).map(button=>button.getBoundingClientRect());return {title:dialog.querySelector('h2').textContent,inViewport:rect.left>=0&&rect.right<=innerWidth&&rect.top>=0&&rect.bottom<=innerHeight,footerVisible:buttons.length>0&&buttons.every(rect=>rect.bottom<=innerHeight&&rect.right<=innerWidth&&rect.top>=0),hasError:!!dialog.querySelector('[role="alert"]')};})()`);
+            if(dialog.title!==title||!dialog.inViewport||!dialog.footerVisible||dialog.hasError) throw new Error('Feature dialog unavailable or actions outside minimum window: '+JSON.stringify(dialog));
+            featureDialogs.push({scenario,page,...dialog});
+            writeFileSync(join(outputDir,`electron-feature-${scenario}-dialog-980.png`),await captureUi());
             await window!.webContents.executeJavaScript(`document.querySelector('[aria-label="关闭对话框"]').click()`);
           }
           writeFileSync(join(outputDir,'feature-dialog-validation.json'),JSON.stringify(featureDialogs,null,2));
@@ -485,7 +497,7 @@ async function createWindow(forceShow = false) {
           window!.setSize(1320,880);
           await new Promise(resolve=>setTimeout(resolve,200));
           writeFileSync(join(outputDir,'electron-settings-dark-1320.png'),await captureUi());
-          for (const page of ['tools','auth','mcp','skills']) {
+          for (const page of ['tools','auth','service','settings']) {
             await window!.webContents.executeJavaScript(`document.querySelector('[data-page="${page}"]').click()`);
             await new Promise(resolve=>setTimeout(resolve,150));
             writeFileSync(join(outputDir,`electron-theme-dark-${page}.png`),await captureUi());
@@ -494,8 +506,8 @@ async function createWindow(forceShow = false) {
           await new Promise(resolve=>setTimeout(resolve,150));
           await window!.webContents.executeJavaScript(`document.querySelector('[data-action="add-api-provider"]').click()`);
           await new Promise(resolve=>setTimeout(resolve,150));
-          const darkDialog=await window!.webContents.executeJavaScript(`(()=>{const modal=document.querySelector('[role="dialog"]');return {visible:!!modal,title:modal?.querySelector('h2')?.textContent,background:modal?getComputedStyle(modal).backgroundColor:null};})()`);
-          if(!darkDialog.visible||darkDialog.background!=='rgb(32, 43, 48)') throw new Error('Dark modal did not render with dark surface');
+          const darkDialog=await window!.webContents.executeJavaScript(`(()=>{const modal=document.querySelector('[role="dialog"]'),probe=document.createElement('div');probe.style.backgroundColor='var(--surface)';probe.style.display='none';document.body.appendChild(probe);const surface=getComputedStyle(probe).backgroundColor;probe.remove();const background=modal?getComputedStyle(modal).backgroundColor:null;return {visible:!!modal,title:modal?.querySelector('h2')?.textContent,theme:document.documentElement.dataset.theme,background,surface,dark:!!background&&/^rgb\\(/.test(background)&&background.match(/\\d+/g).slice(0,3).every(value=>Number(value)<128)};})()`);
+          if(!darkDialog.visible||darkDialog.theme!=='dark'||!darkDialog.dark||darkDialog.background!==darkDialog.surface) throw new Error('Dark modal did not render with the current dark surface: '+JSON.stringify(darkDialog));
           writeFileSync(join(outputDir,'dark-dialog-validation.json'),JSON.stringify(darkDialog,null,2));
           writeFileSync(join(outputDir,'electron-theme-dark-modal.png'),await captureUi());
           await window!.webContents.executeJavaScript(`document.querySelector('[aria-label="关闭对话框"]').click();document.querySelector('[data-source-id="'+${JSON.stringify(outcome.providerId)}+'"]').click()`);
@@ -513,7 +525,7 @@ async function createWindow(forceShow = false) {
           await window!.webContents.executeJavaScript(`Array.from(document.querySelectorAll('[role="dialog"] button')).find(button=>button.textContent.includes('添加所选')).click()`);
           await new Promise(resolve=>setTimeout(resolve,250));
           const addedUi=await window!.webContents.executeJavaScript(`(async()=>{const snapshot=await window.modelDock.snapshot(),models=snapshot.models.filter(model=>model.providerId===${JSON.stringify(outcome.providerId)});return {models:models.map(model=>({upstreamId:model.upstreamId,alias:model.alias,contextWindow:model.contextWindow,tools:model.tools})),success:!!document.querySelector('.discovery-success'),alreadyAdded:document.querySelectorAll('.discovery-model.existing').length};})()`);
-          if(!addedUi.success||addedUi.models.length!==3||addedUi.alreadyAdded!==3||!addedUi.models.some((model:any)=>model.upstreamId==='mock-reasoner'&&model.contextWindow===0&&model.tools)) throw new Error('Model discovery batch add did not persist selected models');
+          if(!addedUi.success||addedUi.models.length!==3||addedUi.alreadyAdded!==3||!addedUi.models.some((model:any)=>model.upstreamId==='mock-reasoner'&&model.contextWindow===0&&model.tools===false)) throw new Error('Model discovery batch add did not preserve selected models and unknown capabilities');
           const repeated=await window!.webContents.executeJavaScript(`window.modelDock.addDiscoveredModels(${JSON.stringify(outcome.providerId)},[{upstreamId:'mock-fast'},{upstreamId:'mock-reasoner'}])`);
           if(repeated.added.length!==0||repeated.skipped.length!==2) throw new Error('Discovery duplicate add did not skip models');
           await window!.webContents.executeJavaScript(`document.querySelector('[aria-label="关闭对话框"]').click()`);
@@ -530,9 +542,13 @@ async function createWindow(forceShow = false) {
           await new Promise(resolve=>setTimeout(resolve,100));
           await window!.webContents.executeJavaScript(`document.querySelector('[role="dialog"] form').requestSubmit()`);
           await new Promise(resolve=>setTimeout(resolve,300));
-          const automatic=await window!.webContents.executeJavaScript(`(()=>{const dialog=document.querySelector('[role="dialog"]');return {title:dialog?.querySelector('h2')?.textContent,models:dialog?.querySelectorAll('.discovery-model').length,hasError:!!dialog?.querySelector('[role="alert"]')};})()`);
-          if(automatic.title!=='获取模型列表'||automatic.models!==3||automatic.hasError) throw new Error('Saving API key did not automatically open populated model discovery');
-          writeFileSync(join(outputDir,'electron-discovery-auto-key-980.png'),await captureUi());
+          const savedProvider=await window!.webContents.executeJavaScript(`(async()=>{const snapshot=await window.modelDock.snapshot(),provider=snapshot.providers.find(p=>p.id===${JSON.stringify(outcome.providerId)}),discover=document.querySelector('[data-action="discover-models"]');return {noDialog:!document.querySelector('[role="dialog"]'),hasSecret:provider?.hasSecret,models:snapshot.models.filter(model=>model.providerId===provider?.id).length,canDiscover:!!discover&&!discover.disabled};})()`);
+          if(!savedProvider.noDialog||!savedProvider.hasSecret||savedProvider.models!==3||!savedProvider.canDiscover) throw new Error('Saving API key did not preserve models and explicit discovery: '+JSON.stringify(savedProvider));
+          await window!.webContents.executeJavaScript(`document.querySelector('[data-action="discover-models"]').click()`);
+          await new Promise(resolve=>setTimeout(resolve,300));
+          const manualAfterKey=await window!.webContents.executeJavaScript(`(()=>{const dialog=document.querySelector('[role="dialog"]');return {title:dialog?.querySelector('h2')?.textContent,models:dialog?.querySelectorAll('.discovery-model').length,hasError:!!dialog?.querySelector('[role="alert"]')};})()`);
+          if(manualAfterKey.title!=='获取模型列表'||manualAfterKey.models!==3||manualAfterKey.hasError) throw new Error('Explicit model discovery after saving API key did not populate');
+          writeFileSync(join(outputDir,'electron-discovery-after-key-980.png'),await captureUi());
           await window!.webContents.executeJavaScript(`document.querySelector('[aria-label="关闭对话框"]').click()`);
           await window!.webContents.executeJavaScript(`(async()=>{const api=window.modelDock,snapshot=await api.snapshot(),provider=snapshot.providers.find(p=>p.id===${JSON.stringify(outcome.providerId)});await api.saveProvider({...provider,apiKey:'synthetic-invalid'});})()`);
           await window!.webContents.executeJavaScript(`document.querySelector('[data-action="discover-models"]').click()`);
@@ -540,7 +556,7 @@ async function createWindow(forceShow = false) {
           const failedDiscovery=await window!.webContents.executeJavaScript(`(()=>{const dialog=document.querySelector('[role="dialog"]');return {authError:dialog.textContent.includes('HTTP 401'),models:dialog.querySelectorAll('.discovery-model').length,addDisabled:Array.from(dialog.querySelectorAll('button')).find(button=>button.textContent.includes('添加所选')).disabled};})()`);
           if(!failedDiscovery.authError||failedDiscovery.models!==0||!failedDiscovery.addDisabled) throw new Error('Discovery auth failure displayed stale models');
           writeFileSync(join(outputDir,'electron-discovery-auth-error-980.png'),await captureUi());
-          writeFileSync(join(outputDir,'discovery-validation.json'),JSON.stringify({discoveredUi,discoveryLayout,addedUi,repeated:{added:repeated.added.length,skipped:repeated.skipped.length},unknownEditable,automatic,failedDiscovery},null,2));
+          writeFileSync(join(outputDir,'discovery-validation.json'),JSON.stringify({discoveredUi,discoveryLayout,addedUi,repeated:{added:repeated.added.length,skipped:repeated.skipped.length},unknownEditable,savedProvider,manualAfterKey,failedDiscovery},null,2));
           await verifyProviderDuplicates(window!, outputDir, captureUi);
           await verifyModelNames(window!, outputDir, captureUi);
           await verifyConnectionTest(window!, outputDir, captureUi);
@@ -608,7 +624,6 @@ function registerIpc() {
   const copilotCliHome = __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.copilot-cli') : process.env.COPILOT_HOME;
   const copilotCliProvidersConfig = __MODELDOCK_SMOKE_BUILD__ ? join(copilotCliHome!, 'providers.json') : process.env.COPILOT_PROVIDERS_CONFIG;
   const copilot = copilotTarget();
-  const traeRelay = new TraeRelayManager(dataDir);
   const relayQuotas = new RelayQuotaCenter(store, async apiKey => {
     if (__MODELDOCK_SMOKE_BUILD__) {
       const mode = store.getManagedState<string>('qa-relay-quota-mode', 'unavailable');
@@ -619,8 +634,7 @@ function registerIpc() {
         windows: mode === 'unknown' ? [{ id: 'credits', label: '订阅积分', unit: '积分' }] : [{ id: 'credits', label: '订阅积分', total: 1000, remaining: 625, remainingPercent: 62.5, usedPercent: 37.5, unit: '积分' }, { id: 'fast', label: '快速请求', total: 500, remaining: 300, remainingPercent: 60, usedPercent: 40, unit: '次' }],
       } };
     }
-    try { return await traeRelay.queryUsage(apiKey); }
-    catch (error) { throw new RelayQuotaFailure(error instanceof TraeRelayUsageError ? error.message : 'TRAE 额度查询失败，请检查托管反代和账号登录后重试。'); }
+    throw new RelayQuotaFailure('请从客户端重新导入 TRAE 账号，再通过内置适配器查询套餐与额度。');
   });
   const undoManager = new ToolSyncUndoManager(store, {
     appData: __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-appdata') : app.getPath('appData'),
@@ -787,7 +801,8 @@ function registerIpc() {
   handle('deleteProvider', async (id: string) => {
     assertEditable(); providerRemovalPending = true;
     try {
-      catalog.invalidate(id); accounts.cancelProviderOperations(id); copilotProviders.cancel(id);
+      catalog.invalidate(id); gateway.cancelProvider(id); accounts.cancelProviderOperations(id); copilotProviders.cancel(id);
+      traeNativeAccounts.providerRemoved(id); centralNativeAccounts.providerRemoved(id);
       await ideAccounts.providerRemoved(id);
       await removeProviderAndSync(store, id, synchronizeTool);
     } finally { catalog.invalidate(id); providerRemovalPending = false; }
@@ -829,41 +844,9 @@ function registerIpc() {
     }
     finally { toolRestorePending = false; }
   });
-  const traeClientImporter = new TraeClientImporter({ homeDir: featureHome, ...(__MODELDOCK_SMOKE_BUILD__ ? { env: {} } : {}) });
-  const centralClientImporter = new CentralClientImporter({ homeDir: featureHome });
-  const safeNativeImport = async <T,>(operation: () => Promise<T>): Promise<T> => {
-    try { return await operation(); }
-    catch (error) {
-      if (error instanceof TraeClientImportError || error instanceof CentralClientImportError) throw new RelayClientImportError(error.message);
-      if (error instanceof RelayClientImportError) throw error;
-      throw new RelayClientImportError('无法完成客户端导入，请检查客户端登录和本机反代后重试。');
-    }
-  };
   let relayImportAdapters: Record<RelayAccountKind, RelayImportAdapter> = {
-    'trae-cn-relay': {
-      inspect: () => safeNativeImport(async () => (await traeClientImporter.listCandidates()).map(candidate => ({ sourceId: candidate.id, client: candidate.id, clientName: (candidate.id === 'trae-cn' ? 'TRAE 中国版' : 'TRAE SOLO 中国版') + (candidate.expired ? '（已过期，请先在客户端重新登录）' : ''), accountId: candidate.accountId, accountLabel: candidate.displayName ?? candidate.accountId }))),
-      perform: (candidate, apiKey) => safeNativeImport(async () => {
-        const credentials = await traeClientImporter.readCredentials(candidate.sourceId);
-        if (credentials.userId !== candidate.accountId) throw new RelayClientImportError('TRAE 客户端账号已切换，请关闭窗口后重新选择。');
-        const status = await traeRelay.start(apiKey);
-        if (status.state !== 'running') throw new RelayClientImportError('本机 TRAE 反代未能启动，请检查 Docker 后重试。');
-        const result = await traeRelay.importAccount(apiKey, credentials);
-        return { upstreamVerified: result.upstreamVerified };
-      }),
-    },
-    'jetbrains-central': {
-      inspect: () => safeNativeImport(async () => {
-        await centralClientImporter.verifyCurrent();
-        return [{ sourceId: 'central-current', client: 'jetbrains-central', clientName: 'JetBrains Central CLI（当前已登录账号）' }];
-      }),
-      perform: (_candidate, apiKey) => safeNativeImport(async () => {
-        await centralClientImporter.verifyCurrent();
-        await ideAccounts.stopRelay();
-        try { await centralPi.start(apiKey); }
-        catch { throw new RelayClientImportError('Central CLI 授权已通过验证，但本机反代未能启动；请确认 Central CLI 与 Pi CLI 均已安装。'); }
-        return { upstreamVerified: true };
-      }),
-    },
+    'trae-cn-relay': { inspect: async () => [], perform: async () => { throw new RelayClientImportError('请重新选择本机 TRAE 账号。'); } },
+    'jetbrains-central': { inspect: async () => [], perform: async () => { throw new RelayClientImportError('请重新连接 Central 账号。'); } },
   };
   if (__MODELDOCK_SMOKE_BUILD__) {
     // Isolated QA adapters never read native client credentials or launch relays.
@@ -881,40 +864,28 @@ function registerIpc() {
     relayImportAdapters = { 'trae-cn-relay': qaAdapter('trae-cn-relay'), 'jetbrains-central': qaAdapter('jetbrains-central') };
   }
   const relayClientImports = new RelayClientImportManager(store, relayImportAdapters, kind => relayKey(kind === 'trae-cn-relay' ? 'trae-relay-api-key' : 'jetbrains-central-relay-key'));
-  handle('relayClientImportCandidates', (kind: RelayAccountKind) => { assertEditable(); return relayClientImports.preview(kind); });
+  handle('relayClientImportCandidates', (kind: RelayAccountKind) => { assertEditable(); return !__MODELDOCK_SMOKE_BUILD__ ? kind === 'trae-cn-relay' ? traeNativeAccounts.preview() : kind === 'jetbrains-central' ? centralNativeAccounts.preview() : Promise.reject(new Error('未知的账号来源。')) : relayClientImports.preview(kind); });
   const importJetBrains = async <T,>(action: () => Promise<T>): Promise<T> => {
     assertEditable(); jetBrainsImportPending = true;
     try { return await action(); } finally { jetBrainsImportPending = false; }
   };
-  handle('importRelayClientAccount', (kind: RelayAccountKind, id: string) => { assertEditable(); return kind === 'jetbrains-central' ? importJetBrains(() => relayClientImports.import(kind, id)) : relayClientImports.import(kind, id); });
+  handle('importRelayClientAccount', async (kind: RelayAccountKind, id: string) => {
+    assertEditable();
+    const account = kind === 'jetbrains-central' ? await importJetBrains(() => !__MODELDOCK_SMOKE_BUILD__ ? centralNativeAccounts.import(id) : relayClientImports.import(kind, id))
+      : kind === 'trae-cn-relay' ? !__MODELDOCK_SMOKE_BUILD__ ? await traeNativeAccounts.import(id) : await relayClientImports.import(kind, id) : (() => { throw new Error('未知的账号来源。'); })();
+    gateway.cancelProvider(account.providerId); catalog.invalidate(account.providerId); return account;
+  });
   handle('openJetBrainsAccountHelp', async (topic: unknown) => {
     if (topic !== 'ide' && topic !== 'central') throw new Error('未知的账号帮助页面。');
     await shell.openExternal(topic === 'ide' ? 'https://www.jetbrains.com/help/air/air-in-ides-authorization.html' : 'https://www.jetbrains.com/help/central-cli/cli-setup.html');
   });
   handle('jetBrainsIdeImportCandidates', () => { assertEditable(); return ideAccounts.preview(); });
-  handle('importJetBrainsIdeAccount', (id: string) => importJetBrains(async () => { const account = await ideAccounts.import(id); await centralPi.stop(); catalog.invalidate(account.providerId); return account; }));
-  handle('startJetBrainsRelay', async (id?: string) => {
-    if (id && ideAccounts.isIdeProvider(id)) { await ideAccounts.startRelay(id); return { baseUrl: JETBRAINS_RELAY_BASE_URL, apiKey: store.getSecret(id)!.apiKey! }; }
-    const apiKey = relayKey('jetbrains-central-relay-key');
-    await centralPi.start(apiKey);
-    return { baseUrl: JETBRAINS_RELAY_BASE_URL, apiKey };
-  });
-  handle('stopJetBrainsRelay', async () => { await ideAccounts.stopRelay(); await centralPi.stop(); });
-  handle('startTraeRelay', async () => {
-    const apiKey = relayKey('trae-relay-api-key');
-    const status = await traeRelay.start(apiKey);
-    if (status.state !== 'running') throw new Error(status.message);
-    return { baseUrl: TRAE_RELAY_BASE_URL, apiKey };
-  });
-  handle('openTraeRelayLogin', async () => {
-    const status = await traeRelay.status();
-    if (status.state !== 'running') throw new Error(status.state === 'stopped' ? '请先启动本机 TRAE 反代，再打开授权页。' : status.message);
-    await shell.openExternal(TRAE_RELAY_LOGIN_URL);
-  });
-  handle('stopTraeRelay', async () => {
-    const status = await traeRelay.stop();
-    if (status.state !== 'stopped') throw new Error(status.message);
-  });
+  handle('importJetBrainsIdeAccount', (id: string) => importJetBrains(async () => { const account = await ideAccounts.import(id); gateway.cancelProvider(account.providerId); catalog.invalidate(account.providerId); return account; }));
+  handle('startJetBrainsRelay', async () => { throw new Error('JetBrains 已通过内置适配器接入网关，请在授权中心连接账号。'); });
+  handle('stopJetBrainsRelay', async () => { /* No independent JetBrains relay process exists. */ });
+  handle('startTraeRelay', async () => { throw new Error('TRAE 已通过内置适配器接入网关，请在授权中心从客户端导入账号。'); });
+  handle('openTraeRelayLogin', async () => { throw new Error('请在 TRAE 中国版客户端完成登录，再到授权中心导入。'); });
+  handle('stopTraeRelay', async () => { /* No independent TRAE relay process exists. */ });
   handle('startGateway', async (port?: number) => {
     const status = await gateway.start(port ?? preferences.get().settings.gatewayPort);
     if (status.running) preferences.save({ gatewayPort: status.port });
@@ -975,9 +946,11 @@ function registerIpc() {
   handle('beginLogin', (id: string) => { assertEditable(); catalog.invalidate(id); return store.getProvider(id)?.kind === 'copilot' ? copilotProviders.beginLogin(id) : oauth.beginLogin(id); });
   handle('authProgress', (id: string) => store.getProvider(id)?.kind === 'copilot' ? copilotProviders.progress(id) : oauth.progress(id));
   handle('cancelLogin', (id: string) => store.getProvider(id)?.kind === 'copilot' ? copilotProviders.cancel(id) : oauth.cancel(id));
-  handle('authAccounts', () => [...accounts.listAccounts().map(account => ideAccounts.decorate(relayQuotas.decorate(account))), ...copilotAccounts.listAccounts()]);
+  handle('authAccounts', () => [...accounts.listAccounts().map(account => traeNativeAccounts.decorate(centralNativeAccounts.decorate(ideAccounts.decorate(relayQuotas.decorate(account))))), ...copilotAccounts.listAccounts()]);
   handle('refreshAccountUsage', (id: string) => {
     if (ideAccounts.isIdeProvider(id)) return ideAccounts.refreshUsage(id);
+    if (traeNativeAccounts.isNativeProvider(id)) return traeNativeAccounts.refreshUsage(id);
+    if (centralNativeAccounts.isNativeProvider(id)) return centralNativeAccounts.refreshUsage(id);
     if (store.getProvider(id)?.presetId === 'trae-cn-relay') return relayQuotas.refresh(id);
     if (isCopilotAccountId(id)) return copilotAccounts.refreshUsage(id);
     if (store.getProvider(id)?.kind === 'copilot') {
@@ -1073,7 +1046,6 @@ function initializeApplication() {
     });
     const runtimeFetch: typeof fetch = __MODELDOCK_SMOKE_BUILD__ ? async (input, init) => {
       const target = new URL(input instanceof Request ? input.url : String(input));
-      if (target.origin === 'http://127.0.0.1:18081' && ideRelay?.baseUrl()) { const local = new URL(target); local.port = new URL(ideRelay.baseUrl()!).port; const response = await fetch(local, init); return new Response([204, 205, 304].includes(response.status) ? null : response.body, { status: response.status, headers: response.headers }); }
       const quotaFixture = await authQuotaFixture(target, init);
       if (quotaFixture) return quotaFixture;
       if (process.env.MODELDOCK_SMOKE_AUTH_MOCK === '1' && target.origin === 'https://chatgpt.com' && target.pathname === '/backend-api/codex/models') {
@@ -1163,23 +1135,27 @@ function initializeApplication() {
     mcp = new McpManager(store, { homeDir: featureHome, appDataDir: featureAppData, backupDir: join(dataDir, 'backups', 'mcp'), configHome: openCodeConfigHome, codexHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.codex') : process.env.CODEX_HOME });
     skills = new SkillManager(store, { homeDir: featureHome, appDataDir: featureAppData, libraryDir: join(dataDir, 'skill-library'), backupDir: join(dataDir, 'backups', 'skills'), configHome: openCodeConfigHome, claudeConfigDir: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.claude') : process.env.CLAUDE_CONFIG_DIR, ...(!__MODELDOCK_SMOKE_BUILD__ ? { codexHome: process.env.CODEX_HOME, dshHome: process.env.DSH_HOME } : {}) });
     // 修改点：Copilot 订阅与其他来源共享目录、连通性及本地网关，凭据准备在主进程分派。
-    const workerDir = app.isPackaged ? join(process.resourcesPath, 'app.asar.unpacked', 'dist-electron') : __dirname;
-    centralPi = new CentralPiManager(dataDir, join(workerDir, 'central-pi-extension.mjs'));
-    ideRelay = new JetBrainsIdeRelay(__MODELDOCK_SMOKE_BUILD__ ? 0 : 18081);
     const nativeFixture = __MODELDOCK_SMOKE_BUILD__ ? createJetBrainsIdeFixture(store) : undefined;
-    ideAccounts = new JetBrainsIdeAccounts(store, nativeFixture?.reader ?? new JetBrainsIdeImporter({ homeDir: featureHome }), nativeFixture?.api ?? new JetBrainsIdeApi({ fetch: runtimeFetch }), ideRelay, () => relayKey('jetbrains-central-relay-key'), error => error instanceof JetBrainsIdeImportError || error instanceof JetBrainsIdeApiError ? error.message : undefined);
+    const ideApi = nativeFixture?.api ?? new JetBrainsIdeApi({ fetch: runtimeFetch });
+    ideAccounts = new JetBrainsIdeAccounts(store, nativeFixture?.reader ?? new JetBrainsIdeImporter({ homeDir: featureHome }), ideApi, undefined, () => relayKey('jetbrains-central-relay-key'), error => error instanceof JetBrainsIdeImportError || error instanceof JetBrainsIdeApiError ? error.message : undefined);
+    ideGatewayAdapter = new JetBrainsGatewayAdapter(ideAccounts, ideApi);
+    const centralApi = new CentralApi({ fetch: runtimeFetch });
+    centralNativeAccounts = new CentralNativeAccounts(store, new CentralClientSessionReader({ homeDir: featureHome }), centralApi, () => relayKey('jetbrains-central-relay-key'), error => error instanceof CentralApiError || error instanceof CentralNativeAccountError ? error.message : undefined);
+    centralGatewayAdapter = new CentralGatewayAdapter(centralNativeAccounts, centralApi);
+    const traeApi = new TraeApi({ fetch: runtimeFetch });
+    traeNativeAccounts = new TraeNativeAccounts(store, new TraeClientImporter({ homeDir: featureHome, ...(__MODELDOCK_SMOKE_BUILD__ ? { env: {} } : {}) }), traeApi, () => relayKey('trae-relay-api-key'), error => error instanceof TraeClientImportError || error instanceof TraeApiError || error instanceof TraeNativeAccountError ? error.message : undefined);
+    traeGatewayAdapter = new TraeGatewayAdapter(traeNativeAccounts, traeApi);
     const upstream = { prepareRequest: async (provider: Provider, path: string, body: Record<string, unknown>) => {
-      if (provider.presetId === 'jetbrains-central' && ideAccounts.isIdeProvider(provider.id)) { await ideAccounts.startRelay(provider.id); }
-      else if (provider.presetId === 'jetbrains-central') {
-        const key = store.getSecret(provider.id)?.apiKey;
-        if (!key || !await centralPi.ownsListener(key)) throw new Error('请在供应商设置中启动 JetBrains 反代。');
-      }
+      if (provider.nativeAdapter) throw new Error('账号来源必须经内置网关适配器调用。');
       return provider.kind === 'copilot' ? copilotProviders.prepareRequest(provider, path, body) : oauth.prepareRequest(provider, path, body);
     } };
-    catalog = new ModelCatalog(store, upstream, { fetch: runtimeFetch });
-    connectionTester = new ConnectionTester(store, upstream, { fetch: runtimeFetch, diagnostics: recordDiagnostic });
+    const nativeAdapter = (provider: Provider) => provider.nativeAdapter === 'trae' ? traeGatewayAdapter : provider.nativeAdapter === 'jetbrains-ide' ? ideGatewayAdapter : provider.nativeAdapter === 'jetbrains-central' ? centralGatewayAdapter : undefined;
+    const nativeModels = (provider: Provider, signal: AbortSignal) => nativeAdapter(provider)?.models(provider, signal) ?? Promise.resolve(undefined);
+    const nativeRequest = (provider: Provider, path: string, body: Record<string, unknown>, signal: AbortSignal) => nativeAdapter(provider)?.request(provider, path, body, signal) ?? Promise.resolve(undefined);
+    catalog = new ModelCatalog(store, upstream, { fetch: runtimeFetch, nativeModels });
+    connectionTester = new ConnectionTester(store, upstream, { fetch: runtimeFetch, nativeRequest, diagnostics: recordDiagnostic });
     const serviceSettings = preferences.get().settings;
-    gateway = new Gateway(store, { diagnostics: recordDiagnostic, runWithDiagnostics: (context, action) => diagnosticScope.run(context, action), port: serviceSettings.gatewayPort, prepareRequest: (provider, _secret, path, body) => upstream.prepareRequest(provider, path, body), fetch: runtimeFetch });
+    gateway = new Gateway(store, { diagnostics: recordDiagnostic, runWithDiagnostics: (context, action) => diagnosticScope.run(context, action), port: serviceSettings.gatewayPort, prepareRequest: (provider, _secret, path, body) => upstream.prepareRequest(provider, path, body), nativeRequest, fetch: runtimeFetch });
     startupStage = 'gateway';
     if (serviceSettings.autoStartGateway) {
       try { await gateway.start(); }
@@ -1211,7 +1187,7 @@ function initializeApplication() {
     if (!exitDiagnosticRecorded) { exitDiagnosticRecorded = true; recordDiagnostic('info', 'app.exit', { stage: 'shutdown' }); }
     if (!quitting) { event.preventDefault(); quitting = true; }
     if (gateway) { event.preventDefault(); const current = gateway; gateway = undefined as unknown as Gateway;
-      accounts?.dispose(); copilotProviders?.dispose(); copilotAccounts?.dispose(); oauth?.dispose(); void Promise.allSettled([current.stop(), centralPi?.stop(), ideAccounts?.dispose()]).then(() => { store?.close(); tray?.destroy(); app.quit(); }); }
+      accounts?.dispose(); copilotProviders?.dispose(); copilotAccounts?.dispose(); oauth?.dispose(); traeNativeAccounts?.dispose(); centralNativeAccounts?.dispose(); void Promise.allSettled([current.stop(), ideAccounts?.dispose()]).then(() => { store?.close(); tray?.destroy(); app.quit(); }); }
   });
   app.on('activate', () => { if (window) revealWindow(); else if (store) void createWindow(true); });
   app.on('window-all-closed', () => { if (!tray) app.quit(); });

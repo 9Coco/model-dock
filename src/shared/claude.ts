@@ -22,7 +22,7 @@ function canonical(value: string): string | undefined {
   try { const url = new URL(value); if (url.username || url.password || url.search || url.hash) return; return url.href.replace(/\/+$/, ''); } catch { return; }
 }
 export function nativeClaudeBaseUrl(provider: Provider): string | undefined {
-  if (provider.kind !== 'openai-compatible') return;
+  if (provider.kind !== 'openai-compatible' || provider.nativeAdapter) return;
   if (provider.claudeBaseUrl?.trim()) return provider.claudeBaseUrl.trim();
   if (isTraeRelayProvider(provider)) return provider.baseUrl.trim().replace(/\/+$/, '').replace(/\/v1$/, '') || undefined;
   if (provider.presetId === 'anthropic') return provider.baseUrl;
@@ -50,5 +50,5 @@ export function claudeModelsForProvider(provider: Provider, models: readonly Mod
   return enabled.filter(model => model.wireApi !== 'messages');
 }
 export function claudeConnectionKind(provider: Provider, models: readonly Model[]): 'direct-api' | 'local-managed' {
-  return provider.kind === 'openai-compatible' && (nativeClaudeBaseUrl(provider) || models.length > 0 && models.every(model => model.wireApi === 'messages')) ? 'direct-api' : 'local-managed';
+  return provider.kind === 'openai-compatible' && !provider.nativeAdapter && (nativeClaudeBaseUrl(provider) || models.length > 0 && models.every(model => model.wireApi === 'messages')) ? 'direct-api' : 'local-managed';
 }

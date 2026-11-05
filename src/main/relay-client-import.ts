@@ -41,9 +41,9 @@ export function relayAccountView(store: Pick<Store, 'getManagedState' | 'getSecr
     ...(clientImport ? { clientImport } : {}), authStatus: relayKeyConfigured ? 'ready' : 'missing', canRefresh: false,
     canQueryUsage: provider.presetId === 'trae-cn-relay' && provider.relayMode === 'managed' && provider.baseUrl === TRAE_RELAY_BASE_URL && relayKeyConfigured,
     usage: { status: 'unavailable', windows: [], message: clientImport ? clientImport.upstreamVerified
-      ? '已复用并校验 Central CLI 当前授权；模型权限与推理结果请通过测试连接确认。'
-      : '客户端会话已交给本机反代；尚未验证云端授权、额度或模型推理。'
-      : '上游授权与订阅额度由反代服务管理，请在反代完成账号登录。' } };
+      ? '当前原生账号授权已校验；模型权限与推理结果请通过测试连接确认。'
+      : '本机账号已导入；云端授权、套餐和模型推理仍需确认。'
+      : provider.nativeAdapter ? '旧连接尚未保存可用的原生授权，请在授权中心重新导入账号。' : '此连接使用已有外部接口，请在原客户端或外部服务中管理授权。' } };
 }
 
 /** Preview tickets contain metadata only. Tokens never enter this map or IPC. */

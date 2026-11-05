@@ -56,7 +56,7 @@ export function bindingConnectionPolicy(binding: ToolBinding, models: Model[], p
     if (!selectedIds.length) return { kind: 'direct', groups: [] };
     const provider = providers?.find(item => item.id === selectedIds[0]);
     if (isSingleEntryTool(binding.id)) return { kind: 'direct', groups: provider && nativeDirectBaseUrl(binding.id, provider, resolved) ? [{ connection: 'direct-api', providerIds: selectedIds, modelIds: resolved.map(model => model.id) }] : [] };
-    const native = provider?.kind === 'openai-compatible' && (binding.id === 'claude-code' ? claudeConnectionKind(provider, resolved) === 'direct-api'
+    const native = provider?.kind === 'openai-compatible' && !provider.nativeAdapter && (binding.id === 'claude-code' ? claudeConnectionKind(provider, resolved) === 'direct-api'
       : isJetBrainsTool(binding.id) ? resolved.length > 0 && resolved.every(model => model.wireApi === 'chat-completions') : true);
     return { kind: 'direct', groups: [{ connection: native ? 'direct-api' : 'local-managed', providerIds: selectedIds, modelIds: resolved.map(model => model.id) }] };
   }
@@ -75,11 +75,12 @@ export function bindingConnectionPolicy(binding: ToolBinding, models: Model[], p
   const auto = binding.mode === 'auto';
   const modeKind = auto && binding.id !== 'codex' ? 'native' : 'aggregate';
   if (!binding.enabled || !selectedIds.length) return { kind: modeKind, groups: [] };
-  const singleApi = selectedIds.length === 1 && providers?.find(provider => provider.id === selectedIds[0])?.kind === 'openai-compatible';
+  const singleProvider = selectedIds.length === 1 ? providers?.find(provider => provider.id === selectedIds[0]) : undefined;
+  const singleApi = singleProvider?.kind === 'openai-compatible' && !singleProvider.nativeAdapter;
   if (auto && binding.id === 'codex' && singleApi) return { kind: 'direct', groups: [{ connection: 'direct-api', providerIds: selectedIds, modelIds: resolved.map(model => model.id) }] };
   if (!auto || binding.id === 'codex') return { kind: 'aggregate', groups: [localGroup()] };
   return { kind: 'native', groups: selectedIds.map(providerId => ({
-    connection: providers?.find(provider => provider.id === providerId)?.kind === 'openai-compatible' ? 'direct-api' : 'local-managed',
+    connection: providers?.find(provider => provider.id === providerId)?.kind === 'openai-compatible' && !providers?.find(provider => provider.id === providerId)?.nativeAdapter ? 'direct-api' : 'local-managed',
     providerIds: [providerId], modelIds: resolved.filter(model => model.providerId === providerId).map(model => model.id),
   })) };
 }
