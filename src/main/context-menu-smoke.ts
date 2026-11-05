@@ -3,6 +3,7 @@ import { writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { clipboard, type BrowserWindow } from 'electron';
 import type { Store } from './store';
+import { revealSmokeNavigationTarget } from './smoke-navigation';
 
 /** Real renderer menus and clipboard, restricted to a fresh synthetic profile. */
 export async function verifyContextMenus(window: BrowserWindow, store: Store, outputDir: string, captureUi: () => Promise<Buffer>): Promise<void> {
@@ -33,6 +34,7 @@ export async function verifyContextMenus(window: BrowserWindow, store: Store, ou
     throw new Error(`Context menu verification timed out: ${label}`);
   }
   async function click(selector: string) {
+    await revealSmokeNavigationTarget(window, selector);
     await waitFor(`!!document.querySelector(${JSON.stringify(selector)})&&!document.querySelector(${JSON.stringify(selector)}).disabled`,selector);
     await evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);
   }
@@ -41,6 +43,7 @@ export async function verifyContextMenus(window: BrowserWindow, store: Store, ou
     await waitFor(`!document.querySelector('[role="menu"]')`,'menu dismissed');
   }
   async function context(selector: string, edge = false) {
+    await revealSmokeNavigationTarget(window, selector);
     await waitFor(`!!document.querySelector(${JSON.stringify(selector)})`,selector);
     // Real users right-click visible objects. Settle fixture scrolling before
     // opening: scrolling the surrounding page intentionally dismisses menus.

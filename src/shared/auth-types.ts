@@ -54,7 +54,26 @@ export interface AuthAccount {
   expiresAt?: number;
   canRefresh: boolean;
   source?: 'client-import' | 'relay';
+  clientImport?: RelayClientImportProvenance;
   /** Local relay credential presence only; never establishes upstream login. */
   relayKeyConfigured?: boolean;
   usage: SubscriptionUsage;
+}
+
+export interface RelayClientImportProvenance {
+  client: 'trae-cn' | 'trae-solo-cn' | 'jetbrains-central';
+  accountLabel?: string;
+  importedAt: string;
+  /** Native account/session validation only; never model inference validation. */
+  upstreamVerified: boolean;
+}
+export interface RelayClientImportCandidate {
+  id: string;
+  clientName: string;
+  accountLabel?: string;
+}
+export interface RelayClientImportPreview {
+  kind: RelayAccountKind;
+  candidates: RelayClientImportCandidate[];
+  message: string;
 }

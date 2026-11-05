@@ -1,5 +1,6 @@
 import type { BrowserWindow } from 'electron';
 import assert from 'node:assert/strict';
+import { revealSmokeNavigationTarget } from './smoke-navigation';
 import { writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import type { Model, Provider, Snapshot } from '../shared/types';
@@ -25,6 +26,7 @@ export async function verifyConnectionTest(window: BrowserWindow, outputDir: str
     throw new Error(`Connection test smoke timed out: ${label}`);
   }
   async function click(selector: string): Promise<void> {
+    await revealSmokeNavigationTarget(window, selector);
     await waitFor(`!!document.querySelector(${JSON.stringify(selector)})`, selector);
     await evaluate(`(()=>{const button=document.querySelector(${JSON.stringify(selector)});if(button.disabled)throw new Error('Connection control disabled: '+${JSON.stringify(selector)});button.click()})()`);
   }

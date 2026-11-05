@@ -13,6 +13,9 @@ import { Gateway } from './gateway';
 import { CentralPiManager } from './central-pi-manager';
 import { JETBRAINS_RELAY_BASE_URL } from '../shared/presets';
 import { TraeRelayManager, TRAE_RELAY_BASE_URL, TRAE_RELAY_LOGIN_URL } from './trae-relay';
+import { TraeClientImporter, TraeClientImportError } from './trae-client-import';
+import { CentralClientImporter, CentralClientImportError } from './central-client-import';
+import { RelayClientImportManager, RelayClientImportError, type RelayImportAdapter } from './relay-client-import';
 import { OAuthManager } from './oauth';
 import { AuthCenter } from './auth-center';
 import { CopilotProviderManager } from './copilot-provider';
@@ -40,8 +43,10 @@ import { verifyToolIcons } from './tool-icons-smoke';
 import { verifyJetBrainsPluginSwitch } from './jetbrains-plugin-smoke';
 import { verifyProviderManagement } from './provider-management-smoke';
 import { verifyRelaySubscriptions } from './relay-subscriptions-smoke';
+import { verifyRelayClientImport } from './relay-client-import-smoke';
 import { verifyNavigationConsolidation } from './navigation-consolidation-smoke';
 import { verifySidebarScroll } from './sidebar-scroll-smoke';
+import { verifySidebarLayout } from './sidebar-layout-smoke';
 import { verifyDshConfiguration } from './dsh-config-smoke';
 import { CopilotDesktopClient } from './copilot-desktop';
 import { applyCopilotDesktop } from './copilot-sync';
@@ -68,13 +73,14 @@ import { buildConfig, buildCopilotDesktopPlan, buildDshPlan, applyConfig, connec
 import { applyDshConfig } from './dsh-config';
 import { resolveDshProfile } from './dsh-profile';
 import type { ModelDockApi, ModelInput, Provider, ProviderInput, ToolBinding, ToolId } from '../shared/types';
-import type { SubscriptionKind } from '../shared/auth-types';
+import type { RelayAccountKind, SubscriptionKind } from '../shared/auth-types';
 import type { McpServerInput } from '../shared/mcp-types';
 import type { SkillRepositoryInput } from '../shared/skill-types';
 import type { AppSettings } from '../shared/settings-types';
 import type { ModelSelection } from '../shared/catalog-types';
 import type { ConnectionTestInput } from '../shared/connection-types';
 import { WindowPresentation } from './window-presentation';
+import { observeWindowPresentation, type WindowPresentationProbe } from './window-presentation-smoke';
 import { installEditContextMenu } from './edit-context-menu';
 import { verifyContextMenus } from './context-menu-smoke';
 import { acquireLinuxInstanceGuard } from './linux-instance-guard';
@@ -94,6 +100,7 @@ let preferences: SettingsManager;
 let catalog: ModelCatalog;
 let connectionTester: ConnectionTester;
 let presentation: WindowPresentation | null = null;
+let windowPresentationProbe: WindowPresentationProbe | undefined;
 let explicitOpenRequested = false;
 let quitting = false;
 let dataDir = '';
@@ -150,21 +157,30 @@ function revealWindow() {
 }
 async function createWindow(forceShow = false) {
   const mark = appIcon();
+  const presentationSmoke = __MODELDOCK_SMOKE_BUILD__ && process.env.MODELDOCK_SMOKE_WINDOW_PRESENTATION_ONLY === '1';
   window = new BrowserWindow({ width: 1080, height: 720, minWidth: 980, minHeight: 680, show: false,
     title: 'ModelDock · 模型坞', backgroundColor: nativeTheme.shouldUseDarkColors ? '#19191c' : '#f8f9fb', icon: mark,
     webPreferences: { preload: join(__dirname, 'preload.cjs'), nodeIntegration: false,
-      contextIsolation: true, sandbox: true, webSecurity: true, backgroundThrottling: !__MODELDOCK_SMOKE_BUILD__ },
+      contextIsolation: true, sandbox: true, webSecurity: true, backgroundThrottling: !__MODELDOCK_SMOKE_BUILD__ || presentationSmoke },
   });
   const currentWindow = window;
+  windowPresentationProbe = __MODELDOCK_SMOKE_BUILD__ && presentationSmoke ? observeWindowPresentation(currentWindow, runtimeConfig.smoke!.outputDir, { hidden: preferences.get().settings.startHidden, theme: preferences.get().settings.theme }) : undefined;
   installEditContextMenu(currentWindow.webContents);
   const currentPresentation = new WindowPresentation(
     forceShow || explicitOpenRequested || !preferences.get().settings.startHidden,
     focus => {
-      if (__MODELDOCK_SMOKE_BUILD__ || currentWindow.isDestroyed() || window !== currentWindow) return;
+      if (__MODELDOCK_SMOKE_BUILD__ && !presentationSmoke || currentWindow.isDestroyed() || window !== currentWindow) return;
+      if (__MODELDOCK_SMOKE_BUILD__) windowPresentationProbe?.beforePresent(focus);
       if (currentWindow.isMinimized()) currentWindow.restore();
       currentWindow.show();
-      if (focus) currentWindow.focus();
-    }, forceShow || explicitOpenRequested,
+      if (focus) {
+        currentWindow.focus();
+        currentWindow.webContents.focus();
+      }
+      // Commit a fresh visible frame after native/page activation. A cached
+      // hidden-window frame must not need the first mouse click to repaint.
+      currentWindow.webContents.invalidate();
+    },
   );
   presentation = currentPresentation;
   currentWindow.once('ready-to-show', () => currentPresentation.windowDidPaint());
@@ -199,7 +215,7 @@ async function createWindow(forceShow = false) {
     await window.loadURL(devUrl);
   } else await window.loadFile(join(__dirname, '../dist/index.html'));
   if (__MODELDOCK_SMOKE_BUILD__) {
-    await window.webContents.executeJavaScript(`(()=>{const style=document.createElement('style');style.textContent='*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}';document.head.appendChild(style);})()`);
+    if (!presentationSmoke) await window.webContents.executeJavaScript(`(()=>{const style=document.createElement('style');style.textContent='*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}';document.head.appendChild(style);})()`);
     const outputDir = runtimeConfig.smoke!.outputDir;
     mkdirSync(outputDir, { recursive: true });
     // Hidden windows can return the previous compositor frame on the first capture.
@@ -218,10 +234,14 @@ async function createWindow(forceShow = false) {
     }
     setTimeout(async () => {
       try {
+        if (windowPresentationProbe) {
+          await windowPresentationProbe.complete();
+          quitting = true; app.quit(); return;
+        }
         const result = await window!.webContents.executeJavaScript(`({title:document.title, text:document.body.innerText, bridge:!!window.modelDock})`);
         writeFileSync(join(outputDir, 'electron-smoke.json'), JSON.stringify({ ...result, dataDir, windowSize: window!.getSize(), contentSize: window!.getContentSize() }, null, 2));
         writeFileSync(join(outputDir, 'electron-smoke.png'), await captureUi());
-        if (process.env.MODELDOCK_SMOKE_PROVIDER_MANAGEMENT_ONLY !== '1' && process.env.MODELDOCK_SMOKE_NAVIGATION_CONSOLIDATION_ONLY !== '1' && process.env.MODELDOCK_SMOKE_RELAY_SUBSCRIPTIONS_ONLY !== '1' && process.env.MODELDOCK_SMOKE_JETBRAINS_PLUGIN_ONLY !== '1' && process.env.MODELDOCK_SMOKE_CONTEXT_MENU_ONLY !== '1') await verifyToolIcons(window!, outputDir, captureUi);
+        if (process.env.MODELDOCK_SMOKE_PROVIDER_MANAGEMENT_ONLY !== '1' && process.env.MODELDOCK_SMOKE_RELAY_CLIENT_IMPORT_ONLY !== '1' && process.env.MODELDOCK_SMOKE_SIDEBAR_LAYOUT_ONLY !== '1' && process.env.MODELDOCK_SMOKE_NAVIGATION_CONSOLIDATION_ONLY !== '1' && process.env.MODELDOCK_SMOKE_RELAY_SUBSCRIPTIONS_ONLY !== '1' && process.env.MODELDOCK_SMOKE_JETBRAINS_PLUGIN_ONLY !== '1' && process.env.MODELDOCK_SMOKE_CONTEXT_MENU_ONLY !== '1') await verifyToolIcons(window!, outputDir, captureUi);
         if (process.env.MODELDOCK_SMOKE_CONTEXT_MENU_ONLY === '1') {
           await verifyContextMenus(window!, store, outputDir, captureUi);
         } else if (process.env.MODELDOCK_SMOKE_JETBRAINS_PLUGIN_ONLY === '1') {
@@ -230,8 +250,12 @@ async function createWindow(forceShow = false) {
           await verifyProviderManagement(window!, store, outputDir, captureUi);
         } else if (process.env.MODELDOCK_SMOKE_RELAY_SUBSCRIPTIONS_ONLY === '1') {
           await verifyRelaySubscriptions(window!, store, outputDir, captureUi);
+        } else if (process.env.MODELDOCK_SMOKE_RELAY_CLIENT_IMPORT_ONLY === '1') {
+          await verifyRelayClientImport(window!, store, outputDir, captureUi);
         } else if (process.env.MODELDOCK_SMOKE_NAVIGATION_CONSOLIDATION_ONLY === '1') {
           await verifyNavigationConsolidation(window!, store, outputDir, captureUi);
+        } else if (process.env.MODELDOCK_SMOKE_SIDEBAR_LAYOUT_ONLY === '1') {
+          await verifySidebarLayout(window!, store, outputDir, captureUi);
         } else if (process.env.MODELDOCK_SMOKE_TOOL_ICONS_ONLY === '1') {
           // Icon validation above uses navigation only and never applies tool configuration.
         } else if (process.env.MODELDOCK_SMOKE_AGGREGATE_ONLY === '1') {
@@ -693,6 +717,7 @@ function registerIpc() {
   });
   handle('openTerminal', () => preferences.openTerminal(dataDir));
   handle('rendererReady', () => {
+    if (__MODELDOCK_SMOKE_BUILD__) windowPresentationProbe?.rendererPrepared();
     presentation?.rendererDidPrepare();
   });
   handle('saveProvider', (input: ProviderInput) => {
@@ -767,6 +792,59 @@ function registerIpc() {
     }
     return apiKey;
   }
+  const traeClientImporter = new TraeClientImporter({ homeDir: featureHome, ...(__MODELDOCK_SMOKE_BUILD__ ? { env: {} } : {}) });
+  const centralClientImporter = new CentralClientImporter({ homeDir: featureHome });
+  const safeNativeImport = async <T,>(operation: () => Promise<T>): Promise<T> => {
+    try { return await operation(); }
+    catch (error) {
+      if (error instanceof TraeClientImportError || error instanceof CentralClientImportError) throw new RelayClientImportError(error.message);
+      if (error instanceof RelayClientImportError) throw error;
+      throw new RelayClientImportError('无法完成客户端导入，请检查客户端登录和本机反代后重试。');
+    }
+  };
+  let relayImportAdapters: Record<RelayAccountKind, RelayImportAdapter> = {
+    'trae-cn-relay': {
+      inspect: () => safeNativeImport(async () => (await traeClientImporter.listCandidates()).map(candidate => ({ sourceId: candidate.id, client: candidate.id, clientName: (candidate.id === 'trae-cn' ? 'TRAE 中国版' : 'TRAE SOLO 中国版') + (candidate.expired ? '（已过期，请先在客户端重新登录）' : ''), accountId: candidate.accountId, accountLabel: candidate.displayName ?? candidate.accountId }))),
+      perform: (candidate, apiKey) => safeNativeImport(async () => {
+        const credentials = await traeClientImporter.readCredentials(candidate.sourceId);
+        if (credentials.userId !== candidate.accountId) throw new RelayClientImportError('TRAE 客户端账号已切换，请关闭窗口后重新选择。');
+        const status = await traeRelay.start(apiKey);
+        if (status.state !== 'running') throw new RelayClientImportError('本机 TRAE 反代未能启动，请检查 Docker 后重试。');
+        const result = await traeRelay.importAccount(apiKey, credentials);
+        return { upstreamVerified: result.upstreamVerified };
+      }),
+    },
+    'jetbrains-central': {
+      inspect: () => safeNativeImport(async () => {
+        await centralClientImporter.verifyCurrent();
+        return [{ sourceId: 'central-current', client: 'jetbrains-central', clientName: 'JetBrains Central CLI（当前已登录账号）' }];
+      }),
+      perform: (_candidate, apiKey) => safeNativeImport(async () => {
+        await centralClientImporter.verifyCurrent();
+        try { await centralPi.start(apiKey); }
+        catch { throw new RelayClientImportError('Central CLI 授权已通过验证，但本机反代未能启动；请确认 Central CLI 与 Pi CLI 均已安装。'); }
+        return { upstreamVerified: true };
+      }),
+    },
+  };
+  if (__MODELDOCK_SMOKE_BUILD__) {
+    // Isolated QA adapters never read native client credentials or launch relays.
+    const qaAdapter = (kind: RelayAccountKind): RelayImportAdapter => ({
+      inspect: async () => store.getManagedState<string>('qa-relay-client-import-stage', 'empty') === 'empty' ? [] : [{
+        sourceId: kind === 'trae-cn-relay' ? 'trae-cn' : 'central-current', client: kind === 'trae-cn-relay' ? 'trae-cn' : 'jetbrains-central',
+        clientName: kind === 'trae-cn-relay' ? 'TRAE 中国版客户端' : 'JetBrains Central CLI（当前已登录账号）',
+        ...(kind === 'trae-cn-relay' ? { accountId: 'qa-native-account', accountLabel: '本机测试账号' } : {}),
+      }],
+      perform: async () => {
+        if (store.getManagedState<string>('qa-relay-client-import-stage', 'empty') === 'failure') throw new Error('PRIVATE_RELAY_IMPORT qa-private-relay-token qa-private-relay-stderr qa-private-relay-path');
+        return { upstreamVerified: kind === 'jetbrains-central' };
+      },
+    });
+    relayImportAdapters = { 'trae-cn-relay': qaAdapter('trae-cn-relay'), 'jetbrains-central': qaAdapter('jetbrains-central') };
+  }
+  const relayClientImports = new RelayClientImportManager(store, relayImportAdapters, kind => relayKey(kind === 'trae-cn-relay' ? 'trae-relay-api-key' : 'jetbrains-central-relay-key'));
+  handle('relayClientImportCandidates', (kind: RelayAccountKind) => { assertEditable(); return relayClientImports.preview(kind); });
+  handle('importRelayClientAccount', (kind: RelayAccountKind, id: string) => { assertEditable(); return relayClientImports.import(kind, id); });
   handle('startJetBrainsRelay', async () => {
     const apiKey = relayKey('jetbrains-central-relay-key');
     await centralPi.start(apiKey);
@@ -1009,6 +1087,10 @@ function initializeApplication() {
     // 修改点：只迁移应用自己登记且未被修改的旧自启动项，不重放外部工具配置。
     try { preferences.migrateLinuxAutostart(); }
     catch { recordDiagnostic('warn', 'app.error', { stage: 'preferences', outcome: 'configuration' }); }
+    if (__MODELDOCK_SMOKE_BUILD__ && process.env.MODELDOCK_SMOKE_WINDOW_PRESENTATION_ONLY === '1') {
+      const requestedTheme = process.env.MODELDOCK_SMOKE_WINDOW_THEME;
+      preferences.save({ ...(requestedTheme === 'light' || requestedTheme === 'dark' || requestedTheme === 'system' ? { theme: requestedTheme } : {}), startHidden: process.env.MODELDOCK_SMOKE_WINDOW_HIDDEN === '1' });
+    }
     nativeTheme.themeSource = preferences.get().settings.theme;
     nativeTheme.on('updated', () => { if (window && !window.isDestroyed()) window.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#19191c' : '#f8f9fb'); });
     startupStage = 'proxy';

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { TRAE_RELAY_BASE_URL, TRAE_RELAY_IMAGE, TRAE_RELAY_LOGIN_URL, TraeRelayManager } from '../src/main/trae-relay';
+import type { TraeClientCredentials } from '../src/main/trae-client-import';
 
 const key = 'a'.repeat(64);
 const containerId = 'b'.repeat(64);
@@ -37,13 +38,56 @@ async function fixture(prefix = 'modeldock-relay-test-') {
       default: throw Error('unexpected docker command');
     }
   });
-  const io = { docker, health: vi.fn(async () => true), portAvailable: vi.fn(async () => true), wait: async () => {} };
+  const io = { docker, health: vi.fn(async () => true), portAvailable: vi.fn(async () => true), wait: async () => {},
+    importAccount: vi.fn(async (_apiKey: string, credentials: TraeClientCredentials) => ({ imported: true as const, accountId: credentials.userId, upstreamVerified: false as const, message: 'fixture imported without upstream validation' })),
+  };
   const root = join(dir, 'trae-cn-relay');
   const manager = new TraeRelayManager(dir, io);
   return { dir, root, manager, state, io, calls: () => docker.mock.calls.map(([args]) => args) };
 }
 
 describe('managed TRAE CN relay', () => {
+  it('never imports into an absent, stopped or different-key relay and does not start one implicitly', async () => {
+    const { manager, io, calls } = await fixture();
+    const credentials: TraeClientCredentials = { token: 'synthetic.private.access', userId: 'fixture-user', host: 'https://api.trae.cn' };
+    await expect(manager.importAccount(key, credentials)).rejects.toThrow('先启动');
+    expect(calls().some(args => args[1] === 'create' || args[1] === 'start')).toBe(false);
+    await manager.start(key);
+    await expect(manager.importAccount('z'.repeat(64), credentials)).rejects.toThrow('匹配');
+    await manager.stop();
+    await expect(manager.importAccount(key, credentials)).rejects.toThrow('先启动');
+    expect(io.importAccount).not.toHaveBeenCalled();
+  });
+
+  it('checks the exact managed container and health before authenticated account import', async () => {
+    const { manager, io, state, calls } = await fixture(); await manager.start(key);
+    const credentials: TraeClientCredentials = { token: 'synthetic.private.access', refreshToken: 'synthetic.private.refresh', userId: 'fixture-user', host: 'https://api.trae.cn' };
+    const owner = state.owner; state.owner = 'foreign-owner';
+    await expect(manager.importAccount(key, credentials)).rejects.toThrow('不属于');
+    state.owner = owner; io.health.mockResolvedValue(false);
+    await expect(manager.importAccount(key, credentials)).rejects.toThrow('healthz');
+    expect(io.importAccount).not.toHaveBeenCalled(); io.health.mockResolvedValue(true);
+    expect(await manager.importAccount(key, credentials)).toMatchObject({ imported: true, accountId: 'fixture-user', upstreamVerified: false });
+    expect(io.importAccount).toHaveBeenCalledExactlyOnceWith(key, credentials);
+    expect(JSON.stringify(calls())).not.toMatch(/synthetic\.private|a{64}/);
+  });
+
+  it('serializes an in-progress import against stop and redacts arbitrary import failures', async () => {
+    const { manager, io, calls } = await fixture(); await manager.start(key);
+    const credentials: TraeClientCredentials = { token: 'synthetic.private.access', userId: 'fixture-user', host: 'https://api.trae.cn' };
+    let release!: (value: Awaited<ReturnType<typeof io.importAccount>>) => void;
+    io.importAccount.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    const imported = manager.importAccount(key, credentials);
+    await vi.waitFor(() => expect(io.importAccount).toHaveBeenCalledTimes(1));
+    const stopped = manager.stop(); expect(calls().filter(args => args[1] === 'stop')).toHaveLength(0);
+    release({ imported: true, accountId: 'fixture-user', upstreamVerified: false, message: 'saved' });
+    await imported; expect((await stopped).state).toBe('stopped');
+    await manager.start(key); io.importAccount.mockRejectedValueOnce(new Error(credentials.token));
+    const error = await manager.importAccount(key, credentials).catch(error => error as Error);
+    expect(String(error)).toContain('导入失败'); expect(String(error)).not.toContain(credentials.token);
+    expect((await manager.stop()).state).toBe('stopped');
+  });
+
   it.skipIf(process.platform !== 'win32')('protects Windows login files with a private inherited ACL and preserves CSV bind-mount paths', async () => {
     const { root, manager, calls } = await fixture('modeldock 空格, relay-');
     expect((await manager.start(key)).state).toBe('running');

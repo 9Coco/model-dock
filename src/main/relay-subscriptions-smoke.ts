@@ -3,6 +3,7 @@ import { writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import type { BrowserWindow } from 'electron';
 import type { Store } from './store';
+import { revealSmokeNavigationTarget } from './smoke-navigation';
 import { JETBRAINS_RELAY_BASE_URL, TRAE_RELAY_BASE_URL, providerCategory } from '../shared/presets';
 
 /** Subscription-relay presentation checks use only this fresh synthetic QA profile. */
@@ -35,6 +36,7 @@ export async function verifyRelaySubscriptions(window: BrowserWindow, store: Sto
     throw new Error(`Relay subscriptions UI timed out: ${label}`);
   }
   async function click(selector: string): Promise<void> {
+    await revealSmokeNavigationTarget(window, selector);
     await waitFor(`!!document.querySelector(${JSON.stringify(selector)})&&!document.querySelector(${JSON.stringify(selector)}).disabled`, selector);
     await evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);
   }

@@ -7,6 +7,7 @@ import type { Provider, ProviderInput, ProviderSecret } from '../shared/types';
 import type { OAuthManager } from './oauth';
 import { safeAccountAvatarUrl } from '../shared/auth-avatar';
 import { isRelayProvider } from '../shared/presets';
+import { relayAccountView } from './relay-client-import';
 
 // Protocol references, read 2026-10-07 (MIT-licensed CC Switch). The parsers
 // below are independent TypeScript implementations of the observed protocols.
@@ -258,13 +259,7 @@ export class AuthCenter {
     return this.store.listProviders().flatMap(provider => {
       if (provider.kind === 'codex' || provider.kind === 'grok') return [this.account(provider as Provider & { kind: SubscriptionKind })];
       if (!isRelayProvider(provider)) return [];
-      const relayKeyConfigured = Boolean(this.store.getSecret(provider.id)?.apiKey);
-      return [{
-        providerId: provider.id, providerName: provider.name, kind: provider.presetId as RelayAccountKind,
-        source: 'relay' as const, relayKeyConfigured, authStatus: relayKeyConfigured ? 'ready' as const : 'missing' as const,
-        canRefresh: false,
-        usage: { status: 'unavailable' as const, windows: [], message: '上游授权与订阅额度由反代服务管理，请在反代完成账号登录。' },
-      }];
+      return [relayAccountView(this.store, provider)];
     });
   }
 

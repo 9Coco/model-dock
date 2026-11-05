@@ -40,6 +40,17 @@ under another project's license. When adding a copied or adapted source portion,
 record its fixed revision and changes, and retain its actual copyright and
 license text. Do not remove required public attribution during secret cleanup.
 
+## TRAE client authorization interoperability
+
+The main-process native-client importer independently implements the `tc`
+AES/AES_PRIVATE storage format documented by
+[Trae2api-cn v1.0.10](https://github.com/autumnsentiment/Trae2api-cn/tree/v1.0.10),
+commit `bb7b659`, `src/trae_decrypt.py`. Its fixed salts and message field names
+are interoperability data. The implementation is TypeScript and bounded to the
+selected local CN client authorization slots; the reference Python code is not
+bundled. The native relay's `/api/web-auth` and account-pool behavior are defined
+by the same fixed revision's `src/main.py` and `src/auth.py`.
+
 ## Dependencies and distributed application
 
 Installed versions are pinned by `package-lock.json`. React, React DOM,

@@ -3,7 +3,7 @@ import type { DiagnosticContext, DiagnosticEvent, DiagnosticLevel, DiagnosticOpe
 
 // 修改点：只从操作结果挑选诊断字段，禁止把 IPC 参数、任意错误文案或返回正文交给日志。
 const ignored = new Set(['reportRendererError', 'queryDiagnostics', 'diagnosticsText', 'exportDiagnostics', 'openDiagnosticsDir', 'copyText', 'copyGatewayKey', 'copyConnectionKey', 'copyProviderKey', 'revealProviderKey', 'revealGatewayKey']);
-const quiet = new Set(['jetBrainsStatus', 'toolSyncUndoStatus', 'snapshot', 'getSettings', 'rendererReady', 'authAccounts', 'authProgress', 'copilotAuthProgress', 'copilotImportCandidates', 'mcpList', 'skillsList', 'skillsReadFile', 'listProviderDuplicates']);
+const quiet = new Set(['jetBrainsStatus', 'toolSyncUndoStatus', 'snapshot', 'getSettings', 'rendererReady', 'authAccounts', 'authProgress', 'copilotAuthProgress', 'copilotImportCandidates', 'relayClientImportCandidates', 'mcpList', 'skillsList', 'skillsReadFile', 'listProviderDuplicates']);
 const providerIdOperations = new Set(['deleteProvider', 'testProvider', 'discoverModels', 'addDiscoveredModels', 'beginLogin', 'authProgress', 'cancelLogin', 'refreshAccountUsage', 'logoutAccount', 'copilotLogoutAccount']);
 const toolIdOperations = new Set(['previewConfig', 'exportConfig', 'applyConfig', 'setJetBrainsPlugin', 'restoreOfficialConfig', 'toolSyncUndoStatus', 'undoToolSync']);
 const tools = new Set(['codex', 'opencode', 'dsh', 'vscode', 'copilot', 'copilot-cli', 'claude-code', 'junie', 'webstorm', 'intellij-idea', 'rider', 'pycharm']);
@@ -11,7 +11,7 @@ const outcomes = new Set(['success', 'failure', 'cancelled', 'skipped', 'model-r
 const stages = new Set(['device-code', 'device-poll', 'token-exchange', 'account-info', 'refresh', 'discovery']);
 const events: Partial<Record<keyof ModelDockApi, DiagnosticEvent>> = {
   saveProvider: 'provider.save', deleteProvider: 'provider.delete', testProvider: 'connection.result', discoverModels: 'models.discovery',
-  beginLogin: 'account.login', beginCopilotLogin: 'account.login', importCopilotClientAccount: 'account.login', logoutAccount: 'account.logout', copilotLogoutAccount: 'account.logout',
+  beginLogin: 'account.login', beginCopilotLogin: 'account.login', importCopilotClientAccount: 'account.login', importRelayClientAccount: 'account.login', logoutAccount: 'account.logout', copilotLogoutAccount: 'account.logout',
   refreshAccountUsage: 'account.refresh', previewConfig: 'config.preview', applyConfig: 'config.apply', restoreOfficialConfig: 'config.restore',
   undoToolSync: 'config.restore',
   mcpSave: 'mcp.operation', mcpDelete: 'mcp.operation', mcpSetTool: 'mcp.operation', mcpImport: 'mcp.operation', mcpApply: 'mcp.operation',

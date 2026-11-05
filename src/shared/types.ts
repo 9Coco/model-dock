@@ -1,4 +1,4 @@
-import type { AuthAccount, CopilotImportCandidate, SubscriptionKind } from './auth-types';
+import type { AuthAccount, CopilotImportCandidate, RelayAccountKind, RelayClientImportPreview, SubscriptionKind } from './auth-types';
 import type { McpServer, McpServerInput, McpImportResult, McpConfigPreview, McpApplyResult } from './mcp-types';
 import type { ManagedSkill, SkillSnapshot, SkillRepositoryInput, SkillImportResult, SkillFilePreview, SkillRemovePreview } from './skill-types';
 import type { AppSettings, SettingsSnapshot } from './settings-types';
@@ -278,6 +278,8 @@ export interface ModelDockApi {
   copilotLogoutAccount(id: string): Promise<void>;
   copilotImportCandidates(): Promise<CopilotImportCandidate[]>;
   importCopilotClientAccount(candidateId: string): Promise<AuthAccount>;
+  relayClientImportCandidates(kind: RelayAccountKind): Promise<RelayClientImportPreview>;
+  importRelayClientAccount(kind: RelayAccountKind, candidateId: string): Promise<AuthAccount>;
   mcpList(): Promise<McpServer[]>;
   mcpSave(input: McpServerInput): Promise<McpServer>;
   mcpDelete(id: string): Promise<void>;
