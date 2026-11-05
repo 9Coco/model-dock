@@ -87,9 +87,10 @@ export async function verifyDshConfiguration(window: BrowserWindow, store: Store
     assert.ok(credentials.refs.FOREIGN_DSH_NATIVE_FIXTURE === originalCredentials.refs.FOREIGN_DSH_NATIVE_FIXTURE, 'Native API credential reference must remain unchanged');
   }
   function assertConfig(expectedSources: Provider[], expectedDefault: Model): void {
+    assert.equal(store.listBindings().find(item => item.id === 'dsh')?.mode, 'auto', 'Native multi-source fixtures must retain their legacy native connection mode');
     const routes = readRoutes();
     assert.equal(routes['foreign-route'], undefined, 'The DSH home override must publish only the current ModelDock selection');
-    const owned = ownedRoutes(), expectedNames = expectedSources.length === 1 ? ['ModelDock'] : expectedSources.map(provider => `ModelDock · ${provider.name}`);
+    const owned = ownedRoutes(), expectedNames = expectedSources.map(provider => `ModelDock · ${provider.name}`);
     assert.deepEqual(new Set(owned.map(([, route]) => route.displayName)), new Set(expectedNames), 'Native DSH routes must contain exactly the selected ModelDock sources');
     const expectedModels = store.listModels().filter(model => expectedSources.some(provider => provider.id === model.providerId) && model.enabled);
     assert.deepEqual(new Set(owned.flatMap(([, route]) => route.models.map(model => model.id))), new Set(expectedModels.map(model => model.upstreamId)), 'Direct API routes must use the actual upstream model IDs');
@@ -101,7 +102,7 @@ export async function verifyDshConfiguration(window: BrowserWindow, store: Store
     assert.ok(secretFile.refs.FOREIGN_DSH_FIXTURE === originalCredentials.refs.FOREIGN_DSH_FIXTURE, 'Foreign credential reference must remain unchanged');
     const sourceReferences: string[] = [];
     for (const provider of expectedSources) {
-      const name = expectedSources.length === 1 ? 'ModelDock' : `ModelDock · ${provider.name}`;
+      const name = `ModelDock · ${provider.name}`;
       const sourceRoutes = owned.filter(([, route]) => route.displayName === name);
       const sourceModels = expectedModels.filter(model => model.providerId === provider.id);
       assert.equal(sourceRoutes.length, new Set(sourceModels.map(model => model.wireApi)).size, 'Each source needs exactly one route per selected protocol');
@@ -153,8 +154,7 @@ export async function verifyDshConfiguration(window: BrowserWindow, store: Store
   const reply = await fetch(target, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${credentials.refs[native[1].apiKeyEnv]}` }, body: JSON.stringify({ model: native[1].models[0].id, messages: [{ role: 'user', content: 'OK' }] }) });
   assert.equal(reply.status, 200); const message = await reply.json() as { choices: Array<{ message: { content: string } }> }; assert.equal(message.choices[0].message.content, 'OK');
   // Scope edits must not widen a legacy model filter, change connection mode or
-  // enable an otherwise disabled binding. A checkbox edit later returns to the
-  // normal native multi-source mode, as intended by the product flow.
+  // enable an otherwise disabled binding. Source edits retain that mode too.
   const legacyBinding: ToolBinding = { ...await binding(), mode: 'aggregate', modelSelection: 'selected', modelIds: [models[0].id], defaultModelId: models[0].id };
   await evaluate(`window.modelDock.saveBinding(${JSON.stringify(legacyBinding)})`);
   await click('[aria-label="刷新本机配置"]');
@@ -174,6 +174,14 @@ export async function verifyDshConfiguration(window: BrowserWindow, store: Store
   await select(providers[0], false);
   assert.deepEqual(Object.keys(readRoutes()), [], 'An empty exclusive selection must not reveal the original model sources');
   assertNativeScope(true);
+  const emptyAggregate = await binding();
+  assert.equal(emptyAggregate.mode, 'aggregate', 'Clearing the last source must not change its saved aggregate connection mode');
+  // Resume the independent legacy native fixture for multi-source protocol and
+  // credential checks. Loading this fixture must not write external settings.
+  const beforeNativeFixture = readFileSync(patchFile, 'utf8');
+  await evaluate(`window.modelDock.saveBinding(${JSON.stringify({ ...emptyAggregate, mode: 'auto', modelSelection: 'all' })})`);
+  await click('[aria-label="刷新本机配置"]');
+  assert.equal(readFileSync(patchFile, 'utf8'), beforeNativeFixture, 'Loading a fixture selection must not replay a configuration write');
   await select(providers[0], true);
   const defaultModel = models.find(model => model.providerId === providers[0].id && model.wireApi === 'responses'); assert.ok(defaultModel);
   const defaultCount = backups().length;

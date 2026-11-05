@@ -1,5 +1,32 @@
 # ModelDock 验证记录
 
+## 2026-11-05 / 0.3.76 · 所有托管反代统一 TypeScript 网关
+
+- TRAE、JetBrains IDE / Air 与 Central 个人 AI 许可证通过主进程 TypeScript 适配器接入现有 Gateway；Codex / Grok / Copilot 保留原生主进程授权转发。生产入口不再导入或实例化 Docker/Python/Pi/独立 IDE 反代，不再监听 18080/18081；两个历史值仅供账号连接身份兼容，模型调用、目录与连接测试都走适配器。打包不再复制 Pi 扩展或 Python 资源，生产校验拒绝旧实现进入产物。
+- Native provider 标记由 Store 私有元数据/预设导出，不能由 renderer ProviderInput 伪造。原生凭据加密保存在主进程，不进入账号视图、API Key reveal、直连配置或日志；工具使用现有网关 URL、别名与本地 Key。旧记录没有原生会话时明确需重新导入，不启动历史服务，也不回退 HTTP 占位地址。
+- TRAE 官方 CN 固定 origin 由已安装 3.4.15 的 product.json/公共 JS bundle 确认；模型目录使用当前 GetConfigDetail GET，推理为 LLMRawChatV2 POST。真实 Windows 客户端仅只读查询：发现两个本机来源，所选账号返回 24 个模型、Free 套餐、可识别额度窗口；没有发送模型生成请求。输出证据 `work/native-trae-readonly-result.json` 仅含计数、套餐及状态，不含身份或凭据。
+- TRAE 套餐按官方有效 entitlement product_type 解析；未知/过期/查询失败不保留旧套餐。当前 Raw v2 DTO 没有已证实的输出预算字段，未支持的预算、多模态及控制参数会明确拒绝，不默默删除；标准 Claude Messages 必需的预算暂不能宣称兼容。
+- Central 依据官方 2.2.0 的一次性 login export/TokenTransfer、OAuth refresh 和原生 wire 协议实现个人许可证接入。只在用户显式预览/连接时读取源 CLI；显式连接派生并保存有期限 Grazie 会话，不保留全账号 refresh token，推理不运行 CLI 或自动重试。工作区/企业/Bedrock/Vertex 未完整核实，明确拒绝且不改用个人身份；到期需重新连接。模型目录保存实际 OpenAI/Anthropic 原生协议。
+- 所有工具（含 JetBrains）即时转发正文、推理、函数参数增量及取消，保留背压。JetBrains 原 32 MiB 整段缓存改为计数限制，仅保留有界终态尾帧。首块前的错误返回 HTTP；首块后截断/迟到错误会终止连接且不发布 stop/DONE，不自动重放推理。旧 Koog 对 EOF 的实际 UI 行为仍需原生 IDE 推理验收。
+- Windows 实际 Electron：订阅入口 26 张、客户端导入 20 张、套餐/额度 19 张、IDE 12 张功能截图均通过；亮暗980/1180、Pro/套餐未知、自定义名称、重复导入、旧19091外部接口、模型/绑定/密钥保留和脱敏断言通过。证据分别为 `work/windows-native-subscriptions-final3-0.3.76`、`work/windows-native-client-import-final-0.3.76`、`work/windows-native-quota-final-0.3.76`、`work/windows-native-ide-final-0.3.76`。IDE 目录和连接测试直接到合成API，不创建独立listener。
+- Windows 通用 Electron 全链通过：`work/windows-native-general-final-0.3.76`，exitCode=0、bridge=true、本机模拟请求200；包括工具接入、授权、模型发现、直连/聚合、自动同步与恢复。真实 TRAE 生成、Central OAuth/推理、JetBrains 原生 IDE 客户端推理和 Linux 原生运行仍未验收；模拟协议和目录成功不等同这些验收。
+- 最终完整回归：111 个测试文件，110 通过、1 跳过；2368 项中 2317 通过、51 按平台/能力跳过、0 失败。`work/windows-native-gateway-tests-final-0.3.76.log`；typecheck/build/生产去测试代码校验/Windows x64 资源图标及ASAR校验通过。补齐按provider取消活跃流、native占位URL与网关端口重合、IDE共享授权交换的单/多等待者取消、退出/删除/重导入拒绝迟到写入。IDE生命周期后再次实际Electron专项通过：`work/windows-native-ide-lifecycle-final-0.3.76`。
+- 运行中的0.3.75未退出或覆盖；新正式构建为 `C:\Users\Coco\Documents\GitHub\model-dock\release\windows-0.3.76-2026-11-05T15-57-51-208Z-11256\win-unpacked`。交付ZIP含93个文件，每个SHA256与构建一致，ZIP SHA256 `587c4d78906c708b9a8e12f636eb185702304a39246a9d91609560eac8bbca6d`；记录 `work/native-gateway-delivery-0.3.76.json`。完整目录无Python运行库或Pi扩展，生产入口不含历史托管反代实现。
+
+
+## 2026-11-05 / 0.3.75 · Windows 账号导入与回归修复
+
+- Windows 账号导入改为只读 Registry64 的 HKCU Java Preferences 固定节点及 `idtoken` / `userlogin` / `userid` 三个值，按安装的 IntelliJ IDEA 2026.2.4 build 262.11879.100 / JBR 25.0.4.1 的转换规则解码，再读取 APPDATA 下固定 2026.2 IDE 的当前个人 AI 许可证。保留选择票据、账号/许可证指纹、确认前双重读取、注销/组织工作区拒绝，不修改源注册表、客户端文件或 PasswordSafe。
+- 原生固定源只读探测已确认本机账号可预览并重新读取确认许可证，输出仅为状态布尔。独立 JBR 纯转换方法生成包含中文、emoji、大小写、斜线和换行的 golden；合成测试覆盖大小、类型、错误脱敏、路径、换号/换证/注销及 Windows junction。未执行真实官方授权交换、额度查询或付费推理；本地读取成功仍标记为未验证身份断言。
+- 授权中心使用主进程已有的系统信息启用 Windows / Linux IDE 导入，其他平台禁用并说明。Windows Electron 专项完整验证空账号、预览、官方服务模拟拒绝、失败保留、重复导入、独立本地密钥、模拟额度/模型/推理与脱敏；12 张合成截图覆盖明暗主题和窄/宽窗口，已人工查看窄窗入口。
+- 修复 GitHub CLI 测试目录、PATH 分隔符和 Linux UID 模拟。POSIX 模式断言在 Windows 改查实际 DACL；目录链接使用 junction，静态硬链接与打开后的硬链接替换均实际执行。符号链接权限和打开文件时目录重命名能力独立探测，不能构造的安全场景明确跳过。全量 102 文件：101 通过、1 跳过；2155 项中 2104 通过、51 按平台/能力跳过、0 失败。未把跳过用例称为已验收。
+- Windows 侧栏完整原生输入验证通过：拖动、取消、键盘步进、边界、窄窗限制、宽窗恢复、刷新后偏好保留、分类切换和双击重置；16 张截图覆盖两种主题/尺寸及宽度上下界。窗口缩小时按实际页面宽度计算，避免将含 Windows 边框的外窗宽度当作内容尺寸。
+- Windows 通用 Electron 全链最终通过（exitCode=0、bridge=true、localhost 请求 HTTP 200）：当前工具入口/导航、明暗主题、布局/弹窗、来源重复提交、模型发现及 401 清理、供应商独立测试模型、授权错误/待确认/取消、剪贴板恢复、Codex 原生目录协议、Grok 授权/网络设置、自动同步、直连与聚合独立选择、精确模型权限、配置备份还原及 DSH 兼容均保留验证。旧测试入口、模式/命名假设和轮询时序已修正；等待基于真实测试计数，未放宽授权/脱敏/备份断言。证据为 `work/windows-fix-general-final-0.3.75`；另有独立 `work/windows-fix-tools-0.3.75` 与 `work/windows-fix-connection-0.3.75` 定向通过。
+- 正式包的独立 QA 副本通过相同 IDE 导入专项，生产产物保持原样，证据为 `work/windows-fix-packaged-ide-0.3.75`。ZIP 内 94 个文件逐项 SHA256 与正式构建一致；最终生产 main/preload/renderer 入口与包内内容一致。
+- 生产构建/类型检查及 Windows x64 包入口、资源、Pi 扩展、图标和内嵌 ASAR 完整性通过。新构建为 `release/windows-0.3.75-2026-11-05T14-48-02-183Z-5500/win-unpacked`；运行中的 D:\ModelDock-0.3.55 保持运行，未覆盖该目录。
+- 证据目录：`work/windows-fix-tests-0.3.75.log`、`work/windows-fix-ide-import-0.3.75`、`work/windows-fix-sidebar-0.3.75`、`work/windows-fix-package-0.3.75.log`。Windows Docker Desktop 的真实容器/授权流程、真实账号云端推理及 Linux 原生回归仍需分别验收。
+
+
 ## 2026-11-04 / 0.3.67 · Copilot CLI 独立接入
 
 - 新增独立 Copilot CLI strict 直连/聚合绑定，与 Copilot app、VS Code 分开。按官方命名来源格式合并 providers.json 的 modeldock-chat / modeldock-responses 和所有当前选定模型，仅修改 JSONC settings.json 的 model；支持 COPILOT_HOME / COPILOT_PROVIDERS_CONFIG。保留其他来源、设置注释、config.json 内部状态、账号、权限、MCP、Skills 与会话。两文件采用私有权限、加密备份/所有权历史、事务回滚、统一撤销与还原。

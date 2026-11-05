@@ -9,6 +9,9 @@ import { lookupModelMetadata, lookupModelReasoningDefaults } from '../shared/mod
 import type { PreparedUpstream } from './oauth';
 import { modelCatalogEndpoint } from './oauth';
 import { anthropicEndpoint } from './anthropic-endpoint';
+import { TraeNativeAccountError } from './trae-native-account';
+import { CentralNativeAccountError } from './central-native-account';
+import { JetBrainsIdeAccountError } from './jetbrains-ide-account';
 
 export interface CatalogStore {
   getProvider(id: string): Provider | undefined;
@@ -38,7 +41,7 @@ function object(value: unknown): RecordValue {
 function safeText(value: unknown, max = 200): string {
   return typeof value === 'string' && value.trim().length <= max && !/[\x00-\x1f\x7f]/.test(value) ? value.trim() : '';
 }
-function fingerprint(provider: Provider): string { return JSON.stringify([provider.id, provider.kind, provider.baseUrl, provider.presetId, provider.hasSecret, provider.copilotAccountId, provider.messagesAuth]); }
+function fingerprint(provider: Provider): string { return JSON.stringify([provider.id, provider.kind, provider.baseUrl, provider.presetId, provider.hasSecret, provider.copilotAccountId, provider.messagesAuth, provider.nativeAdapter]); }
 function positiveContext(...values: unknown[]): number | undefined {
   return values.find((value): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value > 0);
 }
@@ -75,8 +78,9 @@ function parseModel(entry: unknown, provider: Provider, messagesCatalog = false)
   // must never overwrite a native subscription catalog with the same model name.
   const endpoints = data.supported_endpoints ?? capabilities.supported_endpoints;
   if (provider.kind === 'copilot' && Array.isArray(endpoints) && !endpoints.some(endpoint => endpoint === 'responses' || endpoint === '/responses' || endpoint === 'chat_completions' || endpoint === 'chat-completions' || endpoint === '/chat/completions')) return undefined;
-  const wireApi: WireApi = provider.kind === 'copilot' ? Array.isArray(endpoints) && (endpoints.includes('responses') || endpoints.includes('/responses')) ? 'responses' : 'chat-completions'
-    : provider.kind === 'openai-compatible' ? messagesCatalog ? 'messages' : presetById(provider.presetId)?.defaultWireApi ?? 'chat-completions' : 'responses';
+  const nativeWire = provider.nativeAdapter && ['chat-completions', 'responses', 'messages'].includes(String(data.wire_api)) ? data.wire_api as WireApi : undefined;
+  const wireApi: WireApi = nativeWire ?? (provider.kind === 'copilot' ? Array.isArray(endpoints) && (endpoints.includes('responses') || endpoints.includes('/responses')) ? 'responses' : 'chat-completions'
+    : provider.kind === 'openai-compatible' ? messagesCatalog ? 'messages' : presetById(provider.presetId)?.defaultWireApi ?? 'chat-completions' : 'responses');
   const knownMetadata = lookupModelMetadata(upstreamId, provider, wireApi);
   // 订阅目录只借用缺少的思考默认值，不能借用公共 API 的容量或模态。
   const reasoningMetadata = knownMetadata ?? lookupModelReasoningDefaults(upstreamId, provider, wireApi);
@@ -244,7 +248,7 @@ export class ModelCatalog {
   private readonly fetcher: typeof fetch;
   private readonly cache = new Map<string, CachedDiscovery>();
   private readonly revisions = new Map<string, number>();
-  constructor(private readonly store: CatalogStore, private readonly oauth: CatalogOAuth, options: { fetch?: typeof fetch } = {}) { this.fetcher = options.fetch ?? fetch; }
+  constructor(private readonly store: CatalogStore, private readonly oauth: CatalogOAuth, private readonly options: { fetch?: typeof fetch; nativeModels?: (provider: Provider, signal: AbortSignal) => Promise<Response | undefined> } = {}) { this.fetcher = options.fetch ?? fetch; }
   invalidate(providerId: string): void {
     this.cache.delete(providerId);
     this.revisions.set(providerId, (this.revisions.get(providerId) ?? 0) + 1);
@@ -257,12 +261,12 @@ export class ModelCatalog {
     try {
       if (!provider) throw new CatalogFailure('invalid-provider', '供应商不存在。');
       if (!provider.hasSecret) throw new CatalogFailure('missing-credentials', provider.kind === 'openai-compatible' ? '请先保存 API Key，再获取模型列表。' : '请先完成订阅授权，再获取模型列表。');
-      const messagesCatalog = provider.kind === 'openai-compatible' && (presetById(provider.presetId)?.defaultWireApi === 'messages'
+      const messagesCatalog = !provider.nativeAdapter && provider.kind === 'openai-compatible' && (presetById(provider.presetId)?.defaultWireApi === 'messages'
         || !isTraeRelayProvider(provider) && this.store.listModels().some(model => model.providerId === providerId && model.wireApi === 'messages'));
       // Preparing the request also refreshes native subscription credentials.
       const expected = messagesCatalog ? anthropicEndpoint(provider.baseUrl, '/models') : modelCatalogEndpoint(provider);
       let request: PreparedUpstream;
-      try { request = await this.oauth.prepareRequest(provider, messagesCatalog ? '/v1/models' : '/models', {}); }
+      try { request = provider.nativeAdapter ? { url: expected, headers: {}, body: {} } : await this.oauth.prepareRequest(provider, messagesCatalog ? '/v1/models' : '/models', {}); }
       catch {
         if (provider.presetId === 'jetbrains-central') throw new CatalogFailure('authentication', '请先在 JetBrains 供应商详情中启动本机反代，再获取模型列表。');
         throw new CatalogFailure('authentication', provider.kind === 'openai-compatible' ? '无法准备 API 凭据，请重新保存 API Key。' : '无法准备订阅授权，请在授权中心检查账号或重新登录。'); }
@@ -284,7 +288,10 @@ export class ModelCatalog {
       for (let page = 0; next; page++) {
         if (page >= MAX_PAGES || visited.has(next)) throw new CatalogFailure('invalid-response', '模型目录分页过多或重复，已停止请求；没有保存不完整的目录。');
         visited.add(next);
-        const response = await this.fetcher(next, { method: 'GET', headers: request.headers, redirect: 'error', signal });
+        const response = provider.nativeAdapter
+          ? await this.options.nativeModels?.(provider, signal)
+          : await this.fetcher(next, { method: 'GET', headers: request.headers, redirect: 'error', signal });
+        if (!response) throw new CatalogFailure('invalid-provider', '此账号的内置适配器不可用，请重新导入账号。');
         statusCode = response.status;
         if (!response.ok) { await response.body?.cancel(); throw httpFailure(response.status); }
         const result = await boundedJson(response, signal);
@@ -300,6 +307,7 @@ export class ModelCatalog {
         }
         if (entries.length > 0 && models.size === 0) throw new CatalogFailure('invalid-response', '模型目录没有有效的模型 ID。');
         next = nextPage(result.data, next, request.url, provider, messagesCatalog);
+        if (provider.nativeAdapter && next) throw new CatalogFailure('invalid-response', '内置适配器返回了无效的分页目录。');
       }
       const currentProvider = this.store.getProvider(providerId);
       if (!currentProvider || this.revisions.get(providerId) !== revision || fingerprint(currentProvider) !== fingerprint(provider)) {
@@ -327,7 +335,8 @@ export class ModelCatalog {
       return { ok: true, providerId, statusCode, message: `已读取模型目录，发现 ${discovered.length} 个模型。目录可见性不代表模型调用已验证。`, models: discovered };
     } catch (error) {
       // Upstream bodies and arbitrary exception text can contain credentials.
-      const failure = error instanceof CatalogFailure ? error : error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')
+      const failure = error instanceof CatalogFailure ? error : error instanceof TraeNativeAccountError || error instanceof CentralNativeAccountError || error instanceof JetBrainsIdeAccountError
+        ? new CatalogFailure('authentication', error.message, 401) : error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')
         ? new CatalogFailure('timeout', '获取模型目录超时，请检查网络后重试。')
         : new CatalogFailure('network', '无法读取模型目录，请检查网络、API 地址或订阅授权状态后重试。');
       return { ok: false, providerId, statusCode: failure.statusCode ?? statusCode, errorCategory: failure.category, message: failure.message, models: [] };

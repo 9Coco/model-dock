@@ -3,6 +3,7 @@ import { constants } from 'node:fs';
 import { lstat, open } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
+import { readWindowsJetBrainsPreferences, type JetBrainsPreferenceValues } from './jetbrains-ide-windows';
 
 const MAX_FILE = 1024 * 1024, MAX_WRAPPED = 64 * 1024, MAX_TOKEN = 32 * 1024;
 const NODE_PARTS = ['.java', '.userPrefs', 'jetbrains', 'jetprofile'] as const;
@@ -18,7 +19,11 @@ export class JetBrainsIdeImportError extends Error {
 }
 const format = () => new JetBrainsIdeImportError('format', 'JetBrains IDE 本机账号格式无法识别，请在 IDE 重新登录后再试。');
 const missing = () => new JetBrainsIdeImportError('missing', '未找到 JetBrains IDE 已保存的账号会话，请先在 IDE 登录本人 JetBrains Account。');
-export interface JetBrainsIdeImportOptions { homeDir?: string; platform?: NodeJS.Platform; env?: NodeJS.ProcessEnv; now?: () => number }
+export interface JetBrainsIdeImportOptions {
+  homeDir?: string; platform?: NodeJS.Platform; env?: NodeJS.ProcessEnv; now?: () => number;
+  /** Main-process test port. Production reads only the fixed native JBR preference node. */
+  readWindowsPreferences?: () => Promise<JetBrainsPreferenceValues>;
+}
 export interface JetBrainsIdeImportCandidate {
   id: string;
   client: 'jetbrains-ide';
@@ -210,10 +215,11 @@ export class JetBrainsIdeImporter {
   private readonly platform: NodeJS.Platform;
   private readonly env: NodeJS.ProcessEnv;
   private readonly now: () => number;
+  private readonly readWindowsPreferences: () => Promise<JetBrainsPreferenceValues>;
   private readonly selections = new Map<string, { identity: string; product: IdeProduct; expires: number }>();
-  constructor(options: JetBrainsIdeImportOptions = {}) { this.home = options.homeDir ?? homedir(); this.platform = options.platform ?? process.platform; this.env = options.env ?? process.env; this.now = options.now ?? Date.now; }
+  constructor(options: JetBrainsIdeImportOptions = {}) { this.home = options.homeDir ?? homedir(); this.platform = options.platform ?? process.platform; this.env = options.env ?? process.env; this.now = options.now ?? Date.now; this.readWindowsPreferences = options.readWindowsPreferences ?? readWindowsJetBrainsPreferences; }
   private async readFile(base: string, parts: readonly string[]): Promise<string | undefined> {
-    if (this.platform !== 'linux') throw new JetBrainsIdeImportError('unsupported', '当前系统的 JetBrains IDE 账号导入尚未完成原生验证，请先使用独立账号登录。');
+    if (!['linux', 'win32'].includes(this.platform)) throw new JetBrainsIdeImportError('unsupported', '当前系统的 JetBrains IDE 账号导入尚未完成原生验证，请先使用独立账号登录。');
     if (!isAbsolute(base) || base.length > 4096 || /[\x00-\x1f\x7f]/.test(base)) throw format();
     let file;
     try {
@@ -221,7 +227,7 @@ export class JetBrainsIdeImporter {
       for (const part of ['', ...parts.slice(0, -1)]) { directory = join(directory, part); const info = await lstat(directory); if (!info.isDirectory() || info.isSymbolicLink()) throw format(); }
       const filename = join(directory, parts.at(-1)!), original = await lstat(filename);
       if (!original.isFile() || original.isSymbolicLink() || original.nlink !== 1 || original.size > MAX_FILE) throw format();
-      file = await open(filename, constants.O_RDONLY | constants.O_NOFOLLOW);
+      file = await open(filename, constants.O_RDONLY | (constants.O_NOFOLLOW || 0));
       const opened = await file.stat();
       if (!opened.isFile() || opened.size > MAX_FILE || original.dev !== opened.dev || original.ino !== opened.ino) throw format();
       const buffer = Buffer.alloc(MAX_FILE + 1); let size = 0;
@@ -235,11 +241,17 @@ export class JetBrainsIdeImporter {
     } finally { await file?.close().catch(() => {}); }
   }
   private async readJba(): Promise<JbaCredentials | undefined> {
+    if (this.platform === 'win32') {
+      let values: JetBrainsPreferenceValues;
+      try { values = await this.readWindowsPreferences(); }
+      catch { throw new JetBrainsIdeImportError('unsafe-file', '无法安全读取 Windows 中的 JetBrains IDE 本机账号，请检查本机登录和注册表读取权限。'); }
+      return credentials(values);
+    }
     const xml = await this.readFile(this.home, [...NODE_PARTS, 'prefs.xml']);
     return xml === undefined ? undefined : credentials(parseJetBrainsPreferences(xml));
   }
   private async readLicense(product: IdeProduct, accountId: string): Promise<string | undefined> {
-    const config = this.env.XDG_CONFIG_HOME || join(this.home, '.config');
+    const config = this.platform === 'win32' ? this.env.APPDATA || join(this.home, 'AppData', 'Roaming') : this.env.XDG_CONFIG_HOME || join(this.home, '.config');
     const xml = await this.readFile(config, ['JetBrains', PROFILES[product][0], 'options', 'other.xml']);
     return xml === undefined ? undefined : parseJetBrainsAiLicense(xml, accountId);
   }

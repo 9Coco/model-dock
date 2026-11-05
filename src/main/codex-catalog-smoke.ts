@@ -29,6 +29,10 @@ export async function verifyCodexCatalog(window: BrowserWindow, store: Store, ou
     await waitFor(`!!document.querySelector(${JSON.stringify(selector)})`, selector);
     await evaluate(`(()=>{const button=document.querySelector(${JSON.stringify(selector)});if(button.disabled)throw new Error('Codex catalog control disabled');button.click()})()`);
   }
+  async function closeDirectory(label: '完成' | '取消', stage: string): Promise<void> {
+    await evaluate(`(()=>{const button=Array.from(document.querySelectorAll('.discovery-footer button')).find(button=>button.textContent.trim()===${JSON.stringify(label)});if(!button||button.disabled)throw new Error('Catalog close action unavailable');button.click();})()`);
+    await waitFor(`!document.querySelector('[role="dialog"]')`, stage);
+  }
   const snapshot = await evaluate<Snapshot>('window.modelDock.snapshot()');
   assert.equal(resolve(snapshot.dataDir), resolve(dataDir), 'Catalog renderer must use the isolated database');
   const provider = store.listProviders().find(item => item.name === '等待授权回归测试' && item.kind === 'codex');
@@ -70,8 +74,7 @@ export async function verifyCodexCatalog(window: BrowserWindow, store: Store, ou
   assert.equal(saved.length, 1);
   assert.equal(saved[0].upstreamId, 'mock-codex'); assert.equal(saved[0].displayName, 'Native Codex');
   assert.equal(saved[0].contextWindow, 272000); assert.equal(saved[0].wireApi, 'responses'); assert.equal(saved[0].tools, true); assert.equal(saved[0].vision, true); assert.equal(saved[0].enabled, true);
-  await click('.discovery-footer button.secondary');
-  await waitFor(`!document.querySelector('[role="dialog"]')`, 'saved directory dialog closed');
+  await closeDirectory('完成', 'saved directory dialog closed');
   await click('[data-action="discover-models"]');
   await waitFor(`document.querySelectorAll('.discovery-model.existing').length===1&&!document.querySelector('.discovery-loading, .discovery-error')`, 'repeat directory recognizes existing model');
   const repeated = await evaluate<{ rows: number; checkboxDisabled: boolean; checked: boolean; addDisabled: boolean; hiddenShown: boolean }>(`(()=>{
@@ -84,6 +87,5 @@ export async function verifyCodexCatalog(window: BrowserWindow, store: Store, ou
   const afterRepeat = store.listModels().filter(model => model.providerId === provider.id);
   assert.equal(afterRepeat.length, 1); assert.equal(afterRepeat[0].id, saved[0].id);
   writeFileSync(join(outputDir, 'codex-catalog-validation.json'), JSON.stringify({ provider: { id: provider.id, name: provider.name, authStatus: provider.authStatus }, candidate, largeLayout, compactLayout, saved: saved.map(model => ({ id: model.id, upstreamId: model.upstreamId, displayName: model.displayName, contextWindow: model.contextWindow, wireApi: model.wireApi, tools: model.tools, vision: model.vision })), repeated, finalModelCount: afterRepeat.length }, null, 2));
-  await click('.discovery-footer button.secondary');
-  await waitFor(`!document.querySelector('[role="dialog"]')`, 'repeat directory closed');
+  await closeDirectory('取消', 'repeat directory closed');
 }

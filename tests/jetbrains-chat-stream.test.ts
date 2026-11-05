@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createJetBrainsChatStream, JetBrainsChatError, normalizeJetBrainsChatResponse, jetBrainsResponsesHistory } from '../src/main/jetbrains-chat-stream';
+import { createJetBrainsCompletionStream } from '../src/main/jetbrains-completion';
 
 const event = (value: unknown) => `data: ${typeof value === 'string' ? value : JSON.stringify(value)}\n\n`;
 const chunk = (delta: unknown, finish_reason: unknown = null) => ({ choices: [{ index: 0, delta, finish_reason }] });
@@ -12,6 +13,22 @@ const valid = () => event(chunk({ role: 'assistant', content: '' })) + event(chu
 const parse = (raw: string) => raw.split('\n\n').filter(Boolean).map(item => { const data = item.slice(6); return data === '[DONE]' ? data : JSON.parse(data); });
 
 describe('JetBrains 严格 Chat 流接口', () => {
+  it.each(['chat', 'fim'] as const)('%s streams terminal-frame content now and publishes finish/usage exactly once after EOF', async kind => {
+    const transform = kind === 'chat' ? createJetBrainsChatStream('alias') : createJetBrainsCompletionStream('alias');
+    const writer = transform.writable.getWriter(), reader = transform.readable.getReader();
+    const value = kind === 'chat' ? { id: 'synthetic', created: 1, object: 'chat.completion.chunk', choices: [{ index: 0, delta: { content: 'LAST🙂' }, finish_reason: 'stop' }], usage: { total_tokens: 3 } }
+      : { id: 'synthetic', created: 1, model: 'upstream', object: 'text_completion', choices: [{ index: 0, text: 'LAST🙂', logprobs: { tokens: ['LAST🙂'] }, finish_reason: 'stop' }], usage: { total_tokens: 3 } };
+    try {
+      const write = writer.write(new TextEncoder().encode(event(value) + event('[DONE]')));
+      const first = new TextDecoder().decode((await reader.read()).value); await write;
+      expect(first).toContain('LAST🙂'); expect(first).toContain('"finish_reason":null'); expect(first).not.toContain('"usage"');
+      if (kind === 'fim') expect(first).toContain('"logprobs":{"tokens":["LAST🙂"]}');
+      let settled = false; const pending = reader.read().then(value => { settled = true; return value; }); await new Promise<void>(resolve => setImmediate(resolve)); expect(settled).toBe(false);
+      const closing = writer.close(), ending = await pending, sentinel = await reader.read();
+      const tail = new TextDecoder().decode(ending.value), done = new TextDecoder().decode(sentinel.value);
+      expect(tail).toContain('"finish_reason":"stop"'); expect(tail).toContain('"usage":{"total_tokens":3}'); expect(tail).not.toContain('LAST🙂'); expect(done).toBe('data: [DONE]\n\n'); expect((await reader.read()).done).toBe(true); await closing;
+    } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); writer.releaseLock(); }
+  });
   it('Responses 次轮保留回答与工具，仅省略显示字段；不改变原对象或用户内容', () => {
     const body = { messages: [{ role: 'assistant', content: 'Answer', reasoning_content: 'Displayed thought', tool_calls: [{ id: 'call_mock', type: 'function', function: { name: 'read', arguments: '{}' } }] }, { role: 'user', content: 'Follow up', reasoning_content: 'User field' }] };
     expect(jetBrainsResponsesHistory(body)).toEqual({ messages: [{ role: 'assistant', content: 'Answer', tool_calls: body.messages[0].tool_calls }, body.messages[1]] });

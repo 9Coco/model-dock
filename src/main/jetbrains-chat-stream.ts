@@ -34,13 +34,15 @@ export function normalizeJetBrainsChatResponse(value: unknown, model: string): J
 
 /**
  * 修改点：Rider 的 Koog 将每个 data JSON 当作 Chat chunk 解码，即使 event 是 error。
- * 这里校验完整信封、忽略显式心跳，并把失败作为传输错误抛出；不发虚假 stop/[DONE]。
+ * 正文立即转发，只有 finish/usage 尾帧等待 EOF 校验；失败作为传输错误抛出，不发虚假 stop/[DONE]。
  * 正常工具增量保持原样，不重复工具名称、ID 或参数。
  */
 export function createJetBrainsChatStream(model: string, observe: (value: unknown) => void = () => {}): TransformStream<Uint8Array, Uint8Array> {
   const decoder = new TextDecoder('utf-8', { fatal: true }), encoder = new TextEncoder();
   let pending = '', id = '', created = 0, done = false, seenChoice = false;
   const choices = new Set<number>(), finished = new Set<number>();
+  const terminal: Json[] = []; let terminalBytes = 0;
+  const defer = (value: Json) => { terminalBytes += Buffer.byteLength(JSON.stringify(value)); if (terminalBytes > 16 * 1024 * 1024) return fail(); terminal.push(value); };
   const emit = (controller: TransformStreamDefaultController<Uint8Array>, value: Json | '[DONE]') => {
     controller.enqueue(encoder.encode(`data: ${typeof value === 'string' ? value : JSON.stringify(value)}\n\n`));
   };
@@ -63,15 +65,21 @@ export function createJetBrainsChatStream(model: string, observe: (value: unknow
       || value.created !== undefined && !validIndex(value.created)) return fail();
     if (!id) { id = typeof value.id === 'string' ? value.id : `chatcmpl-${randomUUID()}`; created = typeof value.created === 'number' ? value.created : Math.floor(Date.now() / 1000); }
     if (!value.choices.length && (!seenChoice || !object(value.usage))) return fail();
+    const deltas: Json[] = [], endings: Json[] = [];
     for (const choice of value.choices) {
       if (!object(choice) || !validIndex(choice.index) || !object(choice.delta) || finished.has(choice.index)) return fail();
       choices.add(choice.index); seenChoice = true;
       if (choice.finish_reason != null) {
         if (!finishReasons.has(String(choice.finish_reason))) return fail();
         finished.add(choice.index);
-      }
+        endings.push({ index: choice.index, delta: {}, finish_reason: choice.finish_reason });
+        if (Object.keys(choice.delta).length || choice.logprobs != null) deltas.push({ ...choice, finish_reason: null });
+      } else deltas.push(choice);
     }
-    emit(controller, { ...value, id, created, object: 'chat.completion.chunk', model });
+    const envelope = { ...value, id, created, object: 'chat.completion.chunk', model };
+    if (deltas.length) { const data: Json = { ...envelope, choices: deltas }; if (endings.length) delete data.usage; emit(controller, data); }
+    if (endings.length) defer({ ...envelope, choices: endings });
+    else if (!value.choices.length) defer(envelope);
   };
   const feed = (chunk: Uint8Array, last: boolean, controller: TransformStreamDefaultController<Uint8Array>) => {
     try { pending += decoder.decode(chunk, { stream: !last }); } catch { return fail(); }
@@ -84,6 +92,6 @@ export function createJetBrainsChatStream(model: string, observe: (value: unknow
   };
   return new TransformStream({
     transform(chunk, controller) { feed(chunk, false, controller); },
-    flush(controller) { feed(new Uint8Array(), true, controller); if (!done) return fail(); emit(controller, '[DONE]'); },
+    flush(controller) { feed(new Uint8Array(), true, controller); if (!done) return fail(); for (const value of terminal) emit(controller, value); emit(controller, '[DONE]'); },
   });
 }

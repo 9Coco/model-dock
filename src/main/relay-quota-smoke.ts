@@ -68,6 +68,8 @@ export async function verifyRelayQuota(window: BrowserWindow, store: Store, outp
     assert.ok(store.getManagedState(`auth-usage:${managed.id}`, null), 'The authorization center performs its initial automatic quota query');
     const ready = await current();
     assert.equal(ready.canQueryUsage, true); assert.equal(ready.accountId, 'qa-active-a'); assert.equal(ready.displayName, '反代当前账号 A'); assert.equal(ready.clientImport?.accountLabel, provenance.accountLabel);
+    assert.equal(await evaluate<string>(`document.querySelector(${JSON.stringify(row)}+' [data-account-plan]')?.textContent`), 'Pro', 'Verified relay plan is visible beside its identity');
+    assert.equal(await evaluate<string>(`document.querySelector(${JSON.stringify(manualRow)}+' [data-account-plan]')?.textContent`), '套餐未知', 'Manual relays never infer a plan from their label or key');
     assert.deepEqual(ready.usage.windows.map(item => [item.remaining, item.total, item.unit]), [[625, 1000, '积分'], [300, 500, '次']]);
     assert.equal(await evaluate<string>(`document.querySelector(${JSON.stringify(row)}+' [data-quota-window-id="credits"] strong').textContent`), '625 / 1,000 积分', 'Official credits and units are directly visible rather than available only in a tooltip');
     assert.equal(await evaluate<string>(`document.querySelector(${JSON.stringify(row)}+' [data-quota-window-id="fast"] strong').textContent`), '300 / 500 次', 'Official request counts and units are directly visible');
@@ -83,7 +85,8 @@ export async function verifyRelayQuota(window: BrowserWindow, store: Store, outp
       // Even when a synthetic Central account is available, opening this guide
       // must first explain IDE/Air support instead of querying another client.
       store.setManagedState('qa-relay-client-import-stage', 'success');
-      await click('[data-auth-import-account="jetbrains-central"]'); await pause(150);
+      await click('[data-auth-import-account="jetbrains-central"]');
+      await waitFor(`!!document.querySelector('[data-jetbrains-ide-account-boundary]')`, 'JetBrains native account guide opens');
       assert.equal(await evaluate<string>(`document.querySelector('[role="dialog"] #modal-title').textContent`), '连接JetBrains账号');
       assert.equal(await evaluate<boolean>(`!!document.querySelector('[data-jetbrains-ide-account-boundary]')&&!document.querySelector('[role="dialog"] [data-field="relay-import-candidate"]')&&!document.querySelector('[role="dialog"] [role="alert"]')&&document.querySelector('[data-action="import-relay-client-account"]').disabled`), true, 'IDE/Air guidance does not silently inspect or import Central login');
       assert.equal(await evaluate<number>(`document.querySelectorAll('[role="dialog"] [data-action^="jetbrains-account-help-"]').length`), 2);
@@ -99,13 +102,20 @@ export async function verifyRelayQuota(window: BrowserWindow, store: Store, outp
     assert.equal(await evaluate<boolean>(`!document.querySelector(${JSON.stringify(row)}+' [data-quota-window-id="credits"]').textContent.includes('%')&&document.querySelector(${JSON.stringify(row)}+' [data-quota-window-id="credits"] strong').textContent==='未知'`), true); await capture('unknown-dark');
     for (const mode of ['failure', 'unavailable']) {
       const failed = await refresh(mode); assert.equal(failed.usage.status, 'unavailable'); assert.equal(failed.accountId, undefined); assert.equal(failed.displayName, undefined); assert.deepEqual(failed.usage.windows, []);
+      assert.equal(failed.plan, undefined);
       await waitFor(`document.querySelectorAll(${JSON.stringify(row)}+' [data-quota-window-id]').length===0`, 'failed quota removes stale account balances');
+      assert.equal(await evaluate<string>(`document.querySelector(${JSON.stringify(row)}+' [data-account-plan]')?.textContent`), '套餐未知', 'A failed or switched account never keeps the previous plan badge');
       assert.equal(await evaluate<boolean>(`!document.querySelector(${JSON.stringify(row)}+' [data-relay-quota-account]').textContent.includes('反代当前账号 A')&&!document.querySelector(${JSON.stringify(row)}+' [data-relay-quota-account]').textContent.includes('反代当前账号 B')`), true);
-      await capture(`${mode}-dark`);
+      for (const theme of ['light', 'dark']) for (const width of [1180, 980]) {
+        window.setSize(width, width === 1180 ? 800 : 680);
+        await evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)};document.documentElement.style.colorScheme=${JSON.stringify(theme)};document.querySelector(${JSON.stringify(row)}).scrollIntoView({block:'nearest'})`);
+        assert.equal(await evaluate<string>(`document.querySelector(${JSON.stringify(row)}+' [data-account-plan]')?.textContent`), '套餐未知');
+        await capture(`${mode}-plan-unknown-${theme}-${width}`);
+      }
     }
     assert.deepEqual(unchanged(), original, 'Quota reads and guidance preserve every supplier, credential, model and tool binding');
     assert.deepEqual(store.getManagedState<{ clientImport: unknown }>(`auth-metadata:${managed.id}`, { clientImport: null }).clientImport, provenance);
-    writeFileSync(join(outputDir, 'relay-quota-validation.json'), JSON.stringify({ ok: true, managedTraeAutoRefresh: true, managedTraeManualRefresh: true, manualRelayNotQueried: true, officialAmountsAndUnitsShown: true, currentAccountSeparateFromImportProvenance: true, accountSwitchClearsPreviousIdentity: true, unknownQuotaHasNoInventedPercent: true, failuresClearPreviousBalances: true, jetBrainsGuideDoesNotQueryCentralUntilExplicitCheck: true, privacyVerified: true, configurationsUnchanged: true, noRealRelayOrClientAccess: true, stages, screenshots }, null, 2));
+    writeFileSync(join(outputDir, 'relay-quota-validation.json'), JSON.stringify({ ok: true, themes: ['light', 'dark'], widths: [1180, 980], knownProAndUnknownPlanBadgesVerified: true, managedTraeAutoRefresh: true, managedTraeManualRefresh: true, manualRelayNotQueried: true, officialAmountsAndUnitsShown: true, currentAccountSeparateFromImportProvenance: true, accountSwitchClearsPreviousIdentity: true, unknownQuotaHasNoInventedPercent: true, failuresClearPreviousBalances: true, jetBrainsGuideDoesNotQueryCentralUntilExplicitCheck: true, privacyVerified: true, configurationsUnchanged: true, noRealRelayOrClientAccess: true, stages, screenshots }, null, 2));
   } finally {
     store.setManagedState('qa-relay-quota-mode', 'unavailable'); store.setManagedState('qa-relay-client-import-stage', 'empty');
     await evaluate(`(()=>{const original=${JSON.stringify(originalTheme)};if(original.theme===undefined)delete document.documentElement.dataset.theme;else document.documentElement.dataset.theme=original.theme;document.documentElement.style.colorScheme=original.colorScheme})()`);

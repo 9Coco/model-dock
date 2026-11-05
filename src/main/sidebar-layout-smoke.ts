@@ -105,7 +105,10 @@ export async function verifySidebarLayout(window: BrowserWindow, store: Store, o
     await key('[data-sidebar-resizer]', 'Left', true); await width(338, 'Shift Left shrinks by the larger step');
     await key('[data-sidebar-resizer]', 'Home'); await width(200, 'Home reaches minimum width');
     await key('[data-sidebar-resizer]', 'End'); await width(420, 'End reaches the wide-window maximum');
-    window.setSize(980, 680); await width(360, 'smaller windows clamp the rendered width'); validate(await read());
+    const wideViewport = (await read()).viewport;
+    window.setSize(980, 680);
+    await waitFor(`innerWidth<${wideViewport}&&Number(document.querySelector('[data-sidebar-resizer]').getAttribute('aria-valuemax'))===Math.max(200,Math.min(420,Math.floor(innerWidth-620)))&&Math.abs(document.querySelector('.sidebar').getBoundingClientRect().width-Number(document.querySelector('[data-sidebar-resizer]').getAttribute('aria-valuemax')))<=1`, 'smaller windows clamp to the actual content viewport');
+    validate(await read());
     assert.equal((await read()).stored, '420', 'Viewport clamping preserves the preferred width');
     window.setSize(1320, 880); await width(420, 'wider windows restore the preferred width');
     const inputBeforeReload = await evaluate<{ type: string; trusted: boolean }[]>(`window.__sidebarLayoutInput||[]`);

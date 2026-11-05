@@ -182,14 +182,13 @@ export async function verifyJetBrainsIdeImport(window: BrowserWindow, store: Sto
     const key = store.getSecret(provider.id)?.apiKey, metadata = store.getManagedState<{ nativeIde: JetBrainsIdeCredentials }>(`auth-metadata:${provider.id}`, { nativeIde: {} as JetBrainsIdeCredentials });
     assert.ok(key && key.length >= 32 && key !== metadata.nativeIde.idToken && key !== GRAZIE_TOKEN, 'The provider receives a distinct local relay key');
     assert.deepEqual(account.usage.windows.map(value => [value.remaining, value.total, value.unit]), [[625, 1000, 'AI Credits']]);
-    // Exercise IPC -> catalog/connection tester -> account preparation -> the
-    // owned real loopback facade -> synthetic native API ports. QA rewrites
-    // only the fixed 18081 destination to this process's ephemeral listener.
+    // Exercise IPC -> catalog/connection tester -> the main-process native
+    // adapter -> synthetic API ports. No separate 18081 listener is created.
     const beforeRoundTrip = observed();
     const discovered = await evaluate<DiscoveryResult>(`window.modelDock.discoverModels(${JSON.stringify(provider.id)})`);
-    assert.equal(discovered.ok, true, `The owned native facade returns the synthetic model directory: ${discovered.message}`);
+    assert.equal(discovered.ok, true, `The main-process native adapter returns the synthetic model directory: ${discovered.message}`);
     assert.deepEqual(discovered.models.map(value => value.upstreamId), [MODEL_ID]);
-    assert.ok(observed().models > beforeRoundTrip.models, 'Discovery reaches the native fixture through the real local facade');
+    assert.ok(observed().models > beforeRoundTrip.models, 'Discovery reaches the native fixture through the direct main-process adapter');
     const added = await evaluate<AddModelsResult>(`window.modelDock.addDiscoveredModels(${JSON.stringify(provider.id)},[{upstreamId:${JSON.stringify(MODEL_ID)},alias:'qa-ide-local-alias-for-route-check'}])`);
     assert.equal(added.added.length, 1); const roundTripModel = added.added[0];
     assert.equal(roundTripModel.providerId, provider.id); assert.equal(roundTripModel.upstreamId, MODEL_ID); assert.notEqual(roundTripModel.alias, MODEL_ID);

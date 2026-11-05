@@ -4,7 +4,7 @@ import { join, relative, resolve } from 'node:path';
 import type { BrowserWindow } from 'electron';
 import type { Store } from './store';
 import { revealSmokeNavigationTarget } from './smoke-navigation';
-import { JETBRAINS_RELAY_BASE_URL, TRAE_RELAY_BASE_URL, providerCategory } from '../shared/presets';
+import { JETBRAINS_RELAY_BASE_URL, providerCategory } from '../shared/presets';
 
 /** Subscription-relay presentation checks use only this fresh synthetic QA profile. */
 export async function verifyRelaySubscriptions(window: BrowserWindow, store: Store, outputDir: string, captureUi: () => Promise<Buffer>): Promise<void> {
@@ -14,9 +14,9 @@ export async function verifyRelaySubscriptions(window: BrowserWindow, store: Sto
   assert.ok(profile && !profile.startsWith('..') && !/^[A-Za-z]:/.test(profile), 'Relay UI fixtures require the isolated smoke profile');
   assert.equal(process.env.MODELDOCK_SMOKE_AUTH_MOCK, '1');
   const traeKey = 'synthetic-trae-relay-key', jetBrainsKey = 'synthetic-jetbrains-relay-key';
-  // These retain the existing persisted protocol kind. No account migration,
-  // relay startup, account login, or external client configuration is involved.
-  const trae = store.saveProvider({ name: '旧 TRAE 中国版反代', kind: 'openai-compatible', presetId: 'trae-cn-relay', relayMode: 'manual', baseUrl: TRAE_RELAY_BASE_URL, enabled: true, apiKey: traeKey });
+  // Retain persisted identity while checking the native import entry and the
+  // editable legacy external connection. Every account source is synthetic.
+  const trae = store.saveProvider({ name: '旧 TRAE 中国版反代', kind: 'openai-compatible', presetId: 'trae-cn-relay', relayMode: 'manual', baseUrl: 'http://127.0.0.1:19091/v1', enabled: true, apiKey: traeKey });
   const jetBrains = store.saveProvider({ name: '旧 JetBrains AI 会员反代', kind: 'openai-compatible', presetId: 'jetbrains-central', baseUrl: JETBRAINS_RELAY_BASE_URL, enabled: true, apiKey: jetBrainsKey });
   const relays = [trae, jetBrains];
   const relayModel = store.saveModel({ providerId: trae.id, upstreamId: 'synthetic-trae-model', alias: 'synthetic-trae-model', displayName: '反代模型保存验证', wireApi: 'chat-completions', contextWindow: 64000, tools: true, vision: false, enabled: true });
@@ -47,42 +47,54 @@ export async function verifyRelaySubscriptions(window: BrowserWindow, store: Sto
   async function capture(name: string): Promise<void> {
     const privacy = await evaluate<boolean>(`(()=>{const secrets=${JSON.stringify([traeKey, jetBrainsKey])};return !secrets.some(secret=>document.body.innerText.includes(secret))&&[...document.querySelectorAll('input[type="text"],input:not([type])')].every(input=>!secrets.includes(input.value))})()`);
     assert.equal(privacy, true, 'No relay credentials appear in UI screenshots');
-    const layout = await evaluate<{ overflow: boolean; dialogOverflow: boolean }>(`(()=>{const modal=document.querySelector('[role="dialog"]');return {overflow:document.documentElement.scrollWidth>innerWidth+1,dialogOverflow:!!modal&&modal.scrollWidth>modal.clientWidth+1}})()`);
-    assert.deepEqual(layout, { overflow: false, dialogOverflow: false }, 'Relay presentation fits the viewport');
+    const layout = await evaluate<{ overflow: boolean; mainOverflow: boolean; dialogOverflow: boolean }>(`(()=>{const modal=document.querySelector('[role="dialog"]'),main=document.querySelector('.main-content');return {overflow:document.documentElement.scrollWidth>innerWidth+1,mainOverflow:!!main&&main.scrollWidth>main.clientWidth+1,dialogOverflow:!!modal&&modal.scrollWidth>modal.clientWidth+1}})()`);
+    assert.deepEqual(layout, { overflow: false, mainOverflow: false, dialogOverflow: false }, 'Native account presentation fits the viewport');
     const filename = `relay-subscriptions-${name}.png`;
     writeFileSync(join(outputDir, filename), await captureUi()); screenshots.push(filename);
   }
   try {
-    window.setMinimumSize(780, 580); window.setSize(1100, 800);
+    window.setMinimumSize(980, 680); window.setSize(1180, 800);
+    store.setManagedState('qa-relay-client-import-stage', 'empty');
     await click('[aria-label="刷新本机配置"]');
     await waitFor(`!!document.querySelector('.sidebar [data-source-id="${jetBrains.id}"]')`, 'old relay records loaded');
-    for (const theme of ['light', 'dark']) {
+    for (const theme of ['light', 'dark']) for (const width of [1180, 980]) {
+      window.setSize(width, width === 1180 ? 800 : 680);
       await evaluate(`(()=>{document.documentElement.dataset.theme=${JSON.stringify(theme)};document.documentElement.style.colorScheme=${JSON.stringify(theme)}})()`);
       await click('[data-action="add-api-provider"]');
       await waitFor(`document.querySelector('[role="dialog"] #modal-title')?.textContent==='添加 API 供应商'`, 'API dialog');
       const apiPresets = await evaluate<string[]>(`[...document.querySelectorAll('[role="dialog"] [data-preset-id]')].map(item=>item.dataset.presetId)`);
       for (const relay of relays) assert.equal(apiPresets.includes(relay.presetId!), false, 'API dialog excludes subscription relays');
       assert.ok(apiPresets.includes('custom') && apiPresets.includes('deepseek'), 'Normal API presets remain available');
-      await capture(`api-${theme}`); await closeDialog();
+      await capture(`api-${theme}-${width}`); await closeDialog();
       await click('.sidebar [data-page="auth"]');
       await click('[data-action="add-subscription-provider"]');
       await waitFor(`document.querySelector('[role="dialog"] #modal-title')?.textContent==='添加订阅供应商'`, 'subscription dialog');
       const subscriptionPresets = await evaluate<string[]>(`[...document.querySelectorAll('[role="dialog"] [data-preset-id]')].map(item=>item.dataset.presetId)`);
-      for (const relay of relays) {
+      for (const [index, relay] of relays.entries()) {
         assert.equal(subscriptionPresets.includes(relay.presetId!), true, 'Subscription dialog includes both relay choices');
         await click(`[role="dialog"] [data-preset-id="${relay.presetId}"]`);
         await waitFor(`document.querySelector('[role="dialog"] [data-preset-id="${relay.presetId}"]')?.classList.contains('selected')===true`, 'relay preset selected');
         assert.equal(await evaluate<string>(`document.querySelector('[role="dialog"] #modal-title').textContent`), '添加订阅供应商', 'Selecting an OpenAI-compatible relay preserves the subscription dialog');
         assert.equal(await evaluate<boolean>(`document.querySelector('[role="dialog"] .preset-picker')?.classList.contains('subscription-presets')===true`), true);
-        await capture(`${relay.presetId}-${theme}`);
+        assert.equal(await evaluate<boolean>(`[...document.querySelectorAll('[role="dialog"] button')].some(button=>/启动反代|停止反代/.test(button.textContent))`), false, 'New subscriptions have no separate relay start or stop action');
+        assert.equal(await evaluate<number>(`document.querySelectorAll('[role="dialog"] input[type="password"],[role="dialog"] input[type="url"]').length`), 0, 'New native connections require an account import instead of relay addresses or keys');
+        await capture(`${relay.presetId}-${theme}-${width}`);
+        if (index === 0) await click('[role="dialog"] button[type="submit"]');
+        else await click('[role="dialog"] [data-action="import-jetbrains-account"]');
+        await waitFor(`!!document.querySelector('[data-relay-client-import="${relay.presetId}"]')&&document.querySelector('.sidebar [data-page="auth"]')?.getAttribute('aria-current')==='page'`, 'native connection opens its import dialog in the authorization center');
+        assert.equal(await evaluate<boolean>(`document.querySelector('[role="dialog"] [data-action="import-relay-client-account"]').disabled`), true, 'No account is imported without an explicit candidate confirmation');
+        if (relay.presetId === 'jetbrains-central') assert.equal(await evaluate<boolean>(`!!document.querySelector('[data-jetbrains-ide-account-boundary]')&&!document.querySelector('[data-field="relay-import-candidate"]')`), true, 'JetBrains import opens support guidance before inspecting an account');
+        await capture(`${relay.presetId}-native-import-${theme}-${width}`); await closeDialog();
+        assert.deepEqual(store.listProviders(), originalProviders, 'Opening native import does not create or migrate a provider');
+        assert.deepEqual(store.listModels(), originalModels); assert.deepEqual(store.listBindings(), originalBindings);
+        if (index < relays.length - 1) { await click('[data-action="add-subscription-provider"]'); await waitFor(`document.querySelector('[role="dialog"] #modal-title')?.textContent==='添加订阅供应商'`, 'next native subscription draft'); }
       }
-      await closeDialog();
       await click('.sidebar [data-page="auth"]');
       for (const relay of relays) await waitFor(`!!document.querySelector('[data-auth-kind="${relay.presetId}"] [data-auth-account="${relay.id}"][data-auth-relay="${relay.presetId}"]')`, 'relay visible in its authorization center group');
       const accounts = await evaluate<unknown>('window.modelDock.authAccounts()');
       assert.equal([traeKey, jetBrainsKey].some(key => JSON.stringify(accounts).includes(key)), false, 'Account views never expose relay credentials');
       for (const relay of relays) assert.equal(await evaluate<boolean>(`document.querySelector('[data-auth-account="${relay.id}"]').textContent.includes('已授权')`), false, 'Saved local relay keys do not imply upstream authorization');
-      await capture(`auth-${theme}`);
+      await capture(`auth-${theme}-${width}`);
       for (const relay of relays) {
         await click(`[data-auth-account="${relay.id}"] [data-action="manage-auth-relay"]`);
         await waitFor(`document.querySelector('[role="dialog"] #modal-title')?.textContent==='编辑供应商'&&document.querySelector('[role="dialog"] [data-preset-id="${relay.presetId}"]')?.classList.contains('selected')===true`, 'authorization center opens matching relay settings');
@@ -98,6 +110,9 @@ export async function verifyRelaySubscriptions(window: BrowserWindow, store: Sto
     for (const name of [renamed, trae.name]) {
       await click(`[data-auth-account="${trae.id}"] [data-action="manage-auth-relay"]`);
       await waitFor(`!!document.querySelector('[role="dialog"] [data-trae-relay-mode="manual"]')`, 'existing manual TRAE relay editor');
+      assert.equal(await evaluate<string>(`document.querySelector('[role="dialog"] [data-trae-relay-mode="manual"] input[type="url"]').value`), trae.baseUrl, 'Existing external address remains editable');
+      assert.equal(await evaluate<string>(`document.querySelector('[role="dialog"] [data-trae-relay-mode="manual"] input[type="password"]').value`), '', 'Existing external credential is not filled back into the editor');
+      if (name === renamed) { await evaluate(`document.querySelector('[role="dialog"] [data-trae-relay-mode="manual"] input[type="url"]').scrollIntoView({block:'center'})`); await capture('manual-external-editor-dark-980'); }
       await evaluate(`(()=>{const input=document.querySelector('[role="dialog"] input[required][maxlength="80"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,${JSON.stringify(name)});input.dispatchEvent(new Event('input',{bubbles:true}))})()`);
       const savedAt = Date.now();
       await click('[role="dialog"] button[type="submit"]');
@@ -120,8 +135,9 @@ export async function verifyRelaySubscriptions(window: BrowserWindow, store: Sto
     assert.deepEqual(store.listModels(), originalModels, 'Relay models remain unchanged');
     assert.deepEqual(store.listBindings(), originalBindings, 'No client bindings are written');
     assert.deepEqual(relays.map(provider => store.getSecret(provider.id)), originalSecrets, 'Opening relay management preserves credentials');
-    writeFileSync(join(outputDir, 'relay-subscriptions-validation.json'), JSON.stringify({ ok: true, relays: relays.map(provider => provider.presetId), apiPresetsExcludeRelays: true, subscriptionPresetsIncludeRelays: true, subscriptionTitlePreserved: true, legacyRelaysClassifiedAsSubscriptions: true, authorizationCenterListsBothRelays: true, authorizationCenterManagementOpensMatchingEditor: true, authorizationCenterRefreshesAfterSaveWithoutNavigation: true, accountRefreshMs, localCredentialStateDoesNotClaimUpstreamAuthorization: true, relayKeysNotInAccountViews: true, noRelayStartupOrAccountLogin: true, providersUnchanged: true, relayModelsUnchanged: true, toolBindingsUnchanged: true, categories: Object.fromEntries(Object.entries(categories).map(([category, values]) => [category, values.length])), screenshots }, null, 2));
+    writeFileSync(join(outputDir, 'relay-subscriptions-validation.json'), JSON.stringify({ ok: true, relays: relays.map(provider => provider.presetId), themes: ['light', 'dark'], widths: [1180, 980], apiPresetsExcludeRelays: true, subscriptionPresetsIncludeRelays: true, subscriptionTitlePreserved: true, nativeEntryOpensImportInAuthorizationCenter: true, noSeparateRelayStartupOrCredentialFields: true, existingManualExternalAddressAndHiddenKeyPreserved: true, legacyRelaysClassifiedAsSubscriptions: true, authorizationCenterListsBothRelays: true, authorizationCenterManagementOpensMatchingEditor: true, authorizationCenterRefreshesAfterSaveWithoutNavigation: true, accountRefreshMs, localCredentialStateDoesNotClaimUpstreamAuthorization: true, relayKeysNotInAccountViews: true, noRelayStartupOrAccountLogin: true, providersUnchanged: true, relayModelsUnchanged: true, toolBindingsUnchanged: true, categories: Object.fromEntries(Object.entries(categories).map(([category, values]) => [category, values.length])), screenshots }, null, 2));
   } finally {
+    store.setManagedState('qa-relay-client-import-stage', 'empty');
     await evaluate(`(()=>{const original=${JSON.stringify(originalTheme)};if(original.theme===undefined)delete document.documentElement.dataset.theme;else document.documentElement.dataset.theme=original.theme;document.documentElement.style.colorScheme=original.colorScheme})()`);
     window.setMinimumSize(minimum[0], minimum[1]); window.setSize(size[0], size[1]);
   }

@@ -9,15 +9,14 @@ if (args.length > 1 || args.length && !['--smoke', '--development'].includes(arg
 const mode = args[0] === '--smoke' ? 'smoke' : args[0] === '--development' ? 'development' : 'production';
 const runtimeRoot = mode === 'production' ? root : join(root, 'work', `${mode === 'smoke' ? 'smoke' : 'dev'}-runtime`);
 const entry = mode === 'smoke' ? 'main-smoke' : mode === 'development' ? 'main-dev' : 'main';
-if (mode === 'production') for (const name of ['main-smoke.cjs', 'main-smoke.cjs.map', 'main-dev.cjs', 'main-dev.cjs.map', 'main.cjs.map', 'preload.cjs.map', 'dsh-profile-worker.cjs.map']) {
+if (mode === 'production') for (const name of ['main-smoke.cjs', 'main-smoke.cjs.map', 'main-dev.cjs', 'main-dev.cjs.map', 'main.cjs.map', 'preload.cjs.map', 'dsh-profile-worker.cjs.map', 'central-pi-extension.mjs']) {
   const filename = join(root, 'dist-electron', name); if (existsSync(filename)) unlinkSync(filename);
 }
 await build({ absWorkingDir: root, entryPoints: { [entry]: 'src/main/main.ts', preload: 'src/main/preload.ts', 'dsh-profile-worker': 'src/main/dsh-profile-worker.ts' }, bundle: true,
   platform: 'node', format: 'cjs', target: 'node24', outdir: join(runtimeRoot, 'dist-electron'), outExtension: { '.js': '.cjs' },
   packages: 'external', external: ['electron', 'sql.js'], define: { 'import.meta.url': '__filename', '__MODELDOCK_RUNTIME_MODE__': JSON.stringify(mode), '__MODELDOCK_SMOKE_BUILD__': JSON.stringify(mode === 'smoke') },
   treeShaking: true, minifySyntax: true, sourcemap: mode !== 'production' });
-// Pi is a separate Node process and loads this extension from the filesystem.
-cpSync(join(root, 'scripts/central-pi-extension.mjs'), join(runtimeRoot, 'dist-electron/central-pi-extension.mjs'));
+// All managed inference adapters run in the existing main-process gateway.
 writeFileSync(join(runtimeRoot, 'dist-electron/runtime-build.json'), JSON.stringify({ version: 1, mode, entry: `${entry}.cjs`,
   sha256: createHash('sha256').update(readFileSync(join(runtimeRoot, 'dist-electron', `${entry}.cjs`))).digest('hex') }, null, 2));
 if (mode !== 'production') {

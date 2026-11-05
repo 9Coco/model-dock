@@ -116,7 +116,9 @@ export async function verifyConnectionTest(window: BrowserWindow, outputDir: str
   await waitFor(`!!document.querySelector('[data-aggregate-management]')`, 'unified local interface');
   await click(`[data-source-id="${provider.id}"]`);
   const aggregateBadge = await verifyBadge(first); await noDialog();
-  await click('[data-tool-id="codex"]');
+  // Native single-entry tools use a supplier dropdown; VS Code retains the
+  // inline supplier cards whose per-supplier test selection is exercised here.
+  await click('[data-tool-id="vscode"]');
   await waitFor(`!!document.querySelector(${JSON.stringify(badge)})`, 'tool-page inline widget');
   const toolBadge = await verifyBadge(first); await noDialog();
   await click(`[data-source-id="${provider.id}"]`);
@@ -135,7 +137,7 @@ export async function verifyConnectionTest(window: BrowserWindow, outputDir: str
   await choose(otherSecond);
   await click(`[data-source-id="${provider.id}"]`); const supplierReturnBadge = await verifyBadge(second);
   await click('[data-page="service"]'); await click('[data-service-tab="interface"]'); await click(`[data-source-id="${provider.id}"]`); const selectedAggregateBadge = await verifyBadge(second);
-  await click('[data-tool-id="codex"]'); const selectedToolBadge = await verifyBadge(second);
+  await click('[data-tool-id="vscode"]'); const selectedToolBadge = await verifyBadge(second);
   await click(`[data-source-id="${otherProvider.id}"]`); const otherReturnBadge = await verifyBadge(otherSecond);
   await noDialog();
   await evaluate(`window.modelDock.saveSettings({theme:'dark'})`);

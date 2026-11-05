@@ -124,6 +124,31 @@ export function parseTraeCreditWindows(rawValue: unknown): QuotaWindow[] {
   return windows;
 }
 
+/** Installed official Trae CN 3.4.15 ICubeUsageService / cnCreditsUsage:
+ * entitlement_base_info.product_type is the subscription identity. Its enum
+ * is separate from user_pay_identity (ProPlus is 4 here, not identity's 2).
+ * Package, PromoCode, ProPlusPack, PayGo and SoloInvite are not base plans.
+ * Use the official CN priority and labels; no quota amounts or display text
+ * can establish a plan. Init/future/expired packs cannot establish one either.
+ */
+export function parseTraePlan(rawValue: unknown, now = Date.now()): string | undefined {
+  const raw = object(rawValue);
+  if (raw.code !== undefined && raw.code !== 0 || !Array.isArray(raw.user_entitlement_pack_list) || raw.user_entitlement_pack_list.length > 100) return;
+  const current = new Set<number>();
+  for (const value of raw.user_entitlement_pack_list) {
+    const pack = object(value), base = object(pack.entitlement_base_info);
+    // Native status enum: Init=0, Active=1, Canceled=3, Terminated=4, Expired=5.
+    // Canceled subscriptions remain valid until their reported expiry.
+    if (pack.status !== 1 && pack.status !== 3) continue;
+    const start = base.start_time, end = pack.expire_time ?? base.end_time;
+    const validTime = (time: unknown) => time === undefined || typeof time === 'number' && Number.isSafeInteger(time) && time >= 0 && time <= 253402300799;
+    if (!validTime(start) || !validTime(end) || typeof start === 'number' && start > now / 1000 || typeof end === 'number' && end > 0 && end <= now / 1000) continue;
+    if (typeof base.product_type === 'number') current.add(base.product_type);
+  }
+  const plans = [[100, 'Express'], [6, 'Ultra'], [4, 'Pro+'], [1, 'Pro'], [8, 'Lite'], [0, 'Free']] as const;
+  return plans.find(([type]) => current.has(type))?.[1];
+}
+
 /** Call only after TraeRelayManager has verified ownership and the local
  * listener. No account ID supplied by a renderer or import record is accepted. */
 export async function queryTraeRelayUsage(apiKey: string, options: TraeRelayUsageOptions = {}): Promise<TraeRelayUsageResult> {
@@ -135,7 +160,7 @@ export async function queryTraeRelayUsage(apiKey: string, options: TraeRelayUsag
   const after = activeAccount(await getJson('/api/accounts', apiKey, send));
   if (before.id !== after.id) throw failed('TRAE 反代的活跃账号在查询期间已切换，请重新查询。');
   const raw = object(native.raw), windows = parseTraeCreditWindows(raw);
-  const plan = text(raw.user_pay_identity_str ?? raw.userPayIdentityText, 80);
+  const plan = parseTraePlan(raw, now());
   return { accountId: after.id, ...(after.label ? { accountLabel: after.label } : {}), ...(plan ? { plan } : {}),
     usage: { status: windows.length ? 'ready' : 'unavailable', windows, queriedAt: new Date(now()).toISOString(),
       message: windows.length ? '当前反代活跃账号的官方额度；各额度包分开显示，未返回的余额或重置时间保持未知。' : '当前反代活跃账号未返回可识别的积分或快速请求额度，余额未知。' } };

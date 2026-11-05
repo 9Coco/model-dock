@@ -1,6 +1,6 @@
 {
   "name": "model-dock",
-  "version": "0.3.74",
+  "version": "0.3.76",
   "description": "ModelDock — 配置一次，让模型连接你的工具。",
   "license": "MIT",
   "author": {
@@ -72,8 +72,7 @@
       "package.json"
     ],
     "asarUnpack": [
-      "node_modules/sql.js/dist/sql-wasm.wasm",
-      "dist-electron/central-pi-extension.mjs"
+      "node_modules/sql.js/dist/sql-wasm.wasm"
     ],
     "extraResources": [
       {

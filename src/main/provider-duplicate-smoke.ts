@@ -93,11 +93,14 @@ export async function verifyProviderDuplicates(window: BrowserWindow, outputDir:
   })()`);
   await waitFor(`document.querySelector('[role="dialog"] input[type="url"]').value===${JSON.stringify(upstream)}`, 'form input settled');
   await evaluate(`(()=>{const form=document.querySelector('[role="dialog"] form');form.requestSubmit();form.requestSubmit();})()`);
-  await waitFor(`document.querySelector('[role="dialog"] h2')?.textContent.includes('获取模型列表')&&document.querySelectorAll('.discovery-model').length===3`, 'discovery after double submit');
+  await waitFor(`!document.querySelector('[role="dialog"]')&&!!document.querySelector('[data-action="discover-models"]')&&!document.querySelector('[data-action="discover-models"]').disabled`, 'double submit saved without opening model discovery');
+  const savedWithoutDiscovery = await evaluate<boolean>(`!document.querySelector('[role="dialog"]')`);
+  await evaluate(`document.querySelector('[data-action="discover-models"]').click()`);
+  await waitFor(`document.querySelector('[role="dialog"] h2')?.textContent.includes('获取模型列表')&&document.querySelectorAll('.discovery-model').length===3`, 'explicit discovery after double submit');
   const doubleSubmit = await evaluate<{ totalProviders: number; localProviderCount: number; localId: string; deepseekCount: number; discoveryOpen: boolean; discoveredModels: number; hasError: boolean }>(`(async()=>{
     const snapshot=await window.modelDock.snapshot(),providers=snapshot.providers.filter(p=>p.name===${JSON.stringify(local.name)}&&p.baseUrl===${JSON.stringify(upstream)}),dialog=document.querySelector('[role="dialog"]');
     return {totalProviders:snapshot.providers.length,localProviderCount:providers.length,localId:providers[0]?.id,deepseekCount:snapshot.providers.filter(p=>p.name==='DeepSeek').length,discoveryOpen:dialog?.querySelector('h2')?.textContent.includes('获取模型列表'),discoveredModels:dialog?.querySelectorAll('.discovery-model').length,hasError:!!dialog?.querySelector('[role="alert"]')};
   })()`);
   if (doubleSubmit.totalProviders !== local.totalProviders || doubleSubmit.localProviderCount !== 1 || doubleSubmit.localId !== local.id || doubleSubmit.deepseekCount !== 1 || !doubleSubmit.discoveryOpen || doubleSubmit.discoveredModels !== 3 || doubleSubmit.hasError) throw new Error('Double-submit created a duplicate provider or broke discovery');
-  writeFileSync(join(outputDir, 'provider-duplicate-validation.json'), JSON.stringify({ before, reviewLarge, review, merged, idempotency, doubleSubmit }, null, 2));
+  writeFileSync(join(outputDir, 'provider-duplicate-validation.json'), JSON.stringify({ before, reviewLarge, review, merged, idempotency, savedWithoutDiscovery, doubleSubmit }, null, 2));
 }

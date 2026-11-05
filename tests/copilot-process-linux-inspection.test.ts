@@ -1,17 +1,19 @@
 import * as filesystem from 'node:fs/promises';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { collectLinuxCopilotProcessEvidence, isVerifiedLinuxCopilotProcess } from '../src/main/copilot-process-linux';
 
 // Kernel/file fixtures exercise the collector's before/after checks rather than
 // merely setting a precomputed `stable` boolean in the pure verifier.
 vi.mock('node:fs/promises', () => ({ readFile: vi.fn(), readlink: vi.fn(), readdir: vi.fn(), realpath: vi.fn(), stat: vi.fn(), open: vi.fn() }));
-const pid = 3187, port = 34265, currentUid = process.getuid?.() ?? 1000;
+const pid = 3187, port = 34265, currentUid = 1000;
 let statReads = 0, executableReads = 0, tcpReads = 0;
 let reusePid = false, replaceExecutable = false, replaceListener = false;
 const processStat = (ticks: string) => `${pid} (github) ${['S', '2000', ...Array(17).fill('0'), ticks, '0'].join(' ')}`;
 const tcp = (inode: string) => ` sl local_address rem_address st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode\n 0: 0100007F:85D9 00000000:0000 0A 00000000:00000000 00:00000000 00000000 ${currentUid} 0 ${inode} 1`;
 beforeEach(() => {
   vi.resetAllMocks(); statReads = 0; executableReads = 0; tcpReads = 0;
+  // The /proc fixtures describe Linux, even when the test host has no getuid.
+  vi.stubGlobal('process', { ...process, getuid: () => currentUid });
   reusePid = false; replaceExecutable = false; replaceListener = false;
   vi.mocked(filesystem.readFile).mockImplementation(async (value: unknown) => {
     const path = String(value);
@@ -38,10 +40,14 @@ beforeEach(() => {
   });
   vi.mocked(filesystem.open).mockResolvedValue({ read: async (buffer: Buffer) => { buffer.set([0x7f, 0x45, 0x4c, 0x46]); return { bytesRead: 4 }; }, close: vi.fn() } as never);
 });
+afterEach(() => { vi.unstubAllGlobals(); });
 describe('Linux Copilot read-only evidence collection', () => {
   it('collects a stable executable, kernel UID, and socket owned by the published PID', async () => {
     const proof = await collectLinuxCopilotProcessEvidence(pid, port);
     expect(isVerifiedLinuxCopilotProcess(proof, pid, port)).toBe(true);
+    expect(proof).toMatchObject({ currentUid, stable: true });
+    expect(statReads).toBe(2); expect(executableReads).toBe(2); expect(tcpReads).toBe(2);
+    expect(filesystem.readdir).toHaveBeenCalledTimes(2);
     expect(filesystem.readFile).not.toHaveBeenCalledWith(expect.stringContaining('/environ'), expect.anything());
     expect(filesystem.readFile).not.toHaveBeenCalledWith(expect.stringContaining('/cmdline'), expect.anything());
   });
@@ -66,5 +72,10 @@ describe('Linux Copilot read-only evidence collection', () => {
   it('fails closed when process fd permissions cannot be inspected', async () => {
     vi.mocked(filesystem.readdir).mockRejectedValue(Object.assign(new Error('private OS detail'), { code: 'EACCES' }));
     expect(await collectLinuxCopilotProcessEvidence(pid, port)).toEqual({ failedStage: 'listeners' });
+  });
+  it('fails closed before reading process evidence when the current UID is unavailable', async () => {
+    vi.stubGlobal('process', { ...process, getuid: undefined });
+    expect(await collectLinuxCopilotProcessEvidence(pid, port)).toEqual({ failedStage: 'current-user' });
+    expect(filesystem.readFile).not.toHaveBeenCalled(); expect(filesystem.readlink).not.toHaveBeenCalled();
   });
 });

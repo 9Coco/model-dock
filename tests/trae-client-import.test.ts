@@ -87,15 +87,25 @@ describe('TRAE CN exact storage.json credential reader', () => {
     const f = await fixture(); await f.write(JSON.stringify({ ...GOLDEN.auth, userId: undefined }));
     await expect(f.importer.listCandidates()).rejects.toThrow('尚未保存可导入');
   });
-  it('rejects international or arbitrary hosts, malformed expiry and unsafe client files', async () => {
+  it('rejects international or arbitrary hosts, malformed expiry, oversized files and path-like candidate IDs', async () => {
     const f = await fixture();
     for (const value of [{ ...GOLDEN.auth, host: 'https://evil.invalid' }, { ...GOLDEN.auth, host: 'https://core-normal.trae.ai' }, { ...GOLDEN.auth, expiredAt: 'unknown' }]) {
       await f.write(JSON.stringify(value)); await expect(f.importer.readCredentials('trae-cn')).rejects.toThrow('格式无法识别');
     }
     await writeFile(f.filename, 'x'.repeat(4 * 1024 * 1024 + 1)); await expect(f.importer.listCandidates()).rejects.toThrow('无法安全读取');
-    await rm(f.filename); const foreign = join(f.homeDir, 'foreign'); await writeFile(foreign, GOLDEN.auth.token); await symlink(foreign, f.filename);
-    await expect(f.importer.listCandidates()).rejects.toThrow('无法安全读取');
     await expect(f.importer.readCredentials('../../foreign')).rejects.toThrow('请选择已列出');
+  });
+  it('rejects symlinked client files when native file symlinks are permitted', async ({ skip }) => {
+    const f = await fixture(), foreign = join(f.homeDir, 'foreign');
+    const original = JSON.stringify({ 'iCubeAuthInfo://icube.cloudide': GOLDEN.encrypted.AES });
+    await writeFile(foreign, original);
+    try { await symlink(foreign, f.filename, 'file'); }
+    catch (error) {
+      if (process.platform === 'win32' && (error as NodeJS.ErrnoException).code === 'EPERM') skip('Windows account cannot create file symlinks without Developer Mode or elevation.');
+      throw error;
+    }
+    await expect(f.importer.listCandidates()).rejects.toThrow('无法安全读取');
+    expect(await readFile(foreign, 'utf8')).toBe(original);
   });
 });
 

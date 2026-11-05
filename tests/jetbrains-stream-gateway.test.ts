@@ -32,8 +32,8 @@ async function fixture(wire: WireApi, handler: (request: IncomingMessage, respon
 }
 
 interface HttpResult { status: number; text: string; complete: boolean; aborted: boolean; errors: string[]; contentType: string }
-// Rider's real Ktor/Koog client can swallow premature EOF/RST after a valid
-// chunk. Failure therefore has to remain an HTTP error before any success data.
+// Observe HTTP completeness separately from status: immediate streaming can
+// commit 200 before a later failure, which must then omit terminal success.
 async function readHttp(url: string, headers: Record<string, string>, body: unknown): Promise<HttpResult> {
   return new Promise((resolve, reject) => {
     const request = httpRequest(url, { method: 'POST', headers }, response => {
@@ -82,6 +82,13 @@ function assertHttpFailure(result: HttpResult, status = 502) {
   expect(JSON.parse(result.text)).toMatchObject({ error: { message: expect.any(String) } });
   expect(result.text).not.toMatch(/PRIVATE_ERROR_BODY|SYNTHETIC_PRIVATE_KEY|PARTIAL_SYNTHETIC|data:|\[DONE\]|"choices"/);
 }
+function assertInterruptedStream(result: HttpResult, marker = 'PARTIAL_SYNTHETIC') {
+  expect(result).toMatchObject({ status: 200, complete: false, aborted: true }); expect(result.errors.length).toBeGreaterThan(0);
+  expect(result.contentType).toContain('text/event-stream'); expect(result.text).toContain(marker);
+  expect(result.text).not.toMatch(/PRIVATE_ERROR_BODY|SYNTHETIC_PRIVATE_KEY|\[DONE\]|"finish_reason":"(?:stop|tool_calls|length)"/);
+}
+function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
+async function within<T>(promise: Promise<T>): Promise<T> { let timer: ReturnType<typeof setTimeout> | undefined; try { return await Promise.race([promise, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Expected immediate stream event')), 2000); })]); } finally { clearTimeout(timer); } }
 function reconstruct(data: any[]) {
   const message: any = { role: 'assistant', content: '', reasoning_content: '' }, tools = new Map<number, any>();
   for (const chunk of data) for (const choice of chunk.choices) {
@@ -102,7 +109,26 @@ async function splitBytes(response: ServerResponse, text: string) {
 }
 
 describe('JetBrains Chat streaming HTTP contract', () => {
-  it.each(JETBRAINS_TOOL_IDS)('%s accepts type-only Responses part.added through the full buffered HTTP pipeline', async tool => {
+  it.each(JETBRAINS_TOOL_IDS.flatMap(tool => (['chat-completions', 'responses'] as const).map(wire => ({ tool, wire }))))('$tool forwards $wire deltas before the upstream completes', async ({ tool, wire }) => {
+    const release = deferred(); let completed = false;
+    const f = await fixture(wire, async (request, response) => {
+      await bodyOf(request); response.setHeader('content-type', 'text/event-stream');
+      response.write(wire === 'responses' ? sse({ type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'IMMEDIATE_SYNTHETIC🙂' }) : sse({ choices: [{ index: 0, delta: { content: 'IMMEDIATE_SYNTHETIC🙂' }, finish_reason: null }] }));
+      await release.promise; completed = true;
+      response.end(wire === 'responses' ? sse({ type: 'response.completed', response: { status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'IMMEDIATE_SYNTHETIC🙂' }] }] } }) : sse({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }) + sse('[DONE]'));
+    });
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    try {
+      const response = await within(fetch(f.url(tool), { method: 'POST', headers: f.headers, body: JSON.stringify(input()) })); expect(response.status).toBe(200);
+      reader = response.body!.getReader(); const decoder = new TextDecoder(); let text = '';
+      while (!text.includes('IMMEDIATE_SYNTHETIC🙂')) { const part = await within(reader.read()); expect(part.done).toBe(false); text += decoder.decode(part.value, { stream: true }); }
+      expect(completed).toBe(false); expect(text).not.toMatch(/\[DONE\]|"finish_reason":"stop"/); release.resolve();
+      while (true) { const part = await within(reader.read()); if (part.done) break; text += decoder.decode(part.value, { stream: true }); }
+      const chunks = chunksOf(text); expect(chunks.at(-1)).toBe('[DONE]'); expect(reconstruct(chunks.slice(0, -1)).content).toBe('IMMEDIATE_SYNTHETIC🙂');
+      expect(chunks.slice(0, -1).every(chunk => chunk.model === 'synthetic-local-model')).toBe(true);
+    } finally { release.resolve(); await reader?.cancel().catch(() => {}); reader?.releaseLock(); }
+  });
+  it.each(JETBRAINS_TOOL_IDS)('%s accepts type-only Responses part.added through the incremental HTTP pipeline', async tool => {
     const summary = { type: 'reasoning', summary: [{ type: 'summary_text', text: '摘要🙂' }] };
     const thought = { type: 'reasoning', summary: [], content: [{ type: 'reasoning_text', text: '原始🙂' }] };
     const output = { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '答🙂' }, { type: 'refusal', refusal: '拒绝🙂' }] };
@@ -215,7 +241,7 @@ describe('JetBrains Chat streaming HTTP contract', () => {
     assertHttpFailure(result);
   });
 
-  it.each(['error', 'no-finish', 'done-before-finish', 'late-error'] as const)('returns HTTP 502 without publishing partial native Chat on %s', async scenario => {
+  it.each(['error', 'no-finish', 'done-before-finish', 'late-error'] as const)('interrupts native Chat without terminal success after visible partial output on %s', async scenario => {
     const f = await fixture('chat-completions', async (request, response) => {
       await bodyOf(request); response.setHeader('content-type', 'text/event-stream'); response.write(sse({ choices: [{ index: 0, delta: { content: 'PARTIAL_SYNTHETIC' }, finish_reason: null }] }));
       await delay(40);
@@ -225,10 +251,10 @@ describe('JetBrains Chat streaming HTTP contract', () => {
       else response.end();
     });
     const result = await readHttp(f.url('rider'), f.headers, input());
-    assertHttpFailure(result);
+    assertInterruptedStream(result); expect(f.store.logs().at(-1)?.status).toBe(502);
   });
 
-  it.each(['error', 'no-completion', 'late-error'] as const)('returns HTTP 502 without publishing partial Responses output on %s', async scenario => {
+  it.each(['error', 'no-completion', 'late-error'] as const)('interrupts Responses without terminal success after visible partial output on %s', async scenario => {
     const f = await fixture('responses', async (request, response) => {
       await bodyOf(request); response.setHeader('content-type', 'text/event-stream'); response.write(sse({ type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'PARTIAL_SYNTHETIC' }));
       await delay(40);
@@ -237,7 +263,7 @@ describe('JetBrains Chat streaming HTTP contract', () => {
       else response.end();
     });
     const result = await readHttp(f.url('rider'), f.headers, input());
-    assertHttpFailure(result);
+    assertInterruptedStream(result); expect(f.store.logs().at(-1)?.status).toBe(502);
   });
 
   it('converts a successful JSON Chat reply into complete SSE when an upstream ignores stream:true', async () => {
@@ -292,43 +318,33 @@ describe('JetBrains Chat streaming HTTP contract', () => {
     await delay(25); expect(closed).toBe(true);
   });
 
-  it('returns HTTP 504 without publishing partial output when completion times out', async () => {
+  it('interrupts visible partial output without terminal success when completion times out', async () => {
     let closed = false;
     const f = await fixture('chat-completions', async (request, response) => {
       await bodyOf(request); response.once('close', () => { closed = true; }); response.setHeader('content-type', 'text/event-stream');
       response.write(sse({ choices: [{ index: 0, delta: { content: 'PARTIAL_SYNTHETIC' }, finish_reason: null }] }));
     }, 100);
     const result = await readHttp(f.url('rider'), f.headers, input());
-    assertHttpFailure(result, 504);
+    assertInterruptedStream(result); expect(f.store.logs().at(-1)?.status).toBe(504);
     await delay(25); expect(closed).toBe(true);
   });
 
-  it('cancels upstream when a JetBrains client abandons an unfinished buffered response', async () => {
-    let closed = false;
-    let upstreamStarted!: () => void;
-    const started = new Promise<void>(resolve => { upstreamStarted = resolve; });
+  it('cancels upstream when a JetBrains client abandons an unfinished incremental response', async () => {
+    const closed = deferred();
     const f = await fixture('chat-completions', async (request, response) => {
-      await bodyOf(request); response.once('close', () => { closed = true; }); response.setHeader('content-type', 'text/event-stream'); response.write(sse({ choices: [{ index: 0, delta: { content: 'PARTIAL_SYNTHETIC' }, finish_reason: null }] }));
-      upstreamStarted();
+      await bodyOf(request); response.once('close', closed.resolve); response.setHeader('content-type', 'text/event-stream'); response.write(sse({ choices: [{ index: 0, delta: { content: 'PARTIAL_SYNTHETIC' }, finish_reason: null }] }));
     });
-    await new Promise<void>((resolve, reject) => {
-      const request = httpRequest(f.url('rider'), { method: 'POST', headers: f.headers }, response => {
-        response.resume(); reject(new Error('Unfinished upstream output must not publish response headers.'));
-      });
-      request.on('error', error => { if ((error as NodeJS.ErrnoException).code === 'ECONNRESET') resolve(); else reject(error); });
-      request.end(JSON.stringify(input()));
-      void started.then(() => request.destroy());
-    });
-    for (let attempt = 0; attempt < 40 && !closed; attempt++) await delay(10);
-    expect(closed).toBe(true);
+    const response = await fetch(f.url('rider'), { method: 'POST', headers: f.headers, body: JSON.stringify(input()) }); expect(response.status).toBe(200);
+    const reader = response.body!.getReader(); expect(new TextDecoder().decode((await within(reader.read())).value)).toContain('PARTIAL_SYNTHETIC');
+    await reader.cancel(); reader.releaseLock(); await within(closed.promise);
   });
 
-  it('returns HTTP 502 when otherwise valid native Chat output exceeds the 32 MiB buffer limit', async () => {
+  it('interrupts output above the 32 MiB response budget without buffering or signaling success', async () => {
     let closed = false;
     const f = await fixture('chat-completions', async (request, response) => {
       await bodyOf(request); response.once('close', () => { closed = true; }); response.setHeader('content-type', 'text/event-stream');
-      // Each frame is well below the SSE parser's individual-frame limit, so
-      // this specifically checks the bounded total JetBrains response buffer.
+      // Individual deltas remain incremental; the total safety budget uses a
+      // byte counter rather than retaining the response in memory.
       const frame = sse({ choices: [{ index: 0, delta: { content: 'x'.repeat(512 * 1024) }, finish_reason: null }] });
       for (let index = 0; index < 68 && !response.destroyed; index++) {
         if (!response.write(frame)) {
@@ -340,7 +356,7 @@ describe('JetBrains Chat streaming HTTP contract', () => {
       }
       if (!response.destroyed) response.end(sse({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }) + sse('[DONE]'));
     }, 10_000);
-    assertHttpFailure(await readHttp(f.url('rider'), f.headers, input()));
+    assertInterruptedStream(await readHttp(f.url('rider'), f.headers, input()), 'x'.repeat(100)); expect(f.store.logs().at(-1)?.status).toBe(502);
     for (let attempt = 0; attempt < 40 && !closed; attempt++) await delay(10);
     expect(closed).toBe(true);
   }, 15_000);

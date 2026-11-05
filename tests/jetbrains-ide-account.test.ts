@@ -6,7 +6,8 @@ import { Store } from '../src/main/store';
 import { JetBrainsIdeAccounts, JetBrainsIdeAccountError, type JetBrainsIdeApiPort } from '../src/main/jetbrains-ide-account';
 import { JetBrainsIdeApiError } from '../src/main/jetbrains-ide-api';
 import type { JetBrainsIdeCredentials, JetBrainsIdeImportCandidate } from '../src/main/jetbrains-ide-import';
-import { JetBrainsIdeRelay, JetBrainsIdeRelayFailure, type JetBrainsIdeRelayAdapter } from '../src/main/jetbrains-ide-relay';
+import { JetBrainsIdeRelay, type JetBrainsIdeRelayAdapter } from '../src/main/jetbrains-ide-relay';
+import { JetBrainsGatewayAdapter } from '../src/main/jetbrains-gateway-adapter';
 import { relayAccountView } from '../src/main/relay-client-import';
 import { JETBRAINS_RELAY_BASE_URL } from '../src/shared/presets';
 import type { AuthAccount, SubscriptionUsage } from '../src/shared/auth-types';
@@ -57,8 +58,8 @@ async function setup() {
     const value = selected.get(id); if (!value) throw new Error(PRIVATE_ERROR); return structuredClone(value);
   }) };
   const api = {
-    exchange: vi.fn(async (value: { idToken: string; licenseId: string }) => ({ token: value.idToken === a.idToken ? GRAZIE_A : GRAZIE_B, expiresAt: clock + 5 * 60_000 })),
-    quota: vi.fn(async (token: string) => usage(token === GRAZIE_B ? 45 : 10, clock)),
+    exchange: vi.fn(async (value: { idToken: string; licenseId: string }, _signal?: AbortSignal) => ({ token: value.idToken === a.idToken ? GRAZIE_A : GRAZIE_B, expiresAt: clock + 5 * 60_000 })),
+    quota: vi.fn(async (token: string, _signal?: AbortSignal) => usage(token === GRAZIE_B ? 45 : 10, clock)),
     models: vi.fn(async (_token: string, _signal?: AbortSignal) => ({ data: [{ id: 'native-profile-fixture', object: 'model' as const }] })),
     chat: vi.fn(async (_token: string, _body: Record<string, unknown>, _signal: AbortSignal) => new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'MOCK_NATIVE_OK' } }] }), { headers: { 'content-type': 'application/json' } })),
   } satisfies JetBrainsIdeApiPort;
@@ -79,7 +80,12 @@ async function setup() {
   return { dir, store, codec, reader, api, relay, localKey, manager, a, b,
     newManager,
     advance(ms: number) { clock += ms; }, failMetadataEncryption() { failEncryption = true; }, repairEncryption() { failEncryption = false; },
-    adapter() { if (!running) throw new Error('Fixture relay not started'); return running.adapter; },
+    adapter() {
+      const provider = store.listProviders().find(value => manager.isNativeProvider(value.id)); if (!provider) throw new Error('Fixture native account not imported');
+      const adapter = new JetBrainsGatewayAdapter(manager, api), native = { ...provider, nativeAdapter: 'jetbrains-ide' as const };
+      return { models: async (signal: AbortSignal) => { const result = await (await adapter.models(native, signal)).json() as { data: { id: string; object: 'model' }[] }; return { data: result.data }; },
+        chat: async (body: Record<string, unknown>, signal: AbortSignal) => (await adapter.request(native, '/chat/completions', body, signal))! };
+    },
     account(id: string) { return manager.decorate(relayAccountView(store, store.getProvider(id)!)); } };
 }
 
@@ -90,6 +96,13 @@ afterEach(async () => {
 });
 
 describe('IDE 账号导入校验与凭据边界', () => {
+  it('套餐未由已核实的原生协议提供时保持未知，并清除旧视图的套餐标签', async () => {
+    const { manager } = await setup(), account = await manager.import('ticket-a');
+    expect(account.plan).toBeUndefined();
+    const decorated = manager.decorate({ ...account, plan: '之前账号的 AI Ultimate' });
+    expect(decorated.plan).toBeUndefined(); expect(decorated.usage.windows[0].total).toBe(100);
+  });
+
   it('预览仅返回展示字段；空来源或读取失败均不写供应商、不生成本机密钥', async () => {
     const { manager, reader, store, localKey, api, a } = await setup(), before = state(store);
     const preview = await manager.preview();
@@ -118,7 +131,7 @@ describe('IDE 账号导入校验与凭据边界', () => {
     const { manager, api, store, dir, codec, a } = await setup();
     const account = await manager.import('ticket-a'), provider = store.getProvider(account.providerId)!;
     expect(account).toMatchObject({ kind: 'jetbrains-central', source: 'relay', accountId: a.accountId, displayName: a.accountLabel, authStatus: 'ready', canQueryUsage: true, clientImport: { client: 'jetbrains-ide', upstreamVerified: true }, usage: usage() });
-    expect(api.exchange).toHaveBeenCalledWith({ idToken: a.idToken, licenseId: a.licenseId }); expect(api.quota).toHaveBeenCalledWith(GRAZIE_A); expect(api.models).toHaveBeenCalledWith(GRAZIE_A);
+    expect(api.exchange).toHaveBeenCalledWith({ idToken: a.idToken, licenseId: a.licenseId }, expect.any(AbortSignal)); expect(api.quota).toHaveBeenCalledWith(GRAZIE_A, expect.any(AbortSignal)); expect(api.models).toHaveBeenCalledWith(GRAZIE_A, expect.any(AbortSignal));
     expect(provider.baseUrl).toBe(JETBRAINS_RELAY_BASE_URL); expect(store.getSecret(provider.id)).toEqual({ apiKey: LOCAL_KEY });
     const rendererPayload = JSON.stringify({ account, providers: store.listProviders(), models: store.listModels(), bindings: store.listBindings(), logs: store.logs(100) });
     for (const privateValue of [a.idToken, GRAZIE_A, LOCAL_KEY]) expect(rendererPayload).not.toContain(privateValue);
@@ -195,7 +208,7 @@ describe('IDE 授权会话缓存、额度修订与原生 adapter', () => {
     api.quota.mockImplementationOnce(() => delayed.promise);
     const pending = manager.refreshUsage(first.providerId); await vi.waitFor(() => expect(api.quota).toHaveBeenCalledTimes(2));
     const replacement = await manager.import('ticket-b'); expect(replacement.providerId).toBe(first.providerId); expect(replacement.accountId).toBe('fixture-b'); expect(replacement.usage).toEqual(usage(45));
-    delayed.resolve(usage(90)); await expect(pending).rejects.toThrow('查询期间已变更');
+    delayed.resolve(usage(90)); await expect(pending).rejects.toThrow(/查询期间已变更|取消/);
     expect(account(first.providerId)).toMatchObject({ accountId: 'fixture-b', usage: usage(45) });
     expect(store.getManagedState(`auth-usage:${first.providerId}`, null)).toBeNull();
   });
@@ -212,15 +225,15 @@ describe('IDE 授权会话缓存、额度修订与原生 adapter', () => {
     expect(api.exchange).toHaveBeenCalledTimes(2); expect(api.quota.mock.calls.at(-1)?.[0]).toBe('PRIVATE_GRAZIE_RENEWED_SESSION'); expect(api.models.mock.calls.at(-1)?.[0]).toBe('PRIVATE_GRAZIE_RENEWED_SESSION');
   });
 
-  it('目录和模型请求经独立本机Key启动的adapter，原始模型故障只返回安全错误', async () => {
+  it('目录和模型请求经原生Gateway adapter且不启动独立监听，原始模型故障只返回安全错误', async () => {
     const { manager, api, relay, adapter } = await setup(), first = await manager.import('ticket-a');
     await manager.startRelay(first.providerId); await manager.startRelay(first.providerId);
-    expect(relay.start).toHaveBeenCalledTimes(1); expect(relay.start.mock.calls[0][0]).toBe(LOCAL_KEY);
+    expect(relay.start).not.toHaveBeenCalled(); expect(relay.stop).not.toHaveBeenCalled();
     const controller = new AbortController(), body = { model: 'native-profile-fixture', messages: [{ role: 'user', content: 'Synthetic prompt' }], stream: false };
     expect(await adapter().models(controller.signal)).toEqual({ data: [{ id: 'native-profile-fixture', object: 'model' }] });
     const result = await adapter().chat(body, controller.signal); expect(await result.text()).toContain('MOCK_NATIVE_OK'); expect(api.chat).toHaveBeenCalledWith(GRAZIE_A, body, controller.signal);
     api.chat.mockRejectedValueOnce(new Error(PRIVATE_ERROR)); const error = await adapter().chat(body, controller.signal).catch(value => value);
-    expect(error).toBeInstanceOf(JetBrainsIdeRelayFailure); expect(String(error)).not.toContain(PRIVATE_ERROR);
+    expect(error).toBeInstanceOf(Error); expect(String(error)).not.toContain(PRIVATE_ERROR);
   });
 
   it('旧 JBA source exp 仅作提示，仍交服务端验证；公开到期时间仅来自已验证的派生会话', async () => {
@@ -228,7 +241,7 @@ describe('IDE 授权会话缓存、额度修订与原生 adapter', () => {
     reader.readCredentials.mockResolvedValueOnce(old);
     api.exchange.mockResolvedValue({ token: GRAZIE_A, expiresAt: ROOT_NOW + 5 * 60_000 });
     const first = await manager.import('ticket-a');
-    expect(api.exchange).toHaveBeenCalledWith({ idToken: old.idToken, licenseId: old.licenseId });
+    expect(api.exchange).toHaveBeenCalledWith({ idToken: old.idToken, licenseId: old.licenseId }, expect.any(AbortSignal));
     expect(first).toMatchObject({ authStatus: 'ready', expiresAt: ROOT_NOW + 5 * 60_000, usage: usage() });
     expect(first.expiresAt).not.toBe(old.sourceTokenExpHint);
     const persisted = store.getManagedState<{ nativeIde: Record<string, unknown> }>(`auth-metadata:${first.providerId}`, { nativeIde: {} }).nativeIde;
@@ -246,7 +259,7 @@ describe('IDE 授权会话缓存、额度修订与原生 adapter', () => {
     reader.readCredentials.mockResolvedValueOnce(old); api.exchange.mockRejectedValueOnce(new JetBrainsIdeApiError('authorization'));
     const failure = await manager.import('ticket-a').catch(value => value);
     expect(failure).toBeInstanceOf(JetBrainsIdeAccountError); expect(String(failure)).not.toContain(PRIVATE_ERROR);
-    expect(api.exchange).toHaveBeenCalledWith({ idToken: old.idToken, licenseId: old.licenseId });
+    expect(api.exchange).toHaveBeenCalledWith({ idToken: old.idToken, licenseId: old.licenseId }, expect.any(AbortSignal));
     expect(api.quota).not.toHaveBeenCalled(); expect(api.models).not.toHaveBeenCalled(); expect(state(store)).toEqual(before);
   });
 
@@ -275,6 +288,52 @@ describe('IDE 授权会话缓存、额度修订与原生 adapter', () => {
   });
 });
 
+describe('IDE shared authorization cancellation and lifecycle', () => {
+  it('cancels one authorization waiter promptly without aborting another waiter sharing the exchange', async () => {
+    const f = await setup(), imported = await f.manager.import('ticket-a'), restored = f.newManager();
+    const held = deferred<{ token: string; expiresAt: number }>(); f.api.exchange.mockReturnValueOnce(held.promise);
+    const one = new AbortController(), two = new AbortController();
+    const first = restored.credentials(imported.providerId, one.signal).catch(error => error as Error), second = restored.credentials(imported.providerId, two.signal);
+    expect(f.api.exchange).toHaveBeenCalledTimes(2); const upstream = f.api.exchange.mock.calls[1][1]!;
+    one.abort(); expect(String(await first)).toContain('取消'); expect(upstream.aborted).toBe(false);
+    held.resolve({ token: 'PRIVATE_SHARED_SESSION', expiresAt: ROOT_NOW + 300_000 }); expect((await second).token).toBe('PRIVATE_SHARED_SESSION'); expect(f.api.exchange).toHaveBeenCalledTimes(2);
+  });
+  it('aborts upstream when the last waiter cancels and does not cache a late result', async () => {
+    const f = await setup(), imported = await f.manager.import('ticket-a'), restored = f.newManager();
+    const held = deferred<{ token: string; expiresAt: number }>(); f.api.exchange.mockReturnValueOnce(held.promise); const controller = new AbortController();
+    const pending = restored.credentials(imported.providerId, controller.signal).catch(error => error as Error); const upstream = f.api.exchange.mock.calls[1][1]!;
+    controller.abort(); expect(String(await pending)).toContain('取消'); expect(upstream.aborted).toBe(true);
+    held.resolve({ token: 'PRIVATE_LATE_CANCELED_SESSION', expiresAt: ROOT_NOW + 300_000 }); await new Promise(resolve => setImmediate(resolve));
+    expect((await restored.credentials(imported.providerId)).token).toBe(GRAZIE_A); expect(f.api.exchange).toHaveBeenCalledTimes(3);
+  });
+  it('disposes an in-flight import immediately, propagates abort and refuses late provider/usage writes', async () => {
+    const f = await setup(), before = state(f.store), held = deferred<{ token: string; expiresAt: number }>(); f.api.exchange.mockReturnValueOnce(held.promise);
+    const pending = f.manager.import('ticket-a').catch(error => error as Error); await vi.waitFor(() => expect(f.api.exchange).toHaveBeenCalledTimes(1)); const upstream = f.api.exchange.mock.calls[0][1]!;
+    await f.manager.dispose(); expect(String(await pending)).toContain('取消'); expect(upstream.aborted).toBe(true);
+    held.resolve({ token: GRAZIE_A, expiresAt: ROOT_NOW + 300_000 }); await new Promise(resolve => setImmediate(resolve)); expect(state(f.store)).toEqual(before); expect(f.api.quota).not.toHaveBeenCalled(); expect(f.api.models).not.toHaveBeenCalled();
+    await expect(f.manager.preview()).rejects.toThrow('已停止');
+  });
+  it.each(['remove', 'dispose'] as const)('cancels pending quota on %s even when the injected service ignores AbortSignal', async action => {
+    const f = await setup(), imported = await f.manager.import('ticket-a'), held = deferred<SubscriptionUsage>(); f.api.quota.mockReturnValueOnce(held.promise);
+    const pending = f.manager.refreshUsage(imported.providerId).catch(error => error as Error); await vi.waitFor(() => expect(f.api.quota).toHaveBeenCalledTimes(2)); const upstream = f.api.quota.mock.calls[1][1]!;
+    if (action === 'remove') await f.manager.providerRemoved(imported.providerId); else await f.manager.dispose();
+    expect(String(await pending)).toMatch(/取消|已停止/); expect(upstream.aborted).toBe(true); held.resolve(usage(99)); await new Promise(resolve => setImmediate(resolve)); expect(f.store.getManagedState(`auth-usage:${imported.providerId}`, null)).toBeNull();
+  });
+  it('aborts a shared exchange on provider removal and rejects a late native credential result', async () => {
+    const f = await setup(), imported = await f.manager.import('ticket-a'), restored = f.newManager(), held = deferred<{ token: string; expiresAt: number }>(); f.api.exchange.mockReturnValueOnce(held.promise);
+    const pending = restored.credentials(imported.providerId).catch(error => error as Error), upstream = f.api.exchange.mock.calls[1][1]!;
+    await restored.providerRemoved(imported.providerId); expect(String(await pending)).toContain('取消'); expect(upstream.aborted).toBe(true); held.resolve({ token: 'PRIVATE_REMOVED_LATE_SESSION', expiresAt: ROOT_NOW + 300_000 }); await new Promise(resolve => setImmediate(resolve));
+    expect((await restored.credentials(imported.providerId)).token).toBe(GRAZIE_A); expect(f.api.exchange).toHaveBeenCalledTimes(3);
+  });
+  it.each(['quota', 'models'] as const)('aborts pending import %s and preserves the previous account when the provider is removed', async stage => {
+    const f = await setup(), first = await f.manager.import('ticket-a'), before = state(f.store), held = deferred<SubscriptionUsage | { data: { id: string; object: 'model' }[] }>();
+    if (stage === 'quota') f.api.quota.mockReturnValueOnce(held.promise as Promise<SubscriptionUsage>); else f.api.models.mockReturnValueOnce(held.promise as Promise<{ data: { id: string; object: 'model' }[] }>);
+    const pending = f.manager.import('ticket-b').catch(error => error as Error); await vi.waitFor(() => expect(f.api[stage]).toHaveBeenCalledTimes(2)); const upstream = f.api[stage].mock.calls[1][1]!;
+    await f.manager.providerRemoved(first.providerId); expect(String(await pending)).toContain('取消'); expect(upstream.aborted).toBe(true);
+    held.resolve(stage === 'quota' ? usage(99) : { data: [] }); await new Promise(resolve => setImmediate(resolve)); expect(state(f.store)).toEqual(before);
+  });
+});
+
 describe('可选 OS Integration SDK 凭据的身份与保密边界', () => {
   function sdkCredentials(value: JetBrainsIdeCredentials, accessToken: string): JetBrainsIdeCredentials {
     const { idToken: _idToken, sourceTokenExpHint: _sourceHint, ...identity } = value;
@@ -282,13 +341,21 @@ describe('可选 OS Integration SDK 凭据的身份与保密边界', () => {
     // fixture remains explicit while the legacy reader type is kept separate.
     return { ...identity, tokenType: 'jcp-global-access-token', accessToken, expiresAt: ROOT_NOW + 60 * 60_000 } as unknown as JetBrainsIdeCredentials;
   }
+  it('cancels an SDK renewal wait without allowing a late noncancellable reader result to exchange or write', async () => {
+    const f = await setup(), sourceToken = 'PRIVATE_SDK_SOURCE_ACCESS', held = deferred<JetBrainsIdeCredentials>();
+    const initial = sdkCredentials(f.a, sourceToken), reader = { ...f.reader, renewCredentials: vi.fn(async () => held.promise) }; reader.readCredentials.mockResolvedValue(initial);
+    const exchangeJcp = vi.fn(async (_input: { accessToken: string; licenseId: string }, _signal?: AbortSignal) => ({ token: GRAZIE_A, expiresAt: ROOT_NOW + 300_000 }));
+    const manager = f.newManager({ ...f.api, exchangeJcp }, reader), imported = await manager.import('ticket-a'), before = state(f.store); f.advance(300_001);
+    const pending = manager.credentials(imported.providerId).catch(error => error as Error); expect(reader.renewCredentials).toHaveBeenCalledTimes(1); await manager.dispose(); expect(String(await pending)).toContain('取消');
+    held.resolve(sdkCredentials(f.a, 'PRIVATE_LATE_SDK_ACCESS')); await new Promise(resolve => setImmediate(resolve)); expect(exchangeJcp).toHaveBeenCalledTimes(1); expect(state(f.store)).toEqual(before);
+  });
 
   it('SDK token 仅走显式 JCP 交换，不冒充 ID token 或公开账号身份', async () => {
     const { api, reader, store, a, newManager } = await setup(), sdkToken = 'PRIVATE_OS_SDK_EXACT_AUDIENCE_ACCESS_TOKEN';
     reader.readCredentials.mockResolvedValueOnce(sdkCredentials(a, sdkToken));
     const exchangeJcp = vi.fn(async (_value: { accessToken: string; licenseId: string }) => ({ token: GRAZIE_A, expiresAt: ROOT_NOW + 5 * 60_000 }));
     const manager = newManager({ ...api, exchangeJcp }), imported = await manager.import('ticket-a');
-    expect(api.exchange).not.toHaveBeenCalled(); expect(exchangeJcp).toHaveBeenCalledWith({ accessToken: sdkToken, licenseId: a.licenseId });
+    expect(api.exchange).not.toHaveBeenCalled(); expect(exchangeJcp).toHaveBeenCalledWith({ accessToken: sdkToken, licenseId: a.licenseId }, expect.any(AbortSignal));
     expect(imported).toMatchObject({ accountId: a.accountId, displayName: a.accountLabel, clientImport: { client: 'jetbrains-ide' } });
     const metadata = store.getManagedState<{ nativeIde: Record<string, unknown> }>(`auth-metadata:${imported.providerId}`, { nativeIde: {} });
     expect(metadata.nativeIde.tokenType).toBe('jcp-global-access-token'); expect(metadata.nativeIde.accessToken).toBe(sdkToken); expect(metadata.nativeIde).not.toHaveProperty('idToken');

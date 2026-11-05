@@ -15,6 +15,13 @@ import { describeError } from './diagnostic-log';
 import { normalizeUpstreamReasoning } from './upstream-compat';
 import { AnthropicBridgeError, parseAnthropicRequest, toAnthropicResponse, createAnthropicStream, collectAnthropicStream, anthropicMessageToSse } from './anthropic-bridge';
 import { ChatResponsesBridgeError, parseChatResponsesRequest, responsesToChat, createResponsesChatStream, collectResponsesChatStream, chatResponseToSse } from './chat-responses-bridge';
+import { ResponsesChatBridgeError } from './responses-chat-bridge';
+import { TraeApiError } from './trae-api';
+import { CentralApiError } from './central-api';
+import { TraeNativeAccountError } from './trae-native-account';
+import { CentralNativeAccountError } from './central-native-account';
+import { JetBrainsIdeAccountError } from './jetbrains-ide-account';
+import { JetBrainsIdeApiError } from './jetbrains-ide-api';
 import { isJetBrainsTool } from '../shared/jetbrains';
 import { isSingleEntryTool } from '../shared/single-entry';
 import { JetBrainsChatError, createJetBrainsChatStream, normalizeJetBrainsChatResponse, jetBrainsResponsesHistory } from './jetbrains-chat-stream';
@@ -28,6 +35,7 @@ export interface PreparedRequest { url: string; headers: Record<string, string>;
 export interface GatewayOptions {
   port?: number;
   fetch?: typeof fetch;
+  nativeRequest?: (provider: Provider, path: string, body: Json, signal: AbortSignal) => Promise<Response | undefined>;
   prepareRequest?: (provider: Provider, secret: ProviderSecret, path: string, body: Json) => Promise<PreparedRequest>;
   timeoutMs?: number;
   diagnostics?: (level: DiagnosticLevel, event: DiagnosticEvent, context?: DiagnosticContext) => void;
@@ -138,15 +146,32 @@ async function limitedText(response: Response, max = 32 * 1024 * 1024): Promise<
   return Buffer.concat(chunks).toString('utf8');
 }
 
-/** 修改点：当前 Koog SSE 会将中途 EOF/RST 当成功；JetBrains 先有界校验完整回复再发 200。 */
-async function completeJetBrainsStream(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<Uint8Array[]> {
-  const chunks: Uint8Array[] = []; let size = 0;
-  while (true) {
-    const item = await reader.read();
-    if (item.done) return chunks;
-    size += item.value.byteLength;
-    if (size > 32 * 1024 * 1024) throw new JetBrainsChatError('上游 Chat 响应超过 32 MiB，请缩小输出后重试。');
-    chunks.push(item.value);
+/** Read the first validated event before committing HTTP success, then forward
+ * every delta with backpressure. Protocol transforms retain only terminal data. */
+async function sendEventStream(reader: ReadableStreamDefaultReader<Uint8Array>, response: ServerResponse, status: number, signal: AbortSignal, maxBytes?: number): Promise<void> {
+  let item = await reader.read();
+  response.statusCode = status; response.setHeader('content-type', 'text/event-stream; charset=utf-8');
+  response.setHeader('cache-control', 'no-cache'); response.setHeader('x-accel-buffering', 'no'); response.flushHeaders();
+  let bytes = 0;
+  while (true) { if (item.value) { bytes += item.value.byteLength; if (maxBytes && bytes > maxBytes) throw new JetBrainsChatError('上游响应超过 32 MiB，请缩小输出后重试。'); await write(response, item.value, signal); } if (item.done) break; item = await reader.read(); }
+  response.end();
+}
+function controlledFailure(error: unknown): { status: number; message: string } | undefined {
+  if (error instanceof GatewayError || error instanceof AnthropicBridgeError || error instanceof ChatResponsesBridgeError || error instanceof ResponsesChatBridgeError
+    || error instanceof NativeMessagesError || error instanceof JetBrainsChatError || error instanceof JetBrainsCompletionError) return error;
+  if (error instanceof TraeNativeAccountError || error instanceof CentralNativeAccountError || error instanceof JetBrainsIdeAccountError) return { status: 401, message: error.message };
+  if (error instanceof JetBrainsIdeApiError) return { status: ['credentials', 'authorization', 'entitlement'].includes(error.code) ? 401 : ['request', 'model'].includes(error.code) ? 400 : error.code === 'cancelled' ? 504 : error.code === 'limit' ? 413 : 502, message: error.message };
+  if (error instanceof TraeApiError) {
+    const status = error.status && error.status >= 400 && error.status <= 599 ? error.status
+      : ['request', 'capability', 'model'].includes(error.code) ? 400 : error.code === 'credentials' || error.code === 'authorization' ? 401
+        : error.code === 'cancelled' ? 504 : error.code === 'limit' ? 413 : 502;
+    return { status, message: error.message };
+  }
+  if (error instanceof CentralApiError) {
+    const status = error.status && error.status >= 400 && error.status <= 599 ? error.status
+      : ['format', 'unsupported', 'model', 'request'].includes(error.code) ? 400 : error.code === 'authorization' ? 401
+        : error.code === 'cancelled' ? 504 : error.code === 'limit' ? 413 : 502;
+    return { status, message: error.message };
   }
 }
 
@@ -154,6 +179,7 @@ export class Gateway {
   private server?: Server;
   private sockets = new Set<Socket>();
   private controllers = new Set<AbortController>();
+  private controllerProviders = new Map<AbortController, string>();
   private state: GatewayStatus = { running: false, host: '127.0.0.1', port: 18181, baseUrl: 'http://127.0.0.1:18181/v1', requests: 0, lastError: '' };
   constructor(private store: Store, private options: GatewayOptions = {}) { this.configurePort(options.port ?? DEFAULT_SETTINGS.gatewayPort); }
   // 修改点：诊断只记录固定事件和安全元数据；写日志失败不得影响本地 API。
@@ -175,7 +201,7 @@ export class Gateway {
       this.state.lastError = '网关端口无效。'; throw new Error(this.state.lastError);
     }
     for (const provider of this.store.listProviders()) {
-      if (!provider.enabled || !provider.baseUrl.trim()) continue;
+      if (provider.nativeAdapter || !provider.enabled || !provider.baseUrl.trim()) continue;
       try { validateUpstreamUrl(provider.baseUrl, port); }
       catch (error) {
         // This validator emits fixed messages and never includes the supplied URL or credentials.
@@ -218,6 +244,9 @@ export class Gateway {
     if (server || wasRunning) this.diagnostic('info', 'gateway.stopped', { operation: 'stop', stage: 'gateway', outcome: 'success', port: this.state.port });
     return this.status();
   }
+  cancelProvider(providerId: string): void {
+    for (const [controller, id] of this.controllerProviders) if (id === providerId) controller.abort(new GatewayError(499, '账号连接已更新或移除，请重新发起请求。'));
+  }
   private authenticated(request: IncomingMessage, endpoint: string): boolean {
     const authorization = request.headers.authorization;
     const bearer = /^Bearer (.+)$/i.exec(authorization ?? '')?.[1];
@@ -239,7 +268,8 @@ export class Gateway {
   }
   private available(model: Model, nativeMessages = false): boolean {
     const provider = this.store.getProvider(model.providerId);
-    if (model.wireApi === 'messages' && !nativeMessages && !isTraeRelayProvider(provider) || !model.enabled || !provider?.enabled || !provider.hasSecret || provider.authStatus !== 'ready' || !provider.baseUrl.trim()) return false;
+    if (model.wireApi === 'messages' && !nativeMessages && !isTraeRelayProvider(provider) && !provider?.nativeAdapter || !model.enabled || !provider?.enabled || !provider.hasSecret || provider.authStatus !== 'ready' || !provider.baseUrl.trim()) return false;
+    if (provider.nativeAdapter) return true;
     try { validateUpstreamUrl(nativeMessages && provider.kind === 'openai-compatible' ? nativeClaudeBaseUrl(provider) ?? provider.baseUrl : provider.baseUrl, this.state.port); return true; } catch { return false; }
   }
   private allowedModels(tool?: ToolId): Model[] {
@@ -375,8 +405,9 @@ export class Gateway {
       logStatus = upstreamFailed ? upstreamFailureStatus ?? 502 : response.statusCode;
     } catch (error) {
       diagnosticError = describeError(error);
-      logStatus = error instanceof GatewayError || error instanceof AnthropicBridgeError || error instanceof ChatResponsesBridgeError || error instanceof NativeMessagesError || error instanceof JetBrainsChatError || error instanceof JetBrainsCompletionError ? error.status : 502;
-      const message = error instanceof GatewayError || error instanceof AnthropicBridgeError || error instanceof ChatResponsesBridgeError || error instanceof NativeMessagesError || error instanceof JetBrainsChatError || error instanceof JetBrainsCompletionError ? error.message : '上游请求失败，请检查连接和供应商状态。';
+      const controlled = controlledFailure(error);
+      logStatus = controlled?.status ?? 502;
+      const message = controlled?.message ?? '上游请求失败，请检查连接和供应商状态。';
       requestErrorMessage = message;
       if (!response.destroyed && !response.headersSent) {
         if (anthropic) jsonResponse(response, logStatus === 499 ? 400 : logStatus, { type: 'error', error: { type: error instanceof NativeMessagesError ? error.errorType : logStatus === 401 ? 'authentication_error' : logStatus >= 500 ? 'api_error' : 'invalid_request_error', message } });
@@ -413,6 +444,7 @@ export class Gateway {
     const stream = body.stream === true;
     const controller = new AbortController();
     this.controllers.add(controller);
+    this.controllerProviders.set(controller, provider.id);
     const disconnect = () => { if (!response.writableEnded) controller.abort(); };
     response.once('close', disconnect);
     const timeout = setTimeout(() => controller.abort(), this.options.timeoutMs ?? 600_000);
@@ -420,14 +452,20 @@ export class Gateway {
     let upstream: Response | undefined;
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     try {
+      const headers = new Headers();
+      if (provider.nativeAdapter) {
+        upstream = await this.options.nativeRequest?.(provider, path, body, controller.signal);
+        if (!upstream) throw new GatewayError(503, '原生账号适配器尚未就绪，请在授权中心重新导入。');
+      } else {
       const prepared = completionBaseUrl ? this.prepareApiKey({ ...provider, baseUrl: completionBaseUrl }, secret, path, body) : bridge?.kind === 'native-messages' ? prepareNativeMessagesRequest(provider, secret, body, { anthropicVersion: typeof request.headers['anthropic-version'] === 'string' ? request.headers['anthropic-version'] : undefined, anthropicBeta: typeof request.headers['anthropic-beta'] === 'string' ? request.headers['anthropic-beta'] : undefined }) : this.options.prepareRequest ? await this.options.prepareRequest(provider, secret, path, body) : this.prepareApiKey(provider, secret, path, body);
       if (controller.signal.aborted) throw new GatewayError(response.destroyed ? 499 : 504, '请求已取消或超时。');
       validateUpstreamUrl(prepared.url, this.state.port);
       if (provider.kind === 'copilot' && !isCopilotUpstream(prepared.url, path.replace(/^\/v1/, ''))) throw new GatewayError(502, 'Copilot 请求只能发送到官方模型服务。');
-      const headers = new Headers();
       for (const [name, value] of Object.entries(prepared.headers)) if (upstreamHeaderNames.has(name.toLowerCase()) && !/[\r\n]/.test(value)) headers.set(name, value);
       headers.set('content-type', 'application/json');
       upstream = await (this.options.fetch ?? fetch)(prepared.url, { method: 'POST', headers, body: JSON.stringify(prepared.body), signal: controller.signal, redirect: 'manual' });
+      }
+      if (controller.signal.aborted) throw new GatewayError(response.destroyed ? 499 : 504, '请求已取消或超时。');
       const secrets = [secret.apiKey, secret.accessToken, secret.refreshToken, headers.get('authorization')?.replace(/^Bearer /i, ''), headers.get('x-api-key')].filter((item): item is string => Boolean(item));
       if (!upstream.ok) {
         if (completionBaseUrl) {
@@ -491,11 +529,7 @@ export class Gateway {
         if (stream && sse) {
           if (!upstream.body) throw new JetBrainsCompletionError(502);
           reader = upstream.body.pipeThrough(createJetBrainsCompletionStream(model.alias, observe), { signal: controller.signal }).getReader();
-          const complete = await completeJetBrainsStream(reader);
-          response.statusCode = upstream.status; response.setHeader('content-type', 'text/event-stream; charset=utf-8');
-          response.setHeader('cache-control', 'no-cache'); response.setHeader('x-accel-buffering', 'no'); response.flushHeaders();
-          for (const chunk of complete) await write(response, chunk, controller.signal);
-          response.end();
+          await sendEventStream(reader, response, upstream.status, controller.signal, 32 * 1024 * 1024);
         } else {
           let value: unknown; try { value = JSON.parse(await limitedText(upstream)); } catch { throw new JetBrainsCompletionError(502); }
           observe(value); const message = normalizeJetBrainsCompletionResponse(value, model.alias);
@@ -509,14 +543,7 @@ export class Gateway {
           let source = upstream.body!.pipeThrough(transform, { signal: controller.signal });
           if (jetBrains) source = source.pipeThrough(createJetBrainsChatStream(model.alias), { signal: controller.signal });
           reader = source.getReader();
-          // 修改点：Koog 会吞掉中途断流；只向 JetBrains 发布已完整校验的 SSE。
-          const complete = jetBrains ? await completeJetBrainsStream(reader) : undefined;
-          response.statusCode = upstream.status;
-          response.setHeader('content-type', 'text/event-stream; charset=utf-8'); response.setHeader('cache-control', 'no-cache'); response.setHeader('x-accel-buffering', 'no');
-          response.flushHeaders();
-          if (complete) for (const chunk of complete) await write(response, chunk, controller.signal);
-          else while (true) { const item = await reader.read(); if (item.value) await write(response, item.value, controller.signal); if (item.done) break; }
-          response.end();
+          await sendEventStream(reader, response, upstream.status, controller.signal, jetBrains ? 32 * 1024 * 1024 : undefined);
         } else {
           let message: Json;
           if (sse) message = bridge.kind === 'native-messages' ? await collectNativeMessagesStream(upstream.body!, model.alias, { onUpstreamEvent: observe, signal: controller.signal }) : bridge.kind === 'chat-responses' ? await collectResponsesChatStream(upstream.body!, model.alias, { onUpstreamEvent: observe, signal: controller.signal }) : await collectAnthropicStream(upstream.body!, model.wireApi, model.alias, { onUpstreamEvent: observe, signal: controller.signal });
@@ -549,11 +576,7 @@ export class Gateway {
             source = new ReadableStream({ start(controller) { controller.enqueue(payload); controller.close(); } });
           }
           reader = source.pipeThrough(createJetBrainsChatStream(model.alias, sse ? observe : undefined), { signal: controller.signal }).getReader();
-          const complete = await completeJetBrainsStream(reader);
-          response.statusCode = upstream.status; response.setHeader('content-type', 'text/event-stream; charset=utf-8');
-          response.setHeader('cache-control', 'no-cache'); response.setHeader('x-accel-buffering', 'no'); response.flushHeaders();
-          for (const chunk of complete) await write(response, chunk, controller.signal);
-          response.end(); return;
+          await sendEventStream(reader, response, upstream.status, controller.signal, 32 * 1024 * 1024); return;
         }
         response.statusCode = upstream.status;
         response.setHeader('content-type', upstream.headers.get('content-type') ?? 'application/octet-stream');
@@ -579,10 +602,11 @@ export class Gateway {
         jsonResponse(response, upstream.status, jetBrains ? normalizeJetBrainsChatResponse(value, model.alias) : aliasResponse(value, model.alias));
       }
     } catch (error) {
+      if (controller.signal.aborted && controller.signal.reason instanceof GatewayError) throw controller.signal.reason;
       if (controller.signal.aborted && !(error instanceof GatewayError)) throw new GatewayError(response.destroyed ? 499 : 504, '请求已取消或超时。');
       throw error;
     } finally {
-      clearTimeout(timeout); response.removeListener('close', disconnect); this.controllers.delete(controller);
+      clearTimeout(timeout); response.removeListener('close', disconnect); this.controllers.delete(controller); this.controllerProviders.delete(controller);
       if (reader) { try { await reader.cancel(); } catch { /* disconnected */ } reader.releaseLock(); }
       else if (upstream?.body && !upstream.bodyUsed) { try { await upstream.body.cancel(); } catch { /* already closed */ } }
     }

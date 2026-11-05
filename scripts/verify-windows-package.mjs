@@ -103,11 +103,8 @@ function verifyPackage(directory) {
     'SQL WASM must be present in app.asar.unpacked.');
   verifyCopiedFile(join(root, wasmName), join(resources, 'app.asar.unpacked', wasmName));
 
-  // Pi runs outside Electron and cannot load the extension from inside ASAR.
-  const extensionName = 'dist-electron/central-pi-extension.mjs';
-  assert(names.includes(extensionName) && statFile(archive, normalize(extensionName), false).unpacked === true,
-    'Central Pi extension must be present in app.asar.unpacked.');
-  verifyCopiedFile(join(root, 'scripts/central-pi-extension.mjs'), join(resources, 'app.asar.unpacked', extensionName));
+  assert(!names.includes('dist-electron/central-pi-extension.mjs'), 'Removed external relay extension is present in the package.');
+  assert(!existsSync(join(resources, 'trae-native-relay')), 'Removed Python relay runtime is present in the package.');
 
   const executable = join(directory, 'ModelDock.exe');
   assertOrdinaryFile(executable);
@@ -123,7 +120,7 @@ function verifyPackage(directory) {
   execFileSync(process.execPath, [join(root, 'scripts/verify-exe-icon.mjs'), executable],
     { cwd: root, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   console.log(JSON.stringify({ windowsPackageVerified: true, version: manifest.version,
-    directory, productionEntryVerified: true, resourcesVerified: true, centralPiExtensionVerified: true,
+    directory, productionEntryVerified: true, resourcesVerified: true, nativeGatewayAdaptersVerified: true,
     iconVerified: true, embeddedAsarIntegrityVerified: true }));
 }
 

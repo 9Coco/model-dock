@@ -47,9 +47,15 @@ AES/AES_PRIVATE storage format documented by
 [Trae2api-cn v1.0.10](https://github.com/autumnsentiment/Trae2api-cn/tree/v1.0.10),
 commit `bb7b659`, `src/trae_decrypt.py`. Its fixed salts and message field names
 are interoperability data. The implementation is TypeScript and bounded to the
-selected local CN client authorization slots; the reference Python code is not
-bundled. The native relay's `/api/web-auth` and account-pool behavior are defined
-by the same fixed revision's `src/main.py` and `src/auth.py`.
+selected local CN client authorization slots. The same fixed reference documents
+TraeCode's raw chat request, model routing and account entitlement schema.
+ModelDock implements these protocol contracts in TypeScript in its existing
+main-process gateway. Reference source checkouts and Python runtimes are not
+included in application packages.
+
+Central interoperability follows JetBrains' first-party Central CLI documentation
+and the installed official CLI's session transfer and wire protocol. ModelDock
+retains exact license/workspace identity; unsupported identity types fail closed.
 
 ## Dependencies and distributed application
 

@@ -46,11 +46,13 @@ export function jetBrainsCompletionToSse(value: Json): Uint8Array {
   return new TextEncoder().encode(`data: ${JSON.stringify(value)}\n\ndata: [DONE]\n\n`);
 }
 
-/** 修改点：先校验真正的结束信号，且保持 FIM 文本、logprobs 和 usage 原样。 */
+/** FIM 文本和 logprobs 立即转发；只有 finish/usage 尾帧等待真正的结束信号。 */
 export function createJetBrainsCompletionStream(model: string, observe: (value: unknown) => void = () => {}): TransformStream<Uint8Array, Uint8Array> {
   const decoder = new TextDecoder('utf-8', { fatal: true }), encoder = new TextEncoder();
   let pending = '', done = false, id = '', created: number | undefined;
   const choices = new Set<number>(), finished = new Set<number>();
+  const terminal: Json[] = []; let terminalBytes = 0;
+  const defer = (value: Json) => { terminalBytes += Buffer.byteLength(JSON.stringify(value)); if (terminalBytes > 16 * 1024 * 1024) return fail(); terminal.push(value); };
   const frame = (raw: string, controller: TransformStreamDefaultController<Uint8Array>) => {
     const lines = raw.split(/\r\n|\n|\r/);
     const data = lines.filter(line => line.startsWith('data:')).map(line => line.slice(5).replace(/^ /, '')).join('\n');
@@ -65,13 +67,18 @@ export function createJetBrainsCompletionStream(model: string, observe: (value: 
       || typeof value.model !== 'string' || !value.model || !Array.isArray(value.choices) || !value.choices.length) return fail();
     if (id && value.id !== id || created !== undefined && value.created !== created) return fail();
     id = value.id; created = value.created;
-    const seen = new Set<number>();
+    const seen = new Set<number>(), deltas: Json[] = [], endings: Json[] = [];
     for (const choice of value.choices) {
       if (!object(choice) || !index(choice.index) || seen.has(choice.index) || finished.has(choice.index) || typeof choice.text !== 'string') return fail();
       seen.add(choice.index); choices.add(choice.index);
-      if (choice.finish_reason != null) { if (!finishReasons.has(String(choice.finish_reason))) return fail(); finished.add(choice.index); }
+      if (choice.finish_reason != null) {
+        if (!finishReasons.has(String(choice.finish_reason))) return fail(); finished.add(choice.index);
+        endings.push({ index: choice.index, text: '', finish_reason: choice.finish_reason, ...(choice.logprobs !== undefined ? { logprobs: null } : {}) });
+        if (choice.text || choice.logprobs != null) deltas.push({ ...choice, finish_reason: null });
+      } else deltas.push(choice);
     }
-    controller.enqueue(encoder.encode(`data: ${JSON.stringify({ ...value, model })}\n\n`));
+    if (deltas.length) { const data: Json = { ...value, model, choices: deltas }; if (endings.length) delete data.usage; controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`)); }
+    if (endings.length) defer({ ...value, model, choices: endings });
   };
   const feed = (chunk: Uint8Array, last: boolean, controller: TransformStreamDefaultController<Uint8Array>) => {
     try { pending += decoder.decode(chunk, { stream: !last }); } catch { return fail(); }
@@ -82,6 +89,6 @@ export function createJetBrainsCompletionStream(model: string, observe: (value: 
   };
   return new TransformStream({
     transform(chunk, controller) { feed(chunk, false, controller); },
-    flush(controller) { feed(new Uint8Array(), true, controller); if (!done) return fail(); controller.enqueue(encoder.encode('data: [DONE]\n\n')); },
+    flush(controller) { feed(new Uint8Array(), true, controller); if (!done) return fail(); for (const value of terminal) controller.enqueue(encoder.encode(`data: ${JSON.stringify(value)}\n\n`)); controller.enqueue(encoder.encode('data: [DONE]\n\n')); },
   });
 }

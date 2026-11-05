@@ -22,6 +22,7 @@ export async function verifyRelayClientImport(window: BrowserWindow, store: Stor
   const pause = (ms: number) => new Promise<void>(done => setTimeout(done, ms));
   const kinds: RelayAccountKind[] = ['trae-cn-relay', 'jetbrains-central'];
   const screenshots: string[] = [], results: unknown[] = [];
+  const originalTheme = await evaluate<{ theme?: string; colorScheme: string }>(`({theme:document.documentElement.dataset.theme,colorScheme:document.documentElement.style.colorScheme})`);
   const privatePattern = /PRIVATE_RELAY_IMPORT|SYNTHETIC_RELAY_IMPORT_(?:ACCESS|REFRESH|TOKEN|SECRET)|synthetic-relay-import-manual-key|qa-private-relay-(?:token|stderr|path)/i;
   async function waitFor(source: string, label: string): Promise<void> {
     const deadline = Date.now() + 10_000;
@@ -54,7 +55,9 @@ export async function verifyRelayClientImport(window: BrowserWindow, store: Stor
       assert.equal(await evaluate<boolean>(`!!document.querySelector(${JSON.stringify(scope)}+' [role="alert"]')||!!document.querySelector(${JSON.stringify(scope)}+' [data-field="relay-import-candidate"]')`), false, 'Opening the JetBrains guide does not implicitly query a Central login');
       await click('[role="dialog"] [data-action="check-central-login"]');
     }
-    await waitFor(`document.querySelector(${JSON.stringify(scope)})?.getAttribute('aria-busy')==='false'`, 'relay import choices finished loading'); return scope;
+    await waitFor(`document.querySelector(${JSON.stringify(scope)})?.getAttribute('aria-busy')==='false'`, 'relay import choices finished loading');
+    assert.equal(await evaluate<boolean>(`[...document.querySelectorAll('[role="dialog"] button')].some(button=>/启动反代|停止反代/.test(button.textContent))`), false, 'Import has no separate relay startup requirement');
+    return scope;
   }
   async function choose(scope: string): Promise<void> {
     await waitFor(`document.querySelector(${JSON.stringify(scope)}+' [data-field="relay-import-candidate"]')?.options.length>0`, 'synthetic native account candidate');
@@ -101,15 +104,23 @@ export async function verifyRelayClientImport(window: BrowserWindow, store: Stor
       assert.ok(Date.now() - began < 5000, 'Imported account appears without waiting for the background account poll');
       assert.equal(await evaluate<string>(`document.querySelector('[data-auth-account="${provider.id}"] [data-relay-client-source]')?.getAttribute('data-relay-client-source')`), imported.clientImport!.client, 'Imported source is visible on the relay account row');
       await evaluate(`document.querySelector('[data-auth-account="${provider.id}"]').scrollIntoView({block:'nearest'})`);
-      await privacy(); await capture(`${kind}-success-dark`);
+      for (const theme of ['light', 'dark']) for (const width of [1180, 980]) {
+        window.setSize(width, width === 1180 ? 800 : 680);
+        await evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)};document.documentElement.style.colorScheme=${JSON.stringify(theme)};document.querySelector('[data-auth-account="${provider.id}"]').scrollIntoView({block:'nearest'})`);
+        await capture(`${kind}-success-${theme}-${width}`);
+      }
       const model = store.saveModel({ providerId: provider.id, upstreamId: `import-preserve-${kind}`, alias: `import-preserve-${kind}`, displayName: '再次导入保留模型', wireApi: 'chat-completions', contextWindow: 64000, tools: true, vision: false, enabled: true });
       const junie = store.listBindings().find(binding => binding.id === 'junie'); assert.ok(junie);
       store.saveBinding({ ...junie, mode: 'aggregate', enabled: false, providerIds: [provider.id], modelIds: [model.id], modelSelection: 'selected', defaultModelId: model.id });
+      const customName = kind === 'trae-cn-relay' ? '我的 TRAE · 重新导入保留名称' : '我的 JetBrains · 重新连接保留名称';
+      store.saveProvider({ ...store.getProvider(provider.id)!, name: customName });
       const repeatedBefore = { provider: store.getProvider(provider.id), secret: store.getSecret(provider.id), providers: store.listProviders().length, models: store.listModels(), bindings: store.listBindings() };
       scope = await open(kind); await choose(scope); await click('[role="dialog"] [data-action="import-relay-client-account"]'); await waitFor(`!document.querySelector('[role="dialog"]')`, 're-import succeeds');
       const repeated = (await evaluate<AuthAccount[]>('window.modelDock.authAccounts()')).find(account => account.kind === kind && !!account.clientImport);
       assert.equal(repeated?.providerId, provider.id, 'Re-import reuses the same strict relay provider');
       assert.deepEqual({ provider: store.getProvider(provider.id), secret: store.getSecret(provider.id), providers: store.listProviders().length, models: store.listModels(), bindings: store.listBindings() }, repeatedBefore, 'Re-import preserves connection identity, key, source count, models and tool references');
+      await waitFor(`document.querySelector('[data-auth-account="${provider.id}"] .account-identity strong')?.textContent===${JSON.stringify(customName)}`, 're-import preserves and refreshes the customized account name');
+      await capture(`${kind}-reimport-name-dark-980`);
       await privacy(); results.push({ kind, providerReused: true, source: imported.source, client: imported.clientImport!.client });
     }
     assert.deepEqual(store.getProvider(manual.id), manual); assert.deepEqual(store.getSecret(manual.id), { apiKey: manualKey });
@@ -118,9 +129,10 @@ export async function verifyRelayClientImport(window: BrowserWindow, store: Stor
     assert.deepEqual(originalProviders.map(provider => [provider.id, store.getSecret(provider.id)]), originalSecrets);
     assert.ok(originalModels.every(model => store.listModels().some(current => JSON.stringify(current) === JSON.stringify(model))));
     assert.deepEqual(store.listBindings().filter(binding => binding.id !== 'junie'), originalBindings.filter(binding => binding.id !== 'junie'));
-    writeFileSync(join(outputDir, 'relay-client-import-validation.json'), JSON.stringify({ ok: true, relayGroupsExposeImport: true, emptyFixturesDoNotOfferRealAccounts: true, failuresPreserveExistingConfiguration: true, syntheticImportsAndProvenanceVerified: true, repeatedImportReusesProviders: true, manualTraePreserved: true, modelsAndBindingReferencesPreserved: true, rendererAndDiagnosticsDoNotContainSecrets: true, noRealClientCredentialsOrRelayProcesses: true, results, screenshots }, null, 2));
+    writeFileSync(join(outputDir, 'relay-client-import-validation.json'), JSON.stringify({ ok: true, themes: ['light', 'dark'], widths: [1180, 980], relayGroupsExposeImport: true, noSeparateRelayStartup: true, emptyFixturesDoNotOfferRealAccounts: true, failuresPreserveExistingConfiguration: true, syntheticImportsAndProvenanceVerified: true, repeatedImportReusesProviders: true, customizedAccountNamesPreserved: true, manualTraePreserved: true, modelsAndBindingReferencesPreserved: true, rendererAndDiagnosticsDoNotContainSecrets: true, noRealClientCredentialsOrRelayProcesses: true, results, screenshots }, null, 2));
   } finally {
     store.setManagedState('qa-relay-client-import-stage', 'empty');
+    await evaluate(`(()=>{const original=${JSON.stringify(originalTheme)};if(original.theme===undefined)delete document.documentElement.dataset.theme;else document.documentElement.dataset.theme=original.theme;document.documentElement.style.colorScheme=original.colorScheme})()`);
     window.setMinimumSize(minimum[0], minimum[1]); window.setSize(size[0], size[1]);
   }
 }

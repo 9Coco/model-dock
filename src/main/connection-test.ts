@@ -6,6 +6,9 @@ import { upstreamEndpoint, type PreparedUpstream } from './oauth';
 import { isCopilotUpstream } from './copilot-provider';
 import { anthropicEndpoint } from './anthropic-endpoint';
 import type { DiagnosticContext, DiagnosticEvent, DiagnosticLevel } from '../shared/diagnostic-types';
+import { TraeNativeAccountError } from './trae-native-account';
+import { CentralNativeAccountError } from './central-native-account';
+import { JetBrainsIdeAccountError } from './jetbrains-ide-account';
 
 export interface ConnectionStore {
   getProvider(id: string): Provider | undefined;
@@ -289,7 +292,7 @@ async function boundedBody(response: Response, signal: AbortSignal): Promise<str
 /** A single small inference request; model discovery is a separate operation. */
 export class ConnectionTester {
   private readonly fetcher: typeof fetch;
-  constructor(private readonly store: ConnectionStore, private readonly oauth: ConnectionOAuth, private readonly options: { fetch?: typeof fetch; diagnostics?: (level: DiagnosticLevel, event: DiagnosticEvent, context?: DiagnosticContext) => void } = {}) { this.fetcher = options.fetch ?? fetch; }
+  constructor(private readonly store: ConnectionStore, private readonly oauth: ConnectionOAuth, private readonly options: { fetch?: typeof fetch; nativeRequest?: (provider: Provider, path: string, body: Record<string, unknown>, signal: AbortSignal) => Promise<Response | undefined>; diagnostics?: (level: DiagnosticLevel, event: DiagnosticEvent, context?: DiagnosticContext) => void } = {}) { this.fetcher = options.fetch ?? fetch; }
   private diagnostic(context: DiagnosticContext): void {
     try { this.options.diagnostics?.('info', 'connection.response', context); } catch { /* Diagnostics cannot change the inference result. */ }
   }
@@ -326,10 +329,17 @@ export class ConnectionTester {
       const matchesEndpoint = (url: string) => provider.kind === 'copilot' ? isCopilotUpstream(url, route) : url === expected;
       const body: Record<string, unknown> = wireApi === 'responses'
         ? { model: testedModel, input: [{ role: 'user', content: [{ type: 'input_text', text: 'Reply OK.' }] }], stream: false, store: false, max_output_tokens: 64 }
-        : { model: testedModel, messages: [{ role: 'user', content: 'Reply OK.' }], stream: false, max_tokens: 16 };
+        : { model: testedModel, messages: [{ role: 'user', content: 'Reply OK.' }], stream: false, ...(provider.nativeAdapter === 'trae' && wireApi === 'chat-completions' ? {} : { max_tokens: 16 }) };
       const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new ConnectionFailure('timeout', '推理测试超时（30 秒），请稍后重试或检查网络。')); }, TIMEOUT_MS); });
       const request = async () => {
         let prepared: PreparedUpstream;
+        let response: Response;
+        if (provider.nativeAdapter) {
+          prepared = { url: expected!, headers: {}, body };
+          const nativeResponse = await this.options.nativeRequest?.(provider, route, body, controller.signal);
+          if (!nativeResponse) throw new ConnectionFailure('configuration', '此账号的内置适配器不可用，请重新导入账号。');
+          response = nativeResponse;
+        } else {
         try { prepared = await this.oauth.prepareRequest(provider, route, body); }
         catch {
           assertActive(controller.signal);
@@ -350,7 +360,8 @@ export class ConnectionTester {
         if (!validAuth) {
           throw new ConnectionFailure('configuration', '推理请求认证头无效，已停止发送请求。');
         }
-        const response = await this.fetcher(prepared.url, { method: 'POST', headers: prepared.headers, body: JSON.stringify(prepared.body), signal: controller.signal, redirect: 'manual' });
+        response = await this.fetcher(prepared.url, { method: 'POST', headers: prepared.headers, body: JSON.stringify(prepared.body), signal: controller.signal, redirect: 'manual' });
+        }
         statusCode = response.status;
         assertActive(controller.signal);
         if (response.redirected || response.url && !matchesEndpoint(response.url)) { void response.body?.cancel().catch(() => undefined); throw new ConnectionFailure('configuration', '推理接口离开了当前供应商地址，已停止测试。'); }
@@ -372,7 +383,8 @@ export class ConnectionTester {
       const message = evidence === 'limited' ? '模型已处理推理请求，连接通顺；本次短测试达到输出上限。' : evidence === 'processed' ? '模型已处理推理请求，连接通顺；本次测试未返回最终回答。' : '模型推理已成功完成，连接通顺。';
       return { ok: true, outcome: 'success', message, testedModel, wireApi, statusCode, durationMs: Date.now() - start };
     } catch (error) {
-      const failure = error instanceof ConnectionFailure ? error : controller.signal.aborted ? new ConnectionFailure('timeout', '推理测试超时（30 秒），请稍后重试或检查网络。') : new ConnectionFailure('network', '无法连接推理接口，请检查网络与 API 地址后重试。');
+      const failure = error instanceof ConnectionFailure ? error : error instanceof TraeNativeAccountError || error instanceof CentralNativeAccountError || error instanceof JetBrainsIdeAccountError
+        ? new ConnectionFailure('authentication', error.message, 401) : controller.signal.aborted ? new ConnectionFailure('timeout', '推理测试超时（30 秒），请稍后重试或检查网络。') : new ConnectionFailure('network', '无法连接推理接口，请检查网络与 API 地址后重试。');
       return { ok: false, outcome: failure.outcome, message: failure.message, statusCode: failure.statusCode ?? statusCode, durationMs: Date.now() - start, ...(testedModel ? { testedModel } : {}), ...(wireApi ? { wireApi } : {}) };
     } finally { if (timer) clearTimeout(timer); controller.abort(); }
   }

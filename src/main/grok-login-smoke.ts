@@ -6,6 +6,7 @@ import type { Store } from './store';
 import type { AuthProgress, Provider, Snapshot } from '../shared/types';
 import type { AuthAccount } from '../shared/auth-types';
 import type { SettingsSnapshot } from '../shared/settings-types';
+import { beginSmokeAccountLogin, verifySmokeAccountLoginAvailable } from './auth-entry-smoke';
 
 /** Mock-only native Grok UI lifecycle regression. No client files or tokens are read. */
 export async function verifyGrokLogin(window: BrowserWindow, store: Store, outputDir: string, captureUi: () => Promise<Buffer>): Promise<void> {
@@ -44,7 +45,7 @@ export async function verifyGrokLogin(window: BrowserWindow, store: Store, outpu
     return provider;
   }
   async function begin(provider: Provider): Promise<void> {
-    await click(`article[data-provider-id="${provider.id}"] [aria-label="登录 ${provider.name}"]`);
+    await beginSmokeAccountLogin(window, provider.id);
   }
   async function progress(provider: Provider): Promise<AuthProgress> {
     const result = await evaluate<AuthProgress | null>(`window.modelDock.authProgress(${JSON.stringify(provider.id)})`);
@@ -218,7 +219,7 @@ export async function verifyGrokLogin(window: BrowserWindow, store: Store, outpu
       assert.equal(Number(process.env.MODELDOCK_SMOKE_GROK_POLLS), 0, 'Discovery cancellation must never reach token polling');
       await assertNoCredentials(preparingProvider, 'missing');
       preparing.push({ width, firstFrame, firstFrameElapsedMs, layout, cancelled: true, lateResponseIgnored: true, noCredentialsSaved: true });
-      await waitFor(`!document.querySelector('article[data-provider-id="${preparingProvider.id}"] [aria-label="登录 ${preparingProvider.name}"]').disabled`, 'cancelled login can be started again');
+      await verifySmokeAccountLoginAvailable(window, preparingProvider.id);
     }
 
     process.env.MODELDOCK_SMOKE_GROK_MODE = 'network-error'; process.env.MODELDOCK_SMOKE_GROK_POLLS = '0';

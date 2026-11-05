@@ -80,6 +80,13 @@ describe('TRAE quota coordinator with a real private Store', () => {
     expect(JSON.stringify([failed, f.cache(), f.view()])).not.toMatch(/SYNTHETIC_PRIVATE|currently-active|official-credits/);
     expect((await f.center.refresh(f.provider.id)).usage.status).toBe('ready');
   });
+  it('clears an old known plan after a successful unknown-tier result and never decorates a stale account plan onto a missing cache', async () => {
+    const f = await fixture(); const previous = await f.center.refresh(f.provider.id); expect(previous.plan).toBe('Pro');
+    const unknown = f.result(); delete unknown.plan; f.query.mockResolvedValueOnce(unknown);
+    expect((await f.center.refresh(f.provider.id)).plan).toBeUndefined(); expect(f.center.decorate(previous).plan).toBeUndefined();
+    f.store.saveProvider({ ...f.store.getProvider(f.provider.id)!, apiKey: 'changed-key' });
+    const invalidated = f.center.decorate(previous); expect(invalidated.plan).toBeUndefined(); expect(invalidated.accountId).toBeUndefined(); expect(invalidated.displayName).toBeUndefined();
+  });
   it('preserves only a controlled native failure message and does not restore an old account balance', async () => {
     const f = await fixture(); await f.center.refresh(f.provider.id); f.query.mockRejectedValueOnce(new RelayQuotaFailure('反代活跃账号已切换，请刷新。'));
     const failed = await f.center.refresh(f.provider.id); expect(failed.usage.message).toBe('反代活跃账号已切换，请刷新。'); expect(failed.usage.windows).toEqual([]); expect(failed.accountId).toBeUndefined();

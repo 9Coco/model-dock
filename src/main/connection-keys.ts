@@ -5,7 +5,7 @@ export function providerApiKey(store: Pick<Store, 'getProvider' | 'getSecret'>, 
   if (typeof id !== 'string' || !id || id.length > 200 || /[\r\n\0]/.test(id)) throw new Error('供应商标识无效。');
   const provider = store.getProvider(id);
   if (!provider) throw new Error('供应商不存在。');
-  if (provider.kind !== 'openai-compatible') throw new Error('订阅来源使用账号授权；请复制本地聚合接口的 API Key。');
+  if (provider.kind !== 'openai-compatible' || provider.nativeAdapter) throw new Error('订阅来源使用账号授权；请复制本地聚合接口的 API Key。');
   let key: string | undefined;
   try { key = store.getSecret(id)?.apiKey; }
   catch { throw new Error('无法读取已保存的 API Key。'); }
