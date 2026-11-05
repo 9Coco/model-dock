@@ -9,7 +9,7 @@ describe('首次窗口显示', () => {
     else presentation.windowDidPaint();
     expect(show).not.toHaveBeenCalled();
     presentation.rendererDidPrepare(); presentation.windowDidPaint();
-    expect(show.mock.calls).toEqual([[false]]);
+    expect(show.mock.calls).toEqual([[true]]);
     presentation.rendererDidPrepare(); presentation.windowDidPaint();
     expect(show).toHaveBeenCalledTimes(1);
   });
@@ -34,9 +34,9 @@ describe('首次窗口显示', () => {
     expect(show.mock.calls).toEqual([[true], [true]]);
   });
 
-  it('显式激活新窗口保留聚焦意图', () => {
+  it('普通可见启动显式请求窗口激活', () => {
     const show = vi.fn();
-    const presentation = new WindowPresentation(true, show, true);
+    const presentation = new WindowPresentation(true, show);
     presentation.windowDidPaint(); presentation.rendererDidPrepare();
     expect(show.mock.calls).toEqual([[true]]);
   });

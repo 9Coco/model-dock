@@ -4,6 +4,7 @@ import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync, chmodSy
 import { join } from 'node:path';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { isDeepStrictEqual } from 'node:util';
 import type { Provider, ProviderInput, ProviderSecret, Model, ModelInput, ToolBinding, ToolId, RequestLog, GatewayExposure, JetBrainsPlugin } from '../shared/types';
 import { isReasoningEffort, MODEL_SPEC_FIELDS, modelSpecs, sanitizeReasoningEfforts } from '../shared/types';
 import { JETBRAINS_RELAY_BASE_URL, isLocalTraeRelayUrl, providerPresets, presetById, TRAE_RELAY_BASE_URL } from '../shared/presets';
@@ -174,8 +175,8 @@ export class Store {
     const bytes = this.db.export();
     this.db.run('PRAGMA foreign_keys=ON');
     writeFileSync(temp, bytes, { mode: 0o600 });
+    if (process.platform !== 'win32') chmodSync(temp, 0o600);
     renameSync(temp, filename);
-    if (process.platform !== 'win32') chmodSync(filename, 0o600);
   }
   private mutate<T>(action: () => T): T {
     if (this.closed) throw new Error('存储已关闭。');
@@ -229,7 +230,7 @@ export class Store {
     if (typeof key !== 'string' || !/^[a-zA-Z0-9_.:-]{1,120}$/.test(key)) throw new Error('管理配置名称无效。');
     return `managed:${key}`;
   }
-  saveProvider(input: ProviderInput): Provider {
+  saveProvider(input: ProviderInput, beforeCommit?: (provider: Provider) => void): Provider {
     let providerId = input.id ? id(input.id) : randomUUID();
     const name = text(input.name, '供应商名称', 120);
     if (!kinds.has(input.kind) || typeof input.enabled !== 'boolean') throw new Error('供应商类型或启用状态无效。');
@@ -293,8 +294,33 @@ export class Store {
         if (input.kind !== 'openai-compatible') throw new Error('订阅供应商请使用 OAuth 登录。');
         this.putSecret(providerId, { apiKey });
       }
-      return this.getProvider(providerId)!;
+      const saved = this.getProvider(providerId)!;
+      beforeCommit?.(saved);
+      return saved;
     });
+  }
+  /** Import-only atomic save: stage in a cloned database and swap memory only
+   * after the private replacement file has been successfully renamed. */
+  async saveRelayClientImport(input: ProviderInput, metadata: unknown, expected?: { provider: Provider; apiKey?: string }): Promise<Provider> {
+    const SQL = await sqlPromise!;
+    if (this.closed) throw new Error('存储已关闭。');
+    if (input.kind !== 'openai-compatible' || !['trae-cn-relay', 'jetbrains-central'].includes(input.presetId ?? '')) throw new Error('反代导入来源无效。');
+    if (expected && (!isDeepStrictEqual(this.getProvider(expected.provider.id), expected.provider) || this.getSecret(expected.provider.id)?.apiKey !== expected.apiKey)) throw new Error('供应商已被修改，请重新导入。');
+    if (!input.id && this.listProviders().some(provider => providerIdentity(provider) === providerIdentity(input))) throw new Error('供应商列表已变动，请重新导入。');
+    const encoded = JSON.stringify(metadata);
+    if (!encoded || Buffer.byteLength(encoded) > 8192) throw new Error('客户端导入来源信息无效。');
+    const original = this.db, bytes = original.export(); original.run('PRAGMA foreign_keys=ON');
+    const staged = new SQL.Database(bytes); staged.run('PRAGMA foreign_keys=ON'); this.db = staged;
+    let saved: Provider;
+    try {
+      saved = this.saveProvider(input, provider => {
+        this.db.run('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', [this.managedKey(`auth-metadata:${provider.id}`), this.codec.encrypt(encoded)]);
+      });
+    } catch (error) {
+      this.db = original; staged.close(); throw error;
+    }
+    try { original.close(); } catch { /* The staged database and disk already committed; cleanup cannot undo it. */ }
+    return saved;
   }
   private providerModelCount(providerId: string): number { return Number(this.one('SELECT COUNT(*) AS count FROM models WHERE provider_id=?', [providerId])?.count ?? 0); }
   private rankDuplicateProviders(providers: Provider[]): Provider[] {

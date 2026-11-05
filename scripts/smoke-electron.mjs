@@ -171,10 +171,22 @@ child.on('exit', code => {
       console.log(JSON.stringify({ exitCode: code, bridge: value.bridge, relaySubscriptions: true, screenshots: result.screenshots.length, output }));
       process.exit(code || 0);
     }
+    if (env.MODELDOCK_SMOKE_RELAY_CLIENT_IMPORT_ONLY === '1') {
+      const result = JSON.parse(readFileSync(resolve(output, 'relay-client-import-validation.json'), 'utf8'));
+      if (!result.ok || !result.failuresPreserveExistingConfiguration || !result.syntheticImportsAndProvenanceVerified || !result.repeatedImportReusesProviders || !result.rendererAndDiagnosticsDoNotContainSecrets) throw new Error('Relay native client import validation failed');
+      console.log(JSON.stringify({ exitCode: code, bridge: value.bridge, relayClientImport: true, screenshots: result.screenshots.length, output }));
+      process.exit(code || 0);
+    }
     if (env.MODELDOCK_SMOKE_NAVIGATION_CONSOLIDATION_ONLY === '1') {
       const result = JSON.parse(readFileSync(resolve(output, 'navigation-consolidation-validation.json'), 'utf8'));
       if (!result.ok || !result.subscriptionAdditionOnlyInAuthCenter || !result.serviceInterfaceAndLogsConsolidated || !result.subscriptionLocalUrlKeyAliasesCopied || !result.credentialsAndToolBindingsPreserved) throw new Error('Navigation and local subscription connection validation failed');
       console.log(JSON.stringify({ exitCode: code, bridge: value.bridge, navigationConsolidation: true, screenshots: result.screenshots.length, output }));
+      process.exit(code || 0);
+    }
+    if (env.MODELDOCK_SMOKE_SIDEBAR_LAYOUT_ONLY === '1') {
+      const result = JSON.parse(readFileSync(resolve(output, 'sidebar-layout-validation.json'), 'utf8'));
+      if (!result.ok || !result.nativePointerResize || !result.preferredWidthSurvivesClampAndReload || !result.keyboardProviderTabs || !result.providersModelsBindingsUnchanged) throw new Error('Resizable sidebar or provider tab verification failed');
+      console.log(JSON.stringify({ exitCode: code, bridge: value.bridge, sidebarLayout: true, screenshots: result.screenshots.length, output }));
       process.exit(code || 0);
     }
     if (env.MODELDOCK_SMOKE_TOOL_ICONS_ONLY === '1') {

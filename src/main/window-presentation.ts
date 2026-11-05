@@ -3,14 +3,13 @@ export class WindowPresentation {
   private rendererReady = false;
   private paintReady = false;
   private presented = false;
-  constructor(private allowed: boolean, private readonly show: (focus: boolean) => void, private explicit = false) {}
+  constructor(private allowed: boolean, private readonly show: (focus: boolean) => void) {}
 
   rendererDidPrepare(): void { this.rendererReady = true; this.presentInitial(); }
   windowDidPaint(): void { this.paintReady = true; this.presentInitial(); }
 
   requestOpen(): void {
     this.allowed = true;
-    this.explicit = true;
     if (!this.rendererReady || !this.paintReady) return;
     this.presented = true;
     this.show(true);
@@ -19,6 +18,8 @@ export class WindowPresentation {
   private presentInitial(): void {
     if (!this.allowed || !this.rendererReady || !this.paintReady || this.presented) return;
     this.presented = true;
-    this.show(this.explicit);
+    // A visible startup is an open request too. Hidden startup never reaches
+    // this branch; it keeps waiting for requestOpen().
+    this.show(true);
   }
 }

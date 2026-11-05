@@ -15,6 +15,9 @@ const fixtureSymbols = [
   'verifyContextMenus', 'context-menu-validation.json', 'synthetic-context-menu-key',
   'verifyRelaySubscriptions', 'relay-subscriptions-validation.json', 'synthetic-trae-relay-key', 'synthetic-jetbrains-relay-key',
   'verifyNavigationConsolidation', 'navigation-consolidation-validation.json', 'synthetic-navigation-api-key',
+  'observeWindowPresentation', 'window-presentation-validation.json', 'probe-focus-request',
+  'verifySidebarLayout', 'sidebar-layout-validation.json', 'synthetic-sidebar-layout-key', 'revealSmokeNavigationTarget',
+  'verifyRelayClientImport', 'relay-client-import-validation.json', 'synthetic-relay-import-manual-key', 'qa-relay-client-import-stage', 'PRIVATE_RELAY_IMPORT',
 ];
 
 function assert(condition, message) {

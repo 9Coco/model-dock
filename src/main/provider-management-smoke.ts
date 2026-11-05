@@ -3,6 +3,7 @@ import { writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { clipboard, type BrowserWindow } from 'electron';
 import type { Store } from './store';
+import { revealSmokeNavigationTarget } from './smoke-navigation';
 import { providerCategory } from '../shared/presets';
 
 /** Real React/preload/clipboard validation, restricted to a fresh synthetic smoke profile. */
@@ -38,6 +39,7 @@ export async function verifyProviderManagement(window: BrowserWindow, store: Sto
     throw new Error(`Provider management UI timed out: ${label}`);
   }
   async function click(selector: string): Promise<void> {
+    await revealSmokeNavigationTarget(window, selector);
     await waitFor(`!!document.querySelector(${JSON.stringify(selector)})&&!document.querySelector(${JSON.stringify(selector)}).disabled`, selector);
     await evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);
   }

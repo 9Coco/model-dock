@@ -1,0 +1,6 @@
+.resizable-sidebar { position: relative; }
+.sidebar-resizer { position: absolute; z-index: 30; top: 0; right: -3px; bottom: 0; width: 7px; cursor: col-resize; touch-action: none; outline: none; }
+.sidebar-resizer::after { content: ''; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; background: var(--accent); opacity: 0; }
+.sidebar-resizer:hover::after, .sidebar-resizer:focus-visible::after, .sidebar-resizer.dragging::after { opacity: 1; }
+.sidebar-resizer:focus-visible { box-shadow: inset 0 0 0 1px var(--accent); }
+html.sidebar-resizing, html.sidebar-resizing * { cursor: col-resize !important; user-select: none !important; }

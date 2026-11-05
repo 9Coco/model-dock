@@ -1,6 +1,15 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { ModelDockApi } from '../shared/types';
 const call = (method: string, ...args: unknown[]) => ipcRenderer.invoke('modeldock:' + method, ...args);
+const relayImportCall = async (method: 'relayClientImportCandidates' | 'importRelayClientAccount', ...args: unknown[]) => {
+  try { return await call(method, ...args); }
+  catch (error) {
+    // Main already restricts these failures to safe user messages. Remove
+    // Electron's transport prefix before crossing the renderer bridge.
+    const message = error instanceof Error ? error.message.replace(/^Error invoking remote method ['"]modeldock:(?:relayClientImportCandidates|importRelayClientAccount)['"]:\s*(?:Error:\s*)?/, '') : '';
+    throw new Error(message || '客户端导入失败，请检查本机客户端登录后重试。');
+  }
+};
 const rendererErrorNames = new Set(['Error', 'TypeError', 'ReferenceError', 'SyntaxError', 'RangeError', 'URIError', 'EvalError', 'AggregateError', 'AbortError', 'TimeoutError']);
 const api: ModelDockApi = {
   setJetBrainsPlugin: (tool, plugin) => call('setJetBrainsPlugin', tool, plugin),
@@ -37,6 +46,7 @@ const api: ModelDockApi = {
   logoutAccount: id => call('logoutAccount', id), importLocalAccount: kind => call('importLocalAccount', kind),
   beginCopilotLogin: () => call('beginCopilotLogin'), copilotAuthProgress: () => call('copilotAuthProgress'),
   cancelCopilotLogin: () => call('cancelCopilotLogin'), copilotLogoutAccount: id => call('copilotLogoutAccount', id),
+  relayClientImportCandidates: kind => relayImportCall('relayClientImportCandidates', kind), importRelayClientAccount: (kind, id) => relayImportCall('importRelayClientAccount', kind, id),
   copilotImportCandidates: () => call('copilotImportCandidates'), importCopilotClientAccount: id => call('importCopilotClientAccount', id),
   mcpList: () => call('mcpList'), mcpSave: input => call('mcpSave', input), mcpDelete: id => call('mcpDelete', id),
   mcpSetTool: (id, tool, enabled) => call('mcpSetTool', id, tool, enabled), mcpImport: tool => call('mcpImport', tool),

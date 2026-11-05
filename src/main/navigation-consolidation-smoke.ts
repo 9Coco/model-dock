@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { clipboard, type BrowserWindow } from 'electron';
 import type { Store } from './store';
+import { revealSmokeNavigationTarget } from './smoke-navigation';
 import { JETBRAINS_RELAY_BASE_URL, TRAE_RELAY_BASE_URL, providerCategory } from '../shared/presets';
 
 /** Real navigation/local-connection validation with an isolated synthetic client import. */
@@ -32,6 +33,7 @@ export async function verifyNavigationConsolidation(window: BrowserWindow, store
     throw new Error(`Navigation consolidation timed out: ${label}`);
   }
   async function click(selector: string): Promise<void> {
+    await revealSmokeNavigationTarget(window, selector);
     await waitFor(`!!document.querySelector(${JSON.stringify(selector)})&&!document.querySelector(${JSON.stringify(selector)}).disabled`, selector);
     await evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);
   }

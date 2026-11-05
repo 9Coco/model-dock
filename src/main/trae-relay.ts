@@ -7,6 +7,8 @@ import { homedir, release } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { TRAE_RELAY_BASE_URL } from '../shared/presets'
+import { TraeClientImportError, type TraeClientCredentials } from './trae-client-import'
+import { postTraeRelayAccount, type TraeRelayImportResult } from './trae-relay-import'
 
 export { TRAE_RELAY_BASE_URL }
 const relayUrl = new URL(TRAE_RELAY_BASE_URL)
@@ -96,6 +98,7 @@ function probeHealth(): Promise<boolean> {
 
 const defaults = {
   docker: runDocker, portAvailable, health: probeHealth,
+  importAccount: postTraeRelayAccount,
   wait: () => new Promise<void>(resolve => setTimeout(resolve, 400)),
 }
 
@@ -324,6 +327,26 @@ export class TraeRelayManager {
         if ((await this.container(profile))?.running) throw new RelayFailure('unavailable', 'Docker 尚未停止中转。')
       }
       return stopped
+    })
+  }
+
+  /** Explicit import only, serialized against start/stop. Never send an
+   * account credential to an arbitrary manually configured relay URL. */
+  importAccount(apiKey: string, credentials: TraeClientCredentials): Promise<TraeRelayImportResult> {
+    const result = this.queue.then(async () => {
+      if (!/^[a-zA-Z0-9_-]{32,128}$/.test(apiKey)) throw new RelayFailure('conflict', '本机中转密钥无效。')
+      const profile = await this.readProfile()
+      if (!profile || profile.keyHash !== keyHash(apiKey)) throw new RelayFailure('conflict', '账号导入只支持当前 ModelDock 托管反代，请先启动匹配的本机反代。')
+      const current = await this.container(profile)
+      if (!current?.running) throw new RelayFailure('stopped', '请先启动 ModelDock 托管的 TRAE 本机反代，再导入客户端账号。')
+      const status = await this.ready(current.id, profile, false)
+      if (status.state !== 'running') throw new RelayFailure(status.state, status.message)
+      return this.io.importAccount(apiKey, credentials)
+    })
+    this.queue = result.then(() => undefined, () => undefined)
+    return result.catch(error => {
+      if (error instanceof TraeClientImportError) throw error
+      throw new TraeClientImportError('relay', error instanceof RelayFailure ? error.message : 'TRAE 本机账号导入失败，请检查托管反代后重试。')
     })
   }
 }

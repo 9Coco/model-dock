@@ -747,6 +747,12 @@ td { padding: 12px; color: #5b7152; }
 .quota-stale-badge { border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; color: var(--warning); font-size: 9px; }
 .auth-panel .quota-unavailable { color: var(--muted); }
 .auth-panel .account-actions { align-self: start; padding-top: 1px; gap: 3px; }
+.auth-relay-import-source { color: var(--muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.auth-relay-import-loading { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+.auth-relay-import-notes { margin-top: 16px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; line-height: 1.75; overflow-wrap: anywhere; }
+.auth-relay-import-notes p { margin: 6px 0; }
+.auth-panel.auth-compact .account-group-header { flex-wrap: wrap; }
+.auth-panel.auth-compact .account-group-header .row-actions { flex-wrap: wrap; margin-left: auto; justify-content: flex-end; }
 @media (max-width: 1120px) {
   .auth-panel .account-row { grid-template-columns: minmax(180px, .9fr) minmax(245px, 1.3fr); gap: 12px 18px; padding: 17px 14px; }
   .auth-panel .account-actions { grid-column: 1 / -1; margin-top: -4px; justify-content: flex-end; }
