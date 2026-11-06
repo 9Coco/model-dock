@@ -24,6 +24,12 @@
 .auth-panel.auth-compact .account-identity strong { flex: 1 1 100%; max-width: 100%; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; font-weight: 500; line-height: 1.6; color: var(--ink); }
 .auth-panel.auth-compact .account-plan { display: inline-block; padding: 0 4px; margin: 0; color: var(--muted); background: var(--surface-soft); border: 1px solid var(--line); border-radius: 3px; font-size: 12px; line-height: 17px; font-weight: 400; }
 .auth-panel.auth-compact .auth-identity-content .account-plan { flex: 0 0 auto; min-width: 0; max-width: 72px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.auth-panel.auth-compact .auth-license-identity { row-gap: 0; }
+.auth-panel.auth-compact .auth-license-identity strong { line-height: 1.25; }
+.auth-panel.auth-compact .auth-license-identity .account-plan { max-width: 100%; white-space: normal; overflow-wrap: anywhere; line-height: 1.15; }
+.auth-panel.auth-compact .auth-license-summary { display: flex; gap: 8px; min-width: 0; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.auth-panel.auth-compact .auth-license-summary > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.auth-panel.auth-compact .auth-license-summary > span:last-child { flex: 0 0 auto; }
 .auth-panel.auth-compact .auth-identity-status { margin: 0; font-size: 12px; line-height: 1.5; color: var(--muted); }
 .auth-panel.auth-compact .auth-identity-status { flex-shrink: 0; }
 .auth-panel.auth-compact .account-quotas { min-width: 0; display: flex; flex-direction: column; gap: 5px; }

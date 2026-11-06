@@ -59,6 +59,8 @@ export interface AuthAccount {
   /** Public, allowlisted HTTPS profile image; never a token-bearing URL. */
   avatarUrl?: string;
   plan?: string;
+  /** Verified native license display metadata. No raw license identifier. */
+  license?: { label: string; expiresAt?: string; verifiedAt?: string };
   authStatus: Provider['authStatus'] | 'expired';
   expiresAt?: number;
   canRefresh: boolean;
@@ -89,5 +91,5 @@ export interface RelayClientImportPreview {
   message: string;
 }
 
-export type JetBrainsIdeImportResult = { status: 'imported'; account: AuthAccount }
+export type JetBrainsIdeImportResult = { status: 'imported'; account: AuthAccount; accounts?: AuthAccount[]; failures?: { label: string; message: string }[] }
   | { status: 'selection-required'; preview: RelayClientImportPreview };
