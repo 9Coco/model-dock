@@ -1,3 +1,4 @@
+import { SUBSCRIPTION_NAMES } from '../shared/subscription-names';
 import { createHash, randomUUID } from 'node:crypto';
 import type { AuthAccount, RelayClientImportPreview, RelayClientImportProvenance, SubscriptionUsage } from '../shared/auth-types';
 import { JETBRAINS_RELAY_BASE_URL } from '../shared/presets';
@@ -82,7 +83,7 @@ export class CentralNativeAccounts {
       if (hash(this.transfer(await this.reader.read())) !== ticket.fingerprint) throw new CentralNativeAccountError('Central 账号在授权期间已切换，未保存旧账号授权，请重新选择。');
       this.open();
       if (controller.signal.aborted || ticket.until <= this.now() || eligibleBefore !== hash(eligibleProviders()) || target && metadataBefore !== hash(this.store.getManagedState(`auth-metadata:${target.id}`, null))) throw new CentralNativeAccountError('Central 连接在授权期间已变更，请重新选择。');
-      let name = target?.name ?? 'JetBrains AI · Central 导入'; const base = name; let suffix = 2;
+      let name = target?.name ?? SUBSCRIPTION_NAMES['jetbrains-central']; const base = name; let suffix = 2;
       while (!target && this.store.listProviders().some(provider => provider.name.toLowerCase() === name.toLowerCase())) name = `${base} ${suffix++}`;
       const input: ProviderInput = { ...target, ...(target ? { id: target.id } : {}), name, note: target?.note ?? '', enabled: target?.enabled ?? true, kind: 'openai-compatible', presetId: 'jetbrains-central', baseUrl: JETBRAINS_RELAY_BASE_URL, messagesAuth: 'bearer', claudeBaseUrl: '', apiKey: key };
       const metadata: Metadata = { version: 1, revision: randomUUID(), connection: relayConnectionFingerprint(input, key), identity: identity(credentials), clientImport: { client: 'jetbrains-central', accountLabel: credentials.accountLabel, importedAt: new Date(this.now()).toISOString(), upstreamVerified: true }, nativeCentral: { version: 1, credentials } };

@@ -1,6 +1,7 @@
 import type { KeyboardEvent } from 'react';
 import type { Provider, ProviderKind } from '../shared/types';
 import { providerCategory } from '../shared/presets';
+import { subscriptionDisplayName } from '../shared/subscription-names';
 import { Plus } from './MaterialIcon';
 import './provider-navigation.css';
 
@@ -49,8 +50,8 @@ export function ProviderNavigation({ providers, selectedProviderId, active, cate
       data-sidebar-provider-category={item.id} hidden={category !== item.id} tabIndex={providers.some(provider => providerCategory(provider) === item.id) ? undefined : 0}>
       {providers.filter(provider => providerCategory(provider) === item.id).map(provider => <button type="button" key={provider.id}
         data-source-id={provider.id} className={`nav-item source-nav ${active && selectedProviderId === provider.id ? 'active' : ''}`}
-        aria-current={active && selectedProviderId === provider.id ? 'page' : undefined} title={provider.name} onClick={() => onSelect(provider.id)}>
-        <span className={`nav-monogram ${provider.kind}`} aria-hidden="true">{symbols[provider.kind]}</span><span>{provider.name}</span><span className={`status-dot ${provider.authStatus === 'ready' && provider.enabled ? 'green' : ''}`} aria-hidden="true" />
+        aria-current={active && selectedProviderId === provider.id ? 'page' : undefined} title={subscriptionDisplayName(provider)} onClick={() => onSelect(provider.id)}>
+        <span className={`nav-monogram ${provider.kind}`} aria-hidden="true">{symbols[provider.kind]}</span><span>{subscriptionDisplayName(provider)}</span><span className={`status-dot ${provider.authStatus === 'ready' && provider.enabled ? 'green' : ''}`} aria-hidden="true" />
       </button>)}
       {!providers.some(provider => providerCategory(provider) === item.id) && <p className="provider-navigation-empty">{item.id === 'api' ? '尚未添加 API' : '在授权中心添加订阅'}</p>}
     </div>)}

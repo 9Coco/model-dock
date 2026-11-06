@@ -1,3 +1,4 @@
+import { SUBSCRIPTION_NAMES } from '../shared/subscription-names';
 import { createHash, randomUUID } from 'node:crypto';
 import type { AuthAccount, JetBrainsIdeImportResult, RelayClientImportPreview, RelayClientImportProvenance, SubscriptionUsage } from '../shared/auth-types';
 import { JETBRAINS_RELAY_BASE_URL } from '../shared/presets';
@@ -171,7 +172,7 @@ export class JetBrainsIdeAccounts {
     const latest = await this.abortable(this.reader.readCredentials(id), signal);
     this.assertActive(signal); if (target) this.assertEpoch(target.id, epoch, signal);
     if (latest.accountId !== credentials.accountId || latest.licenseId !== credentials.licenseId || latest.product !== credentials.product || latest.sourceIdentity !== credentials.sourceIdentity) throw new JetBrainsIdeAccountError('JetBrains IDE 当前账号或 AI 许可证在授权期间已切换，未保存，请重新导入。');
-    let name = target?.name ?? 'JetBrains AI · IDE 导入'; const base = name; let suffix = 2;
+    let name = target?.name ?? SUBSCRIPTION_NAMES['jetbrains-central']; const base = name; let suffix = 2;
     while (!target && this.store.listProviders().some(provider => provider.name.toLowerCase() === name.toLowerCase())) name = `${base} ${suffix++}`;
     const input: ProviderInput = { ...target, ...(target ? { id: target.id } : {}), name, enabled: target?.enabled ?? true, note: target?.note ?? '', kind: 'openai-compatible', presetId: 'jetbrains-central', baseUrl: JETBRAINS_RELAY_BASE_URL, messagesAuth: 'bearer', claudeBaseUrl: '', apiKey: key };
     const metadata: NativeMetadata = { version: 1, revision: randomUUID(), connection: relayConnectionFingerprint(input, key), identity: hash([credentials.accountId, credentials.sourceIdentity]), clientImport: { client: 'jetbrains-ide', accountLabel: credentials.accountLabel, importedAt: new Date(this.now()).toISOString(), upstreamVerified: true }, nativeIde, initialUsage: usage };

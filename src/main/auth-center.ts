@@ -1,3 +1,4 @@
+import { SUBSCRIPTION_NAMES } from '../shared/subscription-names';
 import { readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -471,7 +472,7 @@ export class AuthCenter {
     const metadata = { ...accountMetadata(kind, secret.accessToken!, idToken, secret.accountId), source: 'client-import' as const };
     if (kind === 'codex' && !secret.accountId) secret.accountId = metadata.accountId;
     const exact = this.store.listProviders().find(p => p.kind === kind && this.store.getSecret(p.id)?.accessToken === secret.accessToken);
-    const provider = exact ?? this.store.saveProvider({ name: `${kind === 'codex' ? 'Codex' : 'Grok Build'} · 客户端导入`, kind, presetId: kind === 'codex' ? 'codex-subscription' : 'grok-build', baseUrl: kind === 'codex' ? 'https://chatgpt.com/backend-api/codex' : 'https://cli-chat-proxy.grok.com/v1', enabled: true, note: '通过授权中心显式导入本机客户端授权；原客户端文件未改动。' });
+    const provider = exact ?? this.store.saveProvider({ name: SUBSCRIPTION_NAMES[kind], kind, presetId: kind === 'codex' ? 'codex-subscription' : 'grok-build', baseUrl: kind === 'codex' ? 'https://chatgpt.com/backend-api/codex' : 'https://cli-chat-proxy.grok.com/v1', enabled: true, note: '通过授权中心显式导入本机客户端授权；原客户端文件未改动。' });
     this.epochs.set(provider.id, (this.epochs.get(provider.id) ?? 0) + 1);
     this.active.get(provider.id)?.controller.abort();
     this.active.delete(provider.id);
