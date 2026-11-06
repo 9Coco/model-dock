@@ -1,5 +1,46 @@
 # ModelDock 验证记录
 
+## 2026-11-06 / 0.3.79 · JetBrains 默认一键从 IDE / Air 导入
+
+- 按用户要求将 JetBrains 授权入口改为「从客户端导入」。显式单击即从 IDE / Air 扫描并导入唯一账号/许可证，成功直接更新账号，不显示前置说明框或成功确认框。无来源/服务器拒绝仅提示安全错误，保留现有记录，不尝试另一来源或 Central。
+- 新主进程默认导入接口与旧选票导入共用导入锁、关闭/取消保护和票据核验。仅主进程增加账号/许可证指纹，同身份跨 IDE 去重并优先现有来源；不同身份、身份不完整或其他 IDE 有不支持/错配访问来源时要求用户明确选择，避免隐式改用另一份个人许可证。保存前再次读取本机来源，阻止云校验期间换号/换证。
+- Central 和原手动预览/导入保留在独立「其他连接方式」。新接口经窄preload桥调用，诊断区分已导入与等待选择，不记录账号标签、候选内容或私有指纹。
+- App在开始处理显式导入请求时消费并清除该请求，使用递增ID，离开授权中心清除待办；AuthPanel保留本地防重、busy和迟到结果校验。启动、普通导航、账号轮询均不扫描或导入，回到授权页不重放旧操作。
+- 类型检查、生产构建及生产入口去测试代码校验通过。111个完整测试文件全过，2424项中2418通过、6项按条件跳过、0失败；覆盖默认去重、歧义无密钥/API/存储副作用、来源变更、取消/关闭及诊断脱敏。
+- 实际 Linux Electron IDE 专项通过，验证单击无弹框、忙碌/重复点击只一次、来源复用、失败保留、真正多许可证才选择、App请求消费不重放及模拟目录/Chat调用。全程合成账号，不读取真实IDE凭据、不连接真实官方账号或发送云端推理。
+- 最终IDE专项13张截图覆盖单击成功、忙碌及多许可证选择的明暗宽窄布局；通用Electron全链另通过（exit0/bridge、本机模拟请求200）。Linux amd64 deb交付至 `release/model-dock_0.3.79_amd64.deb` 和本次outputs，SHA256：`2031bed1ef0eb56c0e321d558f874e8461498756ebf51aea39e36d111359249a`。包内40个生产文件逐项匹配，Deb解包ASAR与目录包一致，打包后Wayland正式启动及单实例通过；未安装或关闭用户应用。
+- 证据：本次work下 `jetbrains-one-click-tests.log`、`jetbrains-one-click-build.log`、`jetbrains-one-click-native-ide-final/jetbrains-ide-import-validation.json`。
+
+## 2026-11-06 / 0.3.78 · TRAE 官方可用积分规则与真实额度核对
+
+- 用户提供官方用量截图：每日签到1313.80/1900（19笔）、每月赠送500/500、总可用1813.80。经用户明确选择「允许只读查询官方额度」，执行一次只读账号/额度查询；不刷新令牌、不修改源客户端、不发送模型生成。持久化结果仅含允许的数值额度/状态/有效期字段和字段名，不含账号身份、令牌、原始请求或完整上游响应。
+- 真实响应含21个权益包：1个Free功能包、20个积分包。其中19笔100积分共用586.1964，剩1313.8036；另500积分包usage为空。14个积分包省略credits_amount。官方本机3.4.15的ICubeUsageService.pRr及CNCommercialService.extractCreditsUsage均明确以usage?.credits_amount??0计算：这批省略值表示未消费，非未知，也不宣称是已证实的protobuf默认值。修复前将它们当未知导致与官网不一致。
+- credits按每笔max(limit-used,0)合计，保留精度后格式化两位；真实脱敏字段离线回放确认total2400、remaining1813.8036、20笔明细、显示1,813.80。未再次请求账号。原始脱敏快照未保存group_name/group_type的值，因此真实来源名称不作为本轮现场核验结论；生产代码读取服务端分组名和分组标识，缺失时不按金额、包数或来源ID猜名称。
+- 使用独立summary显示总可用，windows按已识别官方来源分组，details保留每笔；积分和快速请求分离，不平均百分比、不重复累加总计。显式null/错误用量、错误上限继续保持未知并向分组/总计传播；不因is_hide/is_last_period删余额。补齐按字段选择原生quota/订阅quota的回退，显式错误值不静默回退。
+- 额度到期使用expiresAt并与resetAt分开，任意已知单笔到期触发重新查询且保留退避。TRAE缓存v1/v2升级v3只使旧额度重新查询，已有账号、模型和工具绑定不变。缓存过期的显著总数显示上次可用积分。
+- 111个完整测试文件通过，2401项中2395通过、6项按条件跳过、0失败。类型检查、生产构建、生产去测试入口校验和真实脱敏数据离线验算通过。实际Linux Electron X11专项通过（45截图），包含真实parser接收合成21包后的1813.80总数、两组来源、20笔明细、到期文案、未知向总计传播、40项旧回归及980/1180明暗主题布局。最后的陈旧摘要文案/颜色调整经最终构建纳入，未重复整套原生场景。
+- Linux amd64 deb交付至 `release/model-dock_0.3.78_amd64.deb` 及本次outputs；SHA256：`6fbffc1a07765f455ee6bb5a43777f904145dbdb2cfd46163610c20f97a1d40a`。包内40个生产入口/界面/许可/图标/WASM文件逐项匹配，Deb解包ASAR/可执行程序与目录包一致；打包后的Wayland正式启动及单实例检查通过。未安装到系统或关闭用户应用。
+- 证据位于本次work：`live-trae-quota-shape.json`（脱敏、私有权限）、`trae-quota-observed-replay-verification.json`、`trae-quota-summary-tests.log`、`trae-quota-summary-build.log`、`trae-quota-summary-native-quota/relay-quota-validation.json`。真实模型推理不在本轮验证范围。
+
+## 2026-11-06 / 0.3.77 · TRAE 多额度包解析与界面修复
+
+- 用户真实截图复现授权中心多项积分撑高账号行、文字截断。代码审查确认额度 parser 原先只排除少数终态，没有应用套餐 parser 现有的状态1/3和生效/过期时段校验；界面也没有限制逐包显示数量。截图本身不能证明每个包均已过期，未按编号或金额删包，也未合并不同独立额度。
+- 额度和套餐共用当前有效包筛选，查询时点只取一次；按筛选后有效包编号，保留有效的已耗尽、余额未知和不限量额度。TRAE 额度缓存升级v2，旧缓存刷新前显示未查询，不删除加密账号、模型或工具绑定。
+- 账号列表仅显示前两项，其余由「查看全部 N 项额度」进入已有账号详情。详情完整显示每项名称/余额/重置信息，可滚动到最后；行内额度名称列扩宽，身份和操作按钮顶部对齐。
+- 类型检查、生产构建及生产去测试入口校验通过。111个测试文件全过，2382项中2376通过、6项按条件跳过、0失败。新增包状态/有效期/查询时点/缓存迁移回归；原有网关流式回归保留。
+- 实际Linux Electron X11额度专项通过，32张截图覆盖980/1180、明暗主题。40项独立额度仅展示2项且总数准确，零/未知/不限量保持区分，全部详情可读、无横向溢出、可滚动到第40项，刷新减少为2项后入口自动消失；合成资料的供应商、密钥、模型和工具配置不变。
+- 一次拟议的本机TRAE授权只读官方额度查询被自动审批拒绝，原因是此请求没有明确授权真实凭据访问；该命令未执行，也未绕过。最终验收采用官方本机公共字段证据、合成账号及本机模拟上游，没有读取真实账号凭据或发起官方请求/模型生成。
+- Linux amd64 deb 已交付到 `release/model-dock_0.3.77_amd64.deb` 及本次 outputs。SHA256：`ab0c3a249dd8344b83d5545343c7f280819057ea7a68d76deb9964ab090f3d22`；包内40个生产入口/资源文件逐项哈希匹配，Deb解包的ASAR/主程序与目录包一致。打包后的Wayland正式入口和单实例检查通过；未安装或关闭用户旧版程序。
+- 证据：`/home/coco/Documents/Codex/2026-11-06/zu/work/trae-quota-fix-tests.log`、`trae-quota-fix-build.log`、`trae-quota-fix-native-quota/relay-quota-validation.json`。
+
+## 2026-11-06 / 0.3.76 · Linux amd64 deb 交付
+
+- 基于上节已验证构建打包，Electron 44.5.1 Linux x64；不覆盖已有 `release/linux-unpacked` 目录或终止用户应用。安装包同时位于 `release/model-dock_0.3.76_amd64.deb` 与 `/home/coco/Documents/Codex/2026-11-06/zu/outputs/model-dock_0.3.76_amd64.deb`。
+- Deb SHA256：`e1ed99709f5c44637750a546560a43ae4f6c570cebd35be02d15776e00636034`。解包后 98 条 MD5 校验全部通过；amd64/version、ELF/权限、启动器、图标、安装维护脚本语法和依赖检查通过。
+- ASAR 与当前构建的 40 个入口/界面/许可/图标/SQLite WASM 文件逐项哈希一致；正式入口指纹正确，无测试入口、账号数据或旧 Python/Pi/独立反代资源。ASAR SHA256：`422abaf3e15f1f152dc3af4e4d037cbfde8963e30e4d9203f93a278574b2260b`。
+- 打包后的正式 Linux 程序使用空白隔离目录在本机 Wayland 实际启动，`app.ready`、无启动错误、同目录单实例检查通过；测试后仅关闭测试进程。未安装到系统，未执行安装/卸载脚本，未发起真实账号云端推理。
+- 证据：`/home/coco/Documents/Codex/2026-11-06/zu/work/linux-package-0.3.76.log`、`linux-package-verification.json`、`linux-packaged-production-launch.json`、`linux-package-delivery.json`；校验文件在本次 outputs 中。
+
 ## 2026-11-06 / 0.3.76 · Linux 直接代理架构验证
 
 - 本机 Linux x86_64、Node.js 25.9.0、Electron 44.5.1 验证当前 `da18156` 源码。TRAE / JetBrains IDE / Central 均在现有主进程 Gateway 内运行 TypeScript 适配器；Linux 保留 XDG / Java Preferences / Central 原生程序发现路径，未发现确定的 Linux 生产阻断。

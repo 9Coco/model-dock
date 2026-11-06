@@ -42,19 +42,20 @@ export function quotaQueryAge(value: string | undefined, now: number): string {
 }
 export function quotaCacheExpired(usage: SubscriptionUsage, now: number): boolean {
   const time = timestamp(usage.queriedAt);
-  return usage.status === 'stale' || time !== undefined && (now - time >= QUOTA_CACHE_TTL_MS || resetPassedSinceQuery(usage, time, now));
+  return usage.status === 'stale' || time !== undefined && (now - time >= QUOTA_CACHE_TTL_MS || quotaBoundaryPassedSinceQuery(usage, time, now));
 }
-function resetPassedSinceQuery(usage: SubscriptionUsage, queriedAt: number, now: number): boolean {
-  return usage.windows.some(window => {
-    const resetAt = timestamp(window.resetAt);
-    return resetAt !== undefined && resetAt > queriedAt && resetAt <= now;
-  });
+function quotaBoundaryPassedSinceQuery(usage: SubscriptionUsage, queriedAt: number, now: number): boolean {
+  const windows = usage.details ? [...usage.windows, ...usage.details] : usage.windows;
+  return windows.some(window => [window.resetAt, window.expiresAt].some(value => {
+    const boundary = timestamp(value);
+    return boundary !== undefined && boundary > queriedAt && boundary <= now;
+  }));
 }
 /** A five-second account cache read never implies a five-second network query. */
 export function quotaRefreshDue(usage: SubscriptionUsage, authorized: boolean, now: number, retryAfter = 0): boolean {
   if (!authorized || now < retryAfter) return false;
   const time = timestamp(usage.queriedAt);
-  return time === undefined || now - time >= QUOTA_CACHE_TTL_MS || resetPassedSinceQuery(usage, time, now);
+  return time === undefined || now - time >= QUOTA_CACHE_TTL_MS || quotaBoundaryPassedSinceQuery(usage, time, now);
 }
 export function quotaRetryAt(now: number, failures: number): number {
   return now + Math.min(30 * 60_000, QUOTA_CACHE_TTL_MS * 2 ** Math.max(0, failures - 1));

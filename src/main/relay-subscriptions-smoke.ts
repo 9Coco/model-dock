@@ -55,6 +55,7 @@ export async function verifyRelaySubscriptions(window: BrowserWindow, store: Sto
   try {
     window.setMinimumSize(980, 680); window.setSize(1180, 800);
     store.setManagedState('qa-relay-client-import-stage', 'empty');
+    store.setManagedState('qa-jetbrains-ide-mode', 'empty');
     await click('[aria-label="刷新本机配置"]');
     await waitFor(`!!document.querySelector('.sidebar [data-source-id="${jetBrains.id}"]')`, 'old relay records loaded');
     for (const theme of ['light', 'dark']) for (const width of [1180, 980]) {
@@ -81,10 +82,16 @@ export async function verifyRelaySubscriptions(window: BrowserWindow, store: Sto
         await capture(`${relay.presetId}-${theme}-${width}`);
         if (index === 0) await click('[role="dialog"] button[type="submit"]');
         else await click('[role="dialog"] [data-action="import-jetbrains-account"]');
-        await waitFor(`!!document.querySelector('[data-relay-client-import="${relay.presetId}"]')&&document.querySelector('.sidebar [data-page="auth"]')?.getAttribute('aria-current')==='page'`, 'native connection opens its import dialog in the authorization center');
-        assert.equal(await evaluate<boolean>(`document.querySelector('[role="dialog"] [data-action="import-relay-client-account"]').disabled`), true, 'No account is imported without an explicit candidate confirmation');
-        if (relay.presetId === 'jetbrains-central') assert.equal(await evaluate<boolean>(`!!document.querySelector('[data-jetbrains-ide-account-boundary]')&&!document.querySelector('[data-field="relay-import-candidate"]')`), true, 'JetBrains import opens support guidance before inspecting an account');
-        await capture(`${relay.presetId}-native-import-${theme}-${width}`); await closeDialog();
+        if (relay.presetId === 'jetbrains-central') {
+          await waitFor(`document.querySelector('.sidebar [data-page="auth"]')?.getAttribute('aria-current')==='page'&&!document.querySelector('[role="dialog"]')&&!document.querySelector('[data-auth-import-account="jetbrains-central"]').disabled&&!!document.querySelector('.toast.error')`, 'JetBrains uses its direct IDE import action and reports the empty synthetic client without a dialog');
+          assert.equal(await evaluate<boolean>(`!!document.querySelector('[data-jetbrains-ide-account-boundary]')||!!document.querySelector('[data-field="relay-import-candidate"]')`), false, 'The default IDE source does not require a guide or confirmation when no account exists');
+          await capture(`${relay.presetId}-native-import-${theme}-${width}`);
+          await evaluate(`document.querySelectorAll('.toast-stack [aria-label="关闭提示"]').forEach(button=>button.click())`);
+        } else {
+          await waitFor(`!!document.querySelector('[data-relay-client-import="${relay.presetId}"]')&&document.querySelector('.sidebar [data-page="auth"]')?.getAttribute('aria-current')==='page'`, 'native TRAE connection opens its explicit candidate dialog');
+          assert.equal(await evaluate<boolean>(`document.querySelector('[role="dialog"] [data-action="import-relay-client-account"]').disabled`), true, 'An empty TRAE client offers no candidate to import');
+          await capture(`${relay.presetId}-native-import-${theme}-${width}`); await closeDialog();
+        }
         assert.deepEqual(store.listProviders(), originalProviders, 'Opening native import does not create or migrate a provider');
         assert.deepEqual(store.listModels(), originalModels); assert.deepEqual(store.listBindings(), originalBindings);
         if (index < relays.length - 1) { await click('[data-action="add-subscription-provider"]'); await waitFor(`document.querySelector('[role="dialog"] #modal-title')?.textContent==='添加订阅供应商'`, 'next native subscription draft'); }

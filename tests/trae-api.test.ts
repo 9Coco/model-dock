@@ -129,6 +129,21 @@ describe('direct TraeCode CN native Raw v2 protocol', () => {
     const profileHeaders = new Headers(fetch.mock.calls[0][1]?.headers); expect(profileHeaders.get('x-cloudide-token')).toBe(credential.token); expect(profileHeaders.has('Authorization')).toBe(false);
     const mismatch = fetchMock(() => Response.json({ Result: { UserID: 'another-user' } })); await expect(new TraeApi({ fetch: mismatch }).quota(credential)).rejects.toMatchObject({ code: 'authorization' }); expect(mismatch).toHaveBeenCalledTimes(1);
   });
+  it('projects only current native entitlement packs against the same injected observation time as the plan', async () => {
+    const timestamp = Date.parse('2040-01-01T00:00:00Z'), second = timestamp / 1000, clock = vi.fn(() => timestamp);
+    const pack = (status: unknown, product_type: number, start_time: number, expire_time: number, usage: Record<string, unknown> = {}) => ({ status, expire_time,
+      entitlement_base_info: { product_type, start_time, end_time: expire_time, quota: { credits_limit: 100 } }, usage });
+    const raw = { code: 0, user_entitlement_pack_list: [
+      pack(1, 6, second - 60, second), pack(1, 4, second + 1, second + 60), pack(0, 6, second - 60, second + 60),
+      pack('active', 6, second - 60, second + 60), pack(1, 1, second, second + 60, { credits_amount: 100 }), pack(3, 0, second - 60, second + 60, { credits_amount: null }),
+    ] };
+    const fetch = fetchMock(url => url.includes('GetUserInfo') ? Response.json({ Result: { UserID: credential.userId } }) : Response.json(raw));
+    const result = await new TraeApi({ fetch, now: clock }).quota(credential);
+    expect(result.plan).toBe('Pro'); expect(result.usage.queriedAt).toBe('2040-01-01T00:00:00.000Z'); expect(clock).toHaveBeenCalledTimes(1);
+    expect(result.usage.windows).toMatchObject([{ label: '通用积分', total: 100, remaining: 0 }, { label: '通用积分', total: 100 }]);
+    expect(result.usage.windows).toHaveLength(2); expect(result.usage.windows[1].remaining).toBeUndefined();
+    expect(result.usage.details).toHaveLength(2); expect(result.usage.summary!.total).toBe(200); expect(result.usage.summary!.remaining).toBeUndefined();
+  });
   it('rejects unsupported media, sampling controls, malformed tool correlation and arbitrary origins before inference', async () => {
     const fetch = fetchMock(() => catalog()), api = new TraeApi({ fetch });
     for (const change of [{ messages: [{ role: 'user', content: [{ type: 'image_url', image_url: { url: 'https://private.example' } }] }] }, { temperature: 0.1 }, { messages: [{ role: 'tool', tool_call_id: 'orphan', content: 'value' }] }]) await expect(api.chat(credential, { ...body, ...change })).rejects.toBeInstanceOf(TraeApiError);

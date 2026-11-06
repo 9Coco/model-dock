@@ -28,6 +28,7 @@ export async function verifyRelayQuota(window: BrowserWindow, store: Store, outp
   const pause = (ms: number) => new Promise<void>(done => setTimeout(done, ms));
   const row = `[data-auth-account="${managed.id}"]`, manualRow = `[data-auth-account="${manual.id}"]`;
   const screenshots: string[] = [], stages: unknown[] = [];
+  const rowHeights = new Map<number, number>();
   const originalTheme = await evaluate<{ theme?: string; colorScheme: string }>(`({theme:document.documentElement.dataset.theme,colorScheme:document.documentElement.style.colorScheme})`);
   async function waitFor(source: string, label: string): Promise<void> {
     const end = Date.now() + 10_000;
@@ -82,16 +83,94 @@ export async function verifyRelayQuota(window: BrowserWindow, store: Store, outp
       window.setSize(width, width === 1180 ? 800 : 680);
       await evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)};document.documentElement.style.colorScheme=${JSON.stringify(theme)};document.querySelector(${JSON.stringify(row)}).scrollIntoView({block:'nearest'})`);
       await clearToasts(); await capture(`ready-${theme}-${width}`);
+      rowHeights.set(width, await evaluate<number>(`document.querySelector(${JSON.stringify(row)}).getBoundingClientRect().height`));
       // Even when a synthetic Central account is available, opening this guide
       // must first explain IDE/Air support instead of querying another client.
       store.setManagedState('qa-relay-client-import-stage', 'success');
-      await click('[data-auth-import-account="jetbrains-central"]');
+      await click('[data-action="jetbrains-import-options"]');
       await waitFor(`!!document.querySelector('[data-jetbrains-ide-account-boundary]')`, 'JetBrains native account guide opens');
       assert.equal(await evaluate<string>(`document.querySelector('[role="dialog"] #modal-title').textContent`), '连接JetBrains账号');
       assert.equal(await evaluate<boolean>(`!!document.querySelector('[data-jetbrains-ide-account-boundary]')&&!document.querySelector('[role="dialog"] [data-field="relay-import-candidate"]')&&!document.querySelector('[role="dialog"] [role="alert"]')&&document.querySelector('[data-action="import-relay-client-account"]').disabled`), true, 'IDE/Air guidance does not silently inspect or import Central login');
       assert.equal(await evaluate<number>(`document.querySelectorAll('[role="dialog"] [data-action^="jetbrains-account-help-"]').length`), 2);
       await capture(`jetbrains-guide-${theme}-${width}`); await closeDialog();
     }
+    const many = await refresh('many'); assert.equal(many.usage.windows.length, 40);
+    assert.equal(many.usage.windows[0].remaining, 0); assert.equal(many.usage.windows[1].remaining, undefined); assert.equal(many.usage.windows[2].unlimited, true);
+    for (const theme of ['light', 'dark']) for (const width of [1180, 980]) {
+      window.setSize(width, width === 1180 ? 800 : 680);
+      await evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)};document.documentElement.style.colorScheme=${JSON.stringify(theme)};document.querySelector(${JSON.stringify(row)}).scrollIntoView({block:'nearest'})`);
+      await waitFor(`document.querySelectorAll(${JSON.stringify(row)}+' [data-quota-window-id]').length===2&&document.querySelector(${JSON.stringify(row)}+' [data-action="show-all-quotas"]')?.textContent==='查看全部 40 项额度'`, 'many independent quotas stay collapsed with an exact total');
+      const height = await evaluate<number>(`document.querySelector(${JSON.stringify(row)}).getBoundingClientRect().height`);
+      assert.ok(height <= (rowHeights.get(width) ?? 0) + 52 && height <= 260, `Account row remains bounded with 40 quota windows (${height}px)`);
+      assert.equal(await evaluate<string>(`document.querySelector(${JSON.stringify(row)}+' [data-quota-window-id="many-1"] strong').textContent`), '0 / 1,000 积分', 'Measured zero remains distinct from unknown');
+      assert.equal(await evaluate<string>(`document.querySelector(${JSON.stringify(row)}+' [data-quota-window-id="many-2"] strong').textContent`), '未知', 'Unknown quota is never displayed as zero');
+      await clearToasts(); await capture(`many-collapsed-${theme}-${width}`);
+      await click(`${row} [data-action="show-all-quotas"]`);
+      const details = `[data-auth-account-details="${managed.id}"]`;
+      await waitFor(`document.querySelectorAll(${JSON.stringify(details)}+' [data-quota-detail-id]').length===40`, 'all independent quotas remain accessible in details');
+      const values = await evaluate<{ id: string; text: string }[]>(`[...document.querySelectorAll(${JSON.stringify(details)}+' [data-quota-detail-id]')].map(item=>({id:item.dataset.quotaDetailId,text:item.textContent}))`);
+      assert.deepEqual(values.map(item => item.id), many.usage.windows.map(item => item.id));
+      for (const [index, item] of values.entries()) {
+        assert.ok(item.text.includes(many.usage.windows[index].label), 'The complete independent quota label remains readable');
+        assert.ok(item.text.includes(index % 2 ? '后重置' : '重置时间未知'), 'Known and unknown reset times remain distinct');
+      }
+      assert.ok(values[0].text.includes('0 / 1,000 积分')); assert.ok(values[1].text.includes('未知')); assert.ok(!values[1].text.includes('0%')); assert.ok(values[2].text.includes('不限量'));
+      assert.ok(values[39].text.includes('664 / 1,039 次'), 'The final independent amount is preserved');
+      const scrollable = await evaluate<boolean>(`(()=>{const body=document.querySelector(${JSON.stringify(details)});return body.scrollHeight>body.clientHeight+1&&body.scrollWidth<=body.clientWidth+1})()`);
+      assert.equal(scrollable, true, 'Quota details scroll vertically without horizontal overflow');
+      await capture(`many-details-${theme}-${width}`);
+      await evaluate(`document.querySelector(${JSON.stringify(details)}+' [data-quota-detail-id="many-40"]').scrollIntoView({block:'nearest'})`);
+      await waitFor(`(()=>{const body=document.querySelector(${JSON.stringify(details)}),last=body.querySelector('[data-quota-detail-id="many-40"]');return body.scrollTop>0&&last.getBoundingClientRect().bottom<=body.getBoundingClientRect().bottom+1})()`, 'the last quota is reachable by scrolling');
+      await capture(`many-details-last-${theme}-${width}`); await closeDialog();
+    }
+    const reduced = await refresh('ready'); assert.equal(reduced.usage.windows.length, 2);
+    await waitFor(`document.querySelectorAll(${JSON.stringify(row)}+' [data-quota-window-id]').length===2&&!document.querySelector(${JSON.stringify(row)}+' [data-action="show-all-quotas"]')`, 'shrinking quota results removes the obsolete expand action');
+    await capture('many-reduced-to-two');
+    const official = await refresh('official-balance');
+    assert.ok(official.usage.summary); assert.ok(Math.abs(official.usage.summary.remaining! - 1813.8036) < 0.000001);
+    assert.equal(official.usage.summary.total, 2400); assert.equal(official.usage.summary.grantCount, 20);
+    assert.equal(official.usage.windows.length, 2); assert.equal(official.usage.details?.length, 20);
+    const checkin = official.usage.windows.find(item => item.label === '每日签到'), monthly = official.usage.windows.find(item => item.label === '每月登录赠送');
+    assert.ok(checkin); assert.ok(monthly);
+    assert.equal(checkin.total, 1900); assert.equal(checkin.grantCount, 19); assert.ok(Math.abs(checkin.remaining! - 1313.8036) < 0.000001);
+    assert.equal(monthly.total, 500); assert.equal(monthly.remaining, 500); assert.equal(monthly.grantCount, 1); assert.equal(monthly.measurement, 'official-default');
+    assert.equal(new Set(official.usage.details!.map(item => item.expiresAt)).size, 20, 'Every independent grant retains its own expiry');
+    assert.ok(official.usage.details!.every(item => !!item.expiresAt && item.resetAt === undefined), 'Grant expiry is never reinterpreted as quota reset');
+    for (const theme of ['light', 'dark']) for (const width of [1180, 980]) {
+      window.setSize(width, width === 1180 ? 800 : 680);
+      await evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)};document.documentElement.style.colorScheme=${JSON.stringify(theme)};document.querySelector(${JSON.stringify(row)}).scrollIntoView({block:'nearest'})`);
+      await waitFor(`document.querySelector(${JSON.stringify(row)}+' [data-quota-summary-amount]')?.textContent==='1,813.80 积分'`, 'official credit total is prominent and retains two decimal places');
+      assert.equal(await evaluate<string>(`document.querySelector(${JSON.stringify(row)}+' [data-quota-window-id="${checkin.id}"] strong').textContent`), '1,313.80 / 1,900.00 积分');
+      assert.equal(await evaluate<string>(`document.querySelector(${JSON.stringify(row)}+' [data-quota-window-id="${monthly.id}"] strong').textContent`), '500.00 / 500.00 积分');
+      assert.match(await evaluate<string>(`document.querySelector(${JSON.stringify(row)}+' [data-quota-window-id="${checkin.id}"] .auth-window-label').textContent`), /每日签到 · 19 笔/);
+      assert.equal(await evaluate<string>(`document.querySelector(${JSON.stringify(row)}+' [data-action="show-all-quotas"]').textContent`), '查看全部 20 项额度');
+      assert.ok(await evaluate<boolean>(`document.querySelector(${JSON.stringify(row)}).getBoundingClientRect().height<=330`), 'Grouped official credits remain bounded in the account row');
+      assert.equal(await evaluate<boolean>(`document.querySelector(${JSON.stringify(row)}+' .account-quotas').textContent.includes('后重置')`), false, 'Grouped grant expiry is never described as reset');
+      await capture(`official-balance-${theme}-${width}`);
+      await click(`${row} [data-action="show-all-quotas"]`);
+      const details = `[data-auth-account-details="${managed.id}"]`;
+      await waitFor(`document.querySelectorAll(${JSON.stringify(details)}+' [data-quota-detail-id]').length===20`, 'grouped balance opens all twenty grant details');
+      const detailState = await evaluate<{ summary: string; ids: string[]; text: string; timings: string[] }>(`(()=>{const body=document.querySelector(${JSON.stringify(details)});return{summary:body.querySelector('[data-quota-summary-amount]').textContent,ids:[...body.querySelectorAll('[data-quota-detail-id]')].map(item=>item.dataset.quotaDetailId),text:body.textContent,timings:[...body.querySelectorAll('[data-quota-detail-timing]')].map(item=>item.textContent)}})()`);
+      assert.equal(detailState.summary, '1,813.80 积分'); assert.deepEqual(detailState.ids, official.usage.details!.map(item => item.id));
+      assert.ok(detailState.text.includes('按官方客户端规则')); assert.ok(!detailState.text.includes('按协议默认值')); assert.ok(detailState.text.includes('500.00 / 500.00 积分'));
+      assert.ok(detailState.timings.every(value => value.includes('到期') && !value.includes('重置')));
+      assert.ok(new Set(detailState.timings).size > 1, 'Distinct grant expiries remain visible');
+      await capture(`official-details-${theme}-${width}`);
+      await evaluate(`document.querySelector(${JSON.stringify(details)}+' [data-quota-detail-id="${official.usage.details!.at(-1)!.id}"]').scrollIntoView({block:'nearest'})`);
+      await waitFor(`document.querySelector(${JSON.stringify(details)}).scrollTop>0`, 'official grant details remain scrollable to the final grant');
+      await capture(`official-details-last-${theme}-${width}`); await closeDialog();
+    }
+    await click(`${row} [data-action="relay-account-details"]`);
+    await waitFor(`document.querySelectorAll('[data-auth-account-details="${managed.id}"] [data-quota-detail-id]').length===20`, 'existing account detail action also shows the independent grant list');
+    await closeDialog();
+    const partialOfficial = await refresh('official-unknown');
+    assert.equal(partialOfficial.usage.summary?.remaining, undefined, 'One malformed grant balance makes the grand total unknown');
+    const unknownMonthly = partialOfficial.usage.windows.find(item => item.label === '每月登录赠送'), knownCheckin = partialOfficial.usage.windows.find(item => item.label === '每日签到');
+    assert.ok(unknownMonthly); assert.ok(knownCheckin); assert.equal(unknownMonthly.remaining, undefined); assert.equal(unknownMonthly.total, 500); assert.ok(Math.abs(knownCheckin.remaining! - 1313.8036) < 0.000001);
+    await waitFor(`document.querySelector(${JSON.stringify(row)}+' [data-quota-summary-amount]')?.textContent==='未知'`, 'partial known groups never become a false complete total');
+    assert.equal(await evaluate<string>(`document.querySelector(${JSON.stringify(row)}+' [data-quota-window-id="${unknownMonthly.id}"] strong').textContent`), '剩余未知 / 总额 500.00 积分', 'A known limit is never presented as a known balance');
+    assert.equal(await evaluate<string>(`document.querySelector(${JSON.stringify(row)}+' [data-quota-window-id="${knownCheckin.id}"] strong').textContent`), '1,313.80 / 1,900.00 积分');
+    await capture('official-partial-unknown-dark-980');
     const switched = await refresh('switched'); assert.equal(switched.accountId, 'qa-active-b'); assert.equal(switched.displayName, '反代当前账号 B'); assert.equal(switched.clientImport?.accountLabel, provenance.accountLabel);
     await waitFor(`document.querySelector(${JSON.stringify(row)}+' [data-relay-quota-account]').textContent.includes('反代当前账号 B')`, 'current relay account changes without replacing import provenance'); await capture('switched-dark');
     await click(`${row} [data-action="relay-account-details"]`);
@@ -115,7 +194,7 @@ export async function verifyRelayQuota(window: BrowserWindow, store: Store, outp
     }
     assert.deepEqual(unchanged(), original, 'Quota reads and guidance preserve every supplier, credential, model and tool binding');
     assert.deepEqual(store.getManagedState<{ clientImport: unknown }>(`auth-metadata:${managed.id}`, { clientImport: null }).clientImport, provenance);
-    writeFileSync(join(outputDir, 'relay-quota-validation.json'), JSON.stringify({ ok: true, themes: ['light', 'dark'], widths: [1180, 980], knownProAndUnknownPlanBadgesVerified: true, managedTraeAutoRefresh: true, managedTraeManualRefresh: true, manualRelayNotQueried: true, officialAmountsAndUnitsShown: true, currentAccountSeparateFromImportProvenance: true, accountSwitchClearsPreviousIdentity: true, unknownQuotaHasNoInventedPercent: true, failuresClearPreviousBalances: true, jetBrainsGuideDoesNotQueryCentralUntilExplicitCheck: true, privacyVerified: true, configurationsUnchanged: true, noRealRelayOrClientAccess: true, stages, screenshots }, null, 2));
+    writeFileSync(join(outputDir, 'relay-quota-validation.json'), JSON.stringify({ ok: true, themes: ['light', 'dark'], widths: [1180, 980], knownProAndUnknownPlanBadgesVerified: true, managedTraeAutoRefresh: true, managedTraeManualRefresh: true, manualRelayNotQueried: true, officialAmountsAndUnitsShown: true, manyQuotasStayCollapsedAndBounded: true, allFortyIndependentQuotaDetailsAccessible: true, zeroUnknownAndUnlimitedRemainDistinct: true, detailsScrollWithoutHorizontalOverflow: true, shrinkingResultsRemoveExpandAction: true, officialRawGrantParserMatches1813_80: true, officialSourceGroupsPreserve19CheckinsAndMonthly500: true, allTwentyCreditGrantsPreserved: true, grantExpiryNeverPresentedAsReset: true, officialDefaultUsageExplained: true, existingDetailsActionUsesGrants: true, unknownGrantPropagatesWithoutMislabelingKnownLimits: true, currentAccountSeparateFromImportProvenance: true, accountSwitchClearsPreviousIdentity: true, unknownQuotaHasNoInventedPercent: true, failuresClearPreviousBalances: true, jetBrainsGuideDoesNotQueryCentralUntilExplicitCheck: true, privacyVerified: true, configurationsUnchanged: true, noRealRelayOrClientAccess: true, stages, screenshots }, null, 2));
   } finally {
     store.setManagedState('qa-relay-quota-mode', 'unavailable'); store.setManagedState('qa-relay-client-import-stage', 'empty');
     await evaluate(`(()=>{const original=${JSON.stringify(originalTheme)};if(original.theme===undefined)delete document.documentElement.dataset.theme;else document.documentElement.dataset.theme=original.theme;document.documentElement.style.colorScheme=original.colorScheme})()`);

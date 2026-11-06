@@ -19,19 +19,28 @@ export interface QuotaWindow {
   usedPercent?: number;
   remainingPercent?: number;
   resetAt?: string;
+  /** Entitlement expiry, independent of any quota reset. */
+  expiresAt?: string;
   windowSeconds?: number;
   total?: number;
   remaining?: number;
   unit?: string;
   unlimited?: boolean;
-  /** A recognized CC Switch-compatible proto3 zero default is labeled explicitly. */
-  measurement?: 'reported' | 'protobuf-default';
+  /** Number of independent entitlement grants represented by this window. */
+  grantCount?: number;
+  /** Distinguish reported values, recognized proto3 defaults and separately
+   * verified official-client defaults; none applies to arbitrary missing data. */
+  measurement?: 'reported' | 'protobuf-default' | 'official-default';
 }
 
 /** Only measured quota values belong here. An unavailable query has no windows. */
 export interface SubscriptionUsage {
   status: 'not-queried' | 'ready' | 'stale' | 'unavailable' | 'error';
   windows: QuotaWindow[];
+  /** An optional account-wide value, separate from source or time windows. */
+  summary?: QuotaWindow;
+  /** Independent grants underlying a grouped quota observation. */
+  details?: QuotaWindow[];
   queriedAt?: string;
   message: string;
   resetCredits?: { available: number; expiresAt: (string | null)[] };
@@ -79,3 +88,6 @@ export interface RelayClientImportPreview {
   candidates: RelayClientImportCandidate[];
   message: string;
 }
+
+export type JetBrainsIdeImportResult = { status: 'imported'; account: AuthAccount }
+  | { status: 'selection-required'; preview: RelayClientImportPreview };

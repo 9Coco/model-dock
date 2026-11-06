@@ -751,7 +751,7 @@ td { padding: 12px; color: #5b7152; }
 .auth-relay-import-loading { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
 .auth-relay-import-notes { margin-top: 16px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; line-height: 1.75; overflow-wrap: anywhere; }
 .auth-relay-import-notes p { margin: 6px 0; }
-.auth-panel.auth-compact .auth-relay-row .quota-window.quota-show-amounts { grid-template-columns: 54px minmax(30px, 1fr) auto; gap: 0 6px; }
+.auth-panel.auth-compact .auth-relay-row .quota-window.quota-show-amounts { grid-template-columns: 96px minmax(24px, 1fr) auto; gap: 0 6px; }
 .auth-panel.auth-compact .auth-relay-row .quota-window.quota-show-amounts > strong { font-variant-numeric: tabular-nums; }
 .auth-panel.auth-compact .auth-relay-row .quota-window.quota-show-amounts > .auth-window-reset { grid-column: 2 / -1; }
 .auth-panel.auth-compact .account-group-header { flex-wrap: wrap; }

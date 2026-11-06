@@ -11,6 +11,7 @@ import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { Store } from './store';
 import { Gateway } from './gateway';
 import { TraeApi, TraeApiError } from './trae-api';
+import { parseTraeQuota } from './trae-relay-usage';
 import { TraeNativeAccounts, TraeNativeAccountError } from './trae-native-account';
 import { TraeGatewayAdapter } from './trae-gateway-adapter';
 import { TraeClientImporter, TraeClientImportError } from './trae-client-import';
@@ -78,7 +79,7 @@ import { buildConfig, buildCopilotDesktopPlan, buildDshPlan, applyConfig, connec
 import { applyDshConfig } from './dsh-config';
 import { resolveDshProfile } from './dsh-profile';
 import type { ModelDockApi, ModelInput, Provider, ProviderInput, ToolBinding, ToolId } from '../shared/types';
-import type { RelayAccountKind, SubscriptionKind } from '../shared/auth-types';
+import type { QuotaWindow, RelayAccountKind, SubscriptionKind } from '../shared/auth-types';
 import type { McpServerInput } from '../shared/mcp-types';
 import type { SkillRepositoryInput } from '../shared/skill-types';
 import type { AppSettings } from '../shared/settings-types';
@@ -452,7 +453,7 @@ async function createWindow(forceShow = false) {
           const featureDialogs=[];
           for (const [scenario,page,selector,title] of [
             ['auth-account','auth','[data-auth-add-account="codex"]','添加 ChatGPT / OpenAI 账号'],
-            ['auth-jetbrains','auth','[data-auth-import-account="jetbrains-central"]','连接JetBrains账号'],
+            ['auth-jetbrains','auth','[data-action="jetbrains-import-options"]','连接JetBrains账号'],
             ['service-provider','service','[data-action="add-api-provider"]','添加 API 供应商'],
           ] as const) {
             await window!.webContents.executeJavaScript(`document.querySelector('[data-page="${page}"]').click()`);
@@ -629,9 +630,31 @@ function registerIpc() {
       const mode = store.getManagedState<string>('qa-relay-quota-mode', 'unavailable');
       if (mode === 'failure') throw new Error('PRIVATE_RELAY_QUOTA_TOKEN_RAW_BODY');
       if (mode === 'unavailable') throw new RelayQuotaFailure('TRAE 当前账号额度暂不可查询，请检查反代登录。');
+      const manyWindows: QuotaWindow[] = mode === 'many' ? Array.from({ length: 40 }, (_, index) => ({
+        id: `many-${index + 1}`, label: `高级模型快速请求与独立订阅额度包完整名称 ${index + 1}`,
+        unit: index % 2 ? '次' : '积分', measurement: 'reported',
+        ...(index === 1 ? {} : index === 2 ? { unlimited: true } : {
+          total: 1000 + index, remaining: index === 0 ? 0 : 625 + index,
+          remainingPercent: index === 0 ? 0 : (625 + index) / (1000 + index) * 100,
+        }),
+        ...(index % 2 ? { resetAt: '2099-01-01T00:00:00.000Z' } : {}),
+      })) : [];
+      if (mode === 'official-balance' || mode === 'official-unknown') {
+        const now = Date.now(), start = Math.floor(now / 1000) - 86400;
+        const pack = (id: string, quota: Record<string, number>, usage: Record<string, unknown>, groupName?: string, expiryDays = 30) => ({
+          status: 1, source_id: id, expire_time: Math.floor(now / 1000) + expiryDays * 86400,
+          ...(groupName ? { group_name: groupName, group_type: groupName === '每日签到' ? 'checkin' : 'monthly-login' } : {}),
+          entitlement_base_info: { entitlement_id: id, product_type: groupName ? 2 : 0, start_time: start, end_time: Math.floor(now / 1000) + expiryDays * 86400, quota }, usage,
+        });
+        const parsed = parseTraeQuota({ code: 0, user_entitlement_pack_list: [
+          pack('qa-free', {}, {}), pack('qa-monthly', { credits_limit: 500 }, mode === 'official-unknown' ? { credits_amount: null } : {}, '每月登录赠送'),
+          ...Array.from({ length: 19 }, (_, index) => pack(`qa-checkin-${index + 1}`, { credits_limit: 100 }, index < 5 ? { credits_amount: 100 } : index === 5 ? { credits_amount: 86.1964 } : {}, '每日签到', index + 1)),
+        ] }, now);
+        return { accountId: 'qa-active-a', accountLabel: '反代当前账号 A', plan: 'Free', usage: { ...parsed, status: 'ready' as const, queriedAt: new Date(now).toISOString(), message: '当前 TRAE 账号的官方套餐与额度。' } };
+      }
       return { accountId: mode === 'switched' ? 'qa-active-b' : 'qa-active-a', accountLabel: mode === 'switched' ? '反代当前账号 B' : '反代当前账号 A', plan: 'Pro', usage: {
         status: 'ready' as const, queriedAt: new Date().toISOString(), message: '官方额度；账号为查询时反代的活跃账号。',
-        windows: mode === 'unknown' ? [{ id: 'credits', label: '订阅积分', unit: '积分' }] : [{ id: 'credits', label: '订阅积分', total: 1000, remaining: 625, remainingPercent: 62.5, usedPercent: 37.5, unit: '积分' }, { id: 'fast', label: '快速请求', total: 500, remaining: 300, remainingPercent: 60, usedPercent: 40, unit: '次' }],
+        windows: mode === 'many' ? manyWindows : mode === 'unknown' ? [{ id: 'credits', label: '订阅积分', unit: '积分' }] : [{ id: 'credits', label: '订阅积分', total: 1000, remaining: 625, remainingPercent: 62.5, usedPercent: 37.5, unit: '积分' }, { id: 'fast', label: '快速请求', total: 500, remaining: 300, remainingPercent: 60, usedPercent: 40, unit: '次' }],
       } };
     }
     throw new RelayQuotaFailure('请从客户端重新导入 TRAE 账号，再通过内置适配器查询套餐与额度。');
@@ -879,6 +902,11 @@ function registerIpc() {
     if (topic !== 'ide' && topic !== 'central') throw new Error('未知的账号帮助页面。');
     await shell.openExternal(topic === 'ide' ? 'https://www.jetbrains.com/help/air/air-in-ides-authorization.html' : 'https://www.jetbrains.com/help/central-cli/cli-setup.html');
   });
+  handle('beginJetBrainsIdeImport', () => importJetBrains(async () => {
+    const result = await ideAccounts.importDefault();
+    if (result.status === 'imported') { gateway.cancelProvider(result.account.providerId); catalog.invalidate(result.account.providerId); }
+    return result;
+  }));
   handle('jetBrainsIdeImportCandidates', () => { assertEditable(); return ideAccounts.preview(); });
   handle('importJetBrainsIdeAccount', (id: string) => importJetBrains(async () => { const account = await ideAccounts.import(id); gateway.cancelProvider(account.providerId); catalog.invalidate(account.providerId); return account; }));
   handle('startJetBrainsRelay', async () => { throw new Error('JetBrains 已通过内置适配器接入网关，请在授权中心连接账号。'); });
