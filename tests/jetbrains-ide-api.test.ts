@@ -165,7 +165,7 @@ describe('JetBrains native IDE API', () => {
     const api = new JetBrainsIdeApi({ fetch, now: () => NOW });
     const models = await api.models(AI);
     expect(models.data.map(value => value.id)).toEqual(['openai-gpt-fixture', 'anthropic', 'gemini', 'vertex-claude', 'bedrock', 'xai', 'vllm', 'azure-fixture']);
-    expect(models.data[0]).toEqual({ id: profile.id, object: 'model', owned_by: 'jetbrains', name: 'Fixture GPT', context_length: 128000, max_output_tokens: 16000 });
+    expect(models.data[0]).toEqual({ id: profile.id, object: 'model', owned_by: 'jetbrains', name: 'Fixture GPT', context_length: 128000, max_output_tokens: 16000, modeldock_catalog_visibility: 'historical' });
     expect(JSON.stringify(models)).not.toContain('gpt-native-fixture');
     models.data[0].id = 'mutated-outside';
     await expect(api.chat(AI, { model: 'mutated-outside', messages: [{ role: 'user', content: 'fixture' }] }, signal())).rejects.toMatchObject({ code: 'model' });
@@ -173,7 +173,57 @@ describe('JetBrains native IDE API', () => {
 
   it('drops ambiguous duplicate profile IDs instead of selecting an arbitrary upstream', async () => {
     const fetch = mockTransport(() => reply({ profiles: [nativeProfile(), { ...nativeProfile(), providerModelID: 'other-fixture' }, nativeProfile()] }));
-    expect(await new JetBrainsIdeApi({ fetch, now: () => NOW }).models(AI)).toEqual({ data: [] });
+    expect(await new JetBrainsIdeApi({ fetch, now: () => NOW }).models(AI)).toMatchObject({ data: [], modeldock_history: { source: 'jetbrains-client', currentVerified: true } });
+  });
+
+  it('projects the verified 2026.2 single-model menu by exact JBAI IDs without guessing aliases or creating missing profiles', async () => {
+    // Public ModelOption.Specific nondeprecated entries and LLM.jbaiId from
+    // ej-262.2144.130.jar. Native IDs and alternate channels stay independent.
+    const currentIds = [
+      'anthropic-claude-fable-5-1', 'claude-opus-5', 'anthropic-claude-opus-5-5',
+      'anthropic-claude-sonnet-5', 'anthropic-claude-sonnet-5-5', 'anthropic-claude-haiku-5-5',
+      'google-gemini-3-6-flash', 'google-gemini-3-7-flash', 'google-gemini-3-8-flash', 'google-gemini-4-argon',
+      'openai-gpt-5-6-luna', 'openai-gpt-5-6-sol', 'openai-gpt-5-6-terra', 'openai-gpt-6-astra',
+      'openai-gpt-6-sol', 'openai-gpt-6-1-sol', 'openai-gpt-6-luna', 'xai-grok-4-6', 'xai-grok-4-7',
+    ];
+    const otherIds = ['anthropic-claude-4-6-sonnet', 'bedrock-anthropic-claude-sonnet-5-5', 'claude-sonnet-5-5', 'future-model-999'];
+    const fetch = mockTransport(() => reply({ profiles: [...currentIds, ...otherIds].map(id => ({ ...nativeProfile(id), modelName: 'Same friendly model', provider: 'Anthropic', providerModelID: 'claude-sonnet-5-5' })) }));
+    const result = await new JetBrainsIdeApi({ fetch, now: () => NOW }).models(AI);
+    expect(result.data.filter(model => model.modeldock_catalog_visibility === 'current').map(model => model.id)).toEqual(currentIds);
+    expect(result.data.filter(model => model.modeldock_catalog_visibility === 'historical').map(model => model.id)).toEqual(otherIds);
+    expect(result.data).toHaveLength(23);
+    expect(result.modeldock_history).toMatchObject({ source: 'jetbrains-client', currentVerified: true });
+    expect(result.modeldock_history.message).toContain('2026.2');
+  });
+
+  it('does not promote unsupported, server-deprecated or absent canonical entries from the client snapshot', async () => {
+    const profiles = [
+      { ...nativeProfile('xai-grok-4-6'), provider: 'Xai', features: ['Credits', 'Proxy'] },
+      { ...nativeProfile('xai-grok-4-7'), provider: 'Xai', chatDefinition: null },
+      { ...nativeProfile('anthropic-claude-sonnet-5-5'), provider: 'Anthropic', lifeCycle: { deprecated: true } },
+      { ...nativeProfile('bedrock-anthropic-claude-sonnet-5-5'), provider: 'Bedrock' },
+    ];
+    const api = new JetBrainsIdeApi({ fetch: mockTransport(() => reply({ profiles })), now: () => NOW });
+    const result = await api.models(AI);
+    expect(result.data.map(model => [model.id, model.modeldock_catalog_visibility])).toEqual([['bedrock-anthropic-claude-sonnet-5-5', 'historical']]);
+    await expect(api.chat(AI, { model: 'claude-opus-5', messages: [{ role: 'user', content: 'fixture' }] }, signal())).rejects.toMatchObject({ code: 'model' });
+  });
+
+  it('keeps a saved historical route callable and isolates returned visibility metadata from the cached directory', async () => {
+    const id = 'openai-gpt-5-2';
+    const fetch = mockTransport((url, init) => {
+      if (url.endsWith('profiles/v9')) return reply({ profiles: [nativeProfile(id)] });
+      expect(JSON.parse(String(init.body)).model).toBe('gpt-native-fixture');
+      return reply({ choices: [] });
+    });
+    const api = new JetBrainsIdeApi({ fetch, now: () => NOW });
+    const result = await api.models(AI);
+    expect(result.data[0].modeldock_catalog_visibility).toBe('historical');
+    result.data[0].id = 'outside-id'; result.data[0].modeldock_catalog_visibility = 'current';
+    Object.assign(result.modeldock_history, { message: 'outside-message' });
+    expect((await api.chat(AI, { model: id, messages: [{ role: 'user', content: 'fixture' }] }, signal())).status).toBe(200);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect((await api.models(AI)).modeldock_history.message).not.toBe('outside-message');
   });
 
   it.each([['OpenAI', 'llm/openai/v1'], ['AzureOpenAI', 'llm/azure/openai/v1']])('forwards native %s chat exactly once and preserves tools, images and stream fields', async (provider, prefix) => {

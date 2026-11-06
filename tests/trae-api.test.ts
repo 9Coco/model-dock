@@ -19,7 +19,8 @@ describe('direct TraeCode CN native Raw v2 protocol', () => {
   it('uses the exact function-scoped catalog and accurate provider id without Work aliases or guessed models', async () => {
     const fetch = fetchMock(() => catalog()), api = new TraeApi({ fetch });
     const models = await api.models(credential);
-    expect(models).toEqual({ object: 'list', data: [{ id: 'glm-5.3', object: 'model', owned_by: 'trae', name: 'GLM 5.3' }] });
+    expect(models).toMatchObject({ object: 'list', data: [{ id: 'glm-5.3', object: 'model', owned_by: 'trae', name: 'GLM 5.3' }],
+      modeldock_history: { source: 'trae-client', currentVerified: false } });
     const [url, init] = fetch.mock.calls[0]; expect(String(url)).toBe('https://trae-api-cn.mchost.guru/api/ide/v1/get_detail_param?function=chat_v3&need_prompt=false&poly_prompt=true');
     expect(init?.method).toBe('GET'); expect(init?.body).toBeUndefined();
     expect(init?.redirect).toBe('error'); expect(new Headers(init?.headers).get('x-uid')).toBe(credential.userId);
