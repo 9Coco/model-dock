@@ -77,7 +77,7 @@ export function createJetBrainsIdeFixture(store: Store): { reader: Pick<JetBrain
         observe('quota'); accept(token);
         return { status: 'ready', queriedAt: new Date().toISOString(), windows: [{ id: 'credits', label: 'JetBrains AI Credits', remaining: 625, total: 1000, unit: 'AI Credits', remainingPercent: 62.5, usedPercent: 37.5 }], message: '已查询此 IDE 账号的官方 AI Credits（合成演示）。' };
       },
-      async models(token) { observe('models'); accept(token); return { data: [{ id: MODEL_ID, object: 'model', name: 'IDE 原生演示模型', context_length: 64000 }] }; },
+      async models(token) { observe('models'); accept(token); return { data: [{ id: MODEL_ID, object: 'model', name: 'IDE 原生演示模型', context_length: 64000 }, { id: 'qa-claude-profile', object: 'model', name: 'Claude · 原生目录演示', context_length: 200000, tools: true, vision: true }, { id: 'qa-gemini-profile', object: 'model', name: 'Gemini · 原生目录演示', context_length: 1000000, tools: true, vision: true }] }; },
       async chat(token, body, signal) {
         observe('chat'); accept(token); if (signal.aborted) throw new Error(PRIVATE_ERROR);
         store.setManagedState(LAST_CHAT_MODEL_KEY, typeof body.model === 'string' ? body.model : 'invalid-model');
@@ -128,7 +128,12 @@ export async function verifyJetBrainsIdeImport(window: BrowserWindow, store: Sto
   }
   async function capture(name: string, keepToasts = false): Promise<void> {
     if (!keepToasts) await clearToasts(); await privacy();
+    await evaluate('new Promise(done=>requestAnimationFrame(()=>requestAnimationFrame(done)))');
     const overflow = await evaluate<{ document: boolean; main: boolean; dialog: boolean }>('(()=>{const main=document.querySelector(".main-content"),dialog=document.querySelector(\'[role="dialog"]\');return {document:document.documentElement.scrollWidth>innerWidth+1,main:main.scrollWidth>main.clientWidth+1,dialog:!!dialog&&dialog.scrollWidth>dialog.clientWidth+1}})()');
+    if (overflow.document || overflow.main || overflow.dialog) {
+      writeFileSync(join(outputDir, `jetbrains-ide-import-${name}-overflow.png`), await captureUi());
+      writeFileSync(join(outputDir, `jetbrains-ide-import-${name}-overflow.json`), JSON.stringify(await evaluate(`({width:innerWidth,height:innerHeight,documentWidth:document.documentElement.scrollWidth,elements:[...document.querySelectorAll('body *')].map(node=>({tag:node.tagName,classes:String(node.className),left:node.getBoundingClientRect().left,right:node.getBoundingClientRect().right,width:node.getBoundingClientRect().width,scrollWidth:node.scrollWidth})).filter(node=>node.right>innerWidth+1||node.left< -1).slice(0,40)})`), null, 2));
+    }
     assert.deepEqual(overflow, { document: false, main: false, dialog: false }, 'Native IDE import fits narrow and wide layouts');
     const nameOnDisk = `jetbrains-ide-import-${name}.png`; writeFileSync(join(outputDir, nameOnDisk), await captureUi()); screenshots.push(nameOnDisk);
   }
@@ -200,7 +205,8 @@ export async function verifyJetBrainsIdeImport(window: BrowserWindow, store: Sto
     const beforeRoundTrip = observed();
     const discovered = await evaluate<DiscoveryResult>(`window.modelDock.discoverModels(${JSON.stringify(provider.id)})`);
     assert.equal(discovered.ok, true, `The main-process native adapter returns the synthetic model directory: ${discovered.message}`);
-    assert.deepEqual(discovered.models.map(value => value.upstreamId), [MODEL_ID]);
+    assert.deepEqual(discovered.models.map(value => value.upstreamId), [MODEL_ID, 'qa-claude-profile', 'qa-gemini-profile']);
+    assert.ok(discovered.models.slice(1).every(value => value.tools && value.vision), 'Native vendor capabilities survive discovery and IPC');
     assert.ok(observed().models > beforeRoundTrip.models, 'Discovery reaches the native fixture through the direct main-process adapter');
     const added = await evaluate<AddModelsResult>(`window.modelDock.addDiscoveredModels(${JSON.stringify(provider.id)},[{upstreamId:${JSON.stringify(MODEL_ID)},alias:'qa-ide-local-alias-for-route-check'}])`);
     assert.equal(added.added.length, 1); const roundTripModel = added.added[0];
@@ -215,6 +221,14 @@ export async function verifyJetBrainsIdeImport(window: BrowserWindow, store: Sto
     assert.doesNotMatch(publicRoundTrip, /PRIVATE_JETBRAINS_IDE|idToken|accessToken|nativeIde/);
     assert.equal(publicRoundTrip.includes(metadata.nativeIde.idToken), false); assert.equal(publicRoundTrip.includes(key), false);
     await privacy();
+    await click('[aria-label="刷新本机配置"]'); await click(`[data-source-id="${provider.id}"]`); await click('[data-action="discover-models"]');
+    await waitFor(`document.querySelectorAll('.discovery-model').length===3&&!document.querySelector('.discovery-loading,.discovery-error')`, 'OpenAI, Claude and Gemini coexist in native discovery');
+    const vendorRows = await evaluate<string[]>(`[...document.querySelectorAll('.discovery-model')].map(row=>row.textContent)`);
+    assert.equal(vendorRows.filter(text=>text.includes('qa-claude-profile')).length, 1); assert.equal(vendorRows.filter(text=>text.includes('qa-gemini-profile')).length, 1);
+    for (const [theme, width] of [['dark', 980], ['light', 1180]] as const) {
+      window.setSize(width, 800); await evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)};document.documentElement.style.colorScheme=${JSON.stringify(theme)}`); await capture(`vendor-directory-${theme}-${width}`);
+    }
+    await close(); await click('[data-page="auth"]');
     const row = `[data-auth-account="${provider.id}"]`;
     await waitFor(`!!document.querySelector(${JSON.stringify(row)}+' [data-relay-client-source="jetbrains-ide"]')`, 'native IDE source is visible immediately');
     await waitFor(`(()=>{const node=document.querySelector(${JSON.stringify(row)}+' [data-quota-window-id="credits"] strong');return !!node&&/625/.test(node.textContent)&&/1,?000/.test(node.textContent)&&/AI Credits/.test(node.textContent)})()`, 'AI Credits amounts are directly visible');

@@ -1,11 +1,13 @@
 import { createHash } from 'node:crypto';
 import { version } from '../../package.json';
 import type { QuotaWindow, SubscriptionUsage } from '../shared/auth-types';
+import { JetBrainsGrazieBridgeError, JetBrainsGrazieSignatures, prepareJetBrainsGrazieChat, createJetBrainsGrazieChatStream, collectJetBrainsGrazieChat } from './jetbrains-grazie-bridge';
 
 /** Native personal-license API, independently of Central CLI. The wire contract
  * comes from the installed JetBrains AI Assistant 2026.2 public classes:
  * AuthAPIClient.getAccessV2/verifyV3, QuotaAPI.Get, LlmAPI.Profiles.V9 and
- * OpenAIProxyProvider/OpenAIAzureProxyProvider -> GrazieProxyProvider.
+ * OpenAIProxyProvider/OpenAIAzureProxyProvider -> GrazieProxyProvider, and
+ * ChatModels.Stream.V9 + LlmAPIClient.V9 for native Claude/Google Chat.
  * This is an internal upstream contract, not a public third-party API promise.
  * No source-client file, PasswordSafe, OAuth refresh token or diagnostics access.
  */
@@ -16,7 +18,7 @@ const REQUEST_LIMIT = 2 * 1024 * 1024;
 const DIRECTORY_TTL = 5 * 60_000;
 const CALLER = JSON.stringify({ name: 'modeldock', version });
 type JsonObject = Record<string, unknown>;
-export type JetBrainsIdeApiErrorCode = 'credentials' | 'authorization' | 'entitlement' | 'network' | 'response' | 'cancelled' | 'model' | 'request' | 'limit';
+export type JetBrainsIdeApiErrorCode = 'credentials' | 'authorization' | 'entitlement' | 'network' | 'response' | 'cancelled' | 'model' | 'request' | 'capability' | 'limit';
 const messages: Record<JetBrainsIdeApiErrorCode, string> = {
   credentials: 'JetBrains 账号授权或许可证信息无效，请在原生客户端重新登录后重试。',
   authorization: 'JetBrains 账号授权已失效，请在原生客户端重新登录后重试。',
@@ -26,6 +28,7 @@ const messages: Record<JetBrainsIdeApiErrorCode, string> = {
   cancelled: 'JetBrains AI 请求已取消或超时。',
   model: '此模型未在当前账号的兼容模型目录中，请刷新模型列表后重试。',
   request: '此 JetBrains 连接需要有效的 Chat Completions 请求。',
+  capability: '此 JetBrains 模型暂不支持所请求的参数或工具历史。请关闭扩展思考、严格工具模式，或新建会话后重试。',
   limit: 'JetBrains AI 请求或响应超出支持范围。',
 };
 export class JetBrainsIdeApiError extends Error {
@@ -38,9 +41,12 @@ export interface JetBrainsIdeModel {
   name?: string;
   context_length?: number;
   max_output_tokens?: number;
+  tools?: boolean;
+  vision?: boolean;
+  reasoning_efforts?: string[];
 }
 export interface JetBrainsIdeApiOptions { fetch?: typeof globalThis.fetch; now?: () => number }
-interface RouteModel { model: JetBrainsIdeModel; upstreamId: string; path: string }
+interface RouteModel { model: JetBrainsIdeModel; upstreamId: string; path: string; protocol: 'openai' | 'grazie'; requireToolSignatures: boolean }
 interface Directory { fetchedAt: number; models: Map<string, RouteModel> }
 const object = (value: unknown): JsonObject | undefined => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : undefined;
 const safeText = (value: unknown, max = 256): string | undefined => typeof value === 'string' && value.length > 0 && value.length <= max && !/[\x00-\x1f\x7f]/.test(value) ? value : undefined;
@@ -92,6 +98,7 @@ export class JetBrainsIdeApi {
   private readonly fetcher: typeof globalThis.fetch;
   private readonly now: () => number;
   private readonly directories = new Map<string, Directory>();
+  private readonly signatures = new JetBrainsGrazieSignatures();
   constructor(options: JetBrainsIdeApiOptions = {}) { this.fetcher = options.fetch ?? globalThis.fetch; this.now = options.now ?? Date.now; }
 
   async exchange(input: { idToken: string; licenseId: string }, signal?: AbortSignal): Promise<{ token: string; expiresAt?: number }> {
@@ -160,18 +167,31 @@ export class JetBrainsIdeApi {
     for (const value of response.profiles) {
       const profile = object(value); if (!profile) continue;
       const id = identifier(profile.id), upstreamId = identifier(profile.providerModelID);
-      if (!id || !upstreamId || !Array.isArray(profile.features) || !profile.features.includes('Chat') || !object(profile.chatDefinition) || object(profile.lifeCycle)?.deprecated === true) continue;
-      // LLMType uses these exact enum values. Other native vendor APIs have
-      // different bodies; never label their profiles as OpenAI-compatible.
-      const path = profile.provider === 'OpenAI' ? '/user/v5/llm/openai/v1/chat/completions' : profile.provider === 'AzureOpenAI' ? '/user/v5/llm/azure/openai/v1/chat/completions' : undefined;
-      if (!path) continue;
+      if (!id || !Array.isArray(profile.features) || !profile.features.includes('Chat') || !object(profile.chatDefinition) || object(profile.lifeCycle)?.deprecated === true) continue;
+      // Keep the already-supported OpenAI wire unchanged. Other verified
+      // native vendors use the official provider-neutral Grazie V9 contract,
+      // addressed by profile ID, never an invented OpenAI model or endpoint.
+      const nativeOpenAI = profile.provider === 'OpenAI' || profile.provider === 'AzureOpenAI';
+      const nativeGrazie = !nativeOpenAI && !!safeText(profile.provider, 64);
+      if ((!nativeGrazie && !nativeOpenAI) || (nativeOpenAI && !upstreamId)) continue;
+      const protocol = nativeOpenAI ? 'openai' : 'grazie';
+      const path = nativeOpenAI ? profile.provider === 'OpenAI' ? '/user/v5/llm/openai/v1/chat/completions' : '/user/v5/llm/azure/openai/v1/chat/completions' : '/user/v5/llm/chat/stream/v9';
       if (seen.has(id)) { models.delete(id); continue; }
       seen.add(id);
       const model: JetBrainsIdeModel = { id, object: 'model', owned_by: 'jetbrains' };
       const name = safeText(profile.modelName, 160); if (name) model.name = name;
       if (typeof profile.contextLimit === 'number' && Number.isSafeInteger(profile.contextLimit) && profile.contextLimit > 0) model.context_length = profile.contextLimit;
       if (typeof profile.maxOutputTokens === 'number' && Number.isSafeInteger(profile.maxOutputTokens) && profile.maxOutputTokens > 0) model.max_output_tokens = profile.maxOutputTokens;
-      models.set(id, { model, upstreamId, path });
+      // No user-configurable thinking/effort controls are projected until the
+      // V9 reasoning wire is verified; prevent unrelated dictionary defaults.
+      if (nativeGrazie) model.reasoning_efforts = [];
+      const definition = object(profile.chatDefinition)!;
+      // Official V9 ProfileInfo projection requires both tool messages and the
+      // toolConfig.tools parameter. Missing descriptors remain unknown.
+      if (Array.isArray(definition.roles) && Array.isArray(definition.parameters)) model.tools = definition.roles.includes('tool') && definition.parameters.includes('toolConfig.tools');
+      const media = object(definition.multimediaDataDefinition);
+      if (Array.isArray(media?.supportedTypes)) model.vision = media.supportedTypes.some(value => typeof value === 'string' && /^image\/(?:\*|[a-z0-9.+-]+)$/i.test(value));
+      models.set(id, { model, upstreamId: upstreamId ?? id, path, protocol, requireToolSignatures: nativeGrazie });
     }
     // No tokens/raw profiles in the cache; at most eight account directories.
     if (this.directories.size >= 8) this.directories.delete(this.directories.keys().next().value!);
@@ -187,17 +207,25 @@ export class JetBrainsIdeApi {
     if (!directory || this.now() - directory.fetchedAt >= DIRECTORY_TTL) { await this.models(token, signal); directory = this.directories.get(digest(token)); }
     const route = directory?.models.get(requestModel);
     if (!route) throw failure('model');
+    const grazie = route.protocol === 'grazie';
+    const bridgeOptions = {
+      profileId: route.model.id, maxOutputTokens: route.model.max_output_tokens,
+      signatureNamespace: `${digest(token)}:${route.model.id}`, signatures: this.signatures, signal,
+      history: body.messages, requireToolSignatures: route.requireToolSignatures,
+      toolNames: Array.isArray(body.tools) ? body.tools.map(value => object(object(value)?.function)?.name).filter((name): name is string => typeof name === 'string') : [],
+    };
     let encoded: string;
-    try { encoded = JSON.stringify({ ...body, model: route.upstreamId }); } catch { throw failure('request'); }
+    try { encoded = JSON.stringify(grazie ? prepareJetBrainsGrazieChat(body, bridgeOptions) : { ...body, model: route.upstreamId }); }
+    catch (error) { throw failure(error instanceof JetBrainsGrazieBridgeError ? error.status === 502 ? 'response' : 'capability' : 'request'); }
     if (Buffer.byteLength(encoded) > REQUEST_LIMIT) throw failure('limit');
-    // Native local-proxy forwarding preserves the OpenAI JSON body, including
-    // tools, multimodal messages and stream. The selected model decides support.
-    // Only model is translated from the authorized profile ID to its native ID.
+    // OpenAI keeps its native wire. Claude/Google use the official Grazie V9
+    // provider-neutral contract, with exact profile IDs and main-only signed
+    // history; client-visible requests and replies remain Chat-compatible.
     const operation = this.operation(signal, 180_000);
     try {
-      const upstream = await this.send(route.path, 'POST', { ...this.auth(token), Accept: body.stream ? 'text/event-stream' : 'application/json', 'Content-Type': 'application/json' }, encoded, operation.signal);
+      const upstream = await this.send(route.path, 'POST', { ...this.auth(token), Accept: grazie || body.stream ? 'text/event-stream' : 'application/json', 'Content-Type': 'application/json' }, encoded, operation.signal);
       const contentType = upstream.headers.get('content-type') ?? '';
-      if (!upstream.body || !/^(?:application\/json|text\/event-stream)(?:\s*;|$)/i.test(contentType)) { await upstream.body?.cancel(); throw failure('response'); }
+      if (!upstream.body || !(grazie ? /^text\/event-stream(?:\s*;|$)/i.test(contentType) : /^(?:application\/json|text\/event-stream)(?:\s*;|$)/i.test(contentType))) { await upstream.body?.cancel(); throw failure('response'); }
       const declared = Number(upstream.headers.get('content-length'));
       if (Number.isFinite(declared) && declared > CHAT_LIMIT) { await upstream.body.cancel(); throw failure('limit'); }
       const reader = upstream.body.getReader();
@@ -219,8 +247,13 @@ export class JetBrainsIdeApi {
         },
         cancel: async () => { operation.signal.removeEventListener('abort', abort); await reader.cancel().catch(() => {}); reader.releaseLock(); finish(); },
       });
+      if (grazie) {
+        const options = { ...bridgeOptions, signal: operation.signal };
+        if (body.stream === true) return new Response(stream.pipeThrough(createJetBrainsGrazieChatStream(requestModel, options), { signal: operation.signal }), { headers: { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store' } });
+        return Response.json(await collectJetBrainsGrazieChat(stream, requestModel, options), { headers: { 'cache-control': 'no-store' } });
+      }
       return new Response(stream, { status: 200, headers: { 'content-type': contentType, 'cache-control': 'no-store' } });
-    } catch (error) { operation.cleanup(); throw error instanceof JetBrainsIdeApiError ? error : failure(operation.signal.aborted ? 'cancelled' : 'network'); }
+    } catch (error) { operation.cleanup(); throw error instanceof JetBrainsIdeApiError ? error : failure(operation.signal.aborted ? 'cancelled' : error instanceof JetBrainsGrazieBridgeError ? error.status === 400 ? 'capability' : 'response' : 'network'); }
   }
 
   private auth(token: string): Record<string, string> {

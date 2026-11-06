@@ -156,15 +156,15 @@ describe('JetBrains native IDE API', () => {
     expect(usage.windows).toHaveLength(1); expect(usage.windows[0]).toMatchObject({ id: 'jetbrains-total', total: 20, remaining: 16.5, usedPercent: 17.5 });
   });
 
-  it('publishes only Chat profiles with a proven OpenAI forwarding route and a provider model ID', async () => {
+  it('publishes verified vendor Chat profiles while retaining strict native OpenAI IDs', async () => {
     const profile = nativeProfile();
     const fetch = mockTransport((url, init) => {
       expect(url).toBe('https://api.jetbrains.ai/user/v5/llm/profiles/v9'); expect(init.method).toBe('GET');
-      return reply({ profiles: [profile, { ...profile, id: 'anthropic', provider: 'Anthropic' }, { ...profile, id: 'unknown', provider: 'OpenRouter' }, { ...profile, id: 'old', lifeCycle: { deprecated: true } }, { ...profile, id: 'no-native-id', providerModelID: null }, { ...profile, id: 'fim-only', features: ['Completion'] }, { ...profile, id: 'no-chat', chatDefinition: null }, { ...profile, id: 'azure-fixture', provider: 'AzureOpenAI', providerModelID: 'deployment-fixture' }] });
+      return reply({ profiles: [profile, { ...profile, id: 'anthropic', provider: 'Anthropic' }, { ...profile, id: 'gemini', provider: 'Google', providerModelID: null }, { ...profile, id: 'vertex-claude', provider: 'GoogleVertexAnthropic' }, { ...profile, id: 'bedrock', provider: 'Bedrock' }, { ...profile, id: 'xai', provider: 'Xai' }, { ...profile, id: 'vllm', provider: 'vLLM' }, { ...profile, id: 'unknown', provider: null }, { ...profile, id: 'old', lifeCycle: { deprecated: true } }, { ...profile, id: 'no-native-id', providerModelID: null }, { ...profile, id: 'fim-only', features: ['Completion'] }, { ...profile, id: 'no-chat', chatDefinition: null }, { ...profile, id: 'azure-fixture', provider: 'AzureOpenAI', providerModelID: 'deployment-fixture' }] });
     });
     const api = new JetBrainsIdeApi({ fetch, now: () => NOW });
     const models = await api.models(AI);
-    expect(models.data.map(value => value.id)).toEqual(['openai-gpt-fixture', 'azure-fixture']);
+    expect(models.data.map(value => value.id)).toEqual(['openai-gpt-fixture', 'anthropic', 'gemini', 'vertex-claude', 'bedrock', 'xai', 'vllm', 'azure-fixture']);
     expect(models.data[0]).toEqual({ id: profile.id, object: 'model', owned_by: 'jetbrains', name: 'Fixture GPT', context_length: 128000, max_output_tokens: 16000 });
     expect(JSON.stringify(models)).not.toContain('gpt-native-fixture');
     models.data[0].id = 'mutated-outside';
@@ -271,5 +271,53 @@ describe('JetBrains native IDE API', () => {
   ])('rejects malformed, oversized or redirected quota responses safely', async response => {
     const fetch = mockTransport(response); const error = await new JetBrainsIdeApi({ fetch, now: () => NOW }).quota(AI).catch(value => value);
     expect(error).toBeInstanceOf(JetBrainsIdeApiError); expect(String(error)).not.toMatch(/PRIVATE_|attacker/); expect(fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('JetBrains native multi-vendor V9 routing', () => {
+  const sse = (content = 'vendor answer') => new Response(`data: ${JSON.stringify({ type: 'Content', event_type: 'data', content, choiceIndex: 0 })}\n\ndata: ${JSON.stringify({ type: 'FinishMetadata', event_type: 'data', reason: 'stop', choiceIndex: 0 })}\n\ndata: end\n\n`, { headers: { 'content-type': 'text/event-stream' } });
+  it.each(['Anthropic', 'Google', 'GoogleVertexAnthropic', 'Bedrock', 'Xai', 'vLLM'])('calls %s by its exact authorized profile ID through the official V9 endpoint once', async provider => {
+    const profile = { ...nativeProfile('native-vendor-profile'), provider, providerModelID: 'different-private-native-id' };
+    const fetch = mockTransport((url, init) => {
+      if (url.endsWith('profiles/v9')) return reply({ profiles: [profile] });
+      expect(url).toBe('https://api.jetbrains.ai/user/v5/llm/chat/stream/v9');
+      expect(init.method).toBe('POST');
+      expect(new Headers(init.headers).get('Grazie-Authenticate-JWT')).toBe(AI);
+      expect(new Headers(init.headers).has('Authorization')).toBe(false);
+      expect(new Headers(init.headers).get('Accept')).toBe('text/event-stream');
+      expect(JSON.parse(String(init.body))).toMatchObject({ prompt: 'modeldock', profile: profile.id, chat: { messages: [{ type: 'user_message', content: 'q' }] } });
+      expect(String(init.body)).not.toContain(profile.providerModelID);
+      return sse();
+    });
+    const api = new JetBrainsIdeApi({ fetch, now: () => NOW });
+    const response = await api.chat(AI, { model: profile.id, messages: [{ role: 'user', content: 'q' }], stream: false }, signal());
+    expect(response.headers.get('content-type')).toContain('application/json');
+    const answer = await response.json();
+    expect(answer).toMatchObject({ model: profile.id, choices: [{ message: { role: 'assistant', content: 'vendor answer' }, finish_reason: 'stop' }] });
+    expect(JSON.stringify(answer)).not.toContain('PRIVATE'); expect(fetch).toHaveBeenCalledTimes(2);
+  });
+  it('projects only official V9 tool/media descriptors and retains unknown capability fields', async () => {
+    const profiles = [
+      { ...nativeProfile('claude'), provider: 'Anthropic', chatDefinition: { roles: ['user', 'assistant', 'tool'], parameters: ['toolConfig.tools'], multimediaDataDefinition: { supportedTypes: ['image/png', 'image/jpeg'] } } },
+      { ...nativeProfile('gemini'), provider: 'Google', chatDefinition: { roles: ['user', 'assistant'], parameters: ['toolConfig.tools'], multimediaDataDefinition: { supportedTypes: ['text/plain'] } } },
+      { ...nativeProfile('unknown-capabilities'), provider: 'Anthropic' },
+    ];
+    const api = new JetBrainsIdeApi({ fetch: mockTransport(() => reply({ profiles })), now: () => NOW });
+    const result = await api.models(AI);
+    expect(result.data[0]).toMatchObject({ id: 'claude', tools: true, vision: true, context_length: 128000, max_output_tokens: 16000 });
+    expect(result.data[1]).toMatchObject({ id: 'gemini', tools: false, vision: false });
+    expect(result.data[2]).not.toHaveProperty('tools'); expect(result.data[2]).not.toHaveProperty('vision');
+  });
+  it('rejects unsupported reasoning before any inference POST and does not retry', async () => {
+    const fetch = mockTransport(url => { expect(url.endsWith('profiles/v9')).toBe(true); return reply({ profiles: [{ ...nativeProfile('claude'), provider: 'Anthropic' }] }); });
+    const api = new JetBrainsIdeApi({ fetch, now: () => NOW });
+    await expect(api.chat(AI, { model: 'claude', messages: [{ role: 'user', content: 'q' }], reasoning_effort: 'high' }, signal())).rejects.toMatchObject({ code: 'capability' });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+  it('rejects an HTTP 200 JSON error instead of presenting it as a successful native vendor answer', async () => {
+    const fetch = mockTransport(url => url.endsWith('profiles/v9') ? reply({ profiles: [{ ...nativeProfile('gemini'), provider: 'Google' }] }) : reply({ error: 'PRIVATE_NATIVE_ERROR' }));
+    const api = new JetBrainsIdeApi({ fetch, now: () => NOW });
+    const error = await api.chat(AI, { model: 'gemini', messages: [{ role: 'user', content: 'q' }] }, signal()).catch(error => error);
+    expect(error).toMatchObject({ code: 'response' }); expect(String(error)).not.toContain('PRIVATE'); expect(fetch).toHaveBeenCalledTimes(2);
   });
 });

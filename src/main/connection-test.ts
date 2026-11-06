@@ -307,12 +307,14 @@ export class ConnectionTester {
       if (!provider) throw new ConnectionFailure('configuration', '供应商不存在，请重新选择。');
       if (!input || typeof input !== 'object' || Array.isArray(input)) throw new ConnectionFailure('configuration', '测试模型参数无效。');
       if (!provider.hasSecret) throw new ConnectionFailure('configuration', provider.kind === 'openai-compatible' ? '请先保存 API Key，再测试连接。' : '请先完成订阅授权，再测试连接。');
+      let modelOutputLimit: number | undefined;
       if (input.modelId !== undefined || input.upstreamId === undefined) {
         const model = input.modelId !== undefined ? typeof input.modelId === 'string' ? this.store.listModels().find(item => item.id === input.modelId) : undefined : firstConnectionModel(providerId, this.store.listModels());
         if (!model && input.modelId === undefined) throw new ConnectionFailure('model-required', '此供应商还没有模型，请先获取模型列表或手动添加模型，再测试连接。');
         if (!model || model.providerId !== providerId) throw new ConnectionFailure('model', '所选模型不存在或不属于当前供应商，请重新选择。');
         testedModel = modelName(model.upstreamId);
         wireApi = model.wireApi;
+        if (positiveCount(model.maxOutputTokens)) modelOutputLimit = model.maxOutputTokens;
       } else {
         testedModel = modelName(input.upstreamId);
         wireApi = input.wireApi ?? presetById(provider.presetId)?.defaultWireApi ?? 'chat-completions';
@@ -327,9 +329,12 @@ export class ConnectionTester {
       catch { throw new ConnectionFailure('configuration', 'API 地址无效，请填写 HTTPS 地址或本机 HTTP 回环地址；地址不能包含凭据、查询或片段。'); }
       // 修改点：Copilot 的实际地址来自官方账户授权，仍限定官方域名及所选模型的推理路由。
       const matchesEndpoint = (url: string) => provider.kind === 'copilot' ? isCopilotUpstream(url, route) : url === expected;
+      // Native JetBrains models can exhaust a tiny budget before emitting text.
+      // Use one bounded probe, respecting a smaller explicit selected-model cap.
+      const testBudget = provider.nativeAdapter === 'jetbrains-ide' ? Math.min(256, modelOutputLimit ?? 256) : wireApi === 'responses' ? 64 : 16;
       const body: Record<string, unknown> = wireApi === 'responses'
-        ? { model: testedModel, input: [{ role: 'user', content: [{ type: 'input_text', text: 'Reply OK.' }] }], stream: false, store: false, max_output_tokens: 64 }
-        : { model: testedModel, messages: [{ role: 'user', content: 'Reply OK.' }], stream: false, ...(provider.nativeAdapter === 'trae' && wireApi === 'chat-completions' ? {} : { max_tokens: 16 }) };
+        ? { model: testedModel, input: [{ role: 'user', content: [{ type: 'input_text', text: 'Reply OK.' }] }], stream: false, store: false, max_output_tokens: testBudget }
+        : { model: testedModel, messages: [{ role: 'user', content: 'Reply OK.' }], stream: false, ...(provider.nativeAdapter === 'trae' && wireApi === 'chat-completions' ? {} : { max_tokens: testBudget }) };
       const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new ConnectionFailure('timeout', '推理测试超时（30 秒），请稍后重试或检查网络。')); }, TIMEOUT_MS); });
       const request = async () => {
         let prepared: PreparedUpstream;
