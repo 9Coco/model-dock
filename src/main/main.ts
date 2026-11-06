@@ -452,7 +452,7 @@ async function createWindow(forceShow = false) {
           writeFileSync(join(outputDir,'feature-layout-validation.json'),JSON.stringify(featureLayouts,null,2));
           const featureDialogs=[];
           for (const [scenario,page,selector,title] of [
-            ['auth-account','auth','[data-auth-add-account="codex"]','添加 ChatGPT / OpenAI 账号'],
+            ['auth-account','auth','[data-auth-add-account="codex"]','添加 Codex 订阅 账号'],
             ['auth-jetbrains','auth','[data-action="jetbrains-import-options"]','连接JetBrains账号'],
             ['service-provider','service','[data-action="add-api-provider"]','添加 API 供应商'],
           ] as const) {

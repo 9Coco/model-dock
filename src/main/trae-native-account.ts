@@ -1,3 +1,4 @@
+import { SUBSCRIPTION_NAMES } from '../shared/subscription-names';
 import { createHash, randomUUID } from 'node:crypto';
 import type { AuthAccount, RelayClientImportPreview, RelayClientImportProvenance, SubscriptionUsage } from '../shared/auth-types';
 import { TRAE_RELAY_BASE_URL } from '../shared/presets';
@@ -124,7 +125,7 @@ export class TraeNativeAccounts {
       this.assertOpen();
       if (ticket.expires <= this.now() || eligibleFingerprint !== hash(eligibleProviders())) throw new TraeNativeAccountError('TRAE 连接或客户端选择在导入期间已变更，请重新选择。');
       if (target && beforeMetadata !== hash(this.store.getManagedState(`auth-metadata:${target.id}`, null))) throw new TraeNativeAccountError('TRAE 授权在导入期间已变更，请重新选择。');
-      let name = target?.name ?? 'TRAE 中国版 · 客户端导入'; const base = name; let suffix = 2;
+      let name = target?.name ?? SUBSCRIPTION_NAMES['trae-cn-relay']; const base = name; let suffix = 2;
       while (!target && this.store.listProviders().some(provider => provider.name.toLowerCase() === name.toLowerCase())) name = `${base} ${suffix++}`;
       const input: ProviderInput = { ...target, ...(target ? { id: target.id } : {}), name, enabled: target?.enabled ?? true, note: target?.note ?? '', kind: 'openai-compatible', presetId: 'trae-cn-relay', relayMode: 'managed', baseUrl: TRAE_RELAY_BASE_URL, messagesAuth: 'bearer', claudeBaseUrl: '', apiKey: key };
       const metadata: NativeMetadata = { version: 1, revision: randomUUID(), connection: relayConnectionFingerprint(input, key), identity: ticket.identity,

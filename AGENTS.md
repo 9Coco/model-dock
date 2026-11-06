@@ -1,5 +1,16 @@
 # ModelDock development
 
+## 反代架构强制要求（用户明确要求）
+
+- **ModelDock 托管的所有账号反代和协议转换，必须使用 Electron 主进程内的 TypeScript 适配器，并接入现有 Gateway。** 新增供应商、修复、重构、兼容处理和发行打包都必须遵守这一要求。
+- **禁止引入或恢复 Docker / Docker Compose / 容器反代、Python / Pi 反代、独立 Node.js 或其他语言的反代进程，以及额外的账号 HTTP 服务或监听端口。** 不得以临时兼容、备用方案、可选依赖或后台服务的名义绕过。
+- 供应商差异集中在现有主进程适配器中，复用已有认证、网络会话、模型目录、额度查询和网关路由；界面只通过窄 preload 接口调用。流式增量、取消和背压必须沿现有链路传递，凭据保持主进程加密存储。
+- 这一约束旨在避免额外进程、容器及多层中转增加请求开销和延迟，避免引入环境部署、依赖、端口与进程生命周期的维护负担，也避免重复实现协议与认证逻辑，造成代码冗杂。
+- 上游协议或能力尚未核实时，应明确说明暂不支持并保留原有账号与配置，不得暗中回退到外置反代。构建和评审应确认生产入口及发行包不包含或启动上述反代运行时。
+- 本约束针对项目托管的反代运行链路。既有的一次性官方客户端授权导入、系统钥匙串读取，以及用户显式配置的外部 API 接入可以保留；这些能力不得被用来承载独立的托管推理反代或协议转换服务。
+
+## 其他开发约定
+
 - Keep app logic in TypeScript and the UI in React. The gateway and credentials live in the main process, with a narrow preload bridge.
 - Providers/accounts/models are global; tools consume references. Aggregate and subscription modes keep upstream secrets centralized. API direct mode may write the selected API Key only through explicit preview/export/apply actions; never export rotating OAuth tokens.
 - Preserve localhost-only binding. Do not edit existing Agent or CPA configurations on startup; config application is an explicit user interface action with backups and validation.

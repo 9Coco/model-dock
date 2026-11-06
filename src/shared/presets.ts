@@ -1,3 +1,4 @@
+import { SUBSCRIPTION_NAMES } from './subscription-names';
 import type { Provider, ProviderPreset } from './types';
 
 export const TRAE_RELAY_BASE_URL = 'http://127.0.0.1:18080/v1';
@@ -26,16 +27,16 @@ export const providerPresets: ProviderPreset[] = [
     note: '对应你所说的火山 Token 编程套餐，使用 Coding Plan 专属地址和套餐账号的方舟 API Key；不要混用 Agent Plan 的凭据或按量调用地址。', docsUrl: 'https://docs.volcengine.com/docs/ark/coding-plan-personal-ai-other-tools?lang=zh' },
   { id: 'qwen-token', name: '千问 Token Plan', category: 'api', kind: 'openai-compatible', baseUrl: 'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1', defaultWireApi: 'chat-completions',
     note: '默认中国北京 Token Plan 个人/团队端点，使用套餐专属 Key；国际地区需改为控制台对应地址。', docsUrl: 'https://help.aliyun.com/zh/model-studio/token-plan-personal-quick-start' },
-  { id: 'trae-cn-relay', name: 'TRAE 中国版反代', category: 'subscription', kind: 'openai-compatible', baseUrl: TRAE_RELAY_BASE_URL, defaultWireApi: 'chat-completions',
+  { id: 'trae-cn-relay', name: SUBSCRIPTION_NAMES['trae-cn-relay'], category: 'subscription', kind: 'openai-compatible', baseUrl: TRAE_RELAY_BASE_URL, defaultWireApi: 'chat-completions',
     note: '从本机 TRAE 中国版或 SOLO 中国版导入本人账号，由内置适配器接入 ModelDock 网关，再查询官方套餐、额度与实际模型。', docsUrl: '' },
-  { id: 'jetbrains-central', name: 'JetBrains AI 会员反代', category: 'subscription', kind: 'openai-compatible', baseUrl: JETBRAINS_RELAY_BASE_URL, defaultWireApi: 'chat-completions',
+  { id: 'jetbrains-central', name: SUBSCRIPTION_NAMES['jetbrains-central'], category: 'subscription', kind: 'openai-compatible', baseUrl: JETBRAINS_RELAY_BASE_URL, defaultWireApi: 'chat-completions',
     note: '从 IDE / Air 或 Central 的个人 AI 许可证导入授权，由内置适配器直接连接官方服务并接入现有网关。', docsUrl: JETBRAINS_CENTRAL_SETUP_URL },
   { id: 'custom', name: '自定义 API', category: 'api', kind: 'openai-compatible', baseUrl: '', defaultWireApi: 'chat-completions', note: '填写兼容接口地址、密钥，再发现或添加实际模型，并选择对应的调用协议。', docsUrl: '' },
-  { id: 'codex-subscription', name: 'Codex 订阅', category: 'subscription', kind: 'codex', baseUrl: 'https://chatgpt.com/backend-api/codex', defaultWireApi: 'responses',
+  { id: 'codex-subscription', name: SUBSCRIPTION_NAMES.codex, category: 'subscription', kind: 'codex', baseUrl: 'https://chatgpt.com/backend-api/codex', defaultWireApi: 'responses',
     note: '使用本人 ChatGPT/Codex 账号授权，凭据由 ModelDock 管理续期。', docsUrl: 'https://developers.openai.com/codex/auth/' },
-  { id: 'copilot-subscription', name: 'GitHub Copilot 订阅', category: 'subscription', kind: 'copilot', baseUrl: 'https://api.githubcopilot.com', defaultWireApi: 'chat-completions',
+  { id: 'copilot-subscription', name: SUBSCRIPTION_NAMES.copilot, category: 'subscription', kind: 'copilot', baseUrl: 'https://api.githubcopilot.com', defaultWireApi: 'chat-completions',
     note: '使用本人 GitHub Copilot 订阅；可选择已登录账号或保存后登录，授权由本地入口管理，按模型实际支持的接口转发。', docsUrl: 'https://github.com/github/copilot-sdk' },
-  { id: 'grok-build', name: 'Grok Build 订阅', category: 'subscription', kind: 'grok', baseUrl: 'https://cli-chat-proxy.grok.com/v1', defaultWireApi: 'responses',
+  { id: 'grok-build', name: SUBSCRIPTION_NAMES.grok, category: 'subscription', kind: 'grok', baseUrl: 'https://cli-chat-proxy.grok.com/v1', defaultWireApi: 'responses',
     note: '使用本人 Grok Build 套餐账号授权，凭据由 ModelDock 管理续期。', docsUrl: 'https://x.ai/news/grok-opencode' },
 ];
 export function presetById(id: string | undefined) { return providerPresets.find(preset => preset.id === id); }

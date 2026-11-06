@@ -1,7 +1,8 @@
+import { SUBSCRIPTION_NAMES } from '../shared/subscription-names';
 import { createHash, randomUUID } from 'node:crypto';
 import type { AuthAccount, RelayAccountKind, RelayClientImportPreview, RelayClientImportProvenance } from '../shared/auth-types';
 import type { Provider, ProviderInput } from '../shared/types';
-import { JETBRAINS_RELAY_BASE_URL, TRAE_RELAY_BASE_URL, presetById } from '../shared/presets';
+import { JETBRAINS_RELAY_BASE_URL, TRAE_RELAY_BASE_URL } from '../shared/presets';
 import type { Store } from './store';
 
 export class RelayClientImportError extends Error {}
@@ -85,7 +86,7 @@ export class RelayClientImportManager {
       const expected = target ? { provider: target, apiKey: this.store.getSecret(target.id)?.apiKey } : undefined;
       // The native adapter re-reads the selected account and owns its relay lifecycle.
       const receipt = await this.adapters[kind].perform(ticket.candidate, key);
-      let name = target?.name ?? `${presetById(kind)!.name} · 客户端导入`;
+      let name = target?.name ?? SUBSCRIPTION_NAMES[kind];
       if (!target) {
         const existing = this.store.listProviders(), base = name; let suffix = 2;
         while (existing.some(provider => provider.name.toLowerCase() === name.toLowerCase())) name = `${base} ${suffix++}`;
