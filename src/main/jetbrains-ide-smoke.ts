@@ -75,7 +75,8 @@ export function createJetBrainsIdeFixture(store: Store): { reader: Pick<JetBrain
       },
       async quota(token): Promise<SubscriptionUsage> {
         observe('quota'); accept(token);
-        return { status: 'ready', queriedAt: new Date().toISOString(), windows: [{ id: 'credits', label: 'JetBrains AI Credits', remaining: 625, total: 1000, unit: 'AI Credits', remainingPercent: 62.5, usedPercent: 37.5 }], message: '已查询此 IDE 账号的官方 AI Credits（合成演示）。' };
+        const wideAmount = store.getManagedState<boolean>('qa-unified-auth-layout', false), remaining = wideAmount ? 3_074_611.8 : 625, total = wideAmount ? 3_500_000 : 1000;
+        return { status: 'ready', queriedAt: new Date().toISOString(), windows: [{ id: 'credits', label: 'JetBrains AI Credits', remaining, total, unit: 'AI Credits', remainingPercent: remaining / total * 100, usedPercent: (total - remaining) / total * 100 }], message: '已查询此 IDE 账号的官方 AI Credits（合成演示）。' };
       },
       async models(token) { observe('models'); accept(token); return { data: [{ id: MODEL_ID, object: 'model', name: 'IDE 原生演示模型', context_length: 64000 }, { id: 'qa-claude-profile', object: 'model', name: 'Claude · 原生目录演示', context_length: 200000, tools: true, vision: true }, { id: 'qa-gemini-profile', object: 'model', name: 'Gemini · 原生目录演示', context_length: 1000000, tools: true, vision: true }] }; },
       async chat(token, body, signal) {
@@ -230,7 +231,9 @@ export async function verifyJetBrainsIdeImport(window: BrowserWindow, store: Sto
     }
     await close(); await click('[data-page="auth"]');
     const row = `[data-auth-account="${provider.id}"]`;
-    await waitFor(`!!document.querySelector(${JSON.stringify(row)}+' [data-relay-client-source="jetbrains-ide"]')`, 'native IDE source is visible immediately');
+    await click(`${row} [data-action="account-menu"]`); await click(`[data-auth-account-menu="${provider.id}"] [data-action="relay-account-details"]`);
+    await waitFor(`!!document.querySelector('[data-auth-account-details="${provider.id}"] [data-relay-client-source="jetbrains-ide"]')`, 'native IDE source remains visible in account details');
+    await close();
     await waitFor(`(()=>{const node=document.querySelector(${JSON.stringify(row)}+' [data-quota-window-id="credits"] strong');return !!node&&/625/.test(node.textContent)&&/1,?000/.test(node.textContent)&&/AI Credits/.test(node.textContent)})()`, 'AI Credits amounts are directly visible');
     for (const [theme, width] of [['dark', 980], ['light', 1180]] as const) {
       window.setSize(width, width === 1180 ? 800 : 680); await evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)};document.documentElement.style.colorScheme=${JSON.stringify(theme)};document.querySelector(${JSON.stringify(row)}).scrollIntoView({block:'nearest'})`);
