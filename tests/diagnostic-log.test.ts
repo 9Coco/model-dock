@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { DIAGNOSTIC_MESSAGES, type DiagnosticContext, type DiagnosticEntry } from '../src/shared/diagnostic-types';
@@ -21,6 +21,11 @@ afterEach(() => { faults.write = false; faults.read = false; faults.open = undef
 function fixture(options: ConstructorParameters<typeof DiagnosticsLog>[1] = {}) {
   const root = mkdtempSync(join(tmpdir(), 'modeldock-diagnostics-')); roots.push(root);
   return { root, log: new DiagnosticsLog(root, options), directory: join(root, 'logs'), file: join(root, 'logs', 'diagnostics.jsonl') };
+}
+function opensFixtureLog(path: string, file: string): boolean {
+  // Linux deliberately opens through its pinned directory descriptor. Resolve
+  // that exact file before injecting the race, retaining the fixture boundary.
+  return path === file || process.platform === 'linux' && /^\/proc\/self\/fd\/\d+\/diagnostics\.jsonl$/.test(path) && realpathSync(path) === file;
 }
 function entry(context: Record<string, unknown> = {}, overrides: Record<string, unknown> = {}): DiagnosticEntry {
   return { timestamp: new Date().toISOString(), sessionId: randomUUID(), entryId: randomUUID(), level: 'info', event: 'provider.test', message: DIAGNOSTIC_MESSAGES['provider.test'], context, ...overrides } as DiagnosticEntry;
@@ -292,7 +297,7 @@ describe('diagnostic filesystem safety', () => {
     const f = fixture(), outside = join(f.root, 'external'); writeFileSync(outside, 'private target', { mode: 0o644 }); f.log.write('info', 'app.start');
     const originalPermissions = filesystemPermissions(outside);
     let swapped = false;
-    faults.open = (path, before) => { if (before && path === f.file) { faults.open = undefined; unlinkSync(f.file); symlinkSync(outside, f.file); swapped = true; } };
+    faults.open = (path, before) => { if (before && opensFixtureLog(path, f.file)) { faults.open = undefined; unlinkSync(f.file); symlinkSync(outside, f.file); swapped = true; } };
     f.log.write('error', 'app.error');
     expect(swapped).toBe(true);
     expect(f.log.query().available).toBe(false);
@@ -304,7 +309,7 @@ describe('diagnostic filesystem safety', () => {
     const f = fixture(), outside = join(f.root, 'external'); writeFileSync(outside, 'private target', { mode: 0o644 }); f.log.write('info', 'app.start');
     const originalPermissions = filesystemPermissions(outside);
     let swapped = false;
-    faults.open = (path, before) => { if (!before && path === f.file) { faults.open = undefined; unlinkSync(f.file); linkSync(outside, f.file); swapped = true; } };
+    faults.open = (path, before) => { if (!before && opensFixtureLog(path, f.file)) { faults.open = undefined; unlinkSync(f.file); linkSync(outside, f.file); swapped = true; } };
     f.log.write('error', 'app.error');
     expect(swapped).toBe(true);
     expect(f.log.query().available).toBe(false);
@@ -317,7 +322,7 @@ describe('diagnostic filesystem safety', () => {
     requireOpenFileDirectoryRenameCapability(context);
     const f = fixture(), outside = join(f.root, 'external-dir'); mkdirSync(outside); writeFileSync(join(outside, 'diagnostics.jsonl'), 'private target'); f.log.write('info', 'app.start');
     let swapped = false;
-    faults.open = (path, before) => { if (!before && path === f.file) { faults.open = undefined; renameSync(f.directory, join(f.root, 'old-logs')); createDirectoryLink(outside, f.directory); swapped = true; } };
+    faults.open = (path, before) => { if (!before && opensFixtureLog(path, f.file)) { faults.open = undefined; renameSync(f.directory, join(f.root, 'old-logs')); createDirectoryLink(outside, f.directory); swapped = true; } };
     f.log.write('error', 'app.error');
     expect(swapped).toBe(true);
     expect(f.log.query().available).toBe(false);
