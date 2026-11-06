@@ -38,7 +38,7 @@ async function fixture(onRaw?: (request: RawRequest) => void) {
     requests.push(request); rawStarted.resolve(request); onRaw?.(request);
     return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
   }) as typeof fetch });
-  const adapter = new TraeGatewayAdapter({ isNativeProvider: id => id === provider.id, credentials: () => credentials }, api);
+  const adapter = new TraeGatewayAdapter({ isNativeProvider: id => id === provider.id, credentials: () => credentials, modelClient: () => 'trae-cn' }, api);
   const fallbackFetch = vi.fn(async () => { throw new Error('Native TRAE must not fetch its historical 18080 URL'); });
   const prepareRequest = vi.fn(async () => { throw new Error('Native TRAE must not prepare its historical relay credentials'); });
   const gateway = new Gateway(store, { nativeRequest: (source, path, body, signal) => adapter.request(source, path, body, signal), fetch: fallbackFetch, prepareRequest, timeoutMs: 5000 });

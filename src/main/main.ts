@@ -51,6 +51,7 @@ import { verifyRelaySubscriptions } from './relay-subscriptions-smoke';
 import { verifyRelayClientImport } from './relay-client-import-smoke';
 import { verifyRelayQuota } from './relay-quota-smoke';
 import { verifyNavigationConsolidation } from './navigation-consolidation-smoke';
+import { createHistoryModelsFixture, verifyHistoryModels } from './history-models-smoke';
 import { verifySidebarScroll } from './sidebar-scroll-smoke';
 import { verifySidebarLayout } from './sidebar-layout-smoke';
 import { verifyDshConfiguration } from './dsh-config-smoke';
@@ -159,6 +160,7 @@ if (!__MODELDOCK_SMOKE_BUILD__ || !['baseline', 'disable-wayland-color', 'force-
   applyWaylandColorWorkaround(app.commandLine, process.platform, process.env);
 }
 const runtimeConfig = resolveRuntimeConfig(__MODELDOCK_RUNTIME_MODE__, process.env);
+const modelHistoryOnly = __MODELDOCK_SMOKE_BUILD__ && process.env.MODELDOCK_SMOKE_MODEL_HISTORY_ONLY === '1' && process.env.MODELDOCK_SMOKE_AUTH_MOCK === '1';
 const devUrl = __MODELDOCK_RUNTIME_MODE__ === 'development' ? runtimeConfig.devUrl : undefined;
 if (runtimeConfig.dataDir) {
   mkdirSync(runtimeConfig.dataDir, { recursive: true });
@@ -263,8 +265,10 @@ async function createWindow(forceShow = false) {
         const result = await window!.webContents.executeJavaScript(`({title:document.title, text:document.body.innerText, bridge:!!window.modelDock})`);
         writeFileSync(join(outputDir, 'electron-smoke.json'), JSON.stringify({ ...result, dataDir, windowSize: window!.getSize(), contentSize: window!.getContentSize() }, null, 2));
         writeFileSync(join(outputDir, 'electron-smoke.png'), await captureUi());
-        if (process.env.MODELDOCK_SMOKE_JETBRAINS_IDE_ONLY !== '1' && process.env.MODELDOCK_SMOKE_PROVIDER_MANAGEMENT_ONLY !== '1' && process.env.MODELDOCK_SMOKE_RELAY_QUOTA_ONLY !== '1' && process.env.MODELDOCK_SMOKE_RELAY_CLIENT_IMPORT_ONLY !== '1' && process.env.MODELDOCK_SMOKE_SIDEBAR_LAYOUT_ONLY !== '1' && process.env.MODELDOCK_SMOKE_NAVIGATION_CONSOLIDATION_ONLY !== '1' && process.env.MODELDOCK_SMOKE_RELAY_SUBSCRIPTIONS_ONLY !== '1' && process.env.MODELDOCK_SMOKE_JETBRAINS_PLUGIN_ONLY !== '1' && process.env.MODELDOCK_SMOKE_CONTEXT_MENU_ONLY !== '1') await verifyToolIcons(window!, outputDir, captureUi);
-        if (process.env.MODELDOCK_SMOKE_CONTEXT_MENU_ONLY === '1') {
+        if (!modelHistoryOnly && process.env.MODELDOCK_SMOKE_JETBRAINS_IDE_ONLY !== '1' && process.env.MODELDOCK_SMOKE_PROVIDER_MANAGEMENT_ONLY !== '1' && process.env.MODELDOCK_SMOKE_RELAY_QUOTA_ONLY !== '1' && process.env.MODELDOCK_SMOKE_RELAY_CLIENT_IMPORT_ONLY !== '1' && process.env.MODELDOCK_SMOKE_SIDEBAR_LAYOUT_ONLY !== '1' && process.env.MODELDOCK_SMOKE_NAVIGATION_CONSOLIDATION_ONLY !== '1' && process.env.MODELDOCK_SMOKE_RELAY_SUBSCRIPTIONS_ONLY !== '1' && process.env.MODELDOCK_SMOKE_JETBRAINS_PLUGIN_ONLY !== '1' && process.env.MODELDOCK_SMOKE_CONTEXT_MENU_ONLY !== '1') await verifyToolIcons(window!, outputDir, captureUi);
+        if (modelHistoryOnly) {
+          await verifyHistoryModels(window!, store, outputDir, captureUi);
+        } else if (process.env.MODELDOCK_SMOKE_CONTEXT_MENU_ONLY === '1') {
           await verifyContextMenus(window!, store, outputDir, captureUi);
         } else if (process.env.MODELDOCK_SMOKE_JETBRAINS_PLUGIN_ONLY === '1') {
           await verifyJetBrainsPluginSwitch(window!, store, outputDir, captureUi);
@@ -1165,13 +1169,14 @@ function initializeApplication() {
     skills = new SkillManager(store, { homeDir: featureHome, appDataDir: featureAppData, libraryDir: join(dataDir, 'skill-library'), backupDir: join(dataDir, 'backups', 'skills'), configHome: openCodeConfigHome, claudeConfigDir: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.claude') : process.env.CLAUDE_CONFIG_DIR, ...(!__MODELDOCK_SMOKE_BUILD__ ? { codexHome: process.env.CODEX_HOME, dshHome: process.env.DSH_HOME } : {}) });
     // 修改点：Copilot 订阅与其他来源共享目录、连通性及本地网关，凭据准备在主进程分派。
     const nativeFixture = __MODELDOCK_SMOKE_BUILD__ ? createJetBrainsIdeFixture(store) : undefined;
+    const historyModelsFixture = __MODELDOCK_SMOKE_BUILD__ && modelHistoryOnly ? createHistoryModelsFixture(store) : undefined;
     const ideApi = nativeFixture?.api ?? new JetBrainsIdeApi({ fetch: runtimeFetch });
     ideAccounts = new JetBrainsIdeAccounts(store, nativeFixture?.reader ?? new JetBrainsIdeImporter({ homeDir: featureHome }), ideApi, undefined, () => relayKey('jetbrains-central-relay-key'), error => error instanceof JetBrainsIdeImportError || error instanceof JetBrainsIdeApiError ? error.message : undefined);
     ideGatewayAdapter = new JetBrainsGatewayAdapter(ideAccounts, ideApi);
     const centralApi = new CentralApi({ fetch: runtimeFetch });
     centralNativeAccounts = new CentralNativeAccounts(store, new CentralClientSessionReader({ homeDir: featureHome }), centralApi, () => relayKey('jetbrains-central-relay-key'), error => error instanceof CentralApiError || error instanceof CentralNativeAccountError ? error.message : undefined);
     centralGatewayAdapter = new CentralGatewayAdapter(centralNativeAccounts, centralApi);
-    const traeApi = new TraeApi({ fetch: runtimeFetch });
+    const traeApi = new TraeApi({ fetch: runtimeFetch, clientModelOptions: { homeDir: featureHome, ...(__MODELDOCK_SMOKE_BUILD__ ? { env: {} } : {}) } });
     traeNativeAccounts = new TraeNativeAccounts(store, new TraeClientImporter({ homeDir: featureHome, ...(__MODELDOCK_SMOKE_BUILD__ ? { env: {} } : {}) }), traeApi, () => relayKey('trae-relay-api-key'), error => error instanceof TraeClientImportError || error instanceof TraeApiError || error instanceof TraeNativeAccountError ? error.message : undefined);
     traeGatewayAdapter = new TraeGatewayAdapter(traeNativeAccounts, traeApi);
     const upstream = { prepareRequest: async (provider: Provider, path: string, body: Record<string, unknown>) => {
@@ -1179,7 +1184,13 @@ function initializeApplication() {
       return provider.kind === 'copilot' ? copilotProviders.prepareRequest(provider, path, body) : oauth.prepareRequest(provider, path, body);
     } };
     const nativeAdapter = (provider: Provider) => provider.nativeAdapter === 'trae' ? traeGatewayAdapter : provider.nativeAdapter === 'jetbrains-ide' ? ideGatewayAdapter : provider.nativeAdapter === 'jetbrains-central' ? centralGatewayAdapter : undefined;
-    const nativeModels = (provider: Provider, signal: AbortSignal) => nativeAdapter(provider)?.models(provider, signal) ?? Promise.resolve(undefined);
+    const nativeModels = (provider: Provider, signal: AbortSignal) => {
+      if (historyModelsFixture) {
+        // This dedicated fixture must never fall through to real account auth or HTTP.
+        return Promise.resolve(historyModelsFixture.models(provider, signal) ?? new Response(JSON.stringify({ error: { code: 'smoke-provider-out-of-scope' } }), { status: 400, headers: { 'content-type': 'application/json' } }));
+      }
+      return nativeAdapter(provider)?.models(provider, signal) ?? Promise.resolve(undefined);
+    };
     const nativeRequest = (provider: Provider, path: string, body: Record<string, unknown>, signal: AbortSignal) => nativeAdapter(provider)?.request(provider, path, body, signal) ?? Promise.resolve(undefined);
     catalog = new ModelCatalog(store, upstream, { fetch: runtimeFetch, nativeModels });
     connectionTester = new ConnectionTester(store, upstream, { fetch: runtimeFetch, nativeRequest, diagnostics: recordDiagnostic });

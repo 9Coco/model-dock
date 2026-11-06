@@ -41,6 +41,49 @@ function object(value: unknown): RecordValue {
 function safeText(value: unknown, max = 200): string {
   return typeof value === 'string' && value.trim().length <= max && !/[\x00-\x1f\x7f]/.test(value) ? value.trim() : '';
 }
+function catalogHistorySource(provider: Provider): NonNullable<DiscoveryResult['history']>['source'] | undefined {
+  if (provider.nativeAdapter === 'trae') return 'trae-client';
+  if (provider.nativeAdapter === 'jetbrains-ide') return 'jetbrains-client';
+  if (provider.nativeAdapter) return undefined;
+  return provider.kind === 'codex' ? 'codex-client' : provider.kind === 'grok' ? 'grok-client'
+    : provider.kind === 'copilot' ? 'copilot-client' : undefined;
+}
+function nativeCatalogHistory(payload: unknown, provider: Provider, trusted: boolean): DiscoveryResult['history'] {
+  // These fields are a main-process adapter contract, never upstream API metadata.
+  if (!trusted) return undefined;
+  const source = catalogHistorySource(provider);
+  const data = object(object(payload).modeldock_history);
+  if (!source || data.source !== source || typeof data.currentVerified !== 'boolean') return undefined;
+  const message = safeText(data.message, 500);
+  return { source, currentVerified: data.currentVerified, ...(message ? { message } : {}) };
+}
+function subscriptionCatalogVisibility(entry: unknown, provider: Provider): DiscoveredModel['catalogVisibility'] {
+  const data = object(entry);
+  if (provider.nativeAdapter) return undefined;
+  if (provider.kind === 'codex') {
+    // Official ModelInfo -> ModelPreset: only List is picker-visible. The
+    // app-server's include_hidden projection uses the equivalent hidden boolean.
+    if (data.visibility === 'list') return 'current';
+    if (data.visibility === 'hide' || data.visibility === 'none') return 'historical';
+    if (data.visibility === undefined && typeof data.hidden === 'boolean') return data.hidden ? 'historical' : 'current';
+  } else if (provider.kind === 'grok' && entry !== null && typeof entry === 'object' && !Array.isArray(entry)) {
+    // Official Grok /models parser defaults hidden to false and consults _meta
+    // only when the top-level field is absent. OAuth ignores supported_in_api.
+    const hidden = Object.hasOwn(data, 'hidden') ? data.hidden : object(data._meta).hidden;
+    return hidden === true ? 'historical' : 'current';
+  } else if (provider.kind === 'copilot' && typeof data.model_picker_enabled === 'boolean') {
+    return data.model_picker_enabled ? 'current' : 'historical';
+  }
+  return undefined;
+}
+function subscriptionCatalogHistory(provider: Provider, models: DiscoveredModel[]): DiscoveryResult['history'] {
+  if (provider.nativeAdapter) return undefined;
+  const source = catalogHistorySource(provider);
+  if (!source) return undefined;
+  const currentVerified = models.every(model => model.catalogVisibility !== undefined);
+  return { source, currentVerified, message: '按官方客户端默认可见性筛选，本地实验/手动隐藏以客户端为准。'
+    + (currentVerified ? '' : '部分模型缺少可核实的可见性字段，勾选后可查看未核实展示状态的条目。') };
+}
 function fingerprint(provider: Provider): string { return JSON.stringify([provider.id, provider.kind, provider.baseUrl, provider.presetId, provider.hasSecret, provider.copilotAccountId, provider.messagesAuth, provider.nativeAdapter]); }
 function positiveContext(...values: unknown[]): number | undefined {
   return values.find((value): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value > 0);
@@ -194,8 +237,9 @@ function hiddenModel(entry: unknown, provider: Provider): boolean {
     const endpoints = [data.endpoint, ...(Array.isArray(data.endpoints) ? data.endpoints : [])].filter(name => typeof name === 'string' && name);
     return endpoints.length > 0 && endpoints.every(name => name === 'fallback');
   }
-  if (provider.kind !== 'codex') return false;
-  return data.hidden === true || data.is_hidden === true || data.visibility === 'hide' || data.visibility === 'hidden' || data.visibility === 'none';
+  // Picker-hidden subscription models remain in the full discovery directory.
+  // Explicit non-chat Copilot entries cannot be called through this gateway.
+  return provider.kind === 'copilot' && typeof object(data.capabilities).type === 'string' && object(data.capabilities).type !== 'chat';
 }
 function modelEntries(payload: unknown, provider: Provider): unknown[] {
   if (Array.isArray(payload)) return payload;
@@ -261,12 +305,17 @@ export class ModelCatalog {
     try {
       if (!provider) throw new CatalogFailure('invalid-provider', '供应商不存在。');
       if (!provider.hasSecret) throw new CatalogFailure('missing-credentials', provider.kind === 'openai-compatible' ? '请先保存 API Key，再获取模型列表。' : '请先完成订阅授权，再获取模型列表。');
-      const messagesCatalog = !provider.nativeAdapter && provider.kind === 'openai-compatible' && (presetById(provider.presetId)?.defaultWireApi === 'messages'
+      const signal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+      // Resolve the narrow main-process port once. Ordinary providers return
+      // undefined and continue through the authenticated HTTP catalog path.
+      const nativeResponse = await this.options.nativeModels?.(provider, signal);
+      const useNativeCatalog = Boolean(provider.nativeAdapter || nativeResponse);
+      const messagesCatalog = !useNativeCatalog && provider.kind === 'openai-compatible' && (presetById(provider.presetId)?.defaultWireApi === 'messages'
         || !isTraeRelayProvider(provider) && this.store.listModels().some(model => model.providerId === providerId && model.wireApi === 'messages'));
       // Preparing the request also refreshes native subscription credentials.
       const expected = messagesCatalog ? anthropicEndpoint(provider.baseUrl, '/models') : modelCatalogEndpoint(provider);
       let request: PreparedUpstream;
-      try { request = provider.nativeAdapter ? { url: expected, headers: {}, body: {} } : await this.oauth.prepareRequest(provider, messagesCatalog ? '/v1/models' : '/models', {}); }
+      try { request = useNativeCatalog ? { url: expected, headers: {}, body: {} } : await this.oauth.prepareRequest(provider, messagesCatalog ? '/v1/models' : '/models', {}); }
       catch {
         if (provider.presetId === 'jetbrains-central') throw new CatalogFailure('authentication', '请先在 JetBrains 供应商详情中启动本机反代，再获取模型列表。');
         throw new CatalogFailure('authentication', provider.kind === 'openai-compatible' ? '无法准备 API 凭据，请重新保存 API Key。' : '无法准备订阅授权，请在授权中心检查账号或重新登录。'); }
@@ -280,21 +329,22 @@ export class ModelCatalog {
           : /^Bearer \S+$/.test(headers.get('authorization') || '') && !headers.has('x-api-key');
         if (!validAuth || headers.get('anthropic-version') !== '2023-06-01') throw new CatalogFailure('authentication', 'Messages 模型目录鉴权方式与供应商配置不一致，请检查 API Key 和鉴权设置。');
       }
-      const signal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
       let next: string | undefined = request.url;
       let totalBytes = 0;
       const visited = new Set<string>();
       const models = new Map<string, Omit<DiscoveredModel, 'alias'>>();
+      let history: DiscoveryResult['history'];
       for (let page = 0; next; page++) {
         if (page >= MAX_PAGES || visited.has(next)) throw new CatalogFailure('invalid-response', '模型目录分页过多或重复，已停止请求；没有保存不完整的目录。');
         visited.add(next);
-        const response = provider.nativeAdapter
-          ? await this.options.nativeModels?.(provider, signal)
+        const response = useNativeCatalog
+          ? nativeResponse
           : await this.fetcher(next, { method: 'GET', headers: request.headers, redirect: 'error', signal });
         if (!response) throw new CatalogFailure('invalid-provider', '此账号的内置适配器不可用，请重新导入账号。');
         statusCode = response.status;
         if (!response.ok) { await response.body?.cancel(); throw httpFailure(response.status); }
         const result = await boundedJson(response, signal);
+        history = nativeCatalogHistory(result.data, provider, useNativeCatalog);
         totalBytes += result.bytes;
         if (totalBytes > MAX_TOTAL_BYTES) throw new CatalogFailure('invalid-response', '模型目录累计响应过大，已停止读取。');
         const rawEntries = modelEntries(result.data, provider);
@@ -302,12 +352,16 @@ export class ModelCatalog {
         const entries = rawEntries.filter(entry => !hiddenModel(entry, provider));
         for (const entry of entries) {
           const model = parseModel(entry, provider, messagesCatalog);
+          const visibility = history ? object(entry).modeldock_catalog_visibility : subscriptionCatalogVisibility(entry, provider);
+          if (model && (visibility === 'current' || visibility === 'historical')) model.catalogVisibility = visibility;
+          if (model && history && object(entry).modeldock_catalog_importable === false) model.catalogImportable = false;
           if (model && !models.has(model.upstreamId)) models.set(model.upstreamId, model);
+          else if (model?.catalogImportable === false) models.get(model.upstreamId)!.catalogImportable = false;
           if (models.size > MAX_MODELS) throw new CatalogFailure('invalid-response', '模型目录条目过多，已停止读取。');
         }
         if (entries.length > 0 && models.size === 0) throw new CatalogFailure('invalid-response', '模型目录没有有效的模型 ID。');
         next = nextPage(result.data, next, request.url, provider, messagesCatalog);
-        if (provider.nativeAdapter && next) throw new CatalogFailure('invalid-response', '内置适配器返回了无效的分页目录。');
+        if (useNativeCatalog && next) throw new CatalogFailure('invalid-response', '内置适配器返回了无效的分页目录。');
       }
       const currentProvider = this.store.getProvider(providerId);
       if (!currentProvider || this.revisions.get(providerId) !== revision || fingerprint(currentProvider) !== fingerprint(provider)) {
@@ -331,8 +385,9 @@ export class ModelCatalog {
           ...(existing.reasoningEfforts ? { reasoningEfforts: [...existing.reasoningEfforts] } : {}),
           ...(existing.defaultReasoningEffort ? { defaultReasoningEffort: existing.defaultReasoningEffort } : {}) };
       });
+      history ??= subscriptionCatalogHistory(provider, discovered);
       this.cache.set(providerId, { fingerprint: fingerprint(provider), expiresAt: Date.now() + CACHE_LIFETIME_MS, models: new Map(discovered.map(model => [model.upstreamId, structuredClone(model)])) });
-      return { ok: true, providerId, statusCode, message: `已读取模型目录，发现 ${discovered.length} 个模型。目录可见性不代表模型调用已验证。`, models: discovered };
+      return { ok: true, providerId, statusCode, message: `已读取模型目录，发现 ${discovered.length} 个模型。目录可见性不代表模型调用已验证。`, models: discovered, ...(history ? { history } : {}) };
     } catch (error) {
       // Upstream bodies and arbitrary exception text can contain credentials.
       const failure = error instanceof CatalogFailure ? error : error instanceof TraeNativeAccountError || error instanceof CentralNativeAccountError || error instanceof JetBrainsIdeAccountError
@@ -358,6 +413,7 @@ export class ModelCatalog {
       selectedIds.add(selection.upstreamId);
       if (existing.some(model => model.providerId === providerId && model.upstreamId === selection.upstreamId)) { skipped.push(selection.upstreamId); continue; }
       const found = cached.models.get(selection.upstreamId)!;
+      if (found.catalogImportable === false) throw new Error(`「${found.upstreamId}」尚未核实可用的官方调用通道，暂不能添加。`);
       const requestedAlias = selection.alias === undefined ? undefined : safeText(selection.alias, 400);
       if (requestedAlias !== undefined && (!requestedAlias || !/^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$/.test(requestedAlias))) throw new Error('模型别名只能包含字母、数字和 . _ : / -。');
       const alias = suggestModelAlias(providerId, requestedAlias || found.alias, plannedModels);

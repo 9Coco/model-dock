@@ -22,6 +22,10 @@ export interface DiscoveredModel extends ModelSpecs {
   reasoningEfforts?: ReasoningEffort[];
   defaultReasoningEffort?: ReasoningEffort;
   existingModelId?: string;
+  /** Display scope verified by the native client catalog; never changes routing. */
+  catalogVisibility?: 'current' | 'historical';
+  /** Main-process directory metadata only. A client-visible entry without a verified route cannot be added. */
+  catalogImportable?: false;
 }
 export interface DiscoveryResult {
   ok: boolean;
@@ -30,6 +34,8 @@ export interface DiscoveryResult {
   errorCategory?: DiscoveryErrorCategory;
   message: string;
   models: DiscoveredModel[];
+  /** Verified client-default visibility; not a claim of inference acceptance. */
+  history?: { source: 'trae-client' | 'jetbrains-client' | 'codex-client' | 'grok-client' | 'copilot-client'; currentVerified: boolean; message?: string };
 }
 /** Only IDs from the main process's most recent successful discovery are accepted. */
 export interface ModelSelection extends ModelSpecs {

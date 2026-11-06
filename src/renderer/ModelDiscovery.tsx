@@ -22,7 +22,7 @@ interface Props {
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 const protocolLabel = (wireApi: WireApi) => wireApi === 'messages' ? 'Anthropic Messages' : wireApi === 'responses' ? 'Responses' : 'Chat Completions';
 const reasoningEffortLabels: Record<ReasoningEffort, string> = { none: '无', minimal: '最小', low: '低', medium: '中', high: '高', xhigh: '超高', max: '最大' };
-const candidateDraft = (model: DiscoveredModel, providerId: string): CandidateDraft => ({ ...model, alias: modelLocalAlias({ providerId, alias: model.alias }), selected: !model.existingModelId });
+const candidateDraft = (model: DiscoveredModel, providerId: string): CandidateDraft => ({ ...model, alias: modelLocalAlias({ providerId, alias: model.alias }), selected: !model.existingModelId && model.catalogImportable !== false });
 const metadataLabels: Record<MetadataField, string> = { contextWindow: '上下文', tools: '工具调用', vision: '图片输入', maxInputTokens: '输入上限', maxOutputTokens: '输出预算', thinking: '思考能力', reasoningEfforts: '思考等级', defaultReasoningEffort: '默认强度', reasoningEffortFormat: '思考格式', adaptiveThinking: '自适应思考', minThinkingBudget: '最低思考预算', maxThinkingBudget: '最高思考预算' };
 const activeMetadataFields = (model: CandidateDraft, fields: readonly MetadataField[] | undefined) => (fields ?? []).filter(field => !model.editedFields?.includes(field));
 const metadataFieldLabels = (fields: readonly MetadataField[]) => fields.map(field => metadataLabels[field]).join('、');
@@ -41,6 +41,7 @@ export function ModelDiscovery({ api, provider, notify, onClose, onAdded, onManu
   const [loading, setLoading] = useState(!initialResult);
   const [adding, setAdding] = useState(false);
   const [search, setSearch] = useState('');
+  const [showHistorical, setShowHistorical] = useState(false);
   const [error, setError] = useState('');
   const [added, setAdded] = useState<AddModelsResult | null>(null);
   const [advanced, setAdvanced] = useState(false);
@@ -51,6 +52,8 @@ export function ModelDiscovery({ api, provider, notify, onClose, onAdded, onManu
   const request = useRef(0);
   const mounted = useRef(true);
   const selectionBox = useRef<HTMLInputElement>(null);
+  const historySupported = !!result?.history;
+  useEffect(() => { setShowHistorical(false); }, [provider.id]);
 
   const fetchModels = useCallback(async () => {
     const current = ++request.current;
@@ -78,18 +81,19 @@ export function ModelDiscovery({ api, provider, notify, onClose, onAdded, onManu
     return () => { mounted.current = false; ++request.current; };
   }, [fetchModels, initialResult, provider.id]);
 
+  const eligible = useMemo(() => models.filter(model => !historySupported || showHistorical || model.catalogVisibility === 'current'), [models, historySupported, showHistorical]);
   const visible = useMemo(() => {
     const query = search.trim().toLowerCase();
-    return models.filter(model => !query || [model.upstreamId, model.alias, model.displayName].some(value => value.toLowerCase().includes(query)));
-  }, [models, search]);
-  const available = visible.filter(model => !model.existingModelId);
-  const selected = models.filter(model => model.selected && !model.existingModelId);
+    return eligible.filter(model => !query || [model.upstreamId, model.alias, model.displayName].some(value => value.toLowerCase().includes(query)));
+  }, [eligible, search]);
+  const available = visible.filter(model => !model.existingModelId && model.catalogImportable !== false);
+  const selected = eligible.filter(model => model.selected && !model.existingModelId && model.catalogImportable !== false);
   const allSelected = available.length > 0 && available.every(model => model.selected);
   const someSelected = available.some(model => model.selected);
   useEffect(() => { if (selectionBox.current) selectionBox.current.indeterminate = someSelected && !allSelected; }, [someSelected, allSelected]);
 
   const updateModel = (upstreamId: string, patch: Partial<CandidateDraft>) => {
-    setModels(previous => previous.map(model => model.upstreamId === upstreamId && !model.existingModelId ? patchedCandidate(model, patch) : model));
+    setModels(previous => previous.map(model => model.upstreamId === upstreamId && !model.existingModelId && model.catalogImportable !== false ? patchedCandidate(model, patch) : model));
     setError(''); setAdded(null);
   };
   const selectVisible = (checked: boolean) => {
@@ -107,7 +111,8 @@ export function ModelDiscovery({ api, provider, notify, onClose, onAdded, onManu
       ...(bulkTools ? { tools: bulkTools === 'yes' } : {}),
       ...(bulkVision ? { vision: bulkVision === 'yes' } : {}),
     };
-    setModels(previous => previous.map(model => model.selected && !model.existingModelId ? patchedCandidate(model, patch) : model));
+    const selectedIds = new Set(selected.map(model => model.upstreamId));
+    setModels(previous => previous.map(model => selectedIds.has(model.upstreamId) ? patchedCandidate(model, patch) : model));
     setError(''); setAdded(null);
     notify(`已为 ${selected.length} 个所选模型应用本地设置，添加后生效。`, 'info');
   };
@@ -148,7 +153,8 @@ export function ModelDiscovery({ api, provider, notify, onClose, onAdded, onManu
       {loading ? <div className="discovery-loading" role="status"><BusyIcon active><Download size={24} /></BusyIcon><strong>正在获取供应商模型列表…</strong><span>使用已保存的凭据连接上游服务。</span></div> : <>
         {(error || result && !result.ok) && <div className="discovery-error" role="alert"><strong>{result && !result.ok ? result.errorCategory === 'unsupported' ? '此供应商没有模型列表接口' : result.statusCode ? `获取失败 · HTTP ${result.statusCode}` : '获取失败' : result?.ok ? '添加未完成' : '获取失败'}</strong><span>{error || result?.message}</span>{result && !result.ok && <small>模型列表不可用不代表模型无法调用；可以手动添加模型后测试连接。</small>}</div>}
         {result?.ok && <>
-          <div className="discovery-toolbar"><label className="search-box"><Search size={15} /><input aria-label="搜索模型" placeholder="搜索模型 ID 或名称" value={search} disabled={adding} onChange={event => setSearch(event.target.value)} /></label><span>{models.length} 个模型{models.some(model => model.existingModelId) ? ` · ${models.filter(model => model.existingModelId).length} 个已添加` : ''}</span><button className={`button secondary small ${advanced ? 'selected' : ''}`} aria-expanded={advanced} disabled={adding} onClick={() => setAdvanced(value => !value)}><Settings2 size={14} />高级设置<ChevronDown size={13} className={advanced ? 'discovery-chevron-open' : ''} /></button></div>
+          <div className="discovery-toolbar"><label className="search-box"><Search size={15} /><input aria-label="搜索模型" placeholder="搜索模型 ID 或名称" value={search} disabled={adding} onChange={event => setSearch(event.target.value)} /></label>{historySupported && <label className="discovery-history-toggle"><input type="checkbox" aria-label="显示历史模型" data-action="show-history-models" checked={showHistorical} disabled={loading || adding} onChange={event => { setShowHistorical(event.target.checked); setError(''); setAdded(null); }} />显示历史模型</label>}<span data-discovery-count>{search.trim() ? `${visible.length} / ${eligible.length}` : eligible.length} 个模型{eligible.some(model => model.existingModelId) ? ` · ${eligible.filter(model => model.existingModelId).length} 个已添加` : ''}</span><button className={`button secondary small ${advanced ? 'selected' : ''}`} aria-expanded={advanced} disabled={adding} onClick={() => setAdvanced(value => !value)}><Settings2 size={14} />高级设置<ChevronDown size={13} className={advanced ? 'discovery-chevron-open' : ''} /></button></div>
+          {historySupported && <p className="discovery-history-note" data-discovery-history-message>{result.history?.message || (result.history?.currentVerified ? '默认仅显示已确认的当前模型；勾选后可查看客户端未展示或显示状态未核实的条目。已添加的模型保持不变。' : '尚未核实完整的当前客户端清单；默认仅显示已确认的当前模型，勾选可查看其他已识别条目。')}</p>}
           {advanced && <div className="discovery-advanced">
             <div className="discovery-advanced-copy"><strong>批量配置所选模型</strong><small>优先使用供应商返回的参数；缺少时按内置字典补全。可逐个展开「参数设置」或在这里批量修正，手动设置会覆盖补全值。无法核实的工具和图片能力默认关闭，可自行启用。</small></div>
             <div className="discovery-advanced-grid">
@@ -164,15 +170,18 @@ export function ModelDiscovery({ api, provider, notify, onClose, onAdded, onManu
             {visible.map(model => {
               const inferredFields = activeMetadataFields(model, model.metadataInferred);
               const defaultFields = activeMetadataFields(model, model.metadataDefaults);
-              const locked = adding || !!model.existingModelId;
+              const locked = adding || !!model.existingModelId || model.catalogImportable === false;
               const metadata = lookupModelMetadata(model.upstreamId, provider, model.wireApi);
               const reasoningMetadata = lookupModelReasoningDefaults(model.upstreamId, provider, model.wireApi);
               const thinking = model.thinking ?? !!model.reasoningEfforts?.length;
-              return <div className={`discovery-model ${model.selected ? 'selected' : ''} ${model.existingModelId ? 'existing' : ''}`} key={model.upstreamId}>
+              return <div className={`discovery-model ${model.selected ? 'selected' : ''} ${model.existingModelId ? 'existing' : ''} ${model.catalogImportable === false ? 'unavailable' : ''}`} key={model.upstreamId}>
                 <label className="discovery-model-select"><input type="checkbox" checked={model.selected} disabled={locked} aria-label={`选择模型 ${model.upstreamId}`} onChange={event => updateModel(model.upstreamId, { selected: event.target.checked })} /><span>
                   <strong title={model.upstreamId}>{model.upstreamId}</strong>
                   <small title={modelDisplayLabel(model, provider)}>展示：{modelDisplayLabel(model, provider)}</small>
                   <small>{protocolLabel(model.wireApi)} · {model.contextWindow ? `${model.contextWindow.toLocaleString('zh-CN')} 上下文` : '上下文未设置'}{model.tools ? defaultFields.includes('tools') ? ' · 可尝试工具调用' : ' · 工具调用' : ' · 工具调用关闭'}{model.vision ? ' · 图片输入' : ' · 图片输入关闭'}{model.thinking || model.reasoningEfforts?.length ? ' · 支持思考' : ''}{model.reasoningEfforts?.length ? ' · 可选思考等级' : ''}</small>
+                  {historySupported && model.catalogVisibility === 'historical' && <span className="badge" data-model-historical>客户端未展示</span>}
+                  {historySupported && model.catalogVisibility === undefined && <span className="badge" data-model-visibility-unknown>显示状态未核实</span>}
+                  {model.catalogImportable === false && <><span className="badge" data-model-unimportable>暂不支持添加</span><small>客户端中可见，官方直连配置尚未核实。</small></>}
                   {model.existingModelId ? <span className="badge positive"><Check size={11} />已添加 · 保留已保存参数</span> : <>
                     {!!inferredFields.length && <small className="discovery-defaults">字典补全：{metadataFieldLabels(inferredFields)}</small>}
                     {!!defaultFields.length && <small className="discovery-defaults">缺少规格，使用本地默认：{metadataFieldLabels(defaultFields)}</small>}
@@ -204,7 +213,7 @@ export function ModelDiscovery({ api, provider, notify, onClose, onAdded, onManu
                 </details>
               </div>;
             })}
-          </div> : <EmptyState compact icon={<Layers3 size={24} />} title={search.trim() ? '没有匹配的模型' : '供应商返回了空列表'} description={search.trim() ? '修改搜索内容后继续选择。' : '该地址暂未返回模型，请检查供应商地址与账号权限，也可以手动添加。'} />}
+          </div> : <EmptyState compact icon={<Layers3 size={24} />} title={search.trim() ? '没有匹配的模型' : historySupported && !showHistorical ? result.history?.currentVerified ? '没有已确认的当前模型' : '尚未核实当前客户端清单' : '供应商返回了空列表'} description={search.trim() ? '修改搜索内容后继续选择。' : historySupported && !showHistorical ? '可刷新客户端清单后重试，或勾选“显示历史模型”查看其他已识别条目。已添加的模型保持不变。' : '该地址暂未返回模型，请检查供应商地址与账号权限，也可以手动添加。'} />}
           <div className="discovery-note"><Info size={14} /><span>参数优先采用供应商声明，缺少时按内置字典补全，可展开「参数设置」手动修正。不同供应商可以添加同名模型；目录和工具中按「套餐名 - 模型名」展示。无法核实的工具和图片能力默认关闭，可自行启用。模型可见和字典规格不代表实际调用权限，仍需推理验证。上下文未设置时，工具配置使用 32K 上下文 / 4K 输出的保守预算，以上预算并非上游规格。</span></div>
         </>}
         {!result && !error && <EmptyState compact icon={<Layers3 size={24} />} title="尚未获取模型" description="点击重新获取，从供应商读取真实模型列表。" />}

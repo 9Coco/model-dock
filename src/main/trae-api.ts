@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { SubscriptionUsage } from '../shared/auth-types';
 import type { TraeClientCredentials } from './trae-client-import';
 import { parseTraeQuota, parseTraePlan } from './trae-relay-usage';
+import { readTraeClientModelCatalog, type TraeClientModelCatalog, type TraeClientModelOptions } from './trae-client-models';
 
 /** TraeCode CN CustomModel / ChatMessageData protocol, fixed reference:
  * Trae2api-cn bb7b659 raw_client.build_traecode_chat_body/headers and installed
@@ -37,10 +38,20 @@ export class TraeApiError extends Error {
 const fail = (code: TraeApiErrorCode, status?: number) => new TraeApiError(code, status);
 export interface TraeApiModel {
   id: string; object: 'model'; owned_by: 'trae'; name?: string; context_length?: number;
+  modeldock_catalog_visibility?: 'current' | 'historical';
+  modeldock_catalog_importable?: false;
 }
 interface Route { model: TraeApiModel; providerId: string; configSource: number }
 interface Directory { at: number; routes: Map<string, Route> }
-export interface TraeApiOptions { fetch?: typeof globalThis.fetch; now?: () => number; timeoutMs?: number }
+export interface TraeApiOptions {
+  fetch?: typeof globalThis.fetch; now?: () => number; timeoutMs?: number;
+  clientModels?: (accountId: string, client?: TraeClientModelCatalog['client']) => Promise<TraeClientModelCatalog | undefined>;
+  clientModelOptions?: Omit<TraeClientModelOptions, 'client'>;
+}
+interface TraeModelsResult {
+  object: 'list'; data: TraeApiModel[];
+  modeldock_history: { source: 'trae-client'; currentVerified: boolean; message: string };
+}
 interface Lifetime { signal: AbortSignal; abort(): void; close(): void }
 function lifetime(signal: AbortSignal | undefined, milliseconds: number): Lifetime {
   const controller = new AbortController(), abort = () => controller.abort();
@@ -237,8 +248,13 @@ export class TraeApi {
   private readonly fetch: typeof globalThis.fetch;
   private readonly now: () => number;
   private readonly timeout: number;
+  private readonly clientModels: NonNullable<TraeApiOptions['clientModels']>;
   private readonly directories = new Map<string, Directory>();
-  constructor(options: TraeApiOptions = {}) { this.fetch = options.fetch ?? globalThis.fetch; this.now = options.now ?? Date.now; this.timeout = options.timeoutMs ?? 300000; }
+  constructor(options: TraeApiOptions = {}) {
+    this.fetch = options.fetch ?? globalThis.fetch; this.now = options.now ?? Date.now; this.timeout = options.timeoutMs ?? 300000;
+    this.clientModels = options.clientModels ?? ((accountId, client) => client
+      ? readTraeClientModelCatalog(accountId, { ...options.clientModelOptions, client }) : Promise.resolve(undefined));
+  }
   private async send(url: string, value: TraeClientCredentials, body: unknown, life: Lifetime, accept = 'application/json', extraHeaders: Record<string, string> = {}, method: 'POST' | 'GET' = 'POST'): Promise<Response> {
     if (life.signal.aborted) throw fail('cancelled');
     try {
@@ -251,7 +267,7 @@ export class TraeApi {
     } catch (error) { throw error instanceof TraeApiError ? error : fail(life.signal.aborted ? 'cancelled' : 'network'); }
   }
   private key(value: TraeClientCredentials): string { return createHash('sha256').update(value.userId + '\0' + value.token).digest('hex'); }
-  async models(value: TraeClientCredentials, signal?: AbortSignal): Promise<{ object: 'list'; data: TraeApiModel[] }> {
+  async models(value: TraeClientCredentials, signal?: AbortSignal, clientSource?: TraeClientModelCatalog['client']): Promise<TraeModelsResult> {
     credentials(value); const life = lifetime(signal, Math.min(this.timeout, 30000));
     try {
       // Current official GetConfigDetail sends query parameters with GET; null
@@ -260,7 +276,7 @@ export class TraeApi {
       const response = await this.send(GATEWAY + '/api/ide/v1/get_detail_param?' + query, value, undefined, life, 'application/json', {}, 'GET');
       const raw = await readJson(response, life.signal), list = raw.config_info_list ?? object(raw.data)?.config_info_list;
       if (!Array.isArray(list) || list.length > 1000) throw fail('response');
-      const routes = new Map<string, Route>();
+      const routes = new Map<string, Route>(), publicRows = new Map<string, ObjectValue>();
       for (const item of list) {
         const row = object(item); if (!row || row.usage !== undefined && row.usage !== '' && row.usage !== 'chat_completion' || row.custom_models) continue;
         if (row.raw_chat_function !== undefined && row.raw_chat_function !== FUNCTION) continue;
@@ -271,9 +287,37 @@ export class TraeApi {
         if (routes.has(id)) throw fail('response');
         const display = text(row.display_name ?? object(row.display_config)?.display_name, 512);
         routes.set(id, { model: { id, object: 'model', owned_by: 'trae', ...(display ? { name: display } : {}) }, providerId, configSource });
+        // Personal BYOK credentials and utility/disabled configurations are not
+        // subscription picker entries. Keep genuine routes independent of this
+        // display projection so hiding a row never deletes an existing model.
+        if (configSource === 1 && row.status !== false && row.selectable !== false && row.provider_offline_status !== 'hard') publicRows.set(id, row);
       }
       this.directories.set(this.key(value), { at: this.now(), routes }); if (this.directories.size > 32) this.directories.delete(this.directories.keys().next().value!);
-      return { object: 'list', data: [...routes.values()].map(route => route.model) };
+      const client = await this.clientModels(value.userId, clientSource).catch(() => undefined);
+      if (life.signal.aborted) throw fail('cancelled');
+      const data: TraeApiModel[] = [], currentIds = new Set(client?.models.map(model => model.id));
+      let unsupported = 0;
+      // The current native picker and the legacy GetConfigDetail route catalog
+      // are different contracts. Show the complete verified client snapshot,
+      // but never invent a providerId or callable route for a missing config.
+      for (const model of client?.models ?? []) {
+        const route = publicRows.has(model.id) ? routes.get(model.id) : undefined;
+        if (!route) unsupported++;
+        data.push({ ...(route?.model ?? { id: model.id, object: 'model' as const, owned_by: 'trae' as const }),
+          ...(model.name ? { name: model.name } : {}), modeldock_catalog_visibility: 'current',
+          ...(!route ? { modeldock_catalog_importable: false as const } : {}) });
+      }
+      for (const [id, row] of publicRows) {
+        if (currentIds.has(id)) continue;
+        const visibility = client || row.is_invisible_to_user === true ? 'historical' as const : undefined;
+        data.push({ ...routes.get(id)!.model, ...(visibility ? { modeldock_catalog_visibility: visibility } : {}) });
+      }
+      const message = client
+        ? `按本机同账号 ${client.client === 'trae-solo-cn' ? 'TRAE SOLO CN' : 'TRAE CN'} 客户端最近缓存的 Chat 模型清单显示，共 ${client.models.length} 项。`
+          + (unsupported ? `其中 ${unsupported} 项尚无已核实的官方直连配置，已列出但暂不支持添加。` : '')
+          + '清单变化时请先在 TRAE 刷新，再重新获取；历史选项仅控制显示。'
+        : '尚未读取到本机同账号 TRAE 客户端的 Chat 模型清单，无法核实当前展示状态。请先在 TRAE 刷新模型；勾选后可查看已识别的直连目录。';
+      return { object: 'list', data, modeldock_history: { source: 'trae-client', currentVerified: !!client, message } };
     } finally { life.close(); }
   }
   async quota(value: TraeClientCredentials, signal?: AbortSignal): Promise<{ usage: SubscriptionUsage; plan?: string }> {

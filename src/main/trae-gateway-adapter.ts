@@ -5,10 +5,13 @@ import { parseResponsesChatRequest, chatToResponses, createChatResponsesStream, 
 import { parseAnthropicRequest, toAnthropicResponse, createAnthropicStream, collectAnthropicStream } from './anthropic-bridge';
 
 type Json = Record<string, unknown>;
-interface Accounts { isNativeProvider(id: string): boolean; credentials(id: string): TraeClientCredentials }
+interface Accounts {
+  isNativeProvider(id: string): boolean; credentials(id: string): TraeClientCredentials;
+  modelClient(id: string): 'trae-cn' | 'trae-solo-cn';
+}
 interface Api {
   chat(credentials: TraeClientCredentials, body: Json, signal?: AbortSignal): Promise<Response>;
-  models(credentials: TraeClientCredentials, signal?: AbortSignal): Promise<unknown>;
+  models(credentials: TraeClientCredentials, signal?: AbortSignal, client?: 'trae-cn' | 'trae-solo-cn'): Promise<unknown>;
 }
 const headers = (sse = false) => ({ 'content-type': sse ? 'text/event-stream; charset=utf-8' : 'application/json; charset=utf-8', 'cache-control': 'no-store' });
 function json(value: unknown, status = 200) { return new Response(JSON.stringify(value), { status, headers: headers() }); }
@@ -33,7 +36,7 @@ export class TraeGatewayAdapter {
   constructor(private readonly accounts: Accounts, private readonly api: Api) {}
   async models(provider: Provider, signal: AbortSignal): Promise<Response> {
     if (provider.nativeAdapter !== 'trae' || !this.accounts.isNativeProvider(provider.id)) throw new TraeNativeAccountError('TRAE 原生账号配置已变化，请重新导入。');
-    return json(await this.api.models(this.accounts.credentials(provider.id), signal));
+    return json(await this.api.models(this.accounts.credentials(provider.id), signal, this.accounts.modelClient(provider.id)));
   }
   async request(provider: Provider, path: string, body: Json, signal: AbortSignal): Promise<Response | undefined> {
     if (provider.nativeAdapter !== 'trae') return;

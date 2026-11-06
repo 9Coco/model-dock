@@ -3,6 +3,7 @@ import { version } from '../../package.json';
 import type { QuotaWindow, SubscriptionUsage } from '../shared/auth-types';
 import { JetBrainsGrazieBridgeError, JetBrainsGrazieSignatures, prepareJetBrainsGrazieChat, createJetBrainsGrazieChatStream, collectJetBrainsGrazieChat } from './jetbrains-grazie-bridge';
 import { JetBrainsLicenseCatalogError, readJetBrainsIdeLicenseCatalog } from './jetbrains-license-catalog';
+import { jetBrainsClientModelHistory, jetBrainsClientModelVisibility } from './jetbrains-client-models';
 
 /** Native personal-license API, independently of Central CLI. The wire contract
  * comes from the installed JetBrains AI Assistant 2026.2 public classes:
@@ -46,7 +47,9 @@ export interface JetBrainsIdeModel {
   tools?: boolean;
   vision?: boolean;
   reasoning_efforts?: string[];
+  modeldock_catalog_visibility: 'current' | 'historical';
 }
+export interface JetBrainsIdeModels { data: JetBrainsIdeModel[]; modeldock_history: typeof jetBrainsClientModelHistory }
 export interface JetBrainsIdeApiOptions { fetch?: typeof globalThis.fetch; now?: () => number }
 /** Main-process-only owned personal AI license, verified against its account. */
 export interface JetBrainsIdeLicense { id: string; plan: string; expiresAt?: string; productCode?: string; kind?: string; verifiedAt?: string }
@@ -214,7 +217,7 @@ export class JetBrainsIdeApi {
     return { status: 'ready', windows, queriedAt: new Date(this.now()).toISOString(), message: '当前 JetBrains IDE 账号的官方 AI 额度。' };
   }
 
-  async models(token: string, signal?: AbortSignal): Promise<{ data: JetBrainsIdeModel[] }> {
+  async models(token: string, signal?: AbortSignal): Promise<JetBrainsIdeModels> {
     jwt(token, this.now());
     const key = digest(token);
     // A failed refresh must not leave an old entitlement allowlist usable.
@@ -237,7 +240,7 @@ export class JetBrainsIdeApi {
       const path = nativeOpenAI ? profile.provider === 'OpenAI' ? '/user/v5/llm/openai/v1/chat/completions' : '/user/v5/llm/azure/openai/v1/chat/completions' : '/user/v5/llm/chat/stream/v9';
       if (seen.has(id)) { models.delete(id); continue; }
       seen.add(id);
-      const model: JetBrainsIdeModel = { id, object: 'model', owned_by: 'jetbrains' };
+      const model: JetBrainsIdeModel = { id, object: 'model', owned_by: 'jetbrains', modeldock_catalog_visibility: jetBrainsClientModelVisibility(id) };
       const name = safeText(profile.modelName, 160); if (name) model.name = name;
       if (typeof profile.contextLimit === 'number' && Number.isSafeInteger(profile.contextLimit) && profile.contextLimit > 0) model.context_length = profile.contextLimit;
       if (typeof profile.maxOutputTokens === 'number' && Number.isSafeInteger(profile.maxOutputTokens) && profile.maxOutputTokens > 0) model.max_output_tokens = profile.maxOutputTokens;
@@ -255,7 +258,9 @@ export class JetBrainsIdeApi {
     // No tokens/raw profiles in the cache; at most eight account directories.
     if (this.directories.size >= 8) this.directories.delete(this.directories.keys().next().value!);
     this.directories.set(key, { fetchedAt: this.now(), models });
-    return { data: Array.from(models.values(), value => ({ ...value.model })) };
+    // Visibility is discovery metadata only. Retain every compatible route so
+    // showing a narrower client menu never invalidates already-saved models.
+    return { data: Array.from(models.values(), value => ({ ...value.model })), modeldock_history: { ...jetBrainsClientModelHistory } };
   }
 
   async chat(token: string, body: Record<string, unknown>, signal: AbortSignal): Promise<Response> {

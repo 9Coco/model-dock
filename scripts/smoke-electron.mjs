@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import electron from 'electron';
 import { createServer } from 'node:http';
 import { isDeepStrictEqual } from 'node:util';
+import assert from 'node:assert/strict';
 import { createSmokeProfile } from './smoke-profile.mjs';
 import { verifyQaExecutable } from './smoke-package.mjs';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -147,6 +148,12 @@ child.on('exit', code => {
     if(existsSync(errorFile)) throw new Error(readFileSync(errorFile,'utf8'));
     const value = JSON.parse(readFileSync(resolve(output, 'electron-smoke.json'), 'utf8'));
     if (!value.bridge || !value.text.includes('ModelDock')) throw new Error('Renderer/preload bridge unavailable');
+    if (env.MODELDOCK_SMOKE_MODEL_HISTORY_ONLY === '1') {
+      const result = JSON.parse(readFileSync(resolve(output, 'history-models-validation.json'), 'utf8'));
+      assert.ok(result.ok, 'Model history validation failed');
+      console.log(JSON.stringify({ exitCode: code, bridge: value.bridge, modelHistory: true, families: result.families, screenshots: result.screenshots.length, output }));
+      process.exit(code || 0);
+    }
     if (env.MODELDOCK_SMOKE_CONTEXT_MENU_ONLY === '1') {
       const result = JSON.parse(readFileSync(resolve(output, 'context-menu-validation.json'), 'utf8'));
       if (!result.ok) throw new Error('Context menu validation failed');

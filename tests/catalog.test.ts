@@ -609,6 +609,247 @@ describe('real model catalog discovery and batch selection', () => {
   });
 });
 
+describe('native discovery history metadata and the complete selection directory', () => {
+  function nativeFixture(adapter: NonNullable<Provider['nativeAdapter']>, payload: unknown) {
+    const fetcher = vi.fn(async () => { throw new Error('Unexpected external catalog request'); });
+    const f = fixture(fetcher as typeof fetch);
+    f.store.provider = { ...provider, nativeAdapter: adapter,
+      presetId: adapter === 'trae' ? 'trae-cn-relay' : 'jetbrains-central' };
+    const nativeModels = vi.fn(async () => json(payload));
+    const catalog = new ModelCatalog(f.store, { prepareRequest: f.prepareRequest }, { fetch: fetcher as typeof fetch, nativeModels });
+    return { ...f, catalog, nativeModels, fetcher };
+  }
+
+  it.each([
+    ['trae', 'trae-client'], ['jetbrains-ide', 'jetbrains-client'],
+  ] as const)('retains all %s routes for explicit selection while projecting verified history only into discovery', async (adapter, source) => {
+    const f = nativeFixture(adapter, { modeldock_history: { source, currentVerified: true, message: '已核对官方客户端当前目录。' }, data: [
+      { id: 'current-model', modeldock_catalog_visibility: 'current' },
+      { id: 'historical-model', modeldock_catalog_visibility: 'historical' },
+      { id: 'unclassified-model' },
+    ] });
+    const result = await f.catalog.discover('api');
+    expect(result).toMatchObject({ ok: true, history: { source, currentVerified: true, message: '已核对官方客户端当前目录。' } });
+    expect(result.models).toMatchObject([
+      { upstreamId: 'current-model', catalogVisibility: 'current' },
+      { upstreamId: 'historical-model', catalogVisibility: 'historical' },
+      { upstreamId: 'unclassified-model' },
+    ]);
+    expect(result.models[2]).not.toHaveProperty('catalogVisibility');
+    // A renderer projection cannot narrow the main process's latest full directory.
+    result.models = result.models.filter(model => model.catalogVisibility !== 'historical');
+    const saved = f.catalog.addSelected('api', [{ upstreamId: 'historical-model' }, { upstreamId: 'unclassified-model' }]).added;
+    expect(saved.map(model => model.upstreamId)).toEqual(['historical-model', 'unclassified-model']);
+    for (const model of saved) expect(model).not.toHaveProperty('catalogVisibility');
+    expect(f.nativeModels).toHaveBeenCalledOnce();
+    expect(f.fetcher).not.toHaveBeenCalled();
+    expect(f.prepareRequest).not.toHaveBeenCalled();
+  });
+
+  it('keeps saved routing/settings unchanged while rediscovery uses the latest native visibility', async () => {
+    const f = nativeFixture('trae', { modeldock_history: { source: 'trae-client', currentVerified: true }, data: [
+      { id: 'saved-model', display_name: 'Upstream name', context_window: 100000, modeldock_catalog_visibility: 'historical' },
+    ] });
+    const saved = { id: 'saved', providerId: 'api', upstreamId: 'saved-model', alias: 'custom-route', displayName: 'My saved name',
+      wireApi: 'chat-completions' as const, contextWindow: 1234, tools: true, vision: false, enabled: true,
+      maxOutputTokens: 77, catalogVisibility: 'current' };
+    f.store.models = [saved];
+    const before = structuredClone(f.store.models);
+    const result = await f.catalog.discover('api');
+    expect(result.models[0]).toMatchObject({ existingModelId: 'saved', catalogVisibility: 'historical', alias: 'custom-route',
+      displayName: 'My saved name', contextWindow: 1234, tools: true, maxOutputTokens: 77 });
+    expect(f.catalog.addSelected('api', [{ upstreamId: 'saved-model' }])).toEqual({ added: [], skipped: ['saved-model'] });
+    expect(f.store.models).toEqual(before);
+    expect(f.store.batches).toEqual([]);
+  });
+
+  it('keeps native display-only entries visible but rejects imports using the main-process cached restriction', async () => {
+    const f = nativeFixture('trae', { modeldock_history: { source: 'trae-client', currentVerified: true }, data: [
+      { id: 'current-without-route', modeldock_catalog_visibility: 'current', modeldock_catalog_importable: false },
+    ] });
+    const result = await f.catalog.discover('api');
+    expect(result).toMatchObject({ ok: true, models: [{ upstreamId: 'current-without-route', catalogVisibility: 'current', catalogImportable: false }] });
+    // Neither editing the public result nor forging selection metadata can grant a route.
+    delete result.models[0].catalogImportable;
+    const selection = { upstreamId: 'current-without-route', catalogImportable: true, wireApi: 'chat-completions' as const };
+    expect(() => f.catalog.addSelected('api', [selection])).toThrow('尚未核实可用的官方调用通道');
+    expect(f.store.models).toEqual([]); expect(f.store.batches).toEqual([]);
+  });
+
+  it('rejects an entire mixed native batch before saving any importable model', async () => {
+    const f = nativeFixture('trae', { modeldock_history: { source: 'trae-client', currentVerified: false }, data: [
+      { id: 'verified-route', modeldock_catalog_visibility: 'current' },
+      { id: 'unknown-route', modeldock_catalog_importable: false },
+    ] });
+    await f.catalog.discover('api');
+    expect(() => f.catalog.addSelected('api', [{ upstreamId: 'verified-route' }, { upstreamId: 'unknown-route' }])).toThrow('尚未核实可用的官方调用通道');
+    expect(f.store.models).toEqual([]); expect(f.store.batches).toEqual([]);
+  });
+
+  it('preserves existing native models while projecting a fresh restriction and skips them before admitting a new verified route', async () => {
+    const f = nativeFixture('trae', { modeldock_history: { source: 'trae-client', currentVerified: true }, data: [
+      { id: 'saved-route', modeldock_catalog_visibility: 'current', modeldock_catalog_importable: false },
+      { id: 'verified-new-route', modeldock_catalog_visibility: 'current' },
+    ] });
+    const saved = { id: 'saved', providerId: 'api', upstreamId: 'saved-route', alias: 'unchanged-route', displayName: 'My saved model',
+      wireApi: 'chat-completions' as const, contextWindow: 1234, tools: true, vision: false, enabled: false, maxOutputTokens: 77 };
+    f.store.models = [saved]; const before = structuredClone(saved);
+    const result = await f.catalog.discover('api');
+    expect(result.models[0]).toMatchObject({ existingModelId: 'saved', catalogImportable: false, alias: saved.alias, displayName: saved.displayName });
+    expect(f.store.models).toEqual([before]);
+    expect(f.catalog.addSelected('api', [{ upstreamId: 'saved-route' }, { upstreamId: 'verified-new-route' }])).toMatchObject({ skipped: ['saved-route'], added: [{ upstreamId: 'verified-new-route' }] });
+    expect(f.store.models[0]).toEqual(before);
+    expect(f.store.models[1]).not.toHaveProperty('catalogImportable');
+    expect((await f.catalog.discover('api')).models[0].catalogImportable).toBe(false);
+  });
+
+  it.each([false, true])('does not lose a native import restriction when duplicate IDs put the restricted row first=%s', async restrictedFirst => {
+    const rows = [{ id: 'same-route', modeldock_catalog_visibility: 'current' },
+      { id: 'same-route', modeldock_catalog_visibility: 'current', modeldock_catalog_importable: false }];
+    const f = nativeFixture('trae', { modeldock_history: { source: 'trae-client', currentVerified: true }, data: restrictedFirst ? rows.reverse() : rows });
+    expect((await f.catalog.discover('api')).models).toMatchObject([{ upstreamId: 'same-route', catalogImportable: false }]);
+    expect(() => f.catalog.addSelected('api', [{ upstreamId: 'same-route' }])).toThrow('尚未核实可用的官方调用通道');
+    expect(f.store.batches).toEqual([]);
+  });
+
+  it.each(['custom', 'trae-cn-relay', 'jetbrains-central'] as const)('ignores history-shaped fields from an ordinary %s upstream', async presetId => {
+    const f = fixture(vi.fn(async () => json({ modeldock_history: { source: 'trae-client', currentVerified: true }, data: [
+      { id: 'ordinary-model', modeldock_catalog_visibility: 'historical', modeldock_catalog_importable: false },
+    ] })) as typeof fetch);
+    f.store.provider.presetId = presetId;
+    const result = await f.catalog.discover('api');
+    expect(result).toMatchObject({ ok: true, models: [{ upstreamId: 'ordinary-model' }] });
+    expect(result).not.toHaveProperty('history');
+    expect(result.models[0]).not.toHaveProperty('catalogVisibility');
+    expect(result.models[0]).not.toHaveProperty('catalogImportable');
+    expect(f.catalog.addSelected('api', [{ upstreamId: 'ordinary-model' }]).added).toHaveLength(1);
+  });
+
+  it.each([
+    ['trae', { source: 'jetbrains-client', currentVerified: true }],
+    ['jetbrains-ide', { source: 'trae-client', currentVerified: true }],
+    ['jetbrains-central', { source: 'jetbrains-client', currentVerified: true }],
+    ['trae', { source: 'trae-client', currentVerified: 'true' }],
+    ['trae', { source: 'trae-client' }],
+    ['trae', undefined],
+  ] as const)('does not accept foreign or unverified history metadata for %s (%j)', async (adapter, history) => {
+    const f = nativeFixture(adapter, { modeldock_history: history, data: [{ id: 'native-model', modeldock_catalog_visibility: 'historical', modeldock_catalog_importable: false }] });
+    const result = await f.catalog.discover('api');
+    expect(result.ok).toBe(true);
+    expect(result).not.toHaveProperty('history');
+    expect(result.models[0]).not.toHaveProperty('catalogVisibility');
+    expect(result.models[0]).not.toHaveProperty('catalogImportable');
+    expect(f.catalog.addSelected('api', [{ upstreamId: 'native-model' }]).added).toHaveLength(1);
+  });
+
+  it('preserves unknown visibility and bounded native provenance without claiming a verified current set', async () => {
+    const f = nativeFixture('trae', { modeldock_history: { source: 'trae-client', currentVerified: false, message: 'unsafe\nmessage' }, data: [
+      { id: 'known-historical', modeldock_catalog_visibility: 'historical' },
+      { id: 'unknown-model', modeldock_catalog_visibility: 'unknown' },
+      { id: 'invalid-model', modeldock_catalog_visibility: true },
+    ] });
+    const result = await f.catalog.discover('api');
+    expect(result.history).toEqual({ source: 'trae-client', currentVerified: false });
+    expect(result.models[0].catalogVisibility).toBe('historical');
+    expect(result.models[1]).not.toHaveProperty('catalogVisibility');
+    expect(result.models[2]).not.toHaveProperty('catalogVisibility');
+  });
+
+  it.each(['codex', 'grok', 'copilot'] as const)('resolves a trusted %s subscription directory exactly once without preparing OAuth again', async kind => {
+    const f = fixture(vi.fn() as typeof fetch);
+    f.store.provider = { ...provider, kind, baseUrl: kind === 'copilot' ? 'https://api.githubcopilot.com' : 'https://api.example.test/v1' };
+    const nativeModels = vi.fn(async () => json({ modeldock_history: { source: `${kind}-client`, currentVerified: true }, data: [
+      { id: 'current-model', modeldock_catalog_visibility: 'current' },
+      { id: 'historical-model', modeldock_catalog_visibility: 'historical' },
+    ] }));
+    const catalog = new ModelCatalog(f.store, { prepareRequest: f.prepareRequest }, { fetch: vi.fn() as typeof fetch, nativeModels });
+    const result = await catalog.discover('api');
+    expect(result).toMatchObject({ ok: true, history: { source: `${kind}-client`, currentVerified: true } });
+    expect(result.models.map(model => model.catalogVisibility)).toEqual(['current', 'historical']);
+    expect(nativeModels).toHaveBeenCalledOnce(); expect(f.prepareRequest).not.toHaveBeenCalled();
+    expect(catalog.addSelected('api', [{ upstreamId: 'historical-model' }]).added).toHaveLength(1);
+  });
+
+  it('checks the narrow port once then preserves ordinary authenticated HTTP pagination when it has no directory', async () => {
+    const fetcher = vi.fn(async () => json({ data: [{ id: fetcher.mock.calls.length === 1 ? 'first' : 'second' }], ...(fetcher.mock.calls.length === 1 ? { next: '?page=2' } : {}) }));
+    const f = fixture(fetcher as typeof fetch), nativeModels = vi.fn(async () => undefined);
+    const catalog = new ModelCatalog(f.store, { prepareRequest: f.prepareRequest }, { fetch: fetcher as typeof fetch, nativeModels });
+    expect((await catalog.discover('api')).models.map(model => model.upstreamId)).toEqual(['first', 'second']);
+    expect(nativeModels).toHaveBeenCalledOnce(); expect(f.prepareRequest).toHaveBeenCalledOnce(); expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects a paginated trusted directory without retrying its port or falling back to HTTP/OAuth', async () => {
+    const f = nativeFixture('trae', { data: [{ id: 'partial-model' }], next: '?page=2' });
+    expect(await f.catalog.discover('api')).toMatchObject({ ok: false, errorCategory: 'invalid-response', models: [] });
+    expect(f.nativeModels).toHaveBeenCalledOnce(); expect(f.prepareRequest).not.toHaveBeenCalled(); expect(f.fetcher).not.toHaveBeenCalled();
+    expect(() => f.catalog.addSelected('api', [{ upstreamId: 'partial-model' }])).toThrow('目录已过期');
+  });
+
+  it('does not fall back to ordinary OAuth or HTTP when a persisted native adapter is unavailable', async () => {
+    const f = fixture(vi.fn() as typeof fetch); f.store.provider.nativeAdapter = 'trae';
+    const nativeModels = vi.fn(async () => undefined), fetcher = vi.fn();
+    const catalog = new ModelCatalog(f.store, { prepareRequest: f.prepareRequest }, { fetch: fetcher as typeof fetch, nativeModels });
+    expect(await catalog.discover('api')).toMatchObject({ ok: false, errorCategory: 'invalid-provider', models: [] });
+    expect(nativeModels).toHaveBeenCalledOnce(); expect(f.prepareRequest).not.toHaveBeenCalled(); expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it('uses the official Grok OAuth hidden parser defaults without filtering supported_in_api or guessing versions', async () => {
+    const f = fixture(vi.fn(async () => json({ modeldock_history: { source: 'grok-client', currentVerified: false, message: 'FOREIGN_MESSAGE' }, data: [
+      { id: 'old-looking-1', hidden: false, supported_in_api: false, modeldock_catalog_visibility: 'historical' },
+      { id: 'new-looking-99', hidden: true }, { id: 'meta-hidden', _meta: { hidden: true } },
+      { id: 'default-visible' }, { id: 'explicit-visible', hidden: false, _meta: { hidden: true } },
+      { id: 'invalid-default', hidden: null, _meta: { hidden: true } },
+    ] })) as typeof fetch);
+    f.store.provider = { ...provider, kind: 'grok', presetId: 'grok-build', baseUrl: 'https://cli-chat-proxy.grok.com/v1' };
+    const result = await f.catalog.discover('api');
+    expect(result.history).toMatchObject({ source: 'grok-client', currentVerified: true });
+    expect(result.history?.message).toContain('本地实验/手动隐藏以客户端为准');
+    expect(JSON.stringify(result)).not.toContain('FOREIGN_MESSAGE');
+    expect(result.models.map(model => model.catalogVisibility)).toEqual(['current', 'historical', 'historical', 'current', 'current', 'current']);
+    expect(f.catalog.addSelected('api', [{ upstreamId: 'meta-hidden' }]).added[0].upstreamId).toBe('meta-hidden');
+  });
+
+  it('keeps Codex visibility authoritative over compatibility flags and preserves saved models absent from the latest directory', async () => {
+    const f = fixture(vi.fn(async () => json({ models: [
+      { slug: 'old-looking-1', visibility: 'list', hidden: true },
+      { slug: 'new-looking-99', visibility: 'hide', hidden: false },
+      { slug: 'direct-only', visibility: 'none' }, { slug: 'app-server-visible', hidden: false },
+      { slug: 'unrecognized-visibility', visibility: 'future', hidden: true },
+    ] })) as typeof fetch);
+    f.store.provider = { ...provider, kind: 'codex', presetId: 'codex-subscription', baseUrl: 'https://chatgpt.com/backend-api/codex' };
+    const saved: Model = { id: 'saved-removed', providerId: 'api', upstreamId: 'not-returned-anymore', alias: 'stable-route', displayName: 'Saved historical model',
+      wireApi: 'responses', contextWindow: 1234, tools: true, vision: false, enabled: true };
+    f.store.models = [saved];
+    const result = await f.catalog.discover('api');
+    expect(result.models.map(model => model.catalogVisibility)).toEqual(['current', 'historical', 'historical', 'current', undefined]);
+    expect(result.history).toMatchObject({ source: 'codex-client', currentVerified: false });
+    expect(result.models.some(model => model.upstreamId === saved.upstreamId)).toBe(false);
+    expect(f.store.models).toEqual([saved]);
+    expect(f.catalog.addSelected('api', [{ upstreamId: 'new-looking-99' }]).added).toHaveLength(1);
+    expect(f.store.models[0]).toEqual(saved);
+    expect(() => f.catalog.addSelected('api', [{ upstreamId: 'invented-retired-model' }])).toThrow('最近读取');
+  });
+
+  it('uses Copilot picker flags only for supported chat rows while keeping preview current and missing flags unknown', async () => {
+    const f = fixture(vi.fn(async () => json({ modeldock_history: { source: 'copilot-client', currentVerified: true }, data: [
+      { id: 'preview-current', model_picker_enabled: true, preview: true, capabilities: { type: 'chat' }, supported_endpoints: ['/responses'], modeldock_catalog_visibility: 'historical' },
+      { id: 'picker-hidden', model_picker_enabled: false, capabilities: { type: 'chat' }, supported_endpoints: ['/chat/completions'] },
+      { id: 'unknown-current', capabilities: { type: 'chat' }, supported_endpoints: ['/responses'] },
+      { id: 'embeddings', model_picker_enabled: true, capabilities: { type: 'embeddings' } },
+      { id: 'fim-only', model_picker_enabled: false, capabilities: { type: 'completion' } },
+      { id: 'unsupported-endpoint', model_picker_enabled: false, capabilities: { type: 'chat' }, supported_endpoints: ['/v1/messages'] },
+    ] })) as typeof fetch);
+    f.store.provider = { ...provider, kind: 'copilot', presetId: 'copilot-subscription', baseUrl: 'https://api.githubcopilot.com' };
+    const result = await f.catalog.discover('api');
+    expect(result.history).toMatchObject({ source: 'copilot-client', currentVerified: false });
+    expect(result.models.map(model => [model.upstreamId, model.catalogVisibility])).toEqual([
+      ['preview-current', 'current'], ['picker-hidden', 'historical'], ['unknown-current', undefined],
+    ]);
+    expect(f.catalog.addSelected('api', [{ upstreamId: 'picker-hidden' }]).added).toHaveLength(1);
+    for (const upstreamId of ['embeddings', 'fim-only', 'unsupported-endpoint']) expect(() => f.catalog.addSelected('api', [{ upstreamId }])).toThrow('最近读取');
+  });
+});
+
 describe('Codex native model directory compatibility and immutable pagination', () => {
   const clientVersion = '0.159.0';
   const initialUrl = `https://chatgpt.com/backend-api/codex/models?client_version=${clientVersion}`;
@@ -648,7 +889,7 @@ describe('Codex native model directory compatibility and immutable pagination', 
     expect(nativeFetch).toHaveBeenCalledOnce(); expect(JSON.stringify(result)).not.toMatch(/SYNTHETIC_ONLY|PRIVATE_ERROR_BODY/);
   });
 
-  it('parses native slugs and metadata, excludes explicitly hidden models, and keeps subscription models that are not public API models', async () => {
+  it('parses native slugs/metadata and retains picker-hidden subscription models without treating unsupported_in_api as retirement', async () => {
     const f = codexFixture(vi.fn(async () => json({ models: [
       { id: 'catalog-entry-id', slug: 'native-visible', display_name: 'Native Visible', context_window: 272000, input_modalities: ['text', 'image'], supports_parallel_tool_calls: true },
       { slug: 'hidden-flag', hidden: true }, { slug: 'hidden-native', is_hidden: true },
@@ -659,23 +900,29 @@ describe('Codex native model directory compatibility and immutable pagination', 
     ] })) as typeof fetch);
     const result = await f.catalog.discover('api');
     expect(result.ok).toBe(true);
-    expect(result.models.map(model => model.upstreamId)).toEqual(['native-visible', 'subscription-only', 'parallel-false', 'explicit-tools-false']);
+    expect(result.models.map(model => model.upstreamId)).toEqual(['native-visible', 'hidden-flag', 'hidden-native', 'visibility-hide', 'visibility-hidden', 'visibility-none', 'subscription-only', 'parallel-false', 'explicit-tools-false']);
     expect(result.models[0]).toMatchObject({ displayName: 'Native Visible', contextWindow: 272000, tools: true, vision: true, metadataSource: 'upstream', metadataDefaults: [] });
-    expect(result.models[2]).toMatchObject({ tools: false, metadataDefaults: expect.arrayContaining(['tools']) });
-    expect(result.models[3]).toMatchObject({ tools: false }); expect(result.models[3].metadataDefaults).not.toContain('tools');
-    expect(() => f.catalog.addSelected('api', [{ upstreamId: 'hidden-flag' }])).toThrow('最近读取');
+    expect(result.models[7]).toMatchObject({ tools: false, metadataDefaults: expect.arrayContaining(['tools']) });
+    expect(result.models[8]).toMatchObject({ tools: false }); expect(result.models[8].metadataDefaults).not.toContain('tools');
+    expect(result.models.map(model => model.catalogVisibility)).toEqual([undefined, 'historical', undefined, 'historical', undefined, 'historical', 'current', undefined, undefined]);
+    expect(result.history).toMatchObject({ source: 'codex-client', currentVerified: false });
+    expect(f.catalog.addSelected('api', [{ upstreamId: 'hidden-flag' }]).added).toHaveLength(1);
     expect(f.catalog.addSelected('api', [{ upstreamId: 'subscription-only' }]).added[0].upstreamId).toBe('subscription-only');
   });
 
-  it('accepts native model maps with missing explicit slugs and an intentionally empty visible directory', async () => {
+  it('accepts native model maps and keeps the complete directory when the default current projection is empty', async () => {
     const mapped = codexFixture(vi.fn(async () => json({ models: {
       'mapped-native': { display_name: 'Mapped Display', context_window: 128000 },
       ignored: { slug: 'hidden-mapped', visibility: 'hide' },
     } })) as typeof fetch);
-    expect((await mapped.catalog.discover('api')).models).toMatchObject([{ upstreamId: 'mapped-native', displayName: 'Mapped Display', contextWindow: 128000 }]);
+    expect((await mapped.catalog.discover('api')).models).toMatchObject([{ upstreamId: 'mapped-native', displayName: 'Mapped Display', contextWindow: 128000 }, { upstreamId: 'hidden-mapped', catalogVisibility: 'historical' }]);
     const hidden = codexFixture(vi.fn(async () => json({ models: [{ slug: 'hidden-a', hidden: true }, { slug: 'hidden-b', visibility: 'hide' }] })) as typeof fetch);
-    expect(await hidden.catalog.discover('api')).toMatchObject({ ok: true, models: [] });
-    expect(() => hidden.catalog.addSelected('api', [{ upstreamId: 'hidden-a' }])).toThrow('最近读取');
+    const result = await hidden.catalog.discover('api');
+    expect(result).toMatchObject({ ok: true, history: { source: 'codex-client', currentVerified: true } });
+    expect(result.models.filter(model => model.catalogVisibility !== 'historical')).toEqual([]);
+    expect(result.models.map(model => model.upstreamId)).toEqual(['hidden-a', 'hidden-b']);
+    expect(hidden.store.models).toEqual([]);
+    expect(hidden.catalog.addSelected('api', [{ upstreamId: 'hidden-a' }]).added).toHaveLength(1);
   });
 
   it('preserves the immutable version through numeric pages, cursors and explicit safe links', async () => {

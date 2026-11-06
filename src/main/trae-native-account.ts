@@ -89,6 +89,8 @@ export class TraeNativeAccounts {
   }
   /** Main-process only: never expose through preload, config export or logs. */
   credentials(id: string): TraeClientCredentials { return structuredClone(this.context(id).credentials); }
+  /** Exact imported product; never substitute a different CN/SOLO model menu. */
+  modelClient(id: string): NativeClient { return this.context(id).metadata.nativeClient.client; }
   async preview(): Promise<RelayClientImportPreview> {
     this.assertOpen();
     try {
