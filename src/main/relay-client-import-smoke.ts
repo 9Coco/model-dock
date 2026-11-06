@@ -102,7 +102,9 @@ export async function verifyRelayClientImport(window: BrowserWindow, store: Stor
       assert.equal(provider.presetId, kind); if (kind === 'trae-cn-relay') assert.equal(provider.relayMode, 'managed', 'Client import never converts the existing manual connection');
       await waitFor(`!!document.querySelector('[data-auth-account="${provider.id}"]')`, 'new account is refreshed in its authorization-center group');
       assert.ok(Date.now() - began < 5000, 'Imported account appears without waiting for the background account poll');
-      assert.equal(await evaluate<string>(`document.querySelector('[data-auth-account="${provider.id}"] [data-relay-client-source]')?.getAttribute('data-relay-client-source')`), imported.clientImport!.client, 'Imported source is visible on the relay account row');
+      await click(`[data-auth-account="${provider.id}"] [data-action="account-menu"]`); await click(`[data-auth-account-menu="${provider.id}"] [data-action="relay-account-details"]`);
+      assert.equal(await evaluate<string>(`document.querySelector('[data-auth-account-details="${provider.id}"] [data-relay-client-source]')?.getAttribute('data-relay-client-source')`), imported.clientImport!.client, 'Imported source remains visible in account details');
+      await closeDialog();
       await evaluate(`document.querySelector('[data-auth-account="${provider.id}"]').scrollIntoView({block:'nearest'})`);
       for (const theme of ['light', 'dark']) for (const width of [1180, 980]) {
         window.setSize(width, width === 1180 ? 800 : 680);

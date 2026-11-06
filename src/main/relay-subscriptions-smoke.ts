@@ -103,7 +103,7 @@ export async function verifyRelaySubscriptions(window: BrowserWindow, store: Sto
       for (const relay of relays) assert.equal(await evaluate<boolean>(`document.querySelector('[data-auth-account="${relay.id}"]').textContent.includes('已授权')`), false, 'Saved local relay keys do not imply upstream authorization');
       await capture(`auth-${theme}-${width}`);
       for (const relay of relays) {
-        await click(`[data-auth-account="${relay.id}"] [data-action="manage-auth-relay"]`);
+        await click(`[data-auth-account="${relay.id}"] [data-action="account-menu"]`); await click(`[data-auth-account-menu="${relay.id}"] [data-action="manage-auth-relay"]`);
         await waitFor(`document.querySelector('[role="dialog"] #modal-title')?.textContent==='编辑供应商'&&document.querySelector('[role="dialog"] [data-preset-id="${relay.presetId}"]')?.classList.contains('selected')===true`, 'authorization center opens matching relay settings');
         assert.equal(await evaluate<boolean>(`document.querySelector('[role="dialog"] .preset-picker')?.classList.contains('subscription-presets')===true`), true);
         await closeDialog();
@@ -115,7 +115,7 @@ export async function verifyRelaySubscriptions(window: BrowserWindow, store: Sto
     // through the same UI so later preservation comparisons remain exact.
     const renamed = 'TRAE 反代 · 保存后即时刷新';
     for (const name of [renamed, trae.name]) {
-      await click(`[data-auth-account="${trae.id}"] [data-action="manage-auth-relay"]`);
+      await click(`[data-auth-account="${trae.id}"] [data-action="account-menu"]`); await click(`[data-auth-account-menu="${trae.id}"] [data-action="manage-auth-relay"]`);
       await waitFor(`!!document.querySelector('[role="dialog"] [data-trae-relay-mode="manual"]')`, 'existing manual TRAE relay editor');
       assert.equal(await evaluate<string>(`document.querySelector('[role="dialog"] [data-trae-relay-mode="manual"] input[type="url"]').value`), trae.baseUrl, 'Existing external address remains editable');
       assert.equal(await evaluate<string>(`document.querySelector('[role="dialog"] [data-trae-relay-mode="manual"] input[type="password"]').value`), '', 'Existing external credential is not filled back into the editor');
