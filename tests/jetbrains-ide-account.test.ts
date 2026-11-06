@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -29,6 +30,14 @@ function credentials(account: 'a' | 'b' = 'a', sourceTokenExpHint = ROOT_NOW + 6
 }
 function usage(used = 10, at = ROOT_NOW): SubscriptionUsage {
   return { status: 'ready', queriedAt: new Date(at).toISOString(), windows: [{ id: 'license', label: '官方 AI 积分', total: 100, remaining: 100 - used, unit: 'credits' }], message: '合成官方额度' };
+}
+function importSource(entries: [string, JetBrainsIdeCredentials][]) {
+  const selected = new Map(entries);
+  const candidates: JetBrainsIdeImportCandidate[] = entries.map(([id, value]) => ({ id, client: 'jetbrains-ide', clientName: value.product + ' 2026.2', product: value.product,
+    sourceIdentity: value.sourceIdentity, accountLicenseIdentity: createHash('sha256').update(JSON.stringify([value.accountId, value.licenseId])).digest('hex'), accountId: value.accountId, accountLabel: value.accountLabel }));
+  return { candidates, listCandidates: vi.fn(async () => structuredClone(candidates)), readCredentials: vi.fn(async (id: string) => {
+    const value = selected.get(id); if (!value) throw new Error(PRIVATE_ERROR); return structuredClone(value);
+  }) };
 }
 function deferred<T>() {
   let resolve!: (value: T) => void, reject!: (reason: unknown) => void;
@@ -93,6 +102,106 @@ afterEach(async () => {
   for (const manager of managers.splice(0)) await manager.dispose();
   vi.restoreAllMocks(); for (const store of stores.splice(0)) store.close();
   for (const dir of directories.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+describe('IDE 默认客户端导入与真实歧义', () => {
+  it('仅有一个客户端时直接使用原有票据导入，私有身份指纹不进入返回值', async () => {
+    const f = await setup(), source = importSource([['ticket-only', f.a]]), manager = f.newManager(f.api, source);
+    const result = await manager.importDefault();
+    expect(result).toMatchObject({ status: 'imported', account: { accountId: f.a.accountId, authStatus: 'ready' } });
+    expect(source.listCandidates).toHaveBeenCalledTimes(1); expect(source.readCredentials.mock.calls).toEqual([['ticket-only'], ['ticket-only']]);
+    expect(f.api.exchange).toHaveBeenCalledTimes(1); expect(f.localKey).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(result)).not.toMatch(/accountLicenseIdentity|sourceIdentity|licenseId|PRIVATE|eyJ/);
+  });
+  it('同账号及许可证跨IDE去重，产品优先级稳定且不取决于扫描顺序', async () => {
+    const f = await setup();
+    const entries: [string, JetBrainsIdeCredentials][] = (['pycharm', 'rider', 'webstorm', 'intellij-idea'] as const).map(product => [`ticket-${product}`, { ...f.a, product, sourceIdentity: `fixture-source-${product}` }]);
+    const source = importSource(entries), manager = f.newManager(f.api, source), result = await manager.importDefault();
+    expect(result.status).toBe('imported'); expect(source.readCredentials.mock.calls).toEqual([['ticket-intellij-idea'], ['ticket-intellij-idea']]); expect(f.api.exchange).toHaveBeenCalledTimes(1);
+    const preview = await manager.preview(); expect(preview.candidates).toHaveLength(4);
+    expect(JSON.stringify(preview)).not.toMatch(/accountLicenseIdentity|sourceIdentity|licenseId|PRIVATE|eyJ/);
+  });
+  it('同一身份跨IDE时优先保留已有导入产品及原供应商、模型和工具绑定', async () => {
+    const f = await setup(), source = importSource([['ticket-rider', f.a], ['ticket-idea', { ...f.a, product: 'intellij-idea', sourceIdentity: 'fixture-source-idea' }]]), manager = f.newManager(f.api, source);
+    const first = await manager.import('ticket-rider'); references(f.store, first.providerId);
+    f.store.saveProvider({ ...f.store.getProvider(first.providerId)!, name: '用户现有供应商', note: '保留备注' });
+    const before = state(f.store); source.readCredentials.mockClear();
+    const result = await manager.importDefault(); expect(result).toMatchObject({ status: 'imported', account: { providerId: first.providerId, providerName: '用户现有供应商' } });
+    expect(source.readCredentials.mock.calls).toEqual([['ticket-rider'], ['ticket-rider']]); expect(f.store.listModels()).toEqual(before.models); expect(f.store.listBindings()).toEqual(before.bindings);
+    expect(f.store.getSecret(first.providerId)).toEqual({ apiKey: LOCAL_KEY });
+  });
+  it.each(['account', 'license'] as const)('不同%s总是要求明确选择，即使旧供应商匹配其中一个身份也不读取凭据或请求云端', async difference => {
+    const f = await setup(), other = difference === 'account' ? f.b : { ...f.a, licenseId: 'synthetic-other-license', sourceIdentity: 'fixture-other-license' };
+    const source = importSource([['ticket-a', f.a], ['ticket-b', other]]), manager = f.newManager(f.api, source);
+    await manager.import('ticket-a'); const before = state(f.store); source.readCredentials.mockClear(); f.localKey.mockClear(); f.api.exchange.mockClear(); f.api.quota.mockClear(); f.api.models.mockClear();
+    const secret = vi.spyOn(f.store, 'getSecret'), result = await manager.importDefault();
+    expect(secret).not.toHaveBeenCalled(); expect(source.readCredentials).not.toHaveBeenCalled(); expect(f.localKey).not.toHaveBeenCalled(); expect(f.api.exchange).not.toHaveBeenCalled(); expect(f.api.quota).not.toHaveBeenCalled(); expect(f.api.models).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ status: 'selection-required', preview: { candidates: [{ id: 'ticket-a' }, { id: 'ticket-b' }] } });
+    expect(JSON.stringify(result)).not.toMatch(/accountLicenseIdentity|sourceIdentity|licenseId|PRIVATE|eyJ/); expect(state(f.store)).toEqual(before);
+  });
+  it('歧义列表只折叠已证实等价的跨IDE来源，保留每个独立许可证', async () => {
+    const f = await setup(), source = importSource([['ticket-rider', f.a], ['ticket-idea', { ...f.a, product: 'intellij-idea', sourceIdentity: 'fixture-idea' }], ['ticket-b', f.b]]), manager = f.newManager(f.api, source);
+    const result = await manager.importDefault();
+    expect(result).toMatchObject({ status: 'selection-required', preview: { candidates: [{ id: 'ticket-idea' }, { id: 'ticket-b' }] } }); expect(source.readCredentials).not.toHaveBeenCalled(); expect(f.localKey).not.toHaveBeenCalled();
+    const imported = await manager.import('ticket-b'); expect(imported.accountId).toBe(f.b.accountId);
+  });
+  it.each([undefined, 'unverified-fingerprint'])('多客户端存在缺失或未核实身份%s时不猜等价关系', async accountLicenseIdentity => {
+    const f = await setup(), source = importSource([['ticket-a', f.a], ['ticket-a-copy', { ...f.a, product: 'intellij-idea', sourceIdentity: 'fixture-idea' }]]);
+    source.listCandidates.mockResolvedValueOnce(source.candidates.map(candidate => ({ ...candidate, accountLicenseIdentity })));
+    const result = await f.newManager(f.api, source).importDefault();
+    expect(result).toMatchObject({ status: 'selection-required', preview: { candidates: [{ id: 'ticket-a' }, { id: 'ticket-a-copy' }] } }); expect(source.readCredentials).not.toHaveBeenCalled(); expect(f.localKey).not.toHaveBeenCalled(); expect(f.api.exchange).not.toHaveBeenCalled();
+  });
+  it('唯一旧版候选缺少跨IDE身份指纹时仍可按其有效票据导入', async () => {
+    const f = await setup(), source = importSource([['ticket-a', f.a]]); source.listCandidates.mockResolvedValueOnce(source.candidates.map(({ accountLicenseIdentity: _private, ...candidate }) => candidate));
+    expect((await f.newManager(f.api, source).importDefault()).status).toBe('imported');
+  });
+  it('另一IDE选中不受支持来源时不会自动使用唯一的个人许可证候选，须明确选择', async () => {
+    const f = await setup(), source = importSource([['ticket-supported', f.a]]), manager = f.newManager(f.api, source); source.candidates[0].defaultRequiresSelection = true;
+    const result = await manager.importDefault();
+    expect(result).toMatchObject({ status: 'selection-required', preview: { candidates: [{ id: 'ticket-supported' }] } });
+    if (result.status === 'selection-required') expect(result.preview.message).toContain('明确选择');
+    expect(source.readCredentials).not.toHaveBeenCalled(); expect(f.localKey).not.toHaveBeenCalled(); expect(f.api.exchange).not.toHaveBeenCalled();
+    expect(JSON.stringify(result)).not.toMatch(/defaultRequiresSelection|accountLicenseIdentity|sourceIdentity|licenseId|PRIVATE|eyJ/);
+    expect((await manager.import('ticket-supported')).accountId).toBe(f.a.accountId);
+  });
+  it('空来源及读取错误不产生密钥、网络请求或供应商写入，失败后可重新操作', async () => {
+    const f = await setup(), source = importSource([['ticket-a', f.a]]), manager = f.newManager(f.api, source), before = state(f.store);
+    source.listCandidates.mockResolvedValueOnce([]); await expect(manager.importDefault()).rejects.toThrow('未找到可导入');
+    source.listCandidates.mockRejectedValueOnce(new Error(PRIVATE_ERROR)); const error = await manager.importDefault().catch(value => value);
+    expect(error).toBeInstanceOf(JetBrainsIdeAccountError); expect(String(error)).not.toContain(PRIVATE_ERROR); expect(state(f.store)).toEqual(before);
+    expect(source.readCredentials).not.toHaveBeenCalled(); expect(f.localKey).not.toHaveBeenCalled(); expect(f.api.exchange).not.toHaveBeenCalled();
+    expect((await manager.importDefault()).status).toBe('imported');
+  });
+  it('扫描阶段也阻止并发手动及默认导入，随后复用同一操作锁完成导入', async () => {
+    const f = await setup(), source = importSource([['ticket-a', f.a]]), held = deferred<JetBrainsIdeImportCandidate[]>(), manager = f.newManager(f.api, source);
+    source.listCandidates.mockReturnValueOnce(held.promise); const pending = manager.importDefault();
+    await expect(manager.importDefault()).rejects.toThrow('正在导入'); await expect(manager.import('ticket-a')).rejects.toThrow('正在导入');
+    expect(source.listCandidates).toHaveBeenCalledTimes(1); held.resolve(source.candidates); expect((await pending).status).toBe('imported'); expect(f.api.exchange).toHaveBeenCalledTimes(1);
+  });
+  it('关闭时立即取消扫描，并忽略不支持取消的读取器迟到结果', async () => {
+    const f = await setup(), source = importSource([['ticket-a', f.a]]), held = deferred<JetBrainsIdeImportCandidate[]>(), manager = f.newManager(f.api, source), before = state(f.store);
+    source.listCandidates.mockReturnValueOnce(held.promise); const pending = manager.importDefault().catch(error => error as Error); await manager.dispose();
+    expect(String(await pending)).toMatch(/取消|已停止/); held.resolve(source.candidates); await new Promise(resolve => setImmediate(resolve));
+    expect(source.readCredentials).not.toHaveBeenCalled(); expect(f.localKey).not.toHaveBeenCalled(); expect(f.api.exchange).not.toHaveBeenCalled(); expect(state(f.store)).toEqual(before);
+    await expect(manager.importDefault()).rejects.toThrow('已停止'); await expect(manager.import('ticket-a')).rejects.toThrow('已停止'); expect(source.listCandidates).toHaveBeenCalledTimes(1);
+  });
+  it('默认票据读取失败不会尝试同身份的下一个IDE或其他账号途径', async () => {
+    const f = await setup(), source = importSource([['ticket-rider', f.a], ['ticket-idea', { ...f.a, product: 'intellij-idea', sourceIdentity: 'fixture-idea' }]]), manager = f.newManager(f.api, source), before = state(f.store);
+    source.readCredentials.mockRejectedValueOnce(new Error(PRIVATE_ERROR)); const error = await manager.importDefault().catch(value => value);
+    expect(String(error)).not.toContain(PRIVATE_ERROR); expect(source.readCredentials.mock.calls).toEqual([['ticket-idea']]); expect(f.api.exchange).not.toHaveBeenCalled(); expect(f.localKey).not.toHaveBeenCalled(); expect(state(f.store)).toEqual(before);
+  });
+  it('候选票据返回另一许可证时在生成密钥和云端授权前拒绝', async () => {
+    const f = await setup(), source = importSource([['ticket-a', f.a]]), manager = f.newManager(f.api, source);
+    source.readCredentials.mockResolvedValueOnce({ ...f.a, licenseId: 'switched-within-preview' });
+    await expect(manager.importDefault()).rejects.toThrow('已切换'); expect(f.localKey).not.toHaveBeenCalled(); expect(f.api.exchange).not.toHaveBeenCalled();
+  });
+  it.each(['account', 'license', 'product', 'source'] as const)('云端校验期间%s变化时再次核对票据并拒绝迟到保存', async change => {
+    const f = await setup(), source = importSource([['ticket-a', f.a]]), manager = f.newManager(f.api, source), held = deferred<SubscriptionUsage>(), before = state(f.store);
+    let current = f.a; source.readCredentials.mockImplementation(async () => structuredClone(current)); f.api.quota.mockReturnValueOnce(held.promise);
+    const pending = manager.importDefault(); await vi.waitFor(() => expect(f.api.quota).toHaveBeenCalledTimes(1));
+    current = change === 'account' ? f.b : change === 'license' ? { ...f.a, licenseId: 'switched-license' } : change === 'product' ? { ...f.a, product: 'webstorm' } : { ...f.a, sourceIdentity: 'switched-source' };
+    held.resolve(usage()); await expect(pending).rejects.toThrow('授权期间已切换'); expect(source.readCredentials).toHaveBeenCalledTimes(2); expect(f.api.exchange).toHaveBeenCalledTimes(1); expect(state(f.store)).toEqual(before);
+  });
 });
 
 describe('IDE 账号导入校验与凭据边界', () => {

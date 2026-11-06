@@ -117,6 +117,8 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
   const [secretVisibilityRevision, setSecretVisibilityRevision] = useState(0);
   const [authRefreshRevision, setAuthRefreshRevision] = useState(0);
   const [relayImportRequest, setRelayImportRequest] = useState<{ kind: RelayAccountKind; id: number }>();
+  const relayImportSequence = useRef(0);
+  const consumeRelayImportRequest = useCallback((id: number) => setRelayImportRequest(current => current?.id === id ? undefined : current), []);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [search, setSearch] = useState('');
   const [sourceCategory, setSourceCategory] = useState<'api' | 'subscription'>('api');
@@ -328,7 +330,7 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
       notify(message);
     } catch { notify('无法写入剪贴板，请稍后重试或选中文本手动复制。', 'error'); }
   };
-  const navigate = (next: Page) => { setPage(next); setSearch(''); setSelectedProviderId(null); if (next === 'settings' && bridge?.getSettings) void bridge.getSettings().then(setPreferences).catch(error => notify(errorText(error), 'error')); };
+  const navigate = (next: Page) => { if (next !== 'auth') setRelayImportRequest(undefined); setPage(next); setSearch(''); setSelectedProviderId(null); if (next === 'settings' && bridge?.getSettings) void bridge.getSettings().then(setPreferences).catch(error => notify(errorText(error), 'error')); };
   const selectTool = (id: ToolId) => { navigate('tools'); setSelectedTool(id); };
   const selectProvider = (id: string | null) => { if (!id) { navigate('service'); setServiceTab('interface'); return; } navigate('providers'); const provider = data.providers.find(item => item.id === id); if (provider) setSourceCategory(providerCategory(provider)); setSelectedProviderId(id); };
   useEffect(() => {
@@ -336,7 +338,7 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
   }, [snapshot, selectedProviderId]);
   const editProvider = (provider: Provider) => setProviderDraft({ id: provider.id, name: provider.name, kind: provider.kind, presetId: provider.presetId ?? (provider.kind === 'codex' ? 'codex-subscription' : provider.kind === 'grok' ? 'grok-build' : provider.kind === 'copilot' ? 'copilot-subscription' : 'custom'), baseUrl: provider.baseUrl, ...(provider.presetId === 'trae-cn-relay' ? { relayMode: provider.relayMode ?? 'manual' } : {}), enabled: provider.enabled, note: provider.note, apiKey: '', ...(provider.kind === 'openai-compatible' ? { messagesAuth: provider.messagesAuth ?? 'bearer', claudeBaseUrl: provider.claudeBaseUrl ?? '' } : {}), ...(provider.kind === 'copilot' ? { copilotAccountId: provider.copilotAccountId ?? '' } : {}) });
   const requestRelayImport = (kind: RelayAccountKind) => {
-    setProviderDraft(null); navigate('auth'); setRelayImportRequest({ kind, id: Date.now() });
+    setProviderDraft(null); navigate('auth'); setRelayImportRequest({ kind, id: ++relayImportSequence.current });
   };
   const saveProvider = async () => {
     if (!providerDraft) return;
@@ -1035,7 +1037,7 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
       <header className="topbar"><div className="breadcrumbs"><strong>{detailTitle}</strong></div><div className="topbar-right"><span className={`bridge-status ${isConnected ? 'connected' : ''}`} title={isConnected ? '桌面已连接' : loadError || '桌面未连接'}><span className="status-dot" />{!bridge ? '界面预览' : loadError ? '连接异常' : !snapshot ? '读取配置中' : '已连接'}</span><span className={`local-status ${data.gateway.running ? 'running' : ''}`}><Radio size={14} />{data.gateway.running ? '服务运行中' : '服务未启动'}</span><button className="icon-button" aria-label="刷新本机配置" title="刷新" onClick={() => { setSecretVisibilityRevision(value => value + 1); void run('refresh', refresh); }}><RefreshCw size={15} className={busy.refresh ? 'spin' : ''} /></button></div></header>
       <main className="main-content">
         {(!bridge || loadError) && <div className="bridge-banner"><Unplug size={17} /><span>{!bridge ? '当前为界面预览。桌面桥未连接，未读取任何本机账号或模型。' : `暂时无法读取本机配置：${loadError}`}</span>{!!bridge && <button onClick={() => void refresh()}>重试<RefreshCw size={13} /></button>}</div>}
-        {page === 'auth' && <AuthPanel importRequest={relayImportRequest} platform={preferences?.platform} onAddSubscription={() => setProviderDraft(freshProvider('codex-subscription'))} refreshRevision={authRefreshRevision} api={bridge} notify={notify} onChanged={refresh} onManageProvider={id => { const provider = data.providers.find(item => item.id === id); if (provider) editProvider(provider); }} onAddRelay={requestRelayImport} onCopilotLogin={loginCopilot} onLogin={id => run('auth-center-login', async () => { const latest = await bridge!.snapshot(); setSnapshot(latest); const provider = latest.providers.find(item => item.id === id); if (!provider) throw new Error('账号来源不存在，请刷新。'); await login(provider); })} />}
+        {page === 'auth' && <AuthPanel importRequest={relayImportRequest} onImportRequestHandled={consumeRelayImportRequest} platform={preferences?.platform} onAddSubscription={() => setProviderDraft(freshProvider('codex-subscription'))} refreshRevision={authRefreshRevision} api={bridge} notify={notify} onChanged={refresh} onManageProvider={id => { const provider = data.providers.find(item => item.id === id); if (provider) editProvider(provider); }} onAddRelay={requestRelayImport} onCopilotLogin={loginCopilot} onLogin={id => run('auth-center-login', async () => { const latest = await bridge!.snapshot(); setSnapshot(latest); const provider = latest.providers.find(item => item.id === id); if (!provider) throw new Error('账号来源不存在，请刷新。'); await login(provider); })} />}
         {page === 'settings' && <SettingsPanel api={bridge} snapshot={preferences} onSave={savePreferences} notify={notify} dataDir={data.dataDir} version={data.version} providers={data.providers} models={data.models} />}
 
         {page === 'tools' && <div className={`tool-workspace ${currentSingleEntry ? 'single-entry-workspace' : currentAggregate ? 'with-model-sidebar' : ''}`} data-tool-workspace={selectedTool}>

@@ -48,7 +48,7 @@ export async function verifyRelayClientImport(window: BrowserWindow, store: Stor
     const filename = `relay-client-import-${name}.png`; writeFileSync(join(outputDir, filename), await captureUi()); screenshots.push(filename);
   }
   async function open(kind: RelayAccountKind): Promise<string> {
-    await clearToasts(); await click(`[data-auth-import-account="${kind}"]`);
+    await clearToasts(); await click(kind === 'jetbrains-central' ? '[data-action="jetbrains-import-options"]' : `[data-auth-import-account="${kind}"]`);
     const scope = `[data-relay-client-import="${kind}"]`;
     if (kind === 'jetbrains-central') {
       await waitFor(`!!document.querySelector(${JSON.stringify(scope)}+' [data-jetbrains-ide-account-boundary]')`, 'JetBrains explains the IDE and Air session boundary before checking Central');

@@ -69,6 +69,22 @@
 .auth-account-details dt { color: var(--muted); }
 .auth-account-details dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
 .auth-account-details > p { color: var(--muted); font-size: 12px; line-height: 1.6; margin: 6px 0; }
+.auth-panel.auth-compact .auth-relay-row { align-items: start; }
+.auth-panel.auth-compact .auth-relay-row .account-actions { align-self: start; }
+.auth-panel.auth-compact .auth-quota-details-button { align-self: flex-start; min-height: 24px; padding: 2px 0; font-size: 12px; text-align: left; }
+.auth-account-details .auth-quota-detail { padding: 9px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+.auth-account-details .auth-quota-detail > strong { display: block; color: var(--ink); font-size: 12px; font-weight: 500; line-height: 1.6; }
+.auth-account-details .auth-quota-detail > p { color: var(--muted); font-size: 12px; line-height: 1.6; margin: 3px 0 0; }
+.auth-quota-summary { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 3px 12px; padding: 4px 0; color: var(--ink); }
+.auth-quota-summary > span { color: var(--muted); font-size: 12px; line-height: 1.6; }
+.auth-quota-summary > strong { color: var(--ink); font-size: 18px; font-weight: 600; line-height: 1.5; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.auth-quota-summary-stale > span, .auth-quota-summary-stale > strong { color: var(--warning); }
+.auth-account-details .auth-quota-summary { margin: 9px 0; }
+.auth-panel.auth-compact .auth-relay-row .quota-window.quota-show-amounts.quota-group-window { grid-template-columns: minmax(0, 1fr) auto; gap: 3px 8px; padding-top: 3px; }
+.auth-panel.auth-compact .auth-relay-row .quota-group-window > .auth-window-label { grid-column: 1; grid-row: 1; white-space: normal; overflow: visible; overflow-wrap: anywhere; }
+.auth-panel.auth-compact .auth-relay-row .quota-group-window > strong { grid-column: 2; grid-row: 1; align-self: end; }
+.auth-panel.auth-compact .auth-relay-row .quota-group-window > progress, .auth-panel.auth-compact .auth-relay-row .quota-group-window > .auth-window-unlimited { grid-column: 1 / -1; grid-row: 2; }
+.auth-panel.auth-compact .auth-relay-row .quota-window.quota-group-window > .auth-window-reset { grid-column: 1 / -1; grid-row: 3; }
 @media (max-width: 1120px) {
   .auth-panel.auth-compact .account-row { grid-template-columns: minmax(140px, 182px) minmax(0, 1fr) auto; gap: 7px 9px; padding: 8px 9px; }
   .auth-panel.auth-compact .quota-window { grid-template-columns: 54px minmax(50px, 1fr) 45px minmax(80px, 108px); gap: 6px; }

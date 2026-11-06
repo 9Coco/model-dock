@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import type { ClientRequest, IncomingMessage, RequestOptions } from 'node:http';
 import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { parseTraeCreditWindows, parseTraePlan, queryTraeRelayUsage, TraeRelayUsageError, type TraeUsageRequest } from '../src/main/trae-relay-usage';
+import { parseTraeCreditWindows, parseTraeQuota, parseTraePlan, queryTraeRelayUsage, TraeRelayUsageError, type TraeUsageRequest } from '../src/main/trae-relay-usage';
 
 const key = 'k'.repeat(64), privateValue = 'SYNTHETIC_PRIVATE_TRAE_USAGE_TOKEN';
 const now = () => Date.parse('2026-11-05T10:00:00Z');
@@ -54,16 +54,41 @@ describe('TRAE native entitlement projection', () => {
     for (const changes of [{ expire_time: now() / 1000 }, { entitlement_base_info: { start_time: now() / 1000 + 60 } }, { entitlement_base_info: { start_time: 'invalid' } }, { expire_time: 'invalid' }]) expect(parseTraePlan({ user_entitlement_pack_list: [planPack(1, changes)] }, now())).toBeUndefined();
     for (const raw of [undefined, {}, { code: 1, user_entitlement_pack_list: [planPack(1)] }, { user_entitlement_pack_list: Array.from({ length: 101 }, () => planPack(1)) }]) expect(parseTraePlan(raw, now())).toBeUndefined();
   });
+  it.each([0, 2, 4, 5, 'active', 'canceled', '1', '3', undefined, null])('does not treat unverified entitlement status %s as current quota', status => {
+    const raw = { user_entitlement_pack_list: [planPack(1, { status })] };
+    expect(parseTraeCreditWindows(raw, now())).toEqual([]);
+    expect(parseTraePlan(raw, now())).toBeUndefined();
+  });
+  it('filters future, expired and malformed periods before numbering while retaining exhausted and unknown active balances', () => {
+    const second = now() / 1000;
+    const raw = { code: 0, user_entitlement_pack_list: [
+      planPack(6, { expire_time: second, usage: { credits_amount: 0 } }),
+      planPack(4, { entitlement_base_info: { start_time: second + 1 } }),
+      planPack(1, { usage: { credits_amount: 100 }, entitlement_base_info: { start_time: second } }),
+      planPack(6, { expire_time: undefined, entitlement_base_info: { end_time: second - 1 } }),
+      planPack(6, { expire_time: 'invalid' }),
+      planPack(6, { entitlement_base_info: { start_time: 'invalid' } }),
+      planPack(0, { status: 3, usage: null, expire_time: second + 1 }),
+    ] };
+    const windows = parseTraeCreditWindows(raw, now());
+    expect(windows).toMatchObject([{ label: '通用积分 1', total: 100, remaining: 0, remainingPercent: 0 }, { label: '通用积分 2', total: 100 }]);
+    expect(windows).toHaveLength(2); expect(windows[1].remaining).toBeUndefined(); expect(windows[1].remainingPercent).toBeUndefined();
+    expect(windows.every(window => window.resetAt === undefined && window.windowSeconds === undefined)).toBe(true);
+    expect(parseTraePlan(raw, now())).toBe('Pro');
+    expect(parseTraeCreditWindows(raw, now() + 1000)).toMatchObject([{ label: '通用积分 1' }, { label: '通用积分 2' }]);
+    const single = { user_entitlement_pack_list: [planPack(6, { expire_time: second }), planPack(1)] };
+    expect(parseTraeCreditWindows(single, now())).toMatchObject([{ label: '通用积分', total: 100, remaining: 75 }]);
+  });
   it('shows official per-pack credits independently of relay-local debit and model history', async () => {
     const io = transport(), result = await queryTraeRelayUsage(key, { send: io.send, now });
     expect(result).toMatchObject({ accountId: 'active-user', accountLabel: '当前活跃账号', plan: 'Pro', usage: { status: 'ready', queriedAt: '2026-11-05T10:00:00.000Z', windows: [{ label: '通用积分', total: 100, remaining: 75, unit: '积分', remainingPercent: 75, usedPercent: 25, measurement: 'reported' }] } });
     expect(JSON.stringify(result)).not.toMatch(/recent-import|local_debit|official_used|entitlement|raw|SYNTHETIC_PRIVATE/);
     expect(result.usage.windows[0].resetAt).toBeUndefined();
   });
-  it('keeps credits and fast-request counts in separate windows without guessing missing usage or resets', () => {
+  it('keeps credits and fast-request counts separate and labels only the verified omitted credits usage default', () => {
     const windows = parseTraeCreditWindows({ user_entitlement_pack_list: [pack({ credits_limit: '100.5', premium_model_fast_request_limit: 8 }, { credits_amount: '25.25', premium_model_fast_amount: 3 }), pack({ credits_limit: 50 }, {})] });
     expect(windows).toMatchObject([{ label: '通用积分 1', total: 100.5, remaining: 75.25, unit: '积分' }, { label: '高级模型快速请求 1', total: 8, remaining: 5, unit: '次' }, { label: '通用积分 2', total: 50, unit: '积分' }]);
-    expect(windows[2].remaining).toBeUndefined(); expect(windows[2].remainingPercent).toBeUndefined();
+    expect(windows[2]).toMatchObject({ remaining: 50, remainingPercent: 100, measurement: 'official-default' });
     expect(windows.every(window => window.resetAt === undefined && window.windowSeconds === undefined)).toBe(true);
     expect(new Set(windows.map(window => window.id)).size).toBe(3);
   });
@@ -76,7 +101,10 @@ describe('TRAE native entitlement projection', () => {
     for (const raw of [undefined, {}, { user_entitlement_pack_list: [] }, { code: 1001, message: privateValue, user_entitlement_pack_list: [pack()] }, { user_entitlement_pack_list: [pack({}, {})] }]) {
       expect(parseTraeCreditWindows(raw)).toEqual([]);
     }
-    for (const limit of [null, true, 'NaN', 'Infinity', -2, -.5, Number.MAX_SAFE_INTEGER + 1, {}, '']) expect(parseTraeCreditWindows({ user_entitlement_pack_list: [pack({ credits_limit: limit })] })).toEqual([]);
+    for (const limit of [null, true, 'NaN', 'Infinity', -2, -.5, Number.MAX_SAFE_INTEGER + 1, {}, '']) {
+      const windows = parseTraeCreditWindows({ user_entitlement_pack_list: [pack({ credits_limit: limit })] });
+      expect(windows).toHaveLength(1); expect(windows[0].total).toBeUndefined(); expect(windows[0].remaining).toBeUndefined();
+    }
     for (const used of [null, true, 'NaN', -1, {}, '']) {
       const windows = parseTraeCreditWindows({ user_entitlement_pack_list: [pack({ credits_limit: 100 }, { credits_amount: used })] });
       expect(windows[0]).toMatchObject({ total: 100 }); expect(windows[0].remaining).toBeUndefined();
@@ -85,10 +113,97 @@ describe('TRAE native entitlement projection', () => {
     const result = await queryTraeRelayUsage(key, { send: io.send, now });
     expect(result.usage).toMatchObject({ status: 'unavailable', windows: [] }); expect(result.usage.message).toContain('未知');
   });
-  it('ignores terminal packs and accepts the pinned native subscription quota wrapper', () => {
+  it('accepts only current native statuses and preserves the subscription quota wrapper', () => {
     const active = { ...pack(), entitlement_base_info: { entitlement_id: 'subscription', product_extra: { subscription_extra: { quota: { credits_limit: 40 } } } }, usage: { credits_amount: 2 }, status: 3 };
     expect(parseTraeCreditWindows({ user_entitlement_pack_list: [{ ...pack(), status: 5 }, { ...pack(), status: 'terminated' }, active] })).toMatchObject([{ total: 40, remaining: 38 }]);
     expect(parseTraeCreditWindows({ user_entitlement_pack_list: Array.from({ length: 101 }, () => pack()) })).toEqual([]);
+  });
+});
+
+describe('TRAE source-grouped credits with official CN client defaults', () => {
+  const named = (group_name: unknown, group_type: unknown, quota: Record<string, unknown>, usage: unknown = {}) => ({ ...pack(quota), group_name, group_type, usage });
+  it('matches the synthetic official 19 check-in plus monthly grant example without rounding or dropping exhausted grants', () => {
+    const monthlyExpiry = Date.parse('2026-11-30T15:59:59Z') / 1000, second = now() / 1000;
+    const raw = { code: 0, is_credits_billing: true, user_entitlement_pack_list: [
+      { ...pack({ enable_solo_agent: true }, {}), entitlement_base_info: { ...pack().entitlement_base_info, product_type: 0, quota: { enable_solo_agent: true } } },
+      { ...named('每月登录赠送', 'monthly-login', { credits_limit: 500 }), expire_time: monthlyExpiry },
+      ...Array.from({ length: 19 }, (_, index) => ({
+        ...named('每日签到', 'checkin', { credits_limit: 100 }, index < 5 ? { credits_amount: 100 } : index === 5 ? { credits_amount: 86.1964 } : {}),
+        source_id: `synthetic-grant-${index}`, expire_time: second + (index + 1) * 86400,
+      })),
+    ] };
+    const quota = parseTraeQuota(raw, now());
+    expect(quota.summary).toMatchObject({ id: 'trae-credits-total', label: '总可用积分', total: 2400, remaining: 1813.8036, grantCount: 20, unit: '积分', measurement: 'official-default' });
+    expect(quota.summary!.remaining).toBe(1813.8036);
+    expect(quota.windows).toHaveLength(2);
+    expect(quota.windows).toMatchObject([
+      { label: '每月登录赠送', total: 500, remaining: 500, grantCount: 1, expiresAt: '2026-11-30T15:59:59.000Z', measurement: 'official-default' },
+      { label: '每日签到', total: 1900, remaining: 1313.8036, grantCount: 19, measurement: 'official-default' },
+    ]);
+    expect(quota.windows[1].remaining).toBe(1313.8036); expect(quota.windows[1].expiresAt).toBeUndefined(); expect(quota.summary!.expiresAt).toBeUndefined();
+    expect(quota.details).toHaveLength(20); expect(quota.details.filter(window => window.remaining === 0)).toHaveLength(5);
+    expect(quota.details.filter(window => window.measurement === 'official-default')).toHaveLength(14);
+    expect(quota.details.every(window => !!window.expiresAt && window.resetAt === undefined && window.windowSeconds === undefined)).toBe(true);
+    expect(parseTraeCreditWindows(raw, now())).toEqual(quota.details);
+    expect(JSON.stringify(quota)).not.toMatch(/source_id|synthetic-grant|entitlement_base_info|checkin|monthly-login/);
+  });
+  it.each([undefined, {}])('uses the official zero default only for omitted or empty usage (%s)', usage => {
+    const quota = parseTraeQuota({ user_entitlement_pack_list: [named('月赠', 1, { credits_limit: 500 }, usage)] }, now());
+    expect(quota.summary).toMatchObject({ total: 500, remaining: 500, measurement: 'official-default' });
+    expect(quota.details[0]).toMatchObject({ remaining: 500, measurement: 'official-default' });
+  });
+  it.each([null, 'invalid', false, [], { credits_amount: null }, { credits_amount: false }, { credits_amount: 'NaN' }, { credits_amount: -1 }])('propagates genuinely invalid usage to group and total rather than claiming a partial balance: %j', usage => {
+    const quota = parseTraeQuota({ user_entitlement_pack_list: [named('积分包', 1, { credits_limit: 100 }, { credits_amount: 25 }), named('积分包', 1, { credits_limit: 100 }, usage)] }, now());
+    expect(quota.windows).toHaveLength(1); expect(quota.windows[0].total).toBe(200); expect(quota.windows[0].remaining).toBeUndefined(); expect(quota.windows[0].remainingPercent).toBeUndefined();
+    expect(quota.summary!.total).toBe(200); expect(quota.summary!.remaining).toBeUndefined(); expect(quota.summary!.remainingPercent).toBeUndefined();
+    expect(quota.details).toHaveLength(2); expect(quota.details[0].remaining).toBe(75); expect(quota.details[1].remaining).toBeUndefined();
+  });
+  it('does not silently discard a malformed credit quota and then present the other grants as a complete balance', () => {
+    const quota = parseTraeQuota({ user_entitlement_pack_list: [named('赠送积分', 1, { credits_limit: 100 }, { credits_amount: 25 }), named('赠送积分', 1, { credits_limit: null })] }, now());
+    expect(quota.details).toHaveLength(2); expect(quota.windows).toHaveLength(1);
+    expect(quota.windows[0].total).toBeUndefined(); expect(quota.windows[0].remaining).toBeUndefined();
+    expect(quota.summary!.total).toBeUndefined(); expect(quota.summary!.remaining).toBeUndefined(); expect(quota.summary!.grantCount).toBe(2);
+  });
+  it('keeps metrics and distinct server source types separate and weights percentages by credit amount', () => {
+    const raw = { user_entitlement_pack_list: [
+      named('同名来源', 1, { credits_limit: 100, premium_model_fast_request_limit: 10 }, { credits_amount: 100, premium_model_fast_amount: 1 }),
+      named('同名来源', 1, { credits_limit: 900 }, { credits_amount: 0 }),
+      named('同名来源', 2, { credits_limit: 50 }, { credits_amount: 10 }),
+    ] };
+    const quota = parseTraeQuota(raw, now());
+    expect(quota.windows).toMatchObject([{ label: '同名来源', unit: '积分', total: 1000, remaining: 900, remainingPercent: 90, grantCount: 2 },
+      { label: '同名来源 · 高级模型快速请求', unit: '次', total: 10, remaining: 9, grantCount: 1 }, { label: '同名来源', unit: '积分', total: 50, remaining: 40, grantCount: 1 }]);
+    expect(quota.summary).toMatchObject({ total: 1050, remaining: 940, grantCount: 3 }); expect(quota.details).toHaveLength(4);
+    expect(new Set(quota.windows.map(window => window.id)).size).toBe(3);
+  });
+  it('does not default absent fast usage, add unlimited as -1, or invent a source from grant size', () => {
+    const raw = { user_entitlement_pack_list: [named(undefined, undefined, { credits_limit: -1 }), named(undefined, undefined, { credits_limit: 500, premium_model_fast_request_limit: 5 })] };
+    const quota = parseTraeQuota(raw, now());
+    expect(quota.summary).toMatchObject({ unlimited: true, grantCount: 2 }); expect(quota.summary!.total).toBeUndefined(); expect(quota.summary!.remaining).toBeUndefined();
+    expect(quota.windows.map(window => window.label)).toEqual(['通用积分', '通用积分', '高级模型快速请求']);
+    expect(quota.details[2].remaining).toBeUndefined(); expect(quota.details[2].measurement).toBe('reported');
+    expect(parseTraeQuota({ user_entitlement_pack_list: [named('次数包', 'requests', { premium_model_fast_request_limit: 5 }, { premium_model_fast_amount: 1 })] }, now()).summary).toBeUndefined();
+  });
+  it('uses a common grant expiry only when every grouped grant has the same known expiry, without treating it as a reset', () => {
+    const first = named('来源', 1, { credits_limit: 100 }), second = named('来源', 1, { credits_limit: 100 });
+    const same = parseTraeQuota({ user_entitlement_pack_list: [first, second] }, now());
+    expect(same.windows[0].expiresAt).toBe(new Date(2000000000 * 1000).toISOString()); expect(same.summary!.expiresAt).toBe(same.windows[0].expiresAt); expect(same.windows[0].resetAt).toBeUndefined();
+    const mixed = parseTraeQuota({ user_entitlement_pack_list: [first, { ...second, expire_time: 2000000001 }] }, now());
+    expect(mixed.windows[0].expiresAt).toBeUndefined(); expect(mixed.details.map(window => window.expiresAt)).toEqual(['2033-05-18T03:33:20.000Z', '2033-05-18T03:33:21.000Z']);
+  });
+  it('ignores no grants based on unverified hide/last-period flags and rejects unsafe group metadata', () => {
+    const quota = parseTraeQuota({ user_entitlement_pack_list: [{ ...named('不隐藏', 1, { credits_limit: 100 }), is_hide: true, is_last_period: true },
+      named('每日\n签到', { unsafe: 'group' }, { credits_limit: 500 })] }, now());
+    expect(quota.summary).toMatchObject({ total: 600, remaining: 600, grantCount: 2 });
+    expect(quota.windows.map(window => window.label)).toEqual(['不隐藏', '通用积分']); expect(JSON.stringify(quota)).not.toMatch(/unsafe|每日|签到/);
+  });
+  it('projects per-field subscription quota fallbacks without hiding explicitly invalid direct fields', () => {
+    const first = { ...named('订阅', 1, { enable_solo_agent: true }), entitlement_base_info: { ...pack().entitlement_base_info, quota: { enable_solo_agent: true }, product_extra: { subscription_extra: { quota: { credits_limit: 40, premium_model_fast_request_limit: 5 } } } } };
+    const result = parseTraeQuota({ user_entitlement_pack_list: [first] }, now());
+    expect(result.summary).toMatchObject({ total: 40, remaining: 40 }); expect(result.windows[1]).toMatchObject({ total: 5, unit: '次' });
+    const overridden = { ...first, entitlement_base_info: { ...first.entitlement_base_info, quota: { credits_limit: null, premium_model_fast_request_limit: 2 } } };
+    const unknown = parseTraeQuota({ user_entitlement_pack_list: [overridden] }, now());
+    expect(unknown.summary!.total).toBeUndefined(); expect(unknown.summary!.remaining).toBeUndefined(); expect(unknown.windows[1].total).toBe(2);
   });
 });
 
@@ -99,6 +214,17 @@ describe('owned TRAE quota management transport', () => {
     for (const call of io.calls) expect(call).toMatchObject({ hostname: '127.0.0.1', port: 18080, method: 'GET', agent: false, headers: { Authorization: `Bearer ${key}`, Accept: 'application/json' } });
     expect(io.bodies).toEqual([undefined, undefined, undefined]);
     expect(JSON.stringify(io.calls)).not.toMatch(/claim|overview|usage\/records|completions|responses|recent-import/);
+  });
+  it('uses one injected observation time for validity, plan and the reported quota timestamp', async () => {
+    const timestamp = Date.parse('2040-01-01T00:00:00Z'), clock = vi.fn(() => timestamp);
+    const raw = { user_entitlement_pack_list: [
+      { ...pack(), expire_time: timestamp / 1000 - 1 },
+      { ...pack(), expire_time: timestamp / 1000 + 60, entitlement_base_info: { ...pack().entitlement_base_info, product_type: 0 } },
+    ] };
+    const io = transport([{ body: account() }, { body: nativeCredits(raw) }, { body: account() }]);
+    const result = await queryTraeRelayUsage(key, { send: io.send, now: clock });
+    expect(result.plan).toBe('Free'); expect(result.usage.windows).toHaveLength(1); expect(result.usage.windows[0].label).toBe('通用积分');
+    expect(result.usage.queriedAt).toBe('2040-01-01T00:00:00.000Z'); expect(clock).toHaveBeenCalledTimes(1);
   });
   it('refuses an active-account switch or mismatched credit response instead of attributing it to an imported account', async () => {
     for (const replies of [[{ body: account() }, { body: nativeCredits() }, { body: account('new-active') }], [{ body: account() }, { body: { ...nativeCredits(), id: 'recent-import' } }]]) {

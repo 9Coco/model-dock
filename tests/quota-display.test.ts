@@ -50,4 +50,16 @@ describe('truthful quota and reset display', () => {
     expect(quotaRetryAt(now, 8)).toBe(now + 30 * 60_000);
     expect(quotaCacheExpired(usage(), now + QUOTA_CACHE_TTL_MS)).toBe(true); expect(quotaQueryAge(undefined, now)).toBe('尚未查询'); expect(quotaQueryAge(new Date(now + 60_000).toISOString(), now)).toBe('刚刚查询');
   });
+  it('refreshes grouped credits when an individual grant expires without presenting its expiry as a reset', () => {
+    const expiry = new Date(now + 60_000).toISOString();
+    const grouped = usage({ windows: [{ id: 'daily', label: '每日签到', total: 200, remaining: 150 }],
+      details: [{ id: 'grant-1', label: '每日签到 1', total: 100, remaining: 50, expiresAt: expiry }, { id: 'grant-2', label: '每日签到 2', total: 100, remaining: 100 }] });
+    expect(quotaRefreshDue(grouped, true, now + 59_999)).toBe(false);
+    expect(quotaRefreshDue(grouped, true, now + 60_000)).toBe(true);
+    expect(quotaCacheExpired(grouped, now + 60_000)).toBe(true);
+    expect(quotaRefreshDue(grouped, true, now + 60_000, now + 120_000)).toBe(false);
+    expect(grouped.windows[0].resetAt).toBeUndefined();
+    expect(quotaExpiryLabel(expiry, now)).toContain('到期');
+    expect(quotaRefreshDue({ ...grouped, queriedAt: new Date(now + 60_001).toISOString() }, true, now + 60_002)).toBe(false);
+  });
 });

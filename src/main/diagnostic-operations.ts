@@ -37,6 +37,15 @@ export function diagnosticOperationResult(name: keyof ModelDockApi, args: readon
   if (ignored.has(name)) return;
   const data = object(result), usage = object(data.usage), context = diagnosticOperationContext(name, args);
   context.durationMs = Math.max(0, Math.round(durationMs));
+  if (name === 'beginJetBrainsIdeImport') {
+    if (data.status === 'imported') {
+      context.providerId = id(object(data.account).providerId);
+      context.outcome = 'success';
+      return { level: 'info', event: 'account.login', context };
+    }
+    context.outcome = data.status === 'selection-required' ? 'pending' : 'invalid-response';
+    return { level: data.status === 'selection-required' ? 'info' : 'warn', event: data.status === 'selection-required' ? 'operation.succeeded' : 'operation.failed', context };
+  }
   if (Number.isInteger(data.statusCode) && Number(data.statusCode) >= 100 && Number(data.statusCode) <= 599) context.statusCode = Number(data.statusCode);
   if (name === 'saveProvider') context.providerId = id(data.id);
   if (name === 'saveModel') context.modelId = id(data.id);

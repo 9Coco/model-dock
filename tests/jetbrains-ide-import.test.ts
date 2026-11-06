@@ -99,6 +99,27 @@ describe('explicit Linux IDE account and license selection', () => {
     expect(first.map(candidate => candidate.sourceIdentity)).toEqual(second.map(candidate => candidate.sourceIdentity)); expect(first.map(candidate => candidate.id)).not.toEqual(second.map(candidate => candidate.id));
     expect(new Set(first.map(candidate => candidate.sourceIdentity)).size).toBe(4);
   });
+  it('keeps a private canonical account/license fingerprint equal across IDEs and distinct for another license or account', async () => {
+    const f = await fixture(); await f.write();
+    for (const [profile, license] of [['WebStorm2026.2', 'fixture-license-aip'], ['Rider2026.2', 'different-license']]) {
+      const dir = join(f.home, '.config/JetBrains', profile, 'options'); await mkdir(dir, { recursive: true }); await writeFile(join(dir, 'other.xml'), licenseXml(license));
+    }
+    const before = await f.reader.listCandidates();
+    expect(before[0].accountLicenseIdentity).toMatch(/^[a-f0-9]{64}$/); expect(before[1].accountLicenseIdentity).toBe(before[0].accountLicenseIdentity); expect(before[2].accountLicenseIdentity).not.toBe(before[0].accountLicenseIdentity);
+    expect(before[1].sourceIdentity).not.toBe(before[0].sourceIdentity);
+    await writeFile(f.prefs, authXml({ user_id: 'another-account', sub: 'another-subject' }));
+    const switched = await f.reader.listCandidates(); expect(switched[0].accountLicenseIdentity).not.toBe(before[0].accountLicenseIdentity); expect(switched[1].accountLicenseIdentity).toBe(switched[0].accountLicenseIdentity);
+    expect(JSON.stringify(before)).not.toMatch(/fixture-license-aip|different-license|idToken|eyJ/);
+  });
+  it.each(['workspace', 'account-mismatch'])('requires explicit choice instead of defaulting to another IDE personal license when a selected %s source is rejected', async rejected => {
+    const f = await fixture(); await f.write();
+    const other = join(f.home, '.config/JetBrains/Rider2026.2/options'); await mkdir(other, { recursive: true });
+    const xml = rejected === 'workspace' ? jcpXml('workspace') : jcpXml('license', 'another-user'); await writeFile(join(other, 'other.xml'), xml);
+    const candidates = await f.reader.listCandidates();
+    expect(candidates).toHaveLength(1); expect(candidates[0]).toMatchObject({ product: 'intellij-idea', defaultRequiresSelection: true });
+    expect((await f.reader.readCredentials(candidates[0].id)).licenseId).toBe('fixture-license-aip');
+    expect(await readFile(join(other, 'other.xml'), 'utf8')).toBe(xml);
+  });
   it('requires a selected AI license and respects explicit IDE logout instead of asking the user to guess an ID', async () => {
     const f = await fixture(); await f.write(GOLDEN.xml, '<application><component name="AipLicense"/></application>');
     await expect(f.reader.listCandidates()).rejects.toThrow('选择本人许可证');

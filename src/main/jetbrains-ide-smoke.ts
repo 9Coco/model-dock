@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join, relative, resolve } from 'node:path';
 import type { BrowserWindow } from 'electron';
 import type { AuthAccount, SubscriptionUsage } from '../shared/auth-types';
@@ -8,10 +9,12 @@ import type { ConnectionResult } from '../shared/connection-types';
 import { JETBRAINS_RELAY_BASE_URL } from '../shared/presets';
 import type { JetBrainsIdeApiPort } from './jetbrains-ide-account';
 import { JetBrainsIdeApiError } from './jetbrains-ide-api';
-import { JetBrainsIdeImportError, type JetBrainsIdeCredentials, type JetBrainsIdeImporter } from './jetbrains-ide-import';
+import { JetBrainsIdeImportError, type JetBrainsIdeCredentials, type JetBrainsIdeImporter, type JetBrainsIdeImportCandidate } from './jetbrains-ide-import';
 import type { Store } from './store';
 
 const CANDIDATE_ID = 'd765c058-c4e5-4d93-9a6d-5b54fcb3c4ca';
+const SECOND_CANDIDATE_ID = '8b545b7b-c40d-4d95-afb0-8fcbf33ecce8';
+const OTHER_LICENSE_CANDIDATE_ID = '3cb0f2d1-5b6a-4dcb-a9c2-e8b253dba123';
 const ACCOUNT_ID = 'qa-native-ide-account';
 const ACCOUNT_LABEL = 'Rider 演示账号';
 const GRAZIE_TOKEN = 'PRIVATE_JETBRAINS_IDE_GRAZIE_TOKEN';
@@ -20,7 +23,7 @@ const MODEL_ID = 'qa-native-ide-profile';
 const MODE_KEY = 'qa-jetbrains-ide-mode';
 const OBSERVED_KEY = 'qa-jetbrains-ide-observed';
 const LAST_CHAT_MODEL_KEY = 'qa-jetbrains-ide-last-chat-model';
-type FixtureMode = 'empty' | 'expired' | 'failure' | 'ready';
+type FixtureMode = 'empty' | 'expired' | 'failure' | 'ready' | 'cross-ide' | 'multiple' | 'slow';
 type Observed = Record<'list' | 'read' | 'exchange' | 'quota' | 'models' | 'chat', number>;
 
 /** Synthetic main-process ports only: never reads IDE files, a keychain, or an
@@ -32,7 +35,18 @@ export function createJetBrainsIdeFixture(store: Store): { reader: Pick<JetBrain
   const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
   const idToken = `${encode({ alg: 'RS256', typ: 'JWT' })}.${encode({ user_id: ACCOUNT_ID, marker: 'PRIVATE_JETBRAINS_IDE_JBA_TOKEN', exp: Math.floor(sourceTokenExpHint / 1000) })}.c3ludGhldGljLXNpZ25hdHVyZQ`;
   const credentials: JetBrainsIdeCredentials = { tokenType: 'jba-id-token', authorization: 'unverified', idToken, accountId: ACCOUNT_ID, accountLabel: ACCOUNT_LABEL, email: 'synthetic-ide@example.test', licenseId: 'synthetic-native-ide-license', product: 'rider', sourceIdentity: 'ad'.repeat(32), sourceTokenExpHint };
+  const alternate: JetBrainsIdeCredentials = { ...credentials, product: 'intellij-idea', sourceIdentity: 'be'.repeat(32) };
+  const otherLicense: JetBrainsIdeCredentials = { ...credentials, licenseId: 'synthetic-other-native-ide-license', product: 'pycharm', sourceIdentity: 'cf'.repeat(32) };
   const mode = () => store.getManagedState<FixtureMode>(MODE_KEY, 'empty');
+  function candidates(): JetBrainsIdeImportCandidate[] {
+    if (mode() === 'empty') return [];
+    const candidate = (id: string, value: JetBrainsIdeCredentials, clientName: string): JetBrainsIdeImportCandidate => ({ id, client: 'jetbrains-ide', clientName, product: value.product, sourceIdentity: value.sourceIdentity,
+      accountLicenseIdentity: createHash('sha256').update(JSON.stringify([value.accountId, value.licenseId])).digest('hex'), accountId: value.accountId, accountLabel: value.accountLabel, sourceTokenExpHint });
+    const current = candidate(CANDIDATE_ID, credentials, 'Rider 2026.2');
+    if (mode() === 'cross-ide') return [candidate(SECOND_CANDIDATE_ID, alternate, 'IntelliJ IDEA 2026.2 · 同一许可证'), current];
+    if (mode() === 'multiple') return [current, candidate(OTHER_LICENSE_CANDIDATE_ID, otherLicense, 'PyCharm 2026.2 · 另一许可证')];
+    return [current];
+  }
   function observe(key: keyof Observed): void {
     const value = store.getManagedState<Observed>(OBSERVED_KEY, { list: 0, read: 0, exchange: 0, quota: 0, models: 0, chat: 0 });
     store.setManagedState(OBSERVED_KEY, { ...value, [key]: value[key] + 1 });
@@ -42,21 +56,21 @@ export function createJetBrainsIdeFixture(store: Store): { reader: Pick<JetBrain
     reader: {
       async listCandidates() {
         observe('list');
-        if (mode() === 'empty') return [];
-        return [{ id: CANDIDATE_ID, client: 'jetbrains-ide', clientName: 'Rider 2026.2', product: credentials.product, sourceIdentity: credentials.sourceIdentity, accountId: credentials.accountId, accountLabel: credentials.accountLabel, sourceTokenExpHint }];
+        return candidates();
       },
       async readCredentials(id: string) {
         observe('read');
-        if (mode() === 'empty' || id !== CANDIDATE_ID) throw new JetBrainsIdeImportError('selection', '所选 IDE 账号已不可用，请重新扫描。');
-        return { ...credentials };
+        if (!candidates().some(candidate => candidate.id === id)) throw new JetBrainsIdeImportError('selection', '所选 IDE 账号已不可用，请重新扫描。');
+        return { ...(id === SECOND_CANDIDATE_ID ? alternate : id === OTHER_LICENSE_CANDIDATE_ID ? otherLicense : credentials) };
       },
     },
     api: {
       async exchange(value) {
+        if (mode() === 'slow') await new Promise(resolve => setTimeout(resolve, 400));
         // `expired` is an authoritative server refusal, never a local verdict
         // based on the cached JBA identity ticket's exp claim.
         if (mode() === 'expired') { observe('exchange'); throw new JetBrainsIdeApiError('authorization'); }
-        observe('exchange'); if (mode() === 'failure' || value.idToken !== idToken || value.licenseId !== credentials.licenseId) throw new Error(PRIVATE_ERROR);
+        observe('exchange'); if (mode() === 'failure' || value.idToken !== idToken || ![credentials.licenseId, otherLicense.licenseId].includes(value.licenseId)) throw new Error(PRIVATE_ERROR);
         return { token: GRAZIE_TOKEN, expiresAt: Date.now() + 5 * 60_000 };
       },
       async quota(token): Promise<SubscriptionUsage> {
@@ -105,7 +119,7 @@ export async function verifyJetBrainsIdeImport(window: BrowserWindow, store: Sto
   async function close(): Promise<void> { if (await evaluate<boolean>('!!document.querySelector(\'[role="dialog"]\')')) { await click('[aria-label="关闭对话框"]'); await waitFor('!document.querySelector(\'[role="dialog"]\')', 'dialog closed'); } }
   async function privacy(): Promise<void> {
     const payload = await evaluate<string>('(async()=>JSON.stringify({body:document.body.innerText,inputs:[...document.querySelectorAll("input,textarea")].map(node=>node.value),accounts:await window.modelDock.authAccounts(),snapshot:await window.modelDock.snapshot(),diagnostics:await window.modelDock.queryDiagnostics({limit:200})}))()');
-    assert.doesNotMatch(payload, /PRIVATE_JETBRAINS_IDE|PRIVATE_IDE_MANUAL_KEY|Error invoking remote method|modeldock:(?:jetBrainsIdeImportCandidates|importJetBrainsIdeAccount)/i, 'IDE credentials and raw errors never enter public views or diagnostics');
+    assert.doesNotMatch(payload, /PRIVATE_JETBRAINS_IDE|PRIVATE_IDE_MANUAL_KEY|Error invoking remote method|modeldock:(?:jetBrainsIdeImportCandidates|importJetBrainsIdeAccount|beginJetBrainsIdeImport)/i, 'IDE credentials and raw errors never enter public views or diagnostics');
     for (const provider of store.listProviders()) {
       const metadata = store.getManagedState<{ nativeIde?: { idToken: string } } | null>(`auth-metadata:${provider.id}`, null);
       if (metadata?.nativeIde?.idToken) assert.equal(payload.includes(metadata.nativeIde.idToken), false, 'Raw JBA token stays inside encrypted main-process metadata');
@@ -118,64 +132,63 @@ export async function verifyJetBrainsIdeImport(window: BrowserWindow, store: Sto
     assert.deepEqual(overflow, { document: false, main: false, dialog: false }, 'Native IDE import fits narrow and wide layouts');
     const nameOnDisk = `jetbrains-ide-import-${name}.png`; writeFileSync(join(outputDir, nameOnDisk), await captureUi()); screenshots.push(nameOnDisk);
   }
-  async function open(): Promise<void> {
-    await clearToasts(); const before = observed(); await click('[data-auth-import-account="jetbrains-central"]');
-    await waitFor(`!!document.querySelector(${JSON.stringify(scope)}+' [data-action="scan-jetbrains-ide"]')`, 'explicit IDE scan action');
-    assert.equal(observed().list, before.list, 'Opening the connection choices does not read IDE credentials');
-    assert.equal(await evaluate<number>(`document.querySelectorAll(${JSON.stringify(scope)}+' [data-field="relay-import-candidate"] option').length`), 0, 'The guide does not silently select a Central or IDE account');
-  }
-  async function scan(mode: FixtureMode): Promise<void> {
-    store.setManagedState(MODE_KEY, mode); const before = observed().list; await click(`${scope} [data-action="scan-jetbrains-ide"]`);
-    await waitFor(`document.querySelector(${JSON.stringify(scope)})?.getAttribute('aria-busy')==='false'`, `${mode} scan finishes`);
-    assert.equal(observed().list, before + 1, 'The explicit scan uses the native IDE reader');
+  const importButton = '[data-auth-import-account="jetbrains-central"]';
+  async function direct(mode: FixtureMode, repeatedClick = false): Promise<Observed> {
+    store.setManagedState(MODE_KEY, mode); await clearToasts(); const before = observed();
+    if (repeatedClick) await evaluate(`(()=>{const button=document.querySelector(${JSON.stringify(importButton)});button.scrollIntoView({block:'nearest'});button.click();button.click()})()`);
+    else await click(importButton);
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline && observed().list < before.list + 1) await pause(25);
+    assert.equal(observed().list, before.list + 1, 'One explicit action performs exactly one native discovery');
+    if (mode === 'slow') {
+      assert.equal(await evaluate<boolean>(`document.querySelector(${JSON.stringify(importButton)}).disabled&&!!document.querySelector(${JSON.stringify(importButton)}+' .spin')`), true, 'The direct import stays disabled with a busy indicator while authorization runs');
+      assert.equal(await evaluate<boolean>(`!!document.querySelector('[role="dialog"]')`), false, 'Importing never introduces a confirmation dialog');
+      await capture('direct-import-busy-dark-980');
+    }
+    if (mode === 'multiple') await waitFor(`!!document.querySelector(${JSON.stringify(scope)}+' [data-field="relay-import-candidate"]')`, 'multiple licenses finish discovery');
+    else await waitFor(`!document.querySelector(${JSON.stringify(importButton)}).disabled`, `${mode} direct import finishes`);
     stages.push({ mode, providerCount: store.listProviders().length });
+    return before;
   }
-  async function choose(): Promise<void> {
-    await waitFor(`document.querySelector(${JSON.stringify(scope)}+' [data-field="relay-import-candidate"]')?.options.length===1`, 'one synthetic IDE account');
-    const option = await evaluate<{ value: string; label: string }>(`(()=>{const option=document.querySelector(${JSON.stringify(scope)}+' [data-field="relay-import-candidate"] option');return {value:option.value,label:option.textContent}})()`);
-    assert.equal(option.value, CANDIDATE_ID); assert.ok(option.label.includes('Rider') && option.label.includes(ACCOUNT_LABEL));
-    await evaluate(`(()=>{const select=document.querySelector(${JSON.stringify(scope)}+' [data-field="relay-import-candidate"]');select.value=${JSON.stringify(CANDIDATE_ID)};select.dispatchEvent(new Event('change',{bubbles:true}))})()`);
+  async function choose(id = CANDIDATE_ID): Promise<void> {
+    await waitFor(`document.querySelector(${JSON.stringify(scope)}+' [data-field="relay-import-candidate"]')?.options.length===2`, 'different licenses require a selection');
+    await evaluate(`(()=>{const select=document.querySelector(${JSON.stringify(scope)}+' [data-field="relay-import-candidate"]');select.value=${JSON.stringify(id)};select.dispatchEvent(new Event('change',{bubbles:true}))})()`);
   }
   async function importedAccount(): Promise<AuthAccount> {
     const values = await evaluate<AuthAccount[]>('window.modelDock.authAccounts()'); const account = values.find(value => value.clientImport?.client === 'jetbrains-ide'); assert.ok(account); return account;
   }
   try {
-    // A successful Central fixture is deliberately available. Empty discovery
-    // or a server-refused IDE login must not fall back to that other client.
-    store.setManagedState('qa-relay-client-import-stage', 'success');
-    store.setManagedState(MODE_KEY, 'empty');
+    // A successful Central fixture is deliberately available. IDE failure or
+    // empty discovery must not inspect or fall back to that different client.
+    store.setManagedState('qa-relay-client-import-stage', 'success'); store.setManagedState(MODE_KEY, 'empty');
+    const untouched = observed();
     await click('[aria-label="刷新本机配置"]'); await click('.sidebar [data-page="auth"]');
+    await click('.sidebar [data-tool-id="codex"]'); await click('.sidebar [data-page="auth"]'); await pause(100);
+    assert.deepEqual(observed(), untouched, 'Startup, refresh and ordinary navigation never scan or import an IDE account');
+    assert.equal(await evaluate<string>(`document.querySelector(${JSON.stringify(importButton)}).textContent`), '从客户端导入', 'JetBrains matches the native-client import wording');
     const original = configuration();
     for (const [theme, width] of [['light', 1180], ['dark', 980]] as const) {
       window.setMinimumSize(980, 680); window.setSize(width, width === 1180 ? 800 : 680);
       await evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)};document.documentElement.style.colorScheme=${JSON.stringify(theme)}`);
-      await open(); await capture(`entry-${theme}-${width}`);
-      await scan('empty');
-      assert.equal(await evaluate<number>(`document.querySelectorAll(${JSON.stringify(scope)}+' [data-field="relay-import-candidate"] option').length`), 0);
-      assert.equal(await evaluate<boolean>('document.querySelector(\'[data-action="import-relay-client-account"]\').disabled'), true);
-      await capture(`empty-${theme}-${width}`); await close();
-      await open(); await scan('expired');
-      await choose();
+      const emptyBefore = await direct('empty');
+      assert.equal(await evaluate<boolean>(`!!document.querySelector('[role="dialog"]')`), false, 'Missing IDE authorization is explained without an import dialog');
+      assert.equal(observed().exchange, emptyBefore.exchange); assert.deepEqual(configuration(), original);
+      await waitFor('!!document.querySelector(".toast.error")', 'missing native account reports a safe explanation'); await capture(`empty-${theme}-${width}`, true);
       const rejectedBefore = persistentState(), exchangesBefore = observed().exchange;
-      assert.equal(await evaluate<boolean>('document.querySelector(\'[data-action="import-relay-client-account"]\').disabled'), false, 'A discovered IDE choice remains actionable until the server checks its authorization');
-      await click('[data-action="import-relay-client-account"]');
-      await waitFor(`!!document.querySelector('.toast.error')&&/授权/.test(document.querySelector('.toast.error').textContent)`, 'official server refusal is shown after import confirmation');
-      assert.equal(observed().exchange, exchangesBefore + 1, 'The selected identity reaches the authoritative exchange before rejection');
-      assert.deepEqual(persistentState(), rejectedBefore, 'Server rejection leaves providers, keys, models, bindings and encrypted metadata unchanged');
-      assert.equal((await evaluate<AuthAccount[]>('window.modelDock.authAccounts()')).some(value => value.clientImport?.client === 'jetbrains-central'), false, 'Rejected IDE credentials do not fall back to Central');
-      await capture(`server-rejected-${theme}-${width}`, true); await close();
-      await open(); await scan('ready'); await choose(); await capture(`preview-${theme}-${width}`); await close();
+      await direct('expired');
+      await waitFor('!!document.querySelector(".toast.error")&&/授权/.test(document.querySelector(".toast.error").textContent)', 'official server refusal is shown by the direct import action');
+      assert.equal(observed().exchange, exchangesBefore + 1); assert.deepEqual(persistentState(), rejectedBefore, 'Server rejection preserves providers, keys, models, bindings and encrypted metadata');
+      assert.equal(await evaluate<boolean>(`!!document.querySelector('[role="dialog"]')`), false);
+      assert.equal((await evaluate<AuthAccount[]>('window.modelDock.authAccounts()')).some(value => value.clientImport?.client === 'jetbrains-central'), false, 'IDE failures never fall back to Central');
+      await capture(`server-rejected-${theme}-${width}`, true);
     }
-    assert.deepEqual(configuration(), original, 'Scanning never writes providers, keys, models, or tool choices');
-    await evaluate("document.documentElement.dataset.theme='light';document.documentElement.style.colorScheme='light'");
-    await open(); await scan('ready'); await choose(); await capture('preview-light-980'); await close();
-    await evaluate("document.documentElement.dataset.theme='dark';document.documentElement.style.colorScheme='dark'");
-    await open(); await scan('failure'); await choose(); const failureBefore = persistentState();
-    await click('[data-action="import-relay-client-account"]'); await waitFor('!!document.querySelector(".toast.error")', 'raw fixture error is safely displayed');
-    await privacy(); assert.deepEqual(persistentState(), failureBefore, 'An upstream authorization failure does not create or replace a supplier or its encrypted metadata');
-    assert.equal((await evaluate<AuthAccount[]>('window.modelDock.authAccounts()')).some(value => value.clientImport?.client === 'jetbrains-central'), false, 'Failed native IDE import does not fall back to Central');
-    await capture('failure-dark-980', true); await close();
-    await open(); await scan('ready'); await choose(); await click('[data-action="import-relay-client-account"]'); await waitFor('!document.querySelector(\'[role="dialog"]\')', 'native import succeeds');
+    const failureBefore = persistentState(); await direct('failure'); await waitFor('!!document.querySelector(".toast.error")', 'raw fixture error is safely displayed');
+    await privacy(); assert.deepEqual(persistentState(), failureBefore, 'A failed direct import does not create or replace an account');
+    assert.equal(await evaluate<boolean>(`!!document.querySelector('[role="dialog"]')`), false); await capture('failure-dark-980', true);
+    const firstImport = await direct('slow', true);
+    assert.equal(observed().exchange, firstImport.exchange + 1, 'Rapid duplicate clicks produce one authorization exchange');
+    assert.equal(observed().list, firstImport.list + 1, 'Rapid duplicate clicks produce one discovery');
+    assert.equal(await evaluate<boolean>(`!!document.querySelector('[role="dialog"]')`), false, 'A single available IDE account imports directly without a confirmation');
     const account = await importedAccount(), provider = store.getProvider(account.providerId); assert.ok(provider);
     assert.equal(account.source, 'relay'); assert.equal(account.accountId, ACCOUNT_ID); assert.equal(account.authStatus, 'ready'); assert.equal(account.canQueryUsage, true); assert.equal(account.clientImport?.upstreamVerified, true);
     assert.equal(provider.presetId, 'jetbrains-central'); assert.equal(provider.baseUrl, JETBRAINS_RELAY_BASE_URL);
@@ -214,10 +227,36 @@ export async function verifyJetBrainsIdeImport(window: BrowserWindow, store: Sto
     const rider = store.listBindings().find(binding => binding.id === 'rider'); assert.ok(rider);
     store.saveBinding({ ...rider, mode: 'aggregate', enabled: false, providerIds: [provider.id], modelIds: [model.id], modelSelection: 'selected', defaultModelId: model.id });
     const repeatedBefore = configuration();
-    await open(); await scan('ready'); await choose(); await click('[data-action="import-relay-client-account"]'); await waitFor('!document.querySelector(\'[role="dialog"]\')', 'native re-import succeeds');
+    await direct('ready'); assert.equal(await evaluate<boolean>(`!!document.querySelector('[role="dialog"]')`), false, 'Re-import also completes directly');
     assert.equal((await importedAccount()).providerId, provider.id); assert.deepEqual(configuration(), repeatedBefore, 'Repeat IDE import preserves supplier identity, custom name/note, key, model and binding');
     await privacy();
-    writeFileSync(join(outputDir, 'jetbrains-ide-import-validation.json'), JSON.stringify({ ok: true, explicitIdeScanRequired: true, emptyAndServerRejectedIdeNeverFallBackToCentral: true, serverRejectionOccursAfterExplicitImport: true, privateFailuresDoNotWriteProviders: true, nativeImportUsesIndependentLocalKey: true, sourceIsJetBrainsIde: true, aiCreditsAmountsVisible: true, mockNativeDirectoryAndConnectionVerified: true, nativeTestUsesOriginalProfileId: true, mockedConnection: { model: tested.testedModel, alias: roundTripModel.alias, wireApi: tested.wireApi, statusCode: tested.statusCode, outcome: tested.outcome }, repeatedImportPreservesConfiguration: true, rendererAndDiagnosticsContainNoPrivateCredentials: true, noRealIdeFilesCentralLoginOrCloudInference: true, observed: observed(), stages, screenshots }, null, 2));
+    const crossBefore = configuration(); await direct('cross-ide');
+    assert.equal(await evaluate<boolean>(`!!document.querySelector('[role="dialog"]')`), false, 'Same account and license across IDEs do not require a choice');
+    const crossMetadata = store.getManagedState<{ nativeIde: JetBrainsIdeCredentials }>(`auth-metadata:${provider.id}`, { nativeIde: {} as JetBrainsIdeCredentials });
+    assert.equal(crossMetadata.nativeIde.product, 'rider', 'The existing native source is preferred within one account/license identity'); assert.deepEqual(configuration(), crossBefore); await capture('cross-ide-same-license-direct');
+    const multipleBefore = persistentState(), beforeChoices = observed(); await direct('multiple');
+    await waitFor(`!!document.querySelector(${JSON.stringify(scope)}+' [data-field="relay-import-candidate"]')`, 'different native licenses open the sole required selection');
+    assert.equal(observed().read, beforeChoices.read); assert.equal(observed().exchange, beforeChoices.exchange); assert.deepEqual(persistentState(), multipleBefore, 'A genuine identity choice performs no authorization or configuration write');
+    assert.equal(await evaluate<boolean>('!!document.querySelector("[data-jetbrains-ide-account-boundary]")'), false, 'The necessary choice is not preceded by a connection-method guide');
+    for (const [theme, width] of [['dark', 980], ['light', 1180]] as const) {
+      window.setSize(width, width === 1180 ? 800 : 680); await evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)};document.documentElement.style.colorScheme=${JSON.stringify(theme)}`);
+      await capture(`multiple-licenses-choice-${theme}-${width}`);
+    }
+    await choose(OTHER_LICENSE_CANDIDATE_ID); await click('[data-action="import-relay-client-account"]'); await waitFor(`!document.querySelector('[role="dialog"]')`, 'chosen native license imports');
+    const selectedMetadata = store.getManagedState<{ nativeIde: JetBrainsIdeCredentials }>(`auth-metadata:${provider.id}`, { nativeIde: {} as JetBrainsIdeCredentials });
+    assert.equal(selectedMetadata.nativeIde.licenseId, 'synthetic-other-native-ide-license');
+    assert.deepEqual(configuration(), { providers: multipleBefore.providers, models: multipleBefore.models, bindings: multipleBefore.bindings, secrets: multipleBefore.secrets });
+    await capture('multiple-licenses-selected');
+    store.setManagedState(MODE_KEY, 'ready'); await clearToasts(); const requestBefore = observed(); await click('[data-auth-add-relay="jetbrains-central"]');
+    const requestDeadline = Date.now() + 10_000; while (Date.now() < requestDeadline && observed().exchange <= requestBefore.exchange) await pause(25);
+    await waitFor(`!document.querySelector(${JSON.stringify(importButton)}).disabled`, 'explicit App import request completes');
+    assert.equal(observed().list, requestBefore.list + 1); assert.equal(observed().exchange, requestBefore.exchange + 1);
+    const consumed = observed(); await click('.sidebar [data-tool-id="codex"]'); await click('.sidebar [data-page="auth"]'); await pause(200);
+    assert.deepEqual(observed(), consumed, 'Returning to the authorization center does not replay the consumed explicit import request');
+    const optionsBefore = observed(); await click('[data-action="jetbrains-import-options"]'); await waitFor('!!document.querySelector("[data-jetbrains-ide-account-boundary]")', 'alternate connection options open only by their explicit action');
+    assert.deepEqual(observed(), optionsBefore, 'Opening alternate connection options does not inspect IDE or Central login'); await capture('explicit-other-connection-options'); await close();
+    await privacy();
+    writeFileSync(join(outputDir, 'jetbrains-ide-import-validation.json'), JSON.stringify({ ok: true, defaultIdeImportWithoutDialog: true, singleActionBusyAndDuplicateGuard: true, crossIdeSameLicenseAutoDeduplicated: true, ambiguousLicenseChoiceRequired: true, ordinaryNavigationDoesNotImport: true, consumedImportRequestNeverReplays: true, centralRemainsExplicitAlternative: true, emptyAndServerRejectedIdeNeverFallBackToCentral: true, serverRejectionOccursDuringDirectImport: true, privateFailuresDoNotWriteProviders: true, nativeImportUsesIndependentLocalKey: true, sourceIsJetBrainsIde: true, aiCreditsAmountsVisible: true, mockNativeDirectoryAndConnectionVerified: true, nativeTestUsesOriginalProfileId: true, mockedConnection: { model: tested.testedModel, alias: roundTripModel.alias, wireApi: tested.wireApi, statusCode: tested.statusCode, outcome: tested.outcome }, repeatedImportPreservesConfiguration: true, rendererAndDiagnosticsContainNoPrivateCredentials: true, noRealIdeFilesCentralLoginOrCloudInference: true, observed: observed(), stages, screenshots }, null, 2));
   } finally {
     store.setManagedState(MODE_KEY, 'empty'); store.setManagedState('qa-relay-client-import-stage', 'empty');
     await evaluate(`(()=>{const original=${JSON.stringify(originalTheme)};if(original.theme===undefined)delete document.documentElement.dataset.theme;else document.documentElement.dataset.theme=original.theme;document.documentElement.style.colorScheme=original.colorScheme})()`);

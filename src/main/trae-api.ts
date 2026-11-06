@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { SubscriptionUsage } from '../shared/auth-types';
 import type { TraeClientCredentials } from './trae-client-import';
-import { parseTraeCreditWindows, parseTraePlan } from './trae-relay-usage';
+import { parseTraeQuota, parseTraePlan } from './trae-relay-usage';
 
 /** TraeCode CN CustomModel / ChatMessageData protocol, fixed reference:
  * Trae2api-cn bb7b659 raw_client.build_traecode_chat_body/headers and installed
@@ -282,9 +282,9 @@ export class TraeApi {
       const profile = await readJson(await this.send(ACCOUNT + '/cloudide/api/v3/trae/GetUserInfo', value, { ReqSource: 'IDE' }, life), life.signal);
       const result = object(profile.Result); if (!result || String(result.UserID) !== value.userId) throw fail('authorization');
       const raw = await readJson(await this.send(ACCOUNT + '/trae/api/v2/pay/ide_user_ent_usage', value, { require_usage: true, req_source: 1 }, life), life.signal);
-      const windows = parseTraeCreditWindows(raw), plan = parseTraePlan(raw, this.now());
-      return { ...(plan ? { plan } : {}), usage: { status: windows.length ? 'ready' : 'unavailable', windows, queriedAt: new Date(this.now()).toISOString(),
-        message: windows.length ? '当前 TRAE 账号的官方套餐与额度。' : 'TRAE 未返回可识别的官方额度，余额保持未知。' } };
+      const queriedAt = this.now(), quota = parseTraeQuota(raw, queriedAt), plan = parseTraePlan(raw, queriedAt);
+      return { ...(plan ? { plan } : {}), usage: { status: quota.windows.length ? 'ready' : 'unavailable', ...quota, queriedAt: new Date(queriedAt).toISOString(),
+        message: quota.windows.length ? '当前 TRAE 账号的官方套餐与额度；省略的积分用量按官方客户端默认值计算。' : 'TRAE 未返回可识别的官方额度，余额保持未知。' } };
     } finally { life.close(); }
   }
   async chat(value: TraeClientCredentials, body: ObjectValue, signal?: AbortSignal): Promise<Response> {

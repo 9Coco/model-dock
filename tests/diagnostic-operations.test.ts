@@ -22,6 +22,14 @@ describe('diagnostic operation classification excludes all credential and body f
   it('distinguishes quota stale/error results from Promise success', () => {
     expect(diagnosticOperationResult('refreshAccountUsage', ['copilot:42'], { usage: { status: 'stale', message: secret, windows: [{ token: secret }] } }, 2)).toMatchObject({ level: 'warn', event: 'account.refresh', context: { outcome: 'stale' } });
   });
+  it('records default IDE import completion separately from an account selection without logging its preview', () => {
+    const imported = diagnosticOperationResult('beginJetBrainsIdeImport', [], { status: 'imported', account: { providerId, accountId: secret, displayName: secret, usage: { message: secret }, token: secret } }, 10);
+    expect(imported).toMatchObject({ event: 'account.login', context: { operation: 'beginJetBrainsIdeImport', providerId, outcome: 'success' } });
+    const selection = diagnosticOperationResult('beginJetBrainsIdeImport', [], { status: 'selection-required', preview: { candidates: [{ id: secret, accountLabel: secret }], message: secret } }, 10);
+    expect(selection).toMatchObject({ event: 'operation.succeeded', context: { operation: 'beginJetBrainsIdeImport', outcome: 'pending' } });
+    expect(selection?.context.providerId).toBeUndefined();
+    expect(JSON.stringify([imported, selection])).not.toContain(secret);
+  });
   it('ignores diagnostic queries, exports and credential copy operations to prevent loops', () => {
     for (const name of ['queryDiagnostics', 'diagnosticsText', 'exportDiagnostics', 'openDiagnosticsDir', 'copyText', 'copyGatewayKey', 'copyConnectionKey', 'copyProviderKey', 'revealProviderKey', 'revealGatewayKey'] as const) {
       expect(ignoresDiagnosticOperation(name)).toBe(true);

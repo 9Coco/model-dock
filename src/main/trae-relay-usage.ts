@@ -83,15 +83,73 @@ function activeAccount(value: Record<string, unknown>): { id: string; label?: st
   return { id, ...(text(matches[0].label) ? { label: text(matches[0].label) } : {}) };
 }
 
-function quotaWindow(id: string, label: string, limitValue: unknown, usedValue: unknown, unit: string): QuotaWindow | undefined {
+function quotaWindow(id: string, label: string, limitValue: unknown, usedValue: unknown, unit: string, officialDefault = false): QuotaWindow | undefined {
   const limit = amount(limitValue), used = amount(usedValue);
   if (limit === undefined || limit < 0 && limit !== -1) return;
-  if (limit === -1) return { id, label, unit, unlimited: true, measurement: 'reported' };
-  const result: QuotaWindow = { id, label, total: limit, unit, measurement: 'reported' };
-  // Missing or malformed usage is unknown, not the native parser's zero default.
+  const measurement = officialDefault ? 'official-default' as const : 'reported' as const;
+  if (limit === -1) return { id, label, unit, unlimited: true, measurement };
+  const result: QuotaWindow = { id, label, total: limit, unit, measurement };
+  // Only the verified CN credits omission rule supplies a zero below. Explicit
+  // malformed values and unverified fast-request omissions remain unknown.
   if (used !== undefined && used >= 0) {
     result.remaining = Math.max(limit - used, 0);
     if (limit > 0) { result.remainingPercent = Math.min(100, result.remaining / limit * 100); result.usedPercent = 100 - result.remainingPercent; }
+  }
+  return result;
+}
+
+function currentEntitlementPacks(rawValue: unknown, now: number): Record<string, unknown>[] {
+  const raw = object(rawValue);
+  if (raw.code !== undefined && raw.code !== 0 || !Array.isArray(raw.user_entitlement_pack_list) || raw.user_entitlement_pack_list.length > 100) return [];
+  return raw.user_entitlement_pack_list.map(object).filter(pack => {
+    // Official status enum: Init=0, Active=1, Canceled=3, Terminated=4, Expired=5.
+    // A canceled subscription remains usable until its reported expiry.
+    if (pack.status !== 1 && pack.status !== 3) return false;
+    const base = object(pack.entitlement_base_info), start = base.start_time, end = pack.expire_time ?? base.end_time;
+    const validTime = (time: unknown) => time === undefined || typeof time === 'number' && Number.isSafeInteger(time) && time >= 0 && time <= 253402300799;
+    return validTime(start) && validTime(end) && !(typeof start === 'number' && start > now / 1000) && !(typeof end === 'number' && end > 0 && end <= now / 1000);
+  });
+}
+
+type QuotaMetric = 'credits' | 'fast';
+interface TraeQuotaGrant { window: QuotaWindow; metric: QuotaMetric; groupKey: string; groupLabel: string }
+export interface TraeQuotaProjection { windows: QuotaWindow[]; summary?: QuotaWindow; details: QuotaWindow[] }
+
+function quotaGroupName(value: unknown): string | undefined {
+  const label = text(value, 120);
+  return label && !/[\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/.test(label) ? label : undefined;
+}
+function quotaGroupType(value: unknown): string | number | undefined {
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) return value;
+  return typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,64}$/.test(value) ? value : undefined;
+}
+function creditsUsage(pack: Record<string, unknown>): { value: unknown; defaulted: boolean } {
+  const usage = pack.usage;
+  const record = usage !== null && typeof usage === 'object' && !Array.isArray(usage) ? usage as Record<string, unknown> : undefined;
+  // Installed official CN ICubeUsageService.pRr and CNCommercialService both
+  // use pack.usage?.credits_amount ?? 0 for successful require_usage responses.
+  // This is an explicit client convention, not a claimed protobuf default.
+  if (usage === undefined || record && record.credits_amount === undefined) return { value: 0, defaulted: true };
+  return { value: record?.credits_amount, defaulted: false };
+}
+function totalAmount(values: (number | undefined)[]): number | undefined {
+  if (values.some(value => value === undefined)) return;
+  // Preserve native fractional credits through aggregation; formatting belongs
+  // at the display boundary. Compensation avoids accumulating small errors.
+  let total = 0, correction = 0;
+  for (const value of values as number[]) { const part = value - correction, next = total + part; correction = next - total - part; total = next; }
+  return Number.isFinite(total) && total <= Number.MAX_SAFE_INTEGER ? total : undefined;
+}
+function aggregateQuota(id: string, label: string, grants: QuotaWindow[]): QuotaWindow {
+  const result: QuotaWindow = { id, label, unit: grants[0].unit, grantCount: grants.length,
+    measurement: grants.some(grant => grant.measurement === 'official-default') ? 'official-default' : 'reported' };
+  const expiresAt = grants[0].expiresAt;
+  if (expiresAt && grants.every(grant => grant.expiresAt === expiresAt)) result.expiresAt = expiresAt;
+  if (grants.some(grant => grant.unlimited)) { result.unlimited = true; return result; }
+  result.total = totalAmount(grants.map(grant => grant.total));
+  result.remaining = totalAmount(grants.map(grant => grant.remaining));
+  if (result.total !== undefined && result.total > 0 && result.remaining !== undefined) {
+    result.remainingPercent = Math.min(100, result.remaining / result.total * 100); result.usedPercent = 100 - result.remainingPercent;
   }
   return result;
 }
@@ -101,27 +159,60 @@ function quotaWindow(id: string, label: string, limitValue: unknown, usedValue: 
  * cnCreditsUsage.js and ICubeUsageService independently confirm the v2
  * entitlement path, credits_limit/credits_amount and fast-request fields.
  * Parse the fresh raw entitlement only: credits.remaining includes relay-local
- * projected debits, and its parser invents zero for absent usage/packs.
+ * projected debits. Never use its empty-summary defaults or local balance.
  */
-export function parseTraeCreditWindows(rawValue: unknown): QuotaWindow[] {
-  const raw = object(rawValue);
-  if (raw.code !== undefined && raw.code !== 0 || !Array.isArray(raw.user_entitlement_pack_list) || raw.user_entitlement_pack_list.length > 100) return [];
-  const windows: QuotaWindow[] = [];
-  for (const [index, value] of raw.user_entitlement_pack_list.entries()) {
-    const pack = object(value), base = object(pack.entitlement_base_info), usage = object(pack.usage);
-    if (['expired', 'terminated', 'inactive', '4', '5'].includes(String(pack.status ?? '').toLowerCase())) continue;
+function projectTraeQuotaGrants(rawValue: unknown, now: number): TraeQuotaGrant[] {
+  const packs = currentEntitlementPacks(rawValue, now);
+  const grants: TraeQuotaGrant[] = [];
+  for (const [index, pack] of packs.entries()) {
+    const base = object(pack.entitlement_base_info), usage = object(pack.usage);
     const directQuota = object(base.quota), extraQuota = object(object(object(base.product_extra).subscription_extra).quota);
-    const quota = Object.keys(directQuota).length ? directQuota : extraQuota;
-    const suffix = raw.user_entitlement_pack_list.length > 1 ? ` ${index + 1}` : '';
+    const quota: Record<string, unknown> = {};
+    for (const field of ['credits_limit', 'premium_model_fast_request_limit']) {
+      if (Object.hasOwn(directQuota, field)) quota[field] = directQuota[field];
+      else if (Object.hasOwn(extraQuota, field)) quota[field] = extraQuota[field];
+    }
+    const suffix = packs.length > 1 ? ` ${index + 1}` : '';
     const packId = createHash('sha256').update(JSON.stringify([base.entitlement_id ?? '', pack.source_id ?? '', index])).digest('hex').slice(0, 12);
-    const credits = quotaWindow(`trae-credits-${packId}`, '通用积分' + suffix, quota.credits_limit, usage.credits_amount, '积分');
-    if (credits) windows.push(credits);
-    const fast = quotaWindow(`trae-fast-${packId}`, '高级模型快速请求' + suffix, quota.premium_model_fast_request_limit, usage.premium_model_fast_amount ?? usage.premium_model_fast_request_usage, '次');
-    if (fast) windows.push(fast);
+    const groupName = quotaGroupName(pack.group_name), groupType = quotaGroupType(pack.group_type);
+    const expiry = pack.expire_time ?? base.end_time;
+    const expiresAt = typeof expiry === 'number' && expiry > 0 ? new Date(expiry * 1000).toISOString() : undefined;
+    const append = (window: QuotaWindow | undefined, metric: QuotaMetric, groupLabel: string) => {
+      if (!window) return;
+      if (expiresAt) window.expiresAt = expiresAt;
+      // Source/product IDs are not assumed to identify a category or a grant.
+      // Only the server's bounded group metadata determines display grouping.
+      grants.push({ window, metric, groupLabel, groupKey: JSON.stringify([metric, groupType ?? null, groupName ?? null, groupName || groupType !== undefined ? null : packId]) });
+    };
+    const credits = creditsUsage(pack), creditsLabel = groupName ?? '通用积分';
+    const creditId = `trae-credits-${packId}`, creditLabel = creditsLabel + suffix;
+    const creditWindow = quotaWindow(creditId, creditLabel, quota.credits_limit, credits.value, '积分', credits.defaulted);
+    // An explicitly malformed quota is still evidence of an unknown grant.
+    // Dropping it would turn a partial aggregate into a claimed full balance.
+    append(creditWindow ?? (Object.hasOwn(quota, 'credits_limit') ? { id: creditId, label: creditLabel, unit: '积分', measurement: 'reported' } : undefined), 'credits', creditsLabel);
+    const fastLabel = groupName ? groupName + ' · 高级模型快速请求' : '高级模型快速请求';
+    const fastId = `trae-fast-${packId}`, fastDetailLabel = fastLabel + suffix;
+    const fastWindow = quotaWindow(fastId, fastDetailLabel, quota.premium_model_fast_request_limit, usage.premium_model_fast_amount ?? usage.premium_model_fast_request_usage, '次');
+    append(fastWindow ?? (Object.hasOwn(quota, 'premium_model_fast_request_limit') ? { id: fastId, label: fastDetailLabel, unit: '次', measurement: 'reported' } : undefined), 'fast', fastLabel);
   }
   // expire_time/end_time describe entitlement expiry, not reliably a quota
   // reset. Never turn those into a guessed rolling window or reset timestamp.
-  return windows;
+  return grants;
+}
+
+/** Independent grant details remain available to existing parser consumers. */
+export function parseTraeCreditWindows(rawValue: unknown, now = Date.now()): QuotaWindow[] {
+  return projectTraeQuotaGrants(rawValue, now).map(grant => grant.window);
+}
+
+/** CN official credits add each grant's max(limit - used, 0). Keep fast
+ * request counts separate, and never average percentages across grants. */
+export function parseTraeQuota(rawValue: unknown, now = Date.now()): TraeQuotaProjection {
+  const grants = projectTraeQuotaGrants(rawValue, now), groups = new Map<string, TraeQuotaGrant[]>();
+  for (const grant of grants) { const group = groups.get(grant.groupKey) ?? []; group.push(grant); groups.set(grant.groupKey, group); }
+  const windows = [...groups.entries()].map(([key, group]) => aggregateQuota(`trae-${group[0].metric}-group-${createHash('sha256').update(key).digest('hex').slice(0, 12)}`, group[0].groupLabel, group.map(grant => grant.window)));
+  const credits = grants.filter(grant => grant.metric === 'credits').map(grant => grant.window);
+  return { windows, ...(credits.length ? { summary: aggregateQuota('trae-credits-total', '总可用积分', credits) } : {}), details: grants.map(grant => grant.window) };
 }
 
 /** Installed official Trae CN 3.4.15 ICubeUsageService / cnCreditsUsage:
@@ -132,17 +223,9 @@ export function parseTraeCreditWindows(rawValue: unknown): QuotaWindow[] {
  * can establish a plan. Init/future/expired packs cannot establish one either.
  */
 export function parseTraePlan(rawValue: unknown, now = Date.now()): string | undefined {
-  const raw = object(rawValue);
-  if (raw.code !== undefined && raw.code !== 0 || !Array.isArray(raw.user_entitlement_pack_list) || raw.user_entitlement_pack_list.length > 100) return;
   const current = new Set<number>();
-  for (const value of raw.user_entitlement_pack_list) {
-    const pack = object(value), base = object(pack.entitlement_base_info);
-    // Native status enum: Init=0, Active=1, Canceled=3, Terminated=4, Expired=5.
-    // Canceled subscriptions remain valid until their reported expiry.
-    if (pack.status !== 1 && pack.status !== 3) continue;
-    const start = base.start_time, end = pack.expire_time ?? base.end_time;
-    const validTime = (time: unknown) => time === undefined || typeof time === 'number' && Number.isSafeInteger(time) && time >= 0 && time <= 253402300799;
-    if (!validTime(start) || !validTime(end) || typeof start === 'number' && start > now / 1000 || typeof end === 'number' && end > 0 && end <= now / 1000) continue;
+  for (const pack of currentEntitlementPacks(rawValue, now)) {
+    const base = object(pack.entitlement_base_info);
     if (typeof base.product_type === 'number') current.add(base.product_type);
   }
   const plans = [[100, 'Express'], [6, 'Ultra'], [4, 'Pro+'], [1, 'Pro'], [8, 'Lite'], [0, 'Free']] as const;
@@ -159,9 +242,9 @@ export async function queryTraeRelayUsage(apiKey: string, options: TraeRelayUsag
   if (native.success !== true || native.id !== before.id) throw failed('TRAE 反代未返回当前活跃账号的额度，请重新查询。');
   const after = activeAccount(await getJson('/api/accounts', apiKey, send));
   if (before.id !== after.id) throw failed('TRAE 反代的活跃账号在查询期间已切换，请重新查询。');
-  const raw = object(native.raw), windows = parseTraeCreditWindows(raw);
-  const plan = parseTraePlan(raw, now());
+  const raw = object(native.raw), queriedAt = now(), quota = parseTraeQuota(raw, queriedAt);
+  const plan = parseTraePlan(raw, queriedAt);
   return { accountId: after.id, ...(after.label ? { accountLabel: after.label } : {}), ...(plan ? { plan } : {}),
-    usage: { status: windows.length ? 'ready' : 'unavailable', windows, queriedAt: new Date(now()).toISOString(),
-      message: windows.length ? '当前反代活跃账号的官方额度；各额度包分开显示，未返回的余额或重置时间保持未知。' : '当前反代活跃账号未返回可识别的积分或快速请求额度，余额未知。' } };
+    usage: { status: quota.windows.length ? 'ready' : 'unavailable', ...quota, queriedAt: new Date(queriedAt).toISOString(),
+      message: quota.windows.length ? '当前反代活跃账号的官方额度；省略的积分用量按官方客户端默认值计算，未识别值保持未知。' : '当前反代活跃账号未返回可识别的积分或快速请求额度，余额未知。' } };
 }

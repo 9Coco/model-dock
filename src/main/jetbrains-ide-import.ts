@@ -31,6 +31,12 @@ export interface JetBrainsIdeImportCandidate {
   product: IdeProduct;
   /** Stable product/license identity for provider reuse; contains no token or raw license ID. */
   sourceIdentity: string;
+  /** Main-process only: equivalent account/license choices across IDEs. Never
+   * include this private fingerprint in the renderer-safe import preview. */
+  accountLicenseIdentity?: string;
+  /** Another IDE has an unsupported or mismatched selected access source.
+   * Manual selection remains available, but default import must not fall back. */
+  defaultRequiresSelection?: boolean;
   accountId: string;
   accountLabel: string;
   /** Source assertion metadata only, never an access-authorization deadline. */
@@ -266,10 +272,12 @@ export class JetBrainsIdeImporter {
       if (!licenseId) continue;
       const id = randomUUID(), source = sourceIdentity(product, licenseId);
       this.selections.set(id, { identity: fingerprint(value, source), product, expires: now + 5 * 60_000 });
-      candidates.push({ id, client: 'jetbrains-ide', clientName: PROFILES[product][1] + ' · 已选 AI 许可证', product, sourceIdentity: source, accountId: value.accountId, accountLabel: value.accountLabel, ...(value.sourceTokenExpHint !== undefined ? { sourceTokenExpHint: value.sourceTokenExpHint } : {}) });
+      const accountLicenseIdentity = createHash('sha256').update(JSON.stringify([value.accountId, licenseId])).digest('hex');
+      candidates.push({ id, client: 'jetbrains-ide', clientName: PROFILES[product][1] + ' · 已选 AI 许可证', product, sourceIdentity: source, accountLicenseIdentity, accountId: value.accountId, accountLabel: value.accountLabel, ...(value.sourceTokenExpHint !== undefined ? { sourceTokenExpHint: value.sourceTokenExpHint } : {}) });
     }
     if (!candidates.length && rejectedSelection) throw rejectedSelection;
     if (!candidates.length) throw new JetBrainsIdeImportError('missing', '未找到 IDE 已选择的 AI 许可证，请先在 JetBrains IDE 的 AI Assistant 中选择本人许可证，再导入。');
+    if (rejectedSelection) for (const candidate of candidates) candidate.defaultRequiresSelection = true;
     return candidates;
   }
   async readCredentials(id: string): Promise<JetBrainsIdeCredentials> {

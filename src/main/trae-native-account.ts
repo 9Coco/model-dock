@@ -16,7 +16,7 @@ interface NativeMetadata {
   version: 1; connection: string; identity: string; revision: string; clientImport: RelayClientImportProvenance;
   nativeClient: { version: 1; client: NativeClient; credentials: TraeClientCredentials };
 }
-interface QuotaCache extends TraeNativeQuota { version: 1; revision: string }
+interface QuotaCache extends TraeNativeQuota { version: 3; revision: string }
 interface Ticket { client: NativeClient; identity: string; expires: number }
 export class TraeNativeAccountError extends Error {}
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -142,7 +142,9 @@ export class TraeNativeAccounts {
     const { plan: _oldPlan, accountId: _oldId, displayName: _oldName, expiresAt: _oldExpiry, ...baseAccount } = account;
     try {
       const { credentials, metadata } = this.context(account.providerId), cached = this.store.getManagedState<QuotaCache | null>(`auth-usage:${account.providerId}`, null);
-      const validCache = cached?.version === 1 && cached.revision === metadata.revision;
+      // Earlier caches lack current validity/grouping or CN omission semantics.
+      // Keep the encrypted account intact and require a fresh observation.
+      const validCache = cached?.version === 3 && cached.revision === metadata.revision;
       const usage = structuredClone(validCache ? cached.usage : { status: 'not-queried' as const, windows: [], message: '本机账号已导入；尚未查询官方套餐和额度，云端授权与模型推理仍需确认。' });
       if (usage.status === 'ready' && quotaCacheExpired(usage, this.now())) { usage.status = 'stale'; usage.message = '显示此 TRAE 账号上次查询的官方额度，请刷新确认。'; }
       const plan = validCache ? planName(cached.plan) : undefined;
@@ -161,7 +163,7 @@ export class TraeNativeAccounts {
         const plan = planName(queried.plan); result = { usage: queried.usage, ...(plan ? { plan } : {}) };
       } catch (error) { result = { usage: { status: 'unavailable', windows: [], queriedAt: new Date(this.now()).toISOString(), message: this.error(error, 'TRAE 官方套餐与额度查询失败，请检查账号登录或网络后重试。').message } }; }
       if (this.context(id).metadata.revision !== context.metadata.revision) throw new TraeNativeAccountError('TRAE 账号在查询期间已变更，未保存旧账号额度。');
-      try { this.store.setManagedState(`auth-usage:${id}`, { ...result, version: 1, revision: context.metadata.revision } satisfies QuotaCache); }
+      try { this.store.setManagedState(`auth-usage:${id}`, { ...result, version: 3, revision: context.metadata.revision } satisfies QuotaCache); }
       catch { throw new TraeNativeAccountError('TRAE 额度已查询，但本地缓存未能保存，请重试。'); }
       return this.decorate(relayAccountView(this.store, this.context(id).provider));
     })();

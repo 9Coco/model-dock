@@ -124,6 +124,21 @@ describe('explicit encrypted TRAE native account snapshots without a relay proce
 });
 
 describe('native TRAE official quota cache', () => {
+  it.each([1, 2])('requires a new quota observation for cache version %s without changing encrypted account data or bindings', async version => {
+    const f = await fixture(), account = await f.imported(); addReferences(f.store, account.providerId);
+    const before = { provider: f.store.getProvider(account.providerId), secret: f.store.getSecret(account.providerId), metadata: f.metadata(account.providerId),
+      credentials: f.manager.credentials(account.providerId), models: f.store.listModels(), bindings: f.store.listBindings() };
+    const previous = { ...f.quota('Pro'), version, revision: before.metadata.revision };
+    f.store.setManagedState(`auth-usage:${account.providerId}`, previous);
+    const view = f.view(account.providerId);
+    expect(view).toMatchObject({ authStatus: 'ready', canQueryUsage: true, usage: { status: 'not-queried', windows: [] } }); expect(view.plan).toBeUndefined();
+    expect(f.api.quota).not.toHaveBeenCalled(); expect(f.store.getManagedState(`auth-usage:${account.providerId}`, null)).toEqual(previous);
+    const refreshed = await f.manager.refreshUsage(account.providerId);
+    expect(refreshed).toMatchObject({ plan: 'Pro', usage: { status: 'ready', windows: [{ total: 100, remaining: 75 }] } });
+    expect(f.store.getManagedState(`auth-usage:${account.providerId}`, null)).toMatchObject({ version: 3, revision: before.metadata.revision });
+    expect({ provider: f.store.getProvider(account.providerId), secret: f.store.getSecret(account.providerId), metadata: f.metadata(account.providerId),
+      credentials: f.manager.credentials(account.providerId), models: f.store.listModels(), bindings: f.store.listBindings() }).toEqual(before);
+  });
   it('queries the saved snapshot only on action, deduplicates refreshes, and exposes a safe plan with stale observations labeled', async () => {
     const f = await fixture(), account = await f.imported(), held = deferred<TraeNativeQuota>(); f.api.quota.mockReturnValueOnce(held.promise);
     expect(f.view(account.providerId).usage.status).toBe('not-queried'); expect(f.api.quota).not.toHaveBeenCalled();
