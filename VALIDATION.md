@@ -1,5 +1,14 @@
 # ModelDock 验证记录
 
+## 2026-11-06 / 0.3.86 · Windows 适配补充检查
+
+- 检查本轮 Linux 新增的当前/历史模型筛选、TRAE 客户端模型缓存和额度、JetBrains 多许可证及多厂商协议。TRAE 缓存在 Windows 使用 APPDATA，缺省回退到 AppData/Roaming，保持精确账号与 CN/SOLO 产品边界；JetBrains 仍走已有 Windows Registry64 只读账号导入和 APPDATA 许可证路径。未引入额外反代进程或监听端口。
+- 补充 TRAE Windows 缓存回归：CN/SOLO 两种产品、中文及空格路径、忽略 Linux XDG 路径、漫游目录缺省值、无效/不存在 APPDATA 不回退、源数据库字节不变。文件符号链接用例复用实际权限探测；不具备权限时明确跳过，非绝对路径拒绝独立执行，不再被符号链接创建失败遮挡。
+- 新功能专项 13 个测试文件通过：361 项通过、1 项因文件符号链接权限不足跳过，0 失败。覆盖新许可证目录/解码、授权生命周期、Grazie 桥和签名、TRAE 可见性/缓存/额度等；证据 `work/windows-review-focused.json`。类型检查、生产构建和生产入口去测试代码检查通过；最终再次用 TypeScript CLI 核验通过。
+- 完整 `npm test` 已执行，但本轮不能记为通过。默认临时目录的 Vitest 缓存重命名先遇到 EPERM；将 TEMP/TMP 指向项目内隔离测试目录后，初次全量为 2290 通过、313 失败、54 跳过（118 文件）。可见阻碍包括本机 HTTP 连接 EACCES、junction/hardlink 创建 EPERM 和设置保存失败；完整日志保留在 `work/windows-review-tests.log`，不能将未逐项核验的失败都判为产品缺陷或全部归为环境问题。后续专项包含本次修复与新增用例，不能替代全量网关验收。
+- Windows x64 `npm run pack:win` 成功，常用交付目录 `release/win-unpacked` 已更新。生产入口、许可证/图标资源、SQL WASM、可执行文件图标及嵌入 ASAR 完整性全部通过；生产 main SHA256 `71e981efac959bd0e310430d6c96cb6ab8e234108edcdf0816120c9cfbbc702f`，与本版 Linux 生产主进程构建一致。打包前未发现运行中的 ModelDock，没有停止用户应用。
+- 实际 Electron 历史模型界面专项尝试未产出页面报告；独立运行本机 Electron 44.5.1 `--version`（未加载 ModelDock）也以 `0x80000003` 退出，未输出版本或错误正文，因此未获得 Windows 界面/预加载启动验收。当前权限不能读取 Windows Application 事件日志，尚不能确定该运行时退出的具体原因。未更改界面布局；没有使用真实账号凭据、云端查询或模型生成。本轮未重跑 Linux 原生验证。
+
 ## 2026-11-06 / 0.3.86 · 订阅当前 / 历史模型
 
 - 五类订阅共用默认关闭的「显示历史模型」开关，关闭时只显示明确 current；历史与 unknown 只在勾选后显示，并采用不同标识。未知状态不冒称已与客户端完全一致；搜索、全选、批量参数和提交均受可见且可导入集合限制，不在切换时重新请求。重开/切换来源恢复默认；已有历史模型、参数、账号与绑定保留。
