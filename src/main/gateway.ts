@@ -160,7 +160,7 @@ function controlledFailure(error: unknown): { status: number; message: string } 
   if (error instanceof GatewayError || error instanceof AnthropicBridgeError || error instanceof ChatResponsesBridgeError || error instanceof ResponsesChatBridgeError
     || error instanceof NativeMessagesError || error instanceof JetBrainsChatError || error instanceof JetBrainsCompletionError) return error;
   if (error instanceof TraeNativeAccountError || error instanceof CentralNativeAccountError || error instanceof JetBrainsIdeAccountError) return { status: 401, message: error.message };
-  if (error instanceof JetBrainsIdeApiError) return { status: ['credentials', 'authorization', 'entitlement'].includes(error.code) ? 401 : ['request', 'model'].includes(error.code) ? 400 : error.code === 'cancelled' ? 504 : error.code === 'limit' ? 413 : 502, message: error.message };
+  if (error instanceof JetBrainsIdeApiError) return { status: ['credentials', 'authorization', 'entitlement'].includes(error.code) ? 401 : ['request', 'model', 'capability'].includes(error.code) ? 400 : error.code === 'cancelled' ? 504 : error.code === 'limit' ? 413 : 502, message: error.message };
   if (error instanceof TraeApiError) {
     const status = error.status && error.status >= 400 && error.status <= 599 ? error.status
       : ['request', 'capability', 'model'].includes(error.code) ? 400 : error.code === 'credentials' || error.code === 'authorization' ? 401
@@ -566,7 +566,7 @@ export class Gateway {
         while (true) { const item = await reader.read(); for (const frame of frames.feed(item.value ?? new Uint8Array(), item.done)) { const value = sseData(frame); observe(value); collector.add(value); } if (item.done) break; }
         jsonResponse(response, upstream.status, collector.result(model.alias));
       } else if (stream) {
-        if (jetBrains) {
+        if (jetBrains || provider.nativeAdapter === 'jetbrains-ide' && path.endsWith('/chat/completions')) {
           let source: ReadableStream<Uint8Array>;
           if (sse) { if (!upstream.body) throw new JetBrainsChatError(); source = upstream.body; }
           else {
@@ -576,6 +576,18 @@ export class Gateway {
             source = new ReadableStream({ start(controller) { controller.enqueue(payload); controller.close(); } });
           }
           reader = source.pipeThrough(createJetBrainsChatStream(model.alias, sse ? observe : undefined), { signal: controller.signal }).getReader();
+          await sendEventStream(reader, response, upstream.status, controller.signal, 32 * 1024 * 1024); return;
+        }
+        if (provider.nativeAdapter === 'jetbrains-ide' && sse) {
+          // Native protocol bridges can reject their first upstream event. Wait
+          // for it before sending HTTP 200, and retain the existing alias map.
+          if (!upstream.body) throw new GatewayError(502, 'JetBrains 上游流式响应为空。');
+          const frames = new SseFrames(), encoder = new TextEncoder();
+          const mapped = new TransformStream<Uint8Array, Uint8Array>({
+            transform(chunk, output) { for (const frame of frames.feed(chunk)) { observe(sseData(frame)); output.enqueue(encoder.encode(mappedSse(frame, model.alias))); } },
+            flush(output) { for (const frame of frames.feed(new Uint8Array(), true)) { observe(sseData(frame)); output.enqueue(encoder.encode(mappedSse(frame, model.alias))); } },
+          });
+          reader = upstream.body.pipeThrough(mapped, { signal: controller.signal }).getReader();
           await sendEventStream(reader, response, upstream.status, controller.signal, 32 * 1024 * 1024); return;
         }
         response.statusCode = upstream.status;

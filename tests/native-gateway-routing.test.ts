@@ -94,6 +94,7 @@ describe('native account catalog and inference routing', () => {
     const f = await fixture(adapter), nativeRequest = vi.fn(async (provider: Provider, route: string, body: Record<string, unknown>, signal: AbortSignal) => {
       expect(provider.nativeAdapter).toBe(adapter); expect(route).toBe('/chat/completions'); expect(body.model).toBe(f.model.upstreamId); expect(body.model).not.toBe(f.model.alias); expect(signal.aborted).toBe(false);
       if (adapter === 'trae') expect(body).not.toHaveProperty('max_tokens');
+      else expect(body.max_tokens).toBe(adapter === 'jetbrains-ide' ? 256 : 16);
       return Response.json(chat(f.model.upstreamId));
     });
     const tester = new ConnectionTester(f.store, f.oauth, { fetch: f.fetcher, nativeRequest }), result = await tester.test(f.provider.id, { modelId: f.model.id });
@@ -110,7 +111,7 @@ describe('native account catalog and inference routing', () => {
     } });
     for (const wireApi of ['responses', 'messages'] as const) expect(await tester.test(f.provider.id, { upstreamId: 'Exact/Selected-ID', wireApi })).toMatchObject({ ok: true, testedModel: 'Exact/Selected-ID', wireApi });
     expect(seen.map(row => [row.route, row.body.model])).toEqual([['/responses', 'Exact/Selected-ID'], ['/v1/messages', 'Exact/Selected-ID']]);
-    expect(seen[0].body.max_output_tokens).toBe(64); expect(seen[1].body.max_tokens).toBe(16); expect(f.oauth.prepareRequest).not.toHaveBeenCalled(); expect(f.fetcher).not.toHaveBeenCalled();
+    expect(seen[0].body.max_output_tokens).toBe(adapter === 'jetbrains-ide' ? 256 : 64); expect(seen[1].body.max_tokens).toBe(adapter === 'jetbrains-ide' ? 256 : 16); expect(f.oauth.prepareRequest).not.toHaveBeenCalled(); expect(f.fetcher).not.toHaveBeenCalled();
   });
   it.each(adapters)('%s fails closed when native callbacks are absent or decline the account', async adapter => {
     const f = await fixture(adapter);
