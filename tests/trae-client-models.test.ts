@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import { parseTraeClientModelCatalog, readTraeClientModelCatalog } from '../src/main/trae-client-models';
+import { requireSymlinkCapability } from './helpers/windows-review-filesystem';
 const account='synthetic-account', directories:string[]=[];
 afterEach(async()=>{await Promise.all(directories.splice(0).map(path=>rm(path,{recursive:true,force:true})));});
 const row=(name='current-model',extra:Record<string,unknown>={})=>({name,display_name:'Current model',config_source:1,status:true,selectable:true,...extra});
@@ -37,8 +38,32 @@ describe('TRAE native current model cache, read-only account boundary',()=>{
   const f=await fixture({[account+'_AI.agent.model.model_list_map']:JSON.stringify({chat_v3:[row('cn-only-model')]})});
   expect(await readTraeClientModelCatalog(account,{...f.options,client:'trae-solo-cn'})).toBeUndefined();
  });
- it('rejects symbolic-link model databases and nonabsolute configuration roots',async()=>{
+ it.each(['Trae CN', 'TRAE SOLO CN'])('reads the selected Windows %s cache from APPDATA, including Unicode and spaces',async product=>{
+  const home=await mkdtemp(join(tmpdir(),'modeldock-trae-windows-'));directories.push(home);
+  const base=join(home,'用户 漫游配置');
+  const f=await fixture({[account+'_AI.agent.model.model_list_map']:JSON.stringify({chat_v3:[row('windows-model')]})},product,base);
+  const other=await fixture({[account+'_AI.agent.model.model_list_map']:JSON.stringify({chat_v3:[row('linux-decoy')]})},product,join(home,'.config'));
+  const client=product==='Trae CN'?'trae-cn' as const:'trae-solo-cn' as const;
+  const before=await readFile(f.file);
+  expect(await readTraeClientModelCatalog(account,{platform:'win32',homeDir:home,env:{APPDATA:base,XDG_CONFIG_HOME:other.root},client})).toEqual({client,models:[{id:'windows-model',name:'Current model'}]});
+  expect(await readFile(f.file)).toEqual(before);
+  expect(await readTraeClientModelCatalog(account,{platform:'win32',homeDir:home,env:{APPDATA:base},client:client==='trae-cn'?'trae-solo-cn':'trae-cn'})).toBeUndefined();
+ });
+ it('uses the Windows roaming fallback only when APPDATA is absent, without falling back from an invalid override',async()=>{
+  const home=await mkdtemp(join(tmpdir(),'modeldock-trae-windows-'));directories.push(home);
+  await fixture({[account+':AI.agent.model.model_list_map']:JSON.stringify({chat_v3:[row('roaming-model')]})},'Trae CN',join(home,'AppData','Roaming'));
+  const options={platform:'win32' as const,homeDir:home,client:'trae-cn' as const};
+  expect((await readTraeClientModelCatalog(account,{...options,env:{}}))?.models[0].id).toBe('roaming-model');
+  expect(await readTraeClientModelCatalog(account,{...options,env:{APPDATA:'relative'}})).toBeUndefined();
+  expect(await readTraeClientModelCatalog(account,{...options,env:{APPDATA:join(home,'missing')}})).toBeUndefined();
+ });
+ it('rejects nonabsolute configuration roots independently of symlink privileges',async()=>{
+  const f=await fixture({[account+'_AI.agent.model.model_list_map']:JSON.stringify({chat_v3:[row()]})});
+  expect(await readTraeClientModelCatalog(account,{...f.options,env:{XDG_CONFIG_HOME:'relative'}})).toBeUndefined();
+ });
+ it('rejects symbolic-link model databases',async context=>{
+  requireSymlinkCapability(context,'file');
   const f=await fixture({[account+'_AI.agent.model.model_list_map']:JSON.stringify({chat_v3:[row()]})});const target=f.file+'.saved';await import('node:fs/promises').then(fs=>fs.rename(f.file,target));await symlink(target,f.file);
-  expect(await readTraeClientModelCatalog(account,f.options)).toBeUndefined();expect(await readTraeClientModelCatalog(account,{...f.options,env:{XDG_CONFIG_HOME:'relative'}})).toBeUndefined();
+  expect(await readTraeClientModelCatalog(account,f.options)).toBeUndefined();
  });
 });
