@@ -1,5 +1,16 @@
 # ModelDock 验证记录
 
+## 2026-11-06 / 0.3.76 · Linux 直接代理架构验证
+
+- 本机 Linux x86_64、Node.js 25.9.0、Electron 44.5.1 验证当前 `da18156` 源码。TRAE / JetBrains IDE / Central 均在现有主进程 Gateway 内运行 TypeScript 适配器；Linux 保留 XDG / Java Preferences / Central 原生程序发现路径，未发现确定的 Linux 生产阻断。
+- 修复两处跨平台测试夹具：Central 导出用例改用当前平台绝对路径，并确认失败分支确实调用模拟 runner；三个日志安全竞态用例兼容 Linux `/proc/self/fd` 固定目录路径，保留真实路径边界、竞态已执行及外部文件不被修改的断言。没有修改生产代理逻辑。
+- 修复后完整回归：111 个文件全部通过；2368 项中 2362 通过、6 项按条件跳过、0 失败。类型检查、生产构建和生产入口去测试代码校验通过；在原项目再次执行相同检查，更新本机 `dist` / `dist-electron`。
+- 实际 Linux Electron 通用全链使用 X11 隔离窗口通过：exitCode=0、bridge=true、本机模拟代理请求 HTTP 200，覆盖工具配置、直连/聚合选择、授权、模型目录、自动同步、撤销和恢复。JetBrains IDE 原生导入、TRAE / Central 客户端导入、套餐/额度三个专项分别通过，保存 12 / 20 / 19 张合成截图；验证失败保留、重复导入、身份切换与凭据脱敏。
+- 当前 Wayland 桌面可见窗口的启动、页面就绪与像素读取通过；另直接启动正式生产入口，空白隔离资料目录产生 `app.ready` 且无启动错误，同目录二次启动退出 0、没有重复初始化 Store。截图来自 Electron 内部位图，不能替代 KDE 合成器截图或全部焦点/托盘交互验收。
+- 通用 smoke 的隐藏窗口在原生 Wayland `capturePage()` 等待无返回，本次停止该隔离测试并使用 `--x11` 完成全链；生产可见窗口及专用 Wayland 显示探针均通过。该限制属于当前截图验证方式，不据此宣称生产窗口卡死，也未修改桌面或 Chromium 生产配置。
+- 所有流程使用合成账号、隔离数据库和本机模拟上游，没有导入用户真实凭据、写入真实客户端配置或发起云端生成。真实 TRAE / Central / JetBrains 授权、模型推理与实际 IDE 对流结束的接受仍需单独验收。旧反代记录缺少原生会话时需重新导入或连接账号；不会自动启动历史反代。
+- 本次证据位于 `/home/coco/Documents/Codex/2026-11-06/zu/work/`：`linux-repository-validation.log`、`linux-production-launch.json`、`linux-native-wayland`、`linux-native-general-x11`、`linux-native-ide`、`linux-native-client-import`、`linux-native-quota`。未安装、替换或生成 Linux 发行包。
+
 ## 2026-11-05 / 0.3.76 · 所有托管反代统一 TypeScript 网关
 
 - TRAE、JetBrains IDE / Air 与 Central 个人 AI 许可证通过主进程 TypeScript 适配器接入现有 Gateway；Codex / Grok / Copilot 保留原生主进程授权转发。生产入口不再导入或实例化 Docker/Python/Pi/独立 IDE 反代，不再监听 18080/18081；两个历史值仅供账号连接身份兼容，模型调用、目录与连接测试都走适配器。打包不再复制 Pi 扩展或 Python 资源，生产校验拒绝旧实现进入产物。

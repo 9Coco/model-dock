@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { join, resolve } from 'node:path';
 import { CentralApi, CentralApiError, parseCentralTransfer, type CentralCredentials } from '../src/main/central-api';
 import { CentralClientSessionReader } from '../src/main/central-client-session';
 import { CentralGatewayAdapter } from '../src/main/central-gateway-adapter';
@@ -73,12 +74,15 @@ describe('Central first-party native session and direct provider protocol', () =
     await expect(reading).rejects.toMatchObject({ code: 'cancelled' }); expect(signal?.aborted).toBe(true); expect(cancelled).toBe(true);
   });
   it('uses only the one-shot export command with a bounded private runner contract', async () => {
+    const home = resolve('synthetic-home'), executable = join(resolve('synthetic-bin'), process.platform === 'win32' ? 'central.exe' : 'central');
     const run = vi.fn(async () => ({ exitCode: 0, stdout: envelope(), stderr: '' }));
-    const reader = new CentralClientSessionReader({ homeDir: 'C:\\synthetic-home', resolveExecutable: async () => 'C:\\synthetic-bin\\central.exe', run });
+    const reader = new CentralClientSessionReader({ homeDir: home, resolveExecutable: async () => executable, run });
     expect(await reader.read()).toEqual(transfer);
-    expect(run.mock.calls[0]).toEqual(['C:\\synthetic-bin\\central.exe', ['login', 'export'], expect.objectContaining({ timeoutMs: 10000, maxOutputBytes: 65536 })]);
-    const error = new CentralClientSessionReader({ resolveExecutable: async () => 'C:\\synthetic-bin\\central.exe', run: async () => ({ exitCode: 1, stdout: 'SYNTHETIC_SECRET', stderr: 'SYNTHETIC_PRIVATE_PATH' }) });
+    expect(run.mock.calls[0]).toEqual([executable, ['login', 'export'], expect.objectContaining({ cwd: home, timeoutMs: 10000, maxOutputBytes: 65536 })]);
+    const failedRun = vi.fn(async () => ({ exitCode: 1, stdout: 'SYNTHETIC_SECRET', stderr: 'SYNTHETIC_PRIVATE_PATH' }));
+    const error = new CentralClientSessionReader({ resolveExecutable: async () => executable, run: failedRun });
     await expect(error.read()).rejects.not.toThrow(/SYNTHETIC/);
+    expect(failedRun).toHaveBeenCalledOnce();
   });
   it('refuses a legacy Central provider at the Gateway adapter instead of invoking old Pi/Central', async () => {
     const api = new CentralApi({ now: () => now }), adapter = new CentralGatewayAdapter({ isNativeProvider: () => false, credentials: () => credential }, api);

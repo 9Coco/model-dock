@@ -473,7 +473,7 @@ tests/          本地模拟上游、持久化、OAuth、配置合并测试
 scripts/        开发、构建和 Electron 原生渲染验证
 ```
 
-真实账号授权/推理与 Linux 原生运行需另行验收；自动化验证的结果见 `VALIDATION.md`。
+Linux 正式入口启动、Wayland 可见窗口及隔离模拟上游验证已通过；真实账号授权/云端推理仍需单独验收。具体范围与验证结果见 `VALIDATION.md`。
 
 
 ### 诊断日志
