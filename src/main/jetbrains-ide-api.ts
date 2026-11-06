@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { version } from '../../package.json';
 import type { QuotaWindow, SubscriptionUsage } from '../shared/auth-types';
 import { JetBrainsGrazieBridgeError, JetBrainsGrazieSignatures, prepareJetBrainsGrazieChat, createJetBrainsGrazieChatStream, collectJetBrainsGrazieChat } from './jetbrains-grazie-bridge';
+import { JetBrainsLicenseCatalogError, readJetBrainsIdeLicenseCatalog } from './jetbrains-license-catalog';
 
 /** Native personal-license API, independently of Central CLI. The wire contract
  * comes from the installed JetBrains AI Assistant 2026.2 public classes:
@@ -18,7 +19,7 @@ const REQUEST_LIMIT = 2 * 1024 * 1024;
 const DIRECTORY_TTL = 5 * 60_000;
 const CALLER = JSON.stringify({ name: 'modeldock', version });
 type JsonObject = Record<string, unknown>;
-export type JetBrainsIdeApiErrorCode = 'credentials' | 'authorization' | 'entitlement' | 'network' | 'response' | 'cancelled' | 'model' | 'request' | 'capability' | 'limit';
+export type JetBrainsIdeApiErrorCode = 'credentials' | 'authorization' | 'entitlement' | 'network' | 'response' | 'cancelled' | 'model' | 'request' | 'capability' | 'limit' | 'license-source';
 const messages: Record<JetBrainsIdeApiErrorCode, string> = {
   credentials: 'JetBrains 账号授权或许可证信息无效，请在原生客户端重新登录后重试。',
   authorization: 'JetBrains 账号授权已失效，请在原生客户端重新登录后重试。',
@@ -30,6 +31,7 @@ const messages: Record<JetBrainsIdeApiErrorCode, string> = {
   request: '此 JetBrains 连接需要有效的 Chat Completions 请求。',
   capability: '此 JetBrains 模型暂不支持所请求的参数或工具历史。请关闭扩展思考、严格工具模式，或新建会话后重试。',
   limit: 'JetBrains AI 请求或响应超出支持范围。',
+  'license-source': '此 JetBrains 登录方式暂未支持账号许可证目录，请从已支持的 IDE 登录来源导入。原有账号保持不变。',
 };
 export class JetBrainsIdeApiError extends Error {
   constructor(readonly code: JetBrainsIdeApiErrorCode) { super(messages[code]); this.name = 'JetBrainsIdeApiError'; }
@@ -46,8 +48,12 @@ export interface JetBrainsIdeModel {
   reasoning_efforts?: string[];
 }
 export interface JetBrainsIdeApiOptions { fetch?: typeof globalThis.fetch; now?: () => number }
+/** Main-process-only owned personal AI license, verified against its account. */
+export interface JetBrainsIdeLicense { id: string; plan: string; expiresAt?: string; productCode?: string; kind?: string; verifiedAt?: string }
 interface RouteModel { model: JetBrainsIdeModel; upstreamId: string; path: string; protocol: 'openai' | 'grazie'; requireToolSignatures: boolean }
 interface Directory { fetchedAt: number; models: Map<string, RouteModel> }
+interface LicenseDirectory { until: number; rows: JetBrainsIdeLicense[] }
+interface LicenseRead { controller: AbortController; promise: Promise<JetBrainsIdeLicense[]>; waiters: number; settled: boolean }
 const object = (value: unknown): JsonObject | undefined => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : undefined;
 const safeText = (value: unknown, max = 256): string | undefined => typeof value === 'string' && value.length > 0 && value.length <= max && !/[\x00-\x1f\x7f]/.test(value) ? value : undefined;
 const identifier = (value: unknown): string | undefined => { const text = safeText(value); return text && /^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$/.test(text) ? text : undefined; };
@@ -99,7 +105,60 @@ export class JetBrainsIdeApi {
   private readonly now: () => number;
   private readonly directories = new Map<string, Directory>();
   private readonly signatures = new JetBrainsGrazieSignatures();
+  private readonly licenseDirectories = new Map<string, LicenseDirectory>();
+  private readonly licenseReads = new Map<string, LicenseRead>();
   constructor(options: JetBrainsIdeApiOptions = {}) { this.fetcher = options.fetch ?? globalThis.fetch; this.now = options.now ?? Date.now; }
+
+  async licenses(input: { idToken?: string; accessToken?: string; tokenType?: 'jba-id-token' | 'jcp-global-access-token'; accountId: string; sourceLicenseId?: string }, signal?: AbortSignal): Promise<JetBrainsIdeLicense[]> {
+    if (signal?.aborted) throw failure('cancelled');
+    if (!identifier(input.accountId) || !identifier(input.sourceLicenseId)) throw failure('credentials');
+    if (input.tokenType !== undefined && input.tokenType !== 'jba-id-token' && input.tokenType !== 'jcp-global-access-token') throw failure('credentials');
+    // The inference-audience JCP token does not establish the owner of an
+    // arbitrary legacy userId. Its future SDK reader must provide a verified
+    // current-user binding or the dedicated user-management audience. Never
+    // send that token to a guessed endpoint or query another owner by label.
+    if (input.tokenType === 'jcp-global-access-token') throw failure('license-source');
+    if (!input.idToken || input.accessToken) throw failure('credentials');
+    const assertion = jwt(input.idToken, this.now(), 'hint');
+    const claims = object(JSON.parse(Buffer.from(assertion.token.split('.')[1], 'base64url').toString('utf8')));
+    if (claims?.user_id !== input.accountId) throw failure('credentials');
+    const key = digest(JSON.stringify([input.accountId, input.sourceLicenseId, input.tokenType, input.idToken ?? input.accessToken]));
+    const cached = this.licenseDirectories.get(key);
+    if (cached && cached.until > this.now()) return structuredClone(cached.rows);
+    let pending = this.licenseReads.get(key);
+    if (pending?.controller.signal.aborted) { this.licenseReads.delete(key); pending = undefined; }
+    if (!pending) {
+      const read: LicenseRead = { controller: new AbortController(), waiters: 0, settled: false, promise: Promise.resolve([]) };
+      this.licenseReads.set(key, read);
+      read.promise = (async () => {
+        const operation = this.operation(read.controller.signal, 30_000);
+        try {
+          // A parseable local JWT is not ownership proof. Authorize the exact
+          // selected license before querying the legacy owner-keyed catalog.
+          const source = await this.exchange({ idToken: input.idToken!, licenseId: input.sourceLicenseId! }, operation.signal);
+          const rows = await readJetBrainsIdeLicenseCatalog({ fetch: this.fetcher, accountId: input.accountId, version, now: this.now, signal: operation.signal });
+          if (operation.signal.aborted) throw failure('cancelled');
+          const verifiedAt = new Date(this.now()).toISOString();
+          const receipt = rows.map(row => ({ ...row, verifiedAt }));
+          this.licenseDirectories.delete(key);
+          while (this.licenseDirectories.size >= 16) this.licenseDirectories.delete(this.licenseDirectories.keys().next().value!);
+          this.licenseDirectories.set(key, { until: Math.min(this.now() + DIRECTORY_TTL, source.expiresAt ?? this.now() + DIRECTORY_TTL), rows: receipt });
+          return receipt;
+        } catch (error) { throw error instanceof JetBrainsLicenseCatalogError ? failure(error.code) : error instanceof JetBrainsIdeApiError ? error : failure(operation.signal.aborted ? 'cancelled' : 'response'); }
+        finally { read.settled = true; read.controller.abort(); operation.cleanup(); if (this.licenseReads.get(key) === read) this.licenseReads.delete(key); }
+      })();
+      pending = read;
+    }
+    const read = pending; read.waiters++;
+    try {
+      return structuredClone(await new Promise<JetBrainsIdeLicense[]>((resolve, reject) => {
+        const abort = () => { signal?.removeEventListener('abort', abort); reject(failure('cancelled')); };
+        signal?.addEventListener('abort', abort, { once: true });
+        read.promise.then(value => { signal?.removeEventListener('abort', abort); resolve(value); }, error => { signal?.removeEventListener('abort', abort); reject(error); });
+        if (signal?.aborted) abort();
+      }));
+    } finally { if (--read.waiters === 0 && !read.settled) read.controller.abort(); }
+  }
 
   async exchange(input: { idToken: string; licenseId: string }, signal?: AbortSignal): Promise<{ token: string; expiresAt?: number }> {
     // Native JbaIdToken checks only a nonblank identity ticket; its legacy

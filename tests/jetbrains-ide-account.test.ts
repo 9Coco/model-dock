@@ -262,7 +262,143 @@ describe('IDE 账号导入校验与凭据边界', () => {
   });
 });
 
+describe('同账号官方个人 AI 许可证目录批量导入', () => {
+  async function catalogFixture() {
+    const f = await setup(), source = importSource([['selected-source', f.a]]);
+    const rows = [
+      { id: f.a.licenseId, plan: 'AI Pro' }, { id: 'synthetic-ultimate-license', plan: 'AI Ultimate' },
+      ...[1, 2, 3].map(index => ({ id: `synthetic-free-license-${index}`, plan: 'AI Free' })),
+    ].map(row => ({ ...row, expiresAt: '2031-02-03T04:05:06Z' }));
+    const licenses = vi.fn(async () => structuredClone(rows));
+    f.api.exchange.mockImplementation(async value => ({ token: `PRIVATE_LICENSE_TOKEN_${rows.findIndex(row => row.id === value.licenseId)}`, expiresAt: ROOT_NOW + 300_000 }));
+    f.api.quota.mockImplementation(async token => usage(Number(token.split('_').at(-1)) * 10));
+    const manager = f.newManager({ ...f.api, licenses }, source);
+    return { ...f, source, rows, licenses, manager };
+  }
+  it('一次导入全部五个个人许可证，保持已有精确来源和模型绑定，三个Free独立且不合并额度', async () => {
+    const f = await catalogFixture(), first = await f.manager.import('selected-source'); references(f.store, first.providerId);
+    f.store.saveProvider({ ...f.store.getProvider(first.providerId)!, name: '用户指定的 Pro 来源', note: '保留备注' }); const before = state(f.store);
+    const result = await f.manager.importDefault(); expect(result.status).toBe('imported'); if (result.status !== 'imported') return;
+    expect(result.accounts).toHaveLength(5); expect(result.account.providerId).toBe(first.providerId); expect(result.account.providerName).toBe('用户指定的 Pro 来源');
+    expect(result.accounts!.map(account => account.plan)).toEqual(['AI Pro', 'AI Ultimate', 'AI Free', 'AI Free', 'AI Free']);
+    expect(new Set(result.accounts!.map(account => account.providerId)).size).toBe(5);
+    expect(new Set(result.accounts!.map(account => account.license!.label)).size).toBe(5);
+    expect(result.accounts![1].license!.label).toContain('••••' + f.rows[1].id.slice(-4));
+    expect(result.accounts!.map(account => account.usage.windows[0].remaining)).toEqual([100, 90, 80, 70, 60]);
+    expect(f.store.listModels()).toEqual(before.models); expect(f.store.listBindings()).toEqual(before.bindings);
+    const publicView = JSON.stringify(result); for (const row of f.rows) expect(publicView).not.toContain(row.id);
+    expect(publicView).not.toMatch(/PRIVATE|idToken|accessToken|sourceLicenseId|nativeIde/); expect(f.api.chat).not.toHaveBeenCalled();
+    const restored = f.newManager({ ...f.api, licenses: f.licenses }, f.source);
+    expect(restored.decorate(relayAccountView(f.store, f.store.getProvider(result.accounts![1].providerId)!)).plan).toBe('AI Ultimate');
+    const repeated = await f.manager.importDefault(); expect(repeated.status).toBe('imported');
+    if (repeated.status === 'imported') expect(repeated.accounts!.map(account => account.providerId)).toEqual(result.accounts!.map(account => account.providerId));
+  });
+  it('同账号跨IDE选择不同license也只取一个已确认账号来源，无需弹选择框', async () => {
+    const f = await catalogFixture(), source = importSource([['rider-source', f.a], ['idea-source', { ...f.a, product: 'intellij-idea', sourceIdentity: 'fixture-idea-selected-other-license', licenseId: f.rows[1].id }]]);
+    const manager = f.newManager({ ...f.api, licenses: f.licenses }, source), result = await manager.importDefault();
+    expect(result.status).toBe('imported'); if (result.status === 'imported') expect(result.accounts).toHaveLength(5);
+    expect(f.licenses).toHaveBeenCalledTimes(1); expect(source.readCredentials.mock.calls.every(call => call[0] === 'idea-source')).toBe(true);
+  });
+  it('明确选择复用原始opaque票据，不重扫改变票据或触及另一账号', async () => {
+    const f = await catalogFixture(), source = importSource([['account-a', f.a], ['account-b', f.b]]), manager = f.newManager({ ...f.api, licenses: f.licenses }, source);
+    const preview = await manager.importDefault(); expect(preview.status).toBe('selection-required'); expect(f.licenses).not.toHaveBeenCalled();
+    source.listCandidates.mockRejectedValue(new Error('A source rescan would invalidate opaque tickets'));
+    const result = await manager.importDefault('account-a'); expect(result.status).toBe('imported');
+    expect(source.listCandidates).toHaveBeenCalledTimes(1); expect(source.readCredentials.mock.calls.every(call => call[0] === 'account-a')).toBe(true);
+    expect(f.licenses).toHaveBeenCalledWith(expect.objectContaining({ accountId: f.a.accountId, idToken: f.a.idToken }), expect.any(AbortSignal));
+    await expect(manager.importDefault('invented-choice')).rejects.toThrow('已过期');
+  });
+  it('部分许可交换失败只报告该许可，成功来源独立保留而没有推理重试', async () => {
+    const f = await catalogFixture(), original = f.api.exchange.getMockImplementation()!;
+    f.api.exchange.mockImplementation(async (input, signal) => { if (input.licenseId === f.rows[1].id) throw new Error(PRIVATE_ERROR); return original(input, signal); });
+    const result = await f.manager.importDefault(); expect(result.status).toBe('imported'); if (result.status !== 'imported') return;
+    expect(result.accounts).toHaveLength(4); expect(result.failures).toHaveLength(1); expect(result.failures![0].label).toContain('AI Ultimate');
+    expect(JSON.stringify(result)).not.toContain(PRIVATE_ERROR); expect(f.api.exchange).toHaveBeenCalledTimes(5); expect(f.api.quota).toHaveBeenCalledTimes(4); expect(f.api.chat).not.toHaveBeenCalled();
+  });
+  it('目录等待期间本机来源切换则拒绝全部派生许可证，不使用迟到目录发起交换', async () => {
+    const f = await catalogFixture(), held = deferred<typeof f.rows>(), before = state(f.store); f.licenses.mockReturnValueOnce(held.promise);
+    const pending = f.manager.importDefault(); await vi.waitFor(() => expect(f.licenses).toHaveBeenCalledTimes(1));
+    f.source.readCredentials.mockResolvedValue(f.b); held.resolve(f.rows);
+    await expect(pending).rejects.toThrow('来源已切换'); expect(f.api.exchange).not.toHaveBeenCalled(); expect(state(f.store)).toEqual(before);
+  });
+  it('关闭时取消官方目录读取，忽略非协作端口迟到结果且不写入任何来源', async () => {
+    const f = await catalogFixture(), held = deferred<typeof f.rows>(), before = state(f.store); f.licenses.mockReturnValueOnce(held.promise);
+    const pending = f.manager.importDefault().catch(error => error as Error); await vi.waitFor(() => expect(f.licenses).toHaveBeenCalledTimes(1));
+    await f.manager.dispose(); expect(String(await pending)).toMatch(/取消|已停止/); held.resolve(f.rows); await new Promise(resolve => setImmediate(resolve));
+    expect(f.api.exchange).not.toHaveBeenCalled(); expect(state(f.store)).toEqual(before);
+  });
+  it('空目录、目录超限及所选来源license缺席不使用另一许可、不交换也不写入', async () => {
+    for (const mode of ['empty', 'oversize', 'missing-source'] as const) {
+      const f = await catalogFixture(), before = state(f.store);
+      f.licenses.mockResolvedValue(mode === 'empty' ? [] : mode === 'oversize' ? Array.from({ length: 129 }, (_, index) => ({ ...f.rows[0], id: 'oversize-' + index })) : [f.rows[1]]);
+      await expect(f.manager.importDefault()).rejects.toThrow(); expect(state(f.store)).toEqual(before); expect(f.api.exchange).not.toHaveBeenCalled();
+    }
+  });
+  it('刷新为已有未知套餐补精确官方名称，失败保留旧核验日期，成功目录缺席则清除名称', async () => {
+    const f = await catalogFixture(), legacy = f.newManager(f.api, f.source), imported = await legacy.import('selected-source');
+    expect(imported.plan).toBeUndefined(); const before = state(f.store);
+    const refreshed = await f.manager.refreshUsage(imported.providerId); expect(refreshed.plan).toBe('AI Pro'); expect(refreshed.license?.verifiedAt).toBe(new Date(ROOT_NOW).toISOString());
+    expect(f.store.listProviders()).toEqual(before.providers); expect(f.store.listModels()).toEqual(before.models); expect(f.store.listBindings()).toEqual(before.bindings);
+    f.advance(1000); f.licenses.mockRejectedValueOnce(new Error(PRIVATE_ERROR)); const cached = await f.manager.refreshUsage(imported.providerId);
+    expect(cached.plan).toBe('AI Pro'); expect(cached.license?.verifiedAt).toBe(refreshed.license?.verifiedAt);
+    f.licenses.mockResolvedValueOnce([f.rows[1]]); const removed = await f.manager.refreshUsage(imported.providerId);
+    expect(removed.plan).toBeUndefined(); expect(removed.license).toBeUndefined(); expect(f.store.listProviders()).toEqual(before.providers);
+  });
+  it('重新导入产生新修订后，迟到的旧套餐目录不会覆盖新套餐或额度', async () => {
+    const f = await catalogFixture(), imported = await f.manager.import('selected-source'), held = deferred<typeof f.rows>();
+    f.licenses.mockReturnValueOnce(held.promise);
+    const pending = f.manager.refreshUsage(imported.providerId).catch(error => error as Error); await vi.waitFor(() => expect(f.licenses).toHaveBeenCalledTimes(2));
+    f.rows[0].plan = 'AI Pro 官方新名称'; const refreshed = await f.manager.import('selected-source'); expect(refreshed.providerId).toBe(imported.providerId);
+    held.resolve([{ ...f.rows[0], plan: '迟到旧名称' }]); expect(String(await pending)).toMatch(/取消|已变更/);
+    expect(f.manager.decorate(relayAccountView(f.store, f.store.getProvider(imported.providerId)!)).plan).toBe('AI Pro 官方新名称');
+  });
+  it('JCP续期始终核对本机source license，而派生交换仍使用各自target license', async () => {
+    const f = await catalogFixture(), { idToken: _private, ...identity } = f.a;
+    const initial = { ...identity, tokenType: 'jcp-global-access-token', accessToken: 'PRIVATE_SDK_BASE_ACCESS', expiresAt: ROOT_NOW + 3600_000 } as unknown as JetBrainsIdeCredentials;
+    const renewCredentials = vi.fn(async () => initial), source = { ...f.source, readCredentials: vi.fn(async () => initial), renewCredentials };
+    const exchangeJcp = vi.fn(async (input: { accessToken: string; licenseId: string }) => ({ token: `PRIVATE_LICENSE_TOKEN_${f.rows.findIndex(row => row.id === input.licenseId)}`, expiresAt: ROOT_NOW + 300_000 }));
+    const manager = f.newManager({ ...f.api, licenses: f.licenses, exchangeJcp }, source), result = await manager.importDefault();
+    expect(result.status).toBe('imported'); if (result.status !== 'imported') return;
+    const ultimate = result.accounts!.find(account => account.plan === 'AI Ultimate')!; f.advance(300_001);
+    await manager.credentials(ultimate.providerId);
+    expect(renewCredentials).toHaveBeenCalledWith({ product: f.a.product, accountId: f.a.accountId, licenseId: f.a.licenseId, sourceIdentity: f.a.sourceIdentity });
+    expect(exchangeJcp.mock.calls.at(-1)![0].licenseId).toBe(f.rows[1].id);
+    const stored = f.store.getManagedState<{ nativeIde: { sourceLicenseId: string; licenseId: string } }>(`auth-metadata:${ultimate.providerId}`, { nativeIde: { sourceLicenseId: '', licenseId: '' } });
+    expect(stored.nativeIde).toMatchObject({ sourceLicenseId: f.a.licenseId, licenseId: f.rows[1].id });
+  });
+});
+
 describe('IDE 导入保留已有连接与并发编辑', () => {
+  it('同一账号不同许可证分别保存，重导入只更新精确许可证并保留另一来源模型与绑定', async () => {
+    const f = await setup(), secondLicense = { ...f.a, licenseId: 'synthetic-second-personal-license', sourceIdentity: 'fixture-second-license' };
+    const source = importSource([['license-a', f.a], ['license-b', secondLicense]]), manager = f.newManager(f.api, source);
+    f.api.exchange.mockImplementation(async value => ({ token: value.licenseId === secondLicense.licenseId ? GRAZIE_B : GRAZIE_A, expiresAt: ROOT_NOW + 300_000 }));
+    const first = await manager.import('license-a'); references(f.store, first.providerId); const before = state(f.store);
+    const second = await manager.import('license-b'); expect(second.providerId).not.toBe(first.providerId);
+    expect(second.providerName).not.toBe(first.providerName); expect(second.usage).toEqual(usage(45));
+    expect(f.account(first.providerId)).toMatchObject({ accountId: f.a.accountId, usage: usage(10) });
+    expect(f.store.getProvider(first.providerId)).toEqual(before.providers.find(item => item.id === first.providerId));
+    expect(f.store.getManagedState(`auth-metadata:${first.providerId}`, null)).toEqual(before.metadata.find(([id]) => id === first.providerId)![1]);
+    const again = await manager.import('license-b'); expect(again.providerId).toBe(second.providerId);
+    expect(f.store.listModels()).toEqual(before.models); expect(f.store.listBindings()).toEqual(before.bindings);
+    const nativeIds = f.store.listProviders().filter(item => manager.isNativeProvider(item.id)).map(item => item.id);
+    expect(nativeIds).toEqual([first.providerId, second.providerId]);
+  });
+  it('唯一空订阅来源可承接首个导入，存在任一已导入账号后不再把空来源改绑', async () => {
+    const f = await setup(), empty = f.store.saveProvider({ name: '空的 IDE 来源', kind: 'openai-compatible', presetId: 'jetbrains-central', baseUrl: JETBRAINS_RELAY_BASE_URL, enabled: true });
+    const first = await f.manager.import('ticket-a'); expect(first.providerId).toBe(empty.id);
+    const spare = f.store.saveProvider({ name: '用户留待配置的空来源', kind: 'openai-compatible', presetId: 'jetbrains-central', baseUrl: JETBRAINS_RELAY_BASE_URL, enabled: false });
+    const second = await f.manager.import('ticket-b'); expect(second.providerId).not.toBe(first.providerId); expect(second.providerId).not.toBe(spare.id);
+    expect(f.store.getProvider(spare.id)).toEqual(spare); expect(f.store.getSecret(spare.id)).toBeUndefined();
+  });
+  it('已连接的 Central 来源即使用同一本机 Key 也不会被 IDE 导入覆盖', async () => {
+    const f = await setup(), central = f.store.saveProvider({ name: '既有 Central', kind: 'openai-compatible', presetId: 'jetbrains-central', baseUrl: JETBRAINS_RELAY_BASE_URL, apiKey: LOCAL_KEY, enabled: true });
+    f.store.setManagedState(`auth-metadata:${central.id}`, { clientImport: { client: 'jetbrains-central' }, nativeCentral: { fixture: true } });
+    references(f.store, central.id); const before = state(f.store), imported = await f.manager.import('ticket-a');
+    expect(imported.providerId).not.toBe(central.id); expect(f.store.getProvider(central.id)).toEqual(central);
+    expect(f.store.getManagedState(`auth-metadata:${central.id}`, null)).toEqual(before.metadata.find(([id]) => id === central.id)![1]);
+    expect(f.store.listModels()).toEqual(before.models); expect(f.store.listBindings()).toEqual(before.bindings);
+  });
   it('同源再次导入保留供应商 ID、名称、备注、Key、模型和工具选择', async () => {
     const { manager, store, advance } = await setup();
     const first = await manager.import('ticket-a'), provider = store.getProvider(first.providerId)!;
@@ -287,7 +423,7 @@ describe('IDE 导入保留已有连接与并发编辑', () => {
 
   it('云端确认期间用户修改连接时 CAS 拒绝导入，保留用户的新值', async () => {
     const { manager, api, store } = await setup();
-    const existing = store.saveProvider({ name: '原有本机连接', kind: 'openai-compatible', presetId: 'jetbrains-central', baseUrl: JETBRAINS_RELAY_BASE_URL, apiKey: LOCAL_KEY, enabled: true }); references(store, existing.id);
+    const imported = await manager.import('ticket-a'), existing = store.getProvider(imported.providerId)!; references(store, existing.id); api.exchange.mockClear();
     const exchange = deferred<{ token: string; expiresAt: number }>(); api.exchange.mockImplementationOnce(() => exchange.promise);
     const pending = manager.import('ticket-a'); await vi.waitFor(() => expect(api.exchange).toHaveBeenCalledTimes(1));
     store.saveProvider({ ...existing, name: '用户刚修改的名称', note: '用户刚修改的备注', apiKey: OTHER_KEY }); const edited = state(store);
@@ -311,15 +447,16 @@ describe('IDE 导入保留已有连接与并发编辑', () => {
 });
 
 describe('IDE 授权会话缓存、额度修订与原生 adapter', () => {
-  it('旧账号额度晚返回时不覆盖新导入账号的初始额度', async () => {
+  it('另一账号导入成为独立来源，旧账号额度晚返回只更新原账号', async () => {
     const { manager, api, store, account } = await setup();
     const first = await manager.import('ticket-a'), delayed = deferred<SubscriptionUsage>();
     api.quota.mockImplementationOnce(() => delayed.promise);
     const pending = manager.refreshUsage(first.providerId); await vi.waitFor(() => expect(api.quota).toHaveBeenCalledTimes(2));
-    const replacement = await manager.import('ticket-b'); expect(replacement.providerId).toBe(first.providerId); expect(replacement.accountId).toBe('fixture-b'); expect(replacement.usage).toEqual(usage(45));
-    delayed.resolve(usage(90)); await expect(pending).rejects.toThrow(/查询期间已变更|取消/);
-    expect(account(first.providerId)).toMatchObject({ accountId: 'fixture-b', usage: usage(45) });
-    expect(store.getManagedState(`auth-usage:${first.providerId}`, null)).toBeNull();
+    const replacement = await manager.import('ticket-b'); expect(replacement.providerId).not.toBe(first.providerId); expect(replacement.accountId).toBe('fixture-b'); expect(replacement.usage).toEqual(usage(45));
+    delayed.resolve(usage(90)); await expect(pending).resolves.toMatchObject({ accountId: 'fixture-a', usage: usage(90) });
+    expect(account(first.providerId)).toMatchObject({ accountId: 'fixture-a', usage: usage(90) });
+    expect(account(replacement.providerId)).toMatchObject({ accountId: 'fixture-b', usage: usage(45) });
+    expect(store.getManagedState(`auth-usage:${replacement.providerId}`, null)).toBeNull();
   });
 
   it('缓存 Grazie 会话；即将到期时并发目录和额度只交换一次，并使用新授权', async () => {
@@ -437,7 +574,7 @@ describe('IDE shared authorization cancellation and lifecycle', () => {
   it.each(['quota', 'models'] as const)('aborts pending import %s and preserves the previous account when the provider is removed', async stage => {
     const f = await setup(), first = await f.manager.import('ticket-a'), before = state(f.store), held = deferred<SubscriptionUsage | { data: { id: string; object: 'model' }[] }>();
     if (stage === 'quota') f.api.quota.mockReturnValueOnce(held.promise as Promise<SubscriptionUsage>); else f.api.models.mockReturnValueOnce(held.promise as Promise<{ data: { id: string; object: 'model' }[] }>);
-    const pending = f.manager.import('ticket-b').catch(error => error as Error); await vi.waitFor(() => expect(f.api[stage]).toHaveBeenCalledTimes(2)); const upstream = f.api[stage].mock.calls[1][1]!;
+    const pending = f.manager.import('ticket-a').catch(error => error as Error); await vi.waitFor(() => expect(f.api[stage]).toHaveBeenCalledTimes(2)); const upstream = f.api[stage].mock.calls[1][1]!;
     await f.manager.providerRemoved(first.providerId); expect(String(await pending)).toContain('取消'); expect(upstream.aborted).toBe(true);
     held.resolve(stage === 'quota' ? usage(99) : { data: [] }); await new Promise(resolve => setImmediate(resolve)); expect(state(f.store)).toEqual(before);
   });

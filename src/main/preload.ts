@@ -47,7 +47,7 @@ const api: ModelDockApi = {
   beginCopilotLogin: () => call('beginCopilotLogin'), copilotAuthProgress: () => call('copilotAuthProgress'),
   cancelCopilotLogin: () => call('cancelCopilotLogin'), copilotLogoutAccount: id => call('copilotLogoutAccount', id),
   relayClientImportCandidates: kind => relayImportCall('relayClientImportCandidates', kind), importRelayClientAccount: (kind, id) => relayImportCall('importRelayClientAccount', kind, id),
-  beginJetBrainsIdeImport: () => relayImportCall('beginJetBrainsIdeImport'),
+  beginJetBrainsIdeImport: (candidateId?: string) => relayImportCall('beginJetBrainsIdeImport', ...(candidateId === undefined ? [] : [candidateId])),
   jetBrainsIdeImportCandidates: () => relayImportCall('jetBrainsIdeImportCandidates'), importJetBrainsIdeAccount: id => relayImportCall('importJetBrainsIdeAccount', id),
   openJetBrainsAccountHelp: topic => call('openJetBrainsAccountHelp', topic),
   copilotImportCandidates: () => call('copilotImportCandidates'), importCopilotClientAccount: id => call('importCopilotClientAccount', id),

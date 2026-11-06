@@ -23,8 +23,16 @@ const MODEL_ID = 'qa-native-ide-profile';
 const MODE_KEY = 'qa-jetbrains-ide-mode';
 const OBSERVED_KEY = 'qa-jetbrains-ide-observed';
 const LAST_CHAT_MODEL_KEY = 'qa-jetbrains-ide-last-chat-model';
-type FixtureMode = 'empty' | 'expired' | 'failure' | 'ready' | 'cross-ide' | 'multiple' | 'slow';
-type Observed = Record<'list' | 'read' | 'exchange' | 'quota' | 'models' | 'chat', number>;
+type FixtureMode = 'empty' | 'expired' | 'failure' | 'ready' | 'cross-ide' | 'multiple' | 'slow' | 'all-licenses' | 'partial-licenses';
+type Observed = Record<'list' | 'read' | 'licenses' | 'exchange' | 'quota' | 'models' | 'chat', number>;
+const zeroObserved = (): Observed => ({ list: 0, read: 0, licenses: 0, exchange: 0, quota: 0, models: 0, chat: 0 });
+const OWNED_LICENSES = [
+  { id: 'synthetic-native-ide-license', plan: 'JetBrains AI Pro', expiresAt: '2027-09-30', remaining: 625, total: 1000 },
+  { id: 'synthetic-native-ultimate-UL22', plan: 'JetBrains AI Ultimate', expiresAt: '2027-08-31', remaining: 1435, total: 3500 },
+  { id: 'synthetic-native-free-FR31', plan: 'JetBrains AI Free', expiresAt: '2027-05-31', remaining: 91, total: 100 },
+  { id: 'synthetic-native-free-FR32', plan: 'JetBrains AI Free', expiresAt: '2027-06-30', remaining: 82, total: 100 },
+  { id: 'synthetic-native-free-FR33', plan: 'JetBrains AI Free', expiresAt: '2027-07-31', remaining: 73, total: 100 },
+];
 
 /** Synthetic main-process ports only: never reads IDE files, a keychain, or an
  * installed Central client, and never makes an upstream network request. */
@@ -34,9 +42,10 @@ export function createJetBrainsIdeFixture(store: Store): { reader: Pick<JetBrain
   const sourceTokenExpHint = Date.now() + 60 * 60_000;
   const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
   const idToken = `${encode({ alg: 'RS256', typ: 'JWT' })}.${encode({ user_id: ACCOUNT_ID, marker: 'PRIVATE_JETBRAINS_IDE_JBA_TOKEN', exp: Math.floor(sourceTokenExpHint / 1000) })}.c3ludGhldGljLXNpZ25hdHVyZQ`;
+  const otherIdToken = `${encode({ alg: 'RS256', typ: 'JWT' })}.${encode({ user_id: ACCOUNT_ID + '-other', marker: 'PRIVATE_JETBRAINS_IDE_OTHER_JBA_TOKEN', exp: Math.floor(sourceTokenExpHint / 1000) })}.c3ludGhldGljLXNpZ25hdHVyZQ`;
   const credentials: JetBrainsIdeCredentials = { tokenType: 'jba-id-token', authorization: 'unverified', idToken, accountId: ACCOUNT_ID, accountLabel: ACCOUNT_LABEL, email: 'synthetic-ide@example.test', licenseId: 'synthetic-native-ide-license', product: 'rider', sourceIdentity: 'ad'.repeat(32), sourceTokenExpHint };
   const alternate: JetBrainsIdeCredentials = { ...credentials, product: 'intellij-idea', sourceIdentity: 'be'.repeat(32) };
-  const otherLicense: JetBrainsIdeCredentials = { ...credentials, licenseId: 'synthetic-other-native-ide-license', product: 'pycharm', sourceIdentity: 'cf'.repeat(32) };
+  const otherLicense: JetBrainsIdeCredentials = { ...credentials, idToken: otherIdToken, accountId: ACCOUNT_ID + '-other', accountLabel: 'PyCharm 演示账号', email: 'synthetic-other-ide@example.test', licenseId: 'synthetic-other-native-ide-license', product: 'pycharm', sourceIdentity: 'cf'.repeat(32) };
   const mode = () => store.getManagedState<FixtureMode>(MODE_KEY, 'empty');
   function candidates(): JetBrainsIdeImportCandidate[] {
     if (mode() === 'empty') return [];
@@ -44,14 +53,15 @@ export function createJetBrainsIdeFixture(store: Store): { reader: Pick<JetBrain
       accountLicenseIdentity: createHash('sha256').update(JSON.stringify([value.accountId, value.licenseId])).digest('hex'), accountId: value.accountId, accountLabel: value.accountLabel, sourceTokenExpHint });
     const current = candidate(CANDIDATE_ID, credentials, 'Rider 2026.2');
     if (mode() === 'cross-ide') return [candidate(SECOND_CANDIDATE_ID, alternate, 'IntelliJ IDEA 2026.2 · 同一许可证'), current];
-    if (mode() === 'multiple') return [current, candidate(OTHER_LICENSE_CANDIDATE_ID, otherLicense, 'PyCharm 2026.2 · 另一许可证')];
+    if (mode() === 'multiple') return [current, candidate(OTHER_LICENSE_CANDIDATE_ID, otherLicense, 'PyCharm 2026.2 · 另一账号')];
     return [current];
   }
   function observe(key: keyof Observed): void {
-    const value = store.getManagedState<Observed>(OBSERVED_KEY, { list: 0, read: 0, exchange: 0, quota: 0, models: 0, chat: 0 });
+    const value = store.getManagedState<Observed>(OBSERVED_KEY, zeroObserved());
     store.setManagedState(OBSERVED_KEY, { ...value, [key]: value[key] + 1 });
   }
-  function accept(token: string): void { if (token !== GRAZIE_TOKEN || mode() === 'failure') throw new Error(PRIVATE_ERROR); }
+  const tokens = new Map<string, string>();
+  function accept(token: string): string { const license = tokens.get(token); if (!license || mode() === 'failure') throw new Error(PRIVATE_ERROR); return license; }
   return {
     reader: {
       async listCandidates() {
@@ -65,17 +75,24 @@ export function createJetBrainsIdeFixture(store: Store): { reader: Pick<JetBrain
       },
     },
     api: {
+      async licenses(auth) {
+        observe('licenses');
+        if (mode() === 'failure' || ![ACCOUNT_ID, otherLicense.accountId].includes(auth.accountId) || auth.idToken !== (auth.accountId === ACCOUNT_ID ? idToken : otherIdToken)) throw new Error(PRIVATE_ERROR);
+        if (auth.accountId === otherLicense.accountId) return [{ id: otherLicense.licenseId, plan: 'JetBrains AI Free', expiresAt: '2027-04-30' }];
+        return (['all-licenses', 'partial-licenses'].includes(mode()) ? OWNED_LICENSES : OWNED_LICENSES.slice(0, 1)).map(({ id, plan, expiresAt }) => ({ id, plan, expiresAt }));
+      },
       async exchange(value) {
         if (mode() === 'slow') await new Promise(resolve => setTimeout(resolve, 400));
         // `expired` is an authoritative server refusal, never a local verdict
         // based on the cached JBA identity ticket's exp claim.
         if (mode() === 'expired') { observe('exchange'); throw new JetBrainsIdeApiError('authorization'); }
-        observe('exchange'); if (mode() === 'failure' || value.idToken !== idToken || ![credentials.licenseId, otherLicense.licenseId].includes(value.licenseId)) throw new Error(PRIVATE_ERROR);
-        return { token: GRAZIE_TOKEN, expiresAt: Date.now() + 5 * 60_000 };
+        observe('exchange'); if (mode() === 'failure' || ![idToken, otherIdToken].includes(value.idToken) || ![...OWNED_LICENSES.map(license => license.id), otherLicense.licenseId].includes(value.licenseId) || mode() === 'partial-licenses' && value.licenseId === OWNED_LICENSES[4].id) throw new Error(PRIVATE_ERROR);
+        const token = GRAZIE_TOKEN + ':' + value.licenseId; tokens.set(token, value.licenseId);
+        return { token, expiresAt: Date.now() + 5 * 60_000 };
       },
       async quota(token): Promise<SubscriptionUsage> {
-        observe('quota'); accept(token);
-        const wideAmount = store.getManagedState<boolean>('qa-unified-auth-layout', false), remaining = wideAmount ? 3_074_611.8 : 625, total = wideAmount ? 3_500_000 : 1000;
+        observe('quota'); const id = accept(token), license = OWNED_LICENSES.find(value => value.id === id);
+        const wideAmount = store.getManagedState<boolean>('qa-unified-auth-layout', false), remaining = wideAmount ? 3_074_611.8 : license?.remaining ?? 44, total = wideAmount ? 3_500_000 : license?.total ?? 100;
         return { status: 'ready', queriedAt: new Date().toISOString(), windows: [{ id: 'credits', label: 'JetBrains AI Credits', remaining, total, unit: 'AI Credits', remainingPercent: remaining / total * 100, usedPercent: (total - remaining) / total * 100 }], message: '已查询此 IDE 账号的官方 AI Credits（合成演示）。' };
       },
       async models(token) { observe('models'); accept(token); return { data: [{ id: MODEL_ID, object: 'model', name: 'IDE 原生演示模型', context_length: 64000 }, { id: 'qa-claude-profile', object: 'model', name: 'Claude · 原生目录演示', context_length: 200000, tools: true, vision: true }, { id: 'qa-gemini-profile', object: 'model', name: 'Gemini · 原生目录演示', context_length: 1000000, tools: true, vision: true }] }; },
@@ -104,7 +121,7 @@ export async function verifyJetBrainsIdeImport(window: BrowserWindow, store: Sto
   const pause = (ms: number) => new Promise<void>(done => setTimeout(done, ms));
   const screenshots: string[] = [], stages: { mode: string; providerCount: number }[] = [];
   const originalTheme = await evaluate<{ theme?: string; colorScheme: string }>('({theme:document.documentElement.dataset.theme,colorScheme:document.documentElement.style.colorScheme})');
-  const observed = () => store.getManagedState<Observed>(OBSERVED_KEY, { list: 0, read: 0, exchange: 0, quota: 0, models: 0, chat: 0 });
+  const observed = () => store.getManagedState<Observed>(OBSERVED_KEY, zeroObserved());
   const configuration = () => ({ providers: store.listProviders(), models: store.listModels(), bindings: store.listBindings(), secrets: store.listProviders().map(provider => [provider.id, store.getSecret(provider.id)]) });
   const persistentState = () => ({ ...configuration(), metadata: store.listProviders().map(provider => [provider.id, store.getManagedState(`auth-metadata:${provider.id}`, null)]) });
   async function waitFor(source: string, label: string): Promise<void> {
@@ -125,6 +142,8 @@ export async function verifyJetBrainsIdeImport(window: BrowserWindow, store: Sto
       const metadata = store.getManagedState<{ nativeIde?: { idToken: string } } | null>(`auth-metadata:${provider.id}`, null);
       if (metadata?.nativeIde?.idToken) assert.equal(payload.includes(metadata.nativeIde.idToken), false, 'Raw JBA token stays inside encrypted main-process metadata');
     }
+    for (const license of OWNED_LICENSES) assert.equal(payload.includes(license.id), false, 'Raw license identifiers stay inside main-process metadata');
+    assert.equal(payload.includes('synthetic-other-native-ide-license'), false);
     assert.equal(payload.includes(GRAZIE_TOKEN), false);
   }
   async function capture(name: string, keepToasts = false): Promise<void> {
@@ -157,7 +176,7 @@ export async function verifyJetBrainsIdeImport(window: BrowserWindow, store: Sto
     return before;
   }
   async function choose(id = CANDIDATE_ID): Promise<void> {
-    await waitFor(`document.querySelector(${JSON.stringify(scope)}+' [data-field="relay-import-candidate"]')?.options.length===2`, 'different licenses require a selection');
+    await waitFor(`document.querySelector(${JSON.stringify(scope)}+' [data-field="relay-import-candidate"]')?.options.length===2`, 'different accounts require a source selection');
     await evaluate(`(()=>{const select=document.querySelector(${JSON.stringify(scope)}+' [data-field="relay-import-candidate"]');select.value=${JSON.stringify(id)};select.dispatchEvent(new Event('change',{bubbles:true}))})()`);
   }
   async function importedAccount(): Promise<AuthAccount> {
@@ -251,19 +270,57 @@ export async function verifyJetBrainsIdeImport(window: BrowserWindow, store: Sto
     assert.equal(await evaluate<boolean>(`!!document.querySelector('[role="dialog"]')`), false, 'Same account and license across IDEs do not require a choice');
     const crossMetadata = store.getManagedState<{ nativeIde: JetBrainsIdeCredentials }>(`auth-metadata:${provider.id}`, { nativeIde: {} as JetBrainsIdeCredentials });
     assert.equal(crossMetadata.nativeIde.product, 'rider', 'The existing native source is preferred within one account/license identity'); assert.deepEqual(configuration(), crossBefore); await capture('cross-ide-same-license-direct');
+    const beforeAll = configuration(), allBeforeCalls = observed(); await direct('all-licenses');
+    assert.equal(await evaluate<boolean>(`!!document.querySelector('[role="dialog"]')`), false, 'All official personal licenses of one account import without a choice dialog');
+    const ownedAccounts = (await evaluate<AuthAccount[]>('window.modelDock.authAccounts()')).filter(value => value.clientImport?.client === 'jetbrains-ide' && value.accountId === ACCOUNT_ID);
+    assert.equal(ownedAccounts.length, 5); assert.equal(new Set(ownedAccounts.map(value => value.providerId)).size, 5);
+    assert.deepEqual(ownedAccounts.map(value => value.plan).sort(), OWNED_LICENSES.map(value => value.plan).sort());
+    assert.equal(new Set(ownedAccounts.map(value => value.license?.label)).size, 5, 'Three Free licenses have distinct masked identities');
+    assert.deepEqual(ownedAccounts.map(value => value.license?.expiresAt).sort(), OWNED_LICENSES.map(value => value.expiresAt).sort());
+    for (const value of ownedAccounts) {
+      const native = store.getManagedState<{ nativeIde: JetBrainsIdeCredentials }>(`auth-metadata:${value.providerId}`, { nativeIde: {} as JetBrainsIdeCredentials });
+      const license = OWNED_LICENSES.find(item => item.id === native.nativeIde.licenseId); assert.ok(license);
+      assert.deepEqual(value.usage.windows.map(window => [window.remaining, window.total]), [[license.remaining, license.total]], 'Each license exposes only its own official quota');
+      await waitFor(`!!document.querySelector('[data-auth-account="${value.providerId}"] [data-account-license]')`, 'Every imported license has a distinct compact row');
+    }
+    assert.equal(observed().licenses, allBeforeCalls.licenses + 1, 'One import action reads the catalog once');
+    assert.equal(observed().exchange, allBeforeCalls.exchange + 5);
+    assert.deepEqual(store.getProvider(provider.id), beforeAll.providers.find(value => value.id === provider.id));
+    assert.deepEqual(store.getSecret(provider.id), beforeAll.secrets.find(([id]) => id === provider.id)?.[1]);
+    assert.deepEqual(store.listModels(), beforeAll.models); assert.deepEqual(store.listBindings(), beforeAll.bindings);
+    const allConfiguration = configuration(); await direct('all-licenses');
+    assert.deepEqual(configuration(), allConfiguration, 'Synchronizing all licenses twice preserves every provider ID, custom name, model and tool binding');
+    for (const [theme, width] of [['dark', 980], ['light', 980], ['dark', 1920], ['light', 1920]] as const) {
+      window.setSize(width, width === 1920 ? 1000 : 800); await evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)};document.documentElement.style.colorScheme=${JSON.stringify(theme)};document.querySelector('[data-auth-kind="jetbrains-central"]').scrollIntoView({block:'start'})`);
+      await capture(`all-five-licenses-${theme}-${width}`);
+      assert.equal(await evaluate<boolean>(`[...document.querySelectorAll('[data-auth-kind="jetbrains-central"] [data-account-plan]')].every(node=>node.scrollWidth<=node.clientWidth+1&&node.scrollHeight<=node.clientHeight+1)`), true, 'Official Pro, Ultimate and Free plan names remain readable at every tested width');
+    }
+    const freeAccount = ownedAccounts.find(value => value.plan === 'JetBrains AI Free'); assert.ok(freeAccount);
+    await click(`[data-auth-account="${freeAccount.providerId}"] [data-action="account-menu"]`); await click(`[data-auth-account-menu="${freeAccount.providerId}"] [data-action="relay-account-details"]`);
+    await waitFor(`!!document.querySelector('[data-auth-account-details="${freeAccount.providerId}"] [data-license-details]')`, 'Details show the selected license separately from access authorization');
+    const detailText = await evaluate<string>(`document.querySelector('[data-auth-account-details="${freeAccount.providerId}"]').textContent`);
+    assert.ok(detailText.includes('许可证有效期') && detailText.includes('访问凭据到期') && detailText.includes(freeAccount.license!.expiresAt!));
+    await capture('license-details-with-separate-expiries'); await close();
+    const beforePartial = configuration(), failedAccount = ownedAccounts.find(value => value.license?.expiresAt === OWNED_LICENSES[4].expiresAt); assert.ok(failedAccount);
+    const failedMetadata = store.getManagedState(`auth-metadata:${failedAccount.providerId}`, null);
+    await direct('partial-licenses'); await waitFor('!!document.querySelector(".toast.info")&&/1 项未完成/.test(document.querySelector(".toast.info").textContent)', 'A partial catalog import reports the failed license without hiding successes');
+    assert.deepEqual(configuration(), beforePartial); assert.deepEqual(store.getManagedState(`auth-metadata:${failedAccount.providerId}`, null), failedMetadata, 'A failed license preserves its previous encrypted authorization and quota');
+    await capture('partial-license-import-retains-existing-rows', true);
     const multipleBefore = persistentState(), beforeChoices = observed(); await direct('multiple');
-    await waitFor(`!!document.querySelector(${JSON.stringify(scope)}+' [data-field="relay-import-candidate"]')`, 'different native licenses open the sole required selection');
-    assert.equal(observed().read, beforeChoices.read); assert.equal(observed().exchange, beforeChoices.exchange); assert.deepEqual(persistentState(), multipleBefore, 'A genuine identity choice performs no authorization or configuration write');
+    await waitFor(`!!document.querySelector(${JSON.stringify(scope)}+' [data-field="relay-import-candidate"]')`, 'different native accounts require an explicit source selection');
+    assert.equal(observed().read, beforeChoices.read); assert.equal(observed().licenses, beforeChoices.licenses); assert.equal(observed().exchange, beforeChoices.exchange); assert.deepEqual(persistentState(), multipleBefore, 'An ambiguous account source performs no credential, catalog or authorization read before the explicit choice');
     assert.equal(await evaluate<boolean>('!!document.querySelector("[data-jetbrains-ide-account-boundary]")'), false, 'The necessary choice is not preceded by a connection-method guide');
     for (const [theme, width] of [['dark', 980], ['light', 1180]] as const) {
       window.setSize(width, width === 1180 ? 800 : 680); await evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)};document.documentElement.style.colorScheme=${JSON.stringify(theme)}`);
-      await capture(`multiple-licenses-choice-${theme}-${width}`);
+      await capture(`multiple-account-source-choice-${theme}-${width}`);
     }
     await choose(OTHER_LICENSE_CANDIDATE_ID); await click('[data-action="import-relay-client-account"]'); await waitFor(`!document.querySelector('[role="dialog"]')`, 'chosen native license imports');
-    const selectedMetadata = store.getManagedState<{ nativeIde: JetBrainsIdeCredentials }>(`auth-metadata:${provider.id}`, { nativeIde: {} as JetBrainsIdeCredentials });
-    assert.equal(selectedMetadata.nativeIde.licenseId, 'synthetic-other-native-ide-license');
-    assert.deepEqual(configuration(), { providers: multipleBefore.providers, models: multipleBefore.models, bindings: multipleBefore.bindings, secrets: multipleBefore.secrets });
-    await capture('multiple-licenses-selected');
+    const selected = (await evaluate<AuthAccount[]>('window.modelDock.authAccounts()')).find(value => value.accountId === ACCOUNT_ID + '-other'); assert.ok(selected); assert.notEqual(selected.providerId, provider.id);
+    const selectedMetadata = store.getManagedState<{ nativeIde: JetBrainsIdeCredentials }>(`auth-metadata:${selected.providerId}`, { nativeIde: {} as JetBrainsIdeCredentials });
+    assert.equal(selectedMetadata.nativeIde.licenseId, 'synthetic-other-native-ide-license'); assert.equal(store.listProviders().length, multipleBefore.providers.length + 1);
+    assert.deepEqual(store.listModels(), multipleBefore.models); assert.deepEqual(store.listBindings(), multipleBefore.bindings);
+    for (const previous of multipleBefore.providers) { assert.deepEqual(store.getProvider(previous.id), previous); assert.deepEqual(store.getManagedState(`auth-metadata:${previous.id}`, null), multipleBefore.metadata.find(([id]) => id === previous.id)?.[1]); }
+    await capture('multiple-account-source-selected');
     store.setManagedState(MODE_KEY, 'ready'); await clearToasts(); const requestBefore = observed(); await click('[data-auth-add-relay="jetbrains-central"]');
     const requestDeadline = Date.now() + 10_000; while (Date.now() < requestDeadline && observed().exchange <= requestBefore.exchange) await pause(25);
     await waitFor(`!document.querySelector(${JSON.stringify(importButton)}).disabled`, 'explicit App import request completes');
@@ -273,7 +330,7 @@ export async function verifyJetBrainsIdeImport(window: BrowserWindow, store: Sto
     const optionsBefore = observed(); await click('[data-action="jetbrains-import-options"]'); await waitFor('!!document.querySelector("[data-jetbrains-ide-account-boundary]")', 'alternate connection options open only by their explicit action');
     assert.deepEqual(observed(), optionsBefore, 'Opening alternate connection options does not inspect IDE or Central login'); await capture('explicit-other-connection-options'); await close();
     await privacy();
-    writeFileSync(join(outputDir, 'jetbrains-ide-import-validation.json'), JSON.stringify({ ok: true, defaultIdeImportWithoutDialog: true, singleActionBusyAndDuplicateGuard: true, crossIdeSameLicenseAutoDeduplicated: true, ambiguousLicenseChoiceRequired: true, ordinaryNavigationDoesNotImport: true, consumedImportRequestNeverReplays: true, centralRemainsExplicitAlternative: true, emptyAndServerRejectedIdeNeverFallBackToCentral: true, serverRejectionOccursDuringDirectImport: true, privateFailuresDoNotWriteProviders: true, nativeImportUsesIndependentLocalKey: true, sourceIsJetBrainsIde: true, aiCreditsAmountsVisible: true, mockNativeDirectoryAndConnectionVerified: true, nativeTestUsesOriginalProfileId: true, mockedConnection: { model: tested.testedModel, alias: roundTripModel.alias, wireApi: tested.wireApi, statusCode: tested.statusCode, outcome: tested.outcome }, repeatedImportPreservesConfiguration: true, rendererAndDiagnosticsContainNoPrivateCredentials: true, noRealIdeFilesCentralLoginOrCloudInference: true, observed: observed(), stages, screenshots }, null, 2));
+    writeFileSync(join(outputDir, 'jetbrains-ide-import-validation.json'), JSON.stringify({ ok: true, defaultIdeImportWithoutDialog: true, singleActionBusyAndDuplicateGuard: true, crossIdeSameLicenseAutoDeduplicated: true, allOwnedLicensesImportedIndependently: true, proUltimateAndThreeFreePlansVisible: true, maskedLicenseIdentityAndExpiryVisible: true, partialFailurePreservesExistingLicense: true, multipleAccountSourceChoiceRequired: true, ordinaryNavigationDoesNotImport: true, consumedImportRequestNeverReplays: true, centralRemainsExplicitAlternative: true, emptyAndServerRejectedIdeNeverFallBackToCentral: true, serverRejectionOccursDuringDirectImport: true, privateFailuresDoNotWriteProviders: true, nativeImportUsesIndependentLocalKey: true, sourceIsJetBrainsIde: true, aiCreditsAmountsVisible: true, mockNativeDirectoryAndConnectionVerified: true, nativeTestUsesOriginalProfileId: true, mockedConnection: { model: tested.testedModel, alias: roundTripModel.alias, wireApi: tested.wireApi, statusCode: tested.statusCode, outcome: tested.outcome }, repeatedImportPreservesConfiguration: true, rendererAndDiagnosticsContainNoPrivateCredentials: true, noRealIdeFilesCentralLoginOrCloudInference: true, observed: observed(), stages, screenshots }, null, 2));
   } finally {
     store.setManagedState(MODE_KEY, 'empty'); store.setManagedState('qa-relay-client-import-stage', 'empty');
     await evaluate(`(()=>{const original=${JSON.stringify(originalTheme)};if(original.theme===undefined)delete document.documentElement.dataset.theme;else document.documentElement.dataset.theme=original.theme;document.documentElement.style.colorScheme=original.colorScheme})()`);

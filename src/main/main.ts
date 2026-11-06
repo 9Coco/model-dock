@@ -902,9 +902,10 @@ function registerIpc() {
     if (topic !== 'ide' && topic !== 'central') throw new Error('未知的账号帮助页面。');
     await shell.openExternal(topic === 'ide' ? 'https://www.jetbrains.com/help/air/air-in-ides-authorization.html' : 'https://www.jetbrains.com/help/central-cli/cli-setup.html');
   });
-  handle('beginJetBrainsIdeImport', () => importJetBrains(async () => {
-    const result = await ideAccounts.importDefault();
-    if (result.status === 'imported') { gateway.cancelProvider(result.account.providerId); catalog.invalidate(result.account.providerId); }
+  handle('beginJetBrainsIdeImport', (candidateId?: unknown) => importJetBrains(async () => {
+    if (candidateId !== undefined && (typeof candidateId !== 'string' || candidateId.length > 256)) throw new Error('客户端来源选择无效，请重新导入。');
+    const result = await ideAccounts.importDefault(candidateId as string | undefined);
+    if (result.status === 'imported') for (const account of result.accounts ?? [result.account]) { gateway.cancelProvider(account.providerId); catalog.invalidate(account.providerId); }
     return result;
   }));
   handle('jetBrainsIdeImportCandidates', () => { assertEditable(); return ideAccounts.preview(); });

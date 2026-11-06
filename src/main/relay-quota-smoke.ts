@@ -11,7 +11,7 @@ interface AuthRowRect { left: number; right: number; top: number; bottom: number
 interface UnifiedAuthLayout {
   viewport: { width: number; height: number };
   overflow: boolean;
-  rows: { id: string; kind: string; grid: string; columns: string[]; box: AuthRowRect; identity: AuthRowRect; quotas: AuthRowRect; actions: AuthRowRect; avatar: AuthRowRect; refresh: AuthRowRect; menu: AuthRowRect; quotaCount: number; summary: boolean; details: boolean; fonts: number[]; windows: { grid: string; label: AuthRowRect; bar: AuthRowRect; value: AuthRowRect; timing: AuthRowRect; text: string; title: string; clipped: boolean }[] }[];
+  rows: { id: string; kind: string; grid: string; columns: string[]; box: AuthRowRect; identity: AuthRowRect; quotas: AuthRowRect; actions: AuthRowRect; avatar: AuthRowRect; refresh: AuthRowRect; menu: AuthRowRect; quotaCount: number; summary: boolean; details: boolean; fonts: number[]; queryAge: string; refreshDisabled: boolean; windows: { id: string; grid: string; label: AuthRowRect; bar: AuthRowRect; value: AuthRowRect; timing: AuthRowRect; timingText: string; timingTitle: string; timingHidden: boolean; text: string; title: string; clipped: boolean }[] }[];
 }
 
 /** Only synthetic native-relay quota adapters and the isolated QA database are used. */
@@ -82,6 +82,7 @@ export async function verifyRelayQuota(window: BrowserWindow, store: Store, outp
     original = unchanged();
   }
   async function inspectUnifiedRows(): Promise<void> {
+    const quotaAccounts = new Map((await accounts()).map(account => [account.providerId, account]));
     for (const theme of ['light', 'dark']) for (const [width, height] of [[1920, 1080], [1180, 920], [980, 860]]) {
       window.setSize(width, height);
       await evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)};document.documentElement.style.colorScheme=${JSON.stringify(theme)};document.querySelector('.main-content').scrollTop=0`);
@@ -90,8 +91,8 @@ export async function verifyRelayQuota(window: BrowserWindow, store: Store, outp
         const rect=node=>{const r=node.getBoundingClientRect();return{left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height}};
         return{viewport:{width:innerWidth,height:innerHeight},overflow:document.documentElement.scrollWidth>innerWidth+1||document.querySelector('.main-content').scrollWidth>document.querySelector('.main-content').clientWidth+1,
           rows:${JSON.stringify(unifiedIds)}.map(id=>{const row=document.querySelector('[data-auth-account="'+id+'"]'),identity=row.querySelector(':scope > .account-identity'),quotas=row.querySelector(':scope > .account-quotas'),actions=row.querySelector(':scope > .account-actions');return{
-            id,kind:row.closest('[data-auth-kind]').dataset.authKind,grid:getComputedStyle(row).display,columns:[...row.children].map(item=>item.className),box:rect(row),identity:rect(identity),quotas:rect(quotas),actions:rect(actions),avatar:rect(identity.querySelector('[data-account-avatar]')),refresh:rect(actions.querySelector('[data-action="refresh-account-quota"]')),menu:rect(actions.querySelector('[data-action="account-menu"]')),quotaCount:quotas.querySelectorAll('[data-quota-window-id]').length,summary:!!quotas.querySelector('[data-quota-summary-amount]'),details:!!quotas.querySelector('[data-action="show-all-quotas"]'),fonts:[...row.querySelectorAll('strong,small,span,button')].filter(item=>item.getBoundingClientRect().height>0).map(item=>parseFloat(getComputedStyle(item).fontSize)),
-            windows:[...quotas.querySelectorAll('[data-quota-window-id]')].map(item=>{const value=item.querySelector('strong');return{grid:getComputedStyle(item).display,label:rect(item.querySelector('.auth-window-label')),bar:rect(item.querySelector('progress,.auth-window-unlimited')),value:rect(value),timing:rect(item.querySelector('.auth-window-reset')),text:value.textContent,title:value.title,clipped:value.scrollWidth>value.clientWidth+1}})
+            id,kind:row.closest('[data-auth-kind]').dataset.authKind,grid:getComputedStyle(row).display,columns:[...row.children].map(item=>item.className),box:rect(row),identity:rect(identity),quotas:rect(quotas),actions:rect(actions),avatar:rect(identity.querySelector('[data-account-avatar]')),refresh:rect(actions.querySelector('[data-action="refresh-account-quota"]')),menu:rect(actions.querySelector('[data-action="account-menu"]')),quotaCount:quotas.querySelectorAll('[data-quota-window-id]').length,summary:!!quotas.querySelector('[data-quota-summary-amount]'),details:!!quotas.querySelector('[data-action="show-all-quotas"]'),fonts:[...row.querySelectorAll('strong,small,span,button')].filter(item=>item.getBoundingClientRect().height>0).map(item=>parseFloat(getComputedStyle(item).fontSize)),queryAge:actions.querySelector('.auth-row-age').textContent,refreshDisabled:actions.querySelector('[data-action="refresh-account-quota"]').disabled,
+            windows:[...quotas.querySelectorAll('[data-quota-window-id]')].map(item=>{const value=item.querySelector('strong'),timing=item.querySelector('.auth-window-reset');return{id:item.dataset.quotaWindowId,grid:getComputedStyle(item).display,label:rect(item.querySelector('.auth-window-label')),bar:rect(item.querySelector('progress,.auth-window-unlimited')),value:rect(value),timing:rect(timing),timingText:timing.textContent,timingTitle:timing.title,timingHidden:timing.getAttribute('aria-hidden')==='true',text:value.textContent,title:value.title,clipped:value.scrollWidth>value.clientWidth+1}})
           }} )};
       })()`);
       assert.equal(layout.overflow, false, `Unified account layout has no horizontal overflow: ${theme}/${width}`);
@@ -108,10 +109,22 @@ export async function verifyRelayQuota(window: BrowserWindow, store: Store, outp
         const limit = 64 + Math.max(0, item.quotaCount - 1) * 30 + (item.summary ? 24 : 0) + (item.details ? 20 : 0);
         assert.ok(item.box.height <= limit, `Row height follows the visible quota count instead of a relay card: ${item.kind} ${item.box.height}px > ${limit}px`);
         assert.ok(item.fonts.every(font => font >= 12), `Compact account rows retain readable text: ${item.kind}`);
+        assert.ok(item.queryAge.trim(), `The last quota query age remains visible: ${item.kind}`);
+        assert.equal(item.refreshDisabled, false, `Manual quota querying remains available: ${item.kind}`);
+        const account = quotaAccounts.get(item.id); assert.ok(account);
         for (const quota of item.windows) {
           assert.equal(quota.grid, 'grid', 'Percent and amount quotas share the same layout primitive');
           assert.ok(quota.label.right <= quota.bar.left + 1 && quota.bar.right <= quota.value.left + 1 && quota.value.right <= quota.timing.left + 1, `Quota label/progress/value/timing columns never overlap: ${item.kind}/${width} ${quota.text}`);
           assert.ok(quota.value.right <= item.quotas.right + 1 && quota.timing.right <= item.quotas.right + 1, 'Long credit amounts remain inside their shared quota column');
+          if (item.kind === 'codex' || item.kind === 'grok') {
+            assert.equal(quota.timingHidden, false, `Reset timing remains visible for ${item.kind}`);
+            assert.match(quota.timingText, /重置/, `Existing reset timing is preserved for ${item.kind}`);
+          } else {
+            assert.doesNotMatch(quota.timingText + quota.timingTitle, /重置|刷新次数/, `Other subscriptions do not display reset timing or a reset tooltip: ${item.kind}`);
+            const nativeWindow = account.usage.windows.find(window => window.id === quota.id); assert.ok(nativeWindow);
+            if (nativeWindow.expiresAt || account.usage.summary) assert.match(quota.timingText, /到期/, 'Independent grant expiry remains visible');
+            else { assert.equal(quota.timingText, ''); assert.equal(quota.timingTitle, ''); assert.equal(quota.timingHidden, true, 'An empty timing cell preserves layout without an accessible unknown reset label'); }
+          }
           if (item.kind === 'jetbrains-central') {
             assert.equal(quota.text, '3,074,611.8 / 3,500,000 AI Credits', 'The large official-style JetBrains balance retains its exact visible amount');
             if (width >= 1400) assert.equal(quota.clipped, false, 'Wide layouts show the full large JetBrains amount without ellipsis');
@@ -128,7 +141,15 @@ export async function verifyRelayQuota(window: BrowserWindow, store: Store, outp
       const account = (await accounts()).find(item => item.providerId === id)!;
       const action = account.source === 'relay' ? 'relay-account-details' : 'account-details';
       assert.ok(await evaluate<boolean>(`!!document.querySelector('[data-auth-account-menu="${id}"] [data-action="${action}"]')`), 'Every account keeps its details action reachable');
-      await click(`[data-auth-account-menu="${id}"] [data-action="${action}"]`); await closeDialog();
+      await click(`[data-auth-account-menu="${id}"] [data-action="${action}"]`);
+      const detailsText = await evaluate<string>(`document.querySelector('[data-auth-account-details="${id}"]').textContent`);
+      if (account.kind === 'codex' || account.kind === 'grok') assert.match(detailsText, /重置/, 'The supported subscriptions retain reset timing in details');
+      else {
+        assert.doesNotMatch(detailsText, /重置|刷新次数/, 'Unsupported reset labels and counts remain absent in account details');
+        assert.equal(await evaluate<number>(`document.querySelectorAll('[data-auth-account="${id}"] [data-reset-credits],[data-auth-account="${id}"] [data-reset-expiries]').length`), 0, 'No reset-count controls are added to other subscriptions');
+        if (account.kind === 'jetbrains-central') assert.ok(detailsText.includes('许可证有效期') && detailsText.includes(account.license!.expiresAt!), 'License expiry remains distinct and readable');
+      }
+      await closeDialog();
       if (account.source === 'relay') {
         await click(`[data-auth-account="${id}"] [data-action="account-menu"]`);
         await click(`[data-auth-account-menu="${id}"] [data-action="manage-auth-relay"]`);
@@ -196,6 +217,7 @@ export async function verifyRelayQuota(window: BrowserWindow, store: Store, outp
       await capture(`jetbrains-guide-${theme}-${width}`); await closeDialog();
     }
     const many = await refresh('many'); assert.equal(many.usage.windows.length, 40);
+    assert.equal(many.usage.windows.filter(window => window.resetAt).length, 20, 'Presentation does not remove the original upstream reset timestamps');
     assert.equal(many.usage.windows[0].remaining, 0); assert.equal(many.usage.windows[1].remaining, undefined); assert.equal(many.usage.windows[2].unlimited, true);
     for (const theme of ['light', 'dark']) for (const width of [1180, 980]) {
       window.setSize(width, width === 1180 ? 800 : 680);
@@ -213,10 +235,11 @@ export async function verifyRelayQuota(window: BrowserWindow, store: Store, outp
       assert.deepEqual(values.map(item => item.id), many.usage.windows.map(item => item.id));
       for (const [index, item] of values.entries()) {
         assert.ok(item.text.includes(many.usage.windows[index].label), 'The complete independent quota label remains readable');
-        assert.ok(item.text.includes(index % 2 ? '后重置' : '重置时间未知'), 'Known and unknown reset times remain distinct');
+        assert.doesNotMatch(item.text, /重置|刷新次数/, 'TRAE quota details omit both known and unknown reset labels');
       }
       assert.ok(values[0].text.includes('0 / 1,000 积分')); assert.ok(values[1].text.includes('未知')); assert.ok(!values[1].text.includes('0%')); assert.ok(values[2].text.includes('不限量'));
       assert.ok(values[39].text.includes('664 / 1,039 次'), 'The final independent amount is preserved');
+      assert.equal(await evaluate<number>(`document.querySelectorAll(${JSON.stringify(details)}+' [data-quota-detail-timing]').length`), 0, 'TRAE detail rows without expiry omit empty timing separators');
       const scrollable = await evaluate<boolean>(`(()=>{const body=document.querySelector(${JSON.stringify(details)});return body.scrollHeight>body.clientHeight+1&&body.scrollWidth<=body.clientWidth+1})()`);
       assert.equal(scrollable, true, 'Quota details scroll vertically without horizontal overflow');
       await capture(`many-details-${theme}-${width}`);
@@ -296,7 +319,7 @@ export async function verifyRelayQuota(window: BrowserWindow, store: Store, outp
     }
     assert.deepEqual(unchanged(), original, 'Quota reads and guidance preserve every supplier, credential, model and tool binding');
     assert.deepEqual(store.getManagedState<{ clientImport: unknown }>(`auth-metadata:${managed.id}`, { clientImport: null }).clientImport, provenance);
-    writeFileSync(join(outputDir, 'relay-quota-validation.json'), JSON.stringify({ ok: true, themes: ['light', 'dark'], widths: [1920, 1180, 980], allFiveAccountFamiliesShareColumns: true, percentAndAmountQuotaColumnsAlign: true, allFiveCommonActionMenusWork: true, relaySettingsRemainAccessibleFromMenu: true, unifiedLayouts, knownProAndUnknownPlanBadgesVerified: true, managedTraeAutoRefresh: true, managedTraeManualRefresh: true, manualRelayNotQueried: true, officialAmountsAndUnitsShown: true, manyQuotasStayCollapsedAndBounded: true, allFortyIndependentQuotaDetailsAccessible: true, zeroUnknownAndUnlimitedRemainDistinct: true, detailsScrollWithoutHorizontalOverflow: true, shrinkingResultsRemoveExpandAction: true, officialRawGrantParserMatches1813_80: true, officialSourceGroupsPreserve19CheckinsAndMonthly500: true, allTwentyCreditGrantsPreserved: true, grantExpiryNeverPresentedAsReset: true, officialDefaultUsageExplained: true, existingDetailsActionUsesGrants: true, unknownGrantPropagatesWithoutMislabelingKnownLimits: true, currentAccountSeparateFromImportProvenance: true, accountSwitchClearsPreviousIdentity: true, unknownQuotaHasNoInventedPercent: true, failuresClearPreviousBalances: true, jetBrainsGuideDoesNotQueryCentralUntilExplicitCheck: true, privacyVerified: true, configurationsUnchanged: true, noRealRelayOrClientAccess: true, stages, screenshots }, null, 2));
+    writeFileSync(join(outputDir, 'relay-quota-validation.json'), JSON.stringify({ ok: true, themes: ['light', 'dark'], widths: [1920, 1180, 980], allFiveAccountFamiliesShareColumns: true, resetTimingOnlyForCodexAndGrok: true, otherSubscriptionResetLabelsAndCountsHidden: true, quotaQueryActionsAndAgePreserved: true, upstreamResetDataUnchanged: true, grantAndLicenseExpiryPreserved: true, percentAndAmountQuotaColumnsAlign: true, allFiveCommonActionMenusWork: true, relaySettingsRemainAccessibleFromMenu: true, unifiedLayouts, knownProAndUnknownPlanBadgesVerified: true, managedTraeAutoRefresh: true, managedTraeManualRefresh: true, manualRelayNotQueried: true, officialAmountsAndUnitsShown: true, manyQuotasStayCollapsedAndBounded: true, allFortyIndependentQuotaDetailsAccessible: true, zeroUnknownAndUnlimitedRemainDistinct: true, detailsScrollWithoutHorizontalOverflow: true, shrinkingResultsRemoveExpandAction: true, officialRawGrantParserMatches1813_80: true, officialSourceGroupsPreserve19CheckinsAndMonthly500: true, allTwentyCreditGrantsPreserved: true, grantExpiryNeverPresentedAsReset: true, officialDefaultUsageExplained: true, existingDetailsActionUsesGrants: true, unknownGrantPropagatesWithoutMislabelingKnownLimits: true, currentAccountSeparateFromImportProvenance: true, accountSwitchClearsPreviousIdentity: true, unknownQuotaHasNoInventedPercent: true, failuresClearPreviousBalances: true, jetBrainsGuideDoesNotQueryCentralUntilExplicitCheck: true, privacyVerified: true, configurationsUnchanged: true, noRealRelayOrClientAccess: true, stages, screenshots }, null, 2));
   } finally {
     store.setManagedState('qa-relay-quota-mode', 'unavailable'); store.setManagedState('qa-relay-client-import-stage', 'empty');
     store.setManagedState('qa-jetbrains-ide-mode', 'empty');
