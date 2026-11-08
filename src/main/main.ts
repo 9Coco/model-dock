@@ -491,12 +491,12 @@ async function createWindow(forceShow = false) {
           if(!followsDark||!followsLight) throw new Error('System theme did not follow native color scheme changes');
           await window!.webContents.executeJavaScript(`document.querySelector('[data-theme-choice="dark"]').click()`);
           await new Promise(resolve=>setTimeout(resolve,150));
-          await window!.webContents.executeJavaScript(`window.modelDock.saveSettings({startHidden:true,closeToTray:false,terminal:${JSON.stringify(process.platform === 'win32' ? 'cmd' : 'system')}})`);
+          await window!.webContents.executeJavaScript(`window.modelDock.saveSettings({startHidden:true,closeToTray:false})`);
           await new Promise<void>(resolve=>{window!.webContents.once('did-finish-load',()=>resolve());window!.webContents.reload();});
           await new Promise(resolve=>setTimeout(resolve,400));
           await window!.webContents.executeJavaScript(`(()=>{const style=document.createElement('style');style.textContent='*,*::before,*::after{animation:none!important;transition:none!important}';document.head.appendChild(style);})()`);
           const reloaded=await window!.webContents.executeJavaScript(`(async()=>{const value=await window.modelDock.getSettings();return {settings:value.settings,resolved:document.documentElement.dataset.theme,ready:!!document.querySelector('.app-shell')};})()`);
-          if(!reloaded.ready||reloaded.resolved!=='dark'||!reloaded.settings.startHidden||reloaded.settings.closeToTray||reloaded.settings.terminal!==(process.platform==='win32'?'cmd':'system')) throw new Error('Settings did not survive renderer reload');
+          if(!reloaded.ready||reloaded.resolved!=='dark'||!reloaded.settings.startHidden||reloaded.settings.closeToTray) throw new Error('Settings did not survive renderer reload');
           writeFileSync(join(outputDir,'settings-validation.json'),JSON.stringify({themes,followsDark,followsLight,reloaded},null,2));
           await window!.webContents.executeJavaScript(`document.querySelector('[data-page="settings"]').click()`);
           window!.setSize(1320,880);
@@ -801,7 +801,6 @@ function registerIpc() {
     window?.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#19191c' : '#f8f9fb');
     return result;
   });
-  handle('openTerminal', () => preferences.openTerminal(dataDir));
   handle('rendererReady', () => {
     if (__MODELDOCK_SMOKE_BUILD__) windowPresentationProbe?.rendererPrepared();
     presentation?.rendererDidPrepare();

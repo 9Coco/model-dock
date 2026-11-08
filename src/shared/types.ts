@@ -305,7 +305,6 @@ export interface ModelDockApi {
   getSettings(): Promise<SettingsSnapshot>;
   probeAuthNetwork(): Promise<import('./network-types').AuthNetworkDiagnostic>;
   saveSettings(patch: Partial<AppSettings>): Promise<SettingsSnapshot>;
-  openTerminal(): Promise<void>;
   rendererReady(): Promise<void>;
 }
 declare global { interface Window { modelDock: ModelDockApi } }

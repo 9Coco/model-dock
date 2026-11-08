@@ -1,8 +1,7 @@
-import { spawn as nodeSpawn, type SpawnOptions, type ChildProcess } from 'node:child_process';
 import { closeSync, constants, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
-import { isAbsolute, join, resolve } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { DEFAULT_SETTINGS, type AppSettings, type SettingsSnapshot, type TerminalOption } from '../shared/settings-types';
+import { DEFAULT_SETTINGS, type AppSettings, type SettingsSnapshot } from '../shared/settings-types';
 import { validateProxyUrl } from './network-proxy';
 
 export interface SettingsStore {
@@ -20,7 +19,6 @@ export interface SettingsManagerOptions {
   execPath: string;
   isPackaged: boolean;
   login?: LoginItemAdapter;
-  spawn?: (command: string, args: string[], options: SpawnOptions) => ChildProcess;
 }
 interface LinuxAutostart { path: string; content: string }
 interface LinuxStartupFile { content: string; dev: number; ino: number }
@@ -29,25 +27,22 @@ const KEY = 'app.settings';
 const FLAGS = ['--autostart'];
 class SettingsFailure extends Error {}
 const keys = new Set(Object.keys(DEFAULT_SETTINGS));
-const terminals: Record<'win32' | 'linux' | 'other', TerminalOption[]> = {
-  win32: [{ id: 'system', label: '系统默认（PowerShell）' }, { id: 'powershell', label: 'Windows PowerShell' }, { id: 'cmd', label: '命令提示符' }, { id: 'windows-terminal', label: 'Windows Terminal' }],
-  linux: [{ id: 'system', label: '系统默认终端' }, { id: 'x-terminal-emulator', label: 'x-terminal-emulator' }, { id: 'gnome-terminal', label: 'GNOME Terminal' }, { id: 'konsole', label: 'Konsole' }],
-  other: [],
-};
 
 function object(value: unknown): value is Record<string, unknown> { return typeof value === 'object' && value !== null && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype; }
-function validatePatch(value: unknown, platform: 'win32' | 'linux' | 'other', fromDisk = false): Partial<AppSettings> {
-  if (!object(value) || Object.keys(value).some(key => !keys.has(key))) throw new Error('设置字段无效。');
+function validatePatch(raw: unknown, fromDisk = false): Partial<AppSettings> {
+  if (!object(raw)) throw new Error('设置字段无效。');
+  const value = { ...raw };
+  // Retired settings must not prevent an existing installation from opening.
+  // Only a subsequent explicit save persists the current settings shape.
+  if (fromDisk) delete value.terminal;
+  if (Object.keys(value).some(key => !keys.has(key))) throw new Error('设置字段无效。');
   for (const [key, item] of Object.entries(value)) {
     if (key === 'theme') { if (!['system', 'light', 'dark'].includes(item as string)) throw new Error('主题选项无效。'); }
     else if (key === 'proxyUrl') { validateProxyUrl(item); }
     else if (key === 'gatewayPort') {
       if (typeof item !== 'number' || !Number.isInteger(item) || item < 1024 || item > 65535) throw new Error('本地服务端口必须是 1024 至 65535 之间的整数。');
     }
-    else if (key === 'terminal') {
-      if (typeof item !== 'string' || !Object.values(terminals).flat().some(option => option.id === item)) throw new Error('终端选项无效。');
-      if (!fromDisk && item !== 'system' && !terminals[platform].some(option => option.id === item)) throw new Error('当前系统不支持这个终端选项。');
-    } else if (typeof item !== 'boolean') throw new Error('设置开关必须是布尔值。');
+    else if (typeof item !== 'boolean') throw new Error('设置开关必须是布尔值。');
   }
   return { ...value, ...('proxyUrl' in value ? { proxyUrl: validateProxyUrl(value.proxyUrl) } : {}) } as Partial<AppSettings>;
 }
@@ -63,7 +58,6 @@ export class SettingsManager {
   private readonly platform: 'win32' | 'linux' | 'other';
   private readonly autostartPath: string;
   private readonly legacyAutostartPath: string;
-  private readonly spawn: NonNullable<SettingsManagerOptions['spawn']>;
   private state: StoredSettings;
 
   constructor(private readonly store: SettingsStore, private readonly options: SettingsManagerOptions) {
@@ -73,11 +67,9 @@ export class SettingsManager {
     // 修改点：与安装包启动器 desktop ID 一致，使 KDE 会话恢复能识别开机自启并去重。
     this.autostartPath = join(config, 'autostart', 'model-dock.desktop');
     this.legacyAutostartPath = join(config, 'autostart', 'modeldock.desktop');
-    this.spawn = options.spawn ?? nodeSpawn;
     const stored = store.getManagedState<unknown>(KEY, { version: 1, settings: { ...DEFAULT_SETTINGS } });
     if (!object(stored) || stored.version !== 1 || Object.keys(stored).some(key => !['version', 'settings', 'linuxAutostart'].includes(key))) throw new Error('本地设置格式无效。');
-    const settings = { ...DEFAULT_SETTINGS, ...validatePatch(stored.settings, this.platform, true) };
-    if (!terminals[this.platform].some(option => option.id === settings.terminal)) settings.terminal = 'system';
+    const settings = { ...DEFAULT_SETTINGS, ...validatePatch(stored.settings, true) };
     let linuxAutostart: LinuxAutostart | undefined;
     if (stored.linuxAutostart !== undefined) {
       if (!object(stored.linuxAutostart) || Object.keys(stored.linuxAutostart).some(key => !['path', 'content'].includes(key)) || typeof stored.linuxAutostart.path !== 'string' || typeof stored.linuxAutostart.content !== 'string' || stored.linuxAutostart.content.length > 16_384) throw new Error('本地启动记录格式无效。');
@@ -218,7 +210,7 @@ export class SettingsManager {
         }
       } catch { reason = '无法读取系统启动项状态。'; }
     }
-    return { settings: { ...this.state.settings }, platform: this.platform, launchAtLoginSupported: !this.support(), actualLaunchAtLogin: actual, ...(reason ? { launchAtLoginReason: reason } : {}), terminalOptions: terminals[this.platform].map(option => ({ ...option })) };
+    return { settings: { ...this.state.settings }, platform: this.platform, launchAtLoginSupported: !this.support(), actualLaunchAtLogin: actual, ...(reason ? { launchAtLoginReason: reason } : {}) };
   }
 
   private linuxContent(): string {
@@ -276,7 +268,7 @@ export class SettingsManager {
     };
   }
   save(patch: Partial<AppSettings>): SettingsSnapshot {
-    const validated = validatePatch(patch, this.platform);
+    const validated = validatePatch(patch);
     const previous = structuredClone(this.state), next = { ...structuredClone(this.state), settings: { ...this.state.settings, ...validated } };
     let rollback: (() => void) | undefined;
     let persistenceAttempted = false;
@@ -297,32 +289,4 @@ export class SettingsManager {
     return this.get();
   }
 
-  async openTerminal(dataDir: string): Promise<void> {
-    if (!isAbsolute(dataDir) || /[\x00-\x1f\x7f]/.test(dataDir) || !existsSync(dataDir) || !lstatSync(dataDir).isDirectory()) throw new Error('终端工作目录无效。');
-    const selected = this.state.settings.terminal;
-    let command: string, args: string[];
-    let windowsLauncher = false;
-    if (this.platform === 'win32') {
-      if (selected === 'windows-terminal') { command = 'wt.exe'; args = ['-d', resolve(dataDir)]; }
-      else {
-        // `start` creates the interactive child with its own console handles.
-        // This command text is fixed; user paths are passed only via cwd.
-        command = 'cmd.exe';
-        args = ['/d', '/s', '/c', selected === 'cmd' ? 'start "" cmd.exe /d /k' : 'start "" powershell.exe -NoLogo -NoExit'];
-        windowsLauncher = true;
-      }
-    } else if (this.platform === 'linux') {
-      if (selected === 'gnome-terminal') { command = 'gnome-terminal'; args = ['--working-directory', resolve(dataDir)]; }
-      else if (selected === 'konsole') { command = 'konsole'; args = ['--workdir', resolve(dataDir)]; }
-      else { command = 'x-terminal-emulator'; args = []; }
-    } else throw new Error('当前平台尚未支持打开终端。');
-    await new Promise<void>((accept, reject) => {
-      try {
-        const child = this.spawn(command, args, { cwd: resolve(dataDir), shell: false, detached: !windowsLauncher, stdio: 'ignore', windowsHide: windowsLauncher });
-        child.once('error', () => reject(new Error('终端无法启动，请确认所选终端已安装。')));
-        if (windowsLauncher) child.once('exit', code => { if (code === 0) accept(); else reject(new Error('终端无法启动，请确认所选终端已安装。')); });
-        else child.once('spawn', () => { child.unref(); accept(); });
-      } catch { reject(new Error('终端无法启动，请确认所选终端已安装。')); }
-    });
-  }
 }

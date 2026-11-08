@@ -61,7 +61,7 @@ const api: ModelDockApi = {
   skillsPreviewRemove: id => call('skillsPreviewRemove', id), skillsDelete: id => call('skillsDelete', id),
   getSettings: () => call('getSettings'), saveSettings: patch => call('saveSettings', patch),
   probeAuthNetwork: () => call('probeAuthNetwork'),
-  openTerminal: () => call('openTerminal'), rendererReady: () => call('rendererReady'),
+  rendererReady: () => call('rendererReady'),
 };
 contextBridge.exposeInMainWorld('modelDock', Object.freeze(api));
 

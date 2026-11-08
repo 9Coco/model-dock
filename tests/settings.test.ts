@@ -1,9 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { EventEmitter } from 'node:events';
 import { existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
-import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { SettingsManager, quoteDesktopExec, type LoginItemAdapter, type SettingsStore } from '../src/main/settings';
 import { DEFAULT_SETTINGS } from '../src/shared/settings-types';
 import type { AppSettings } from '../src/shared/settings-types';
@@ -106,22 +104,38 @@ describe('application settings', () => {
     expect(existsSync(autostart())).toBe(false);
   });
   it('persists preferences and returns detached snapshots', () => {
-    const manager = linux(), saved = manager.save({ theme: 'dark', startHidden: true, closeToTray: false, terminal: 'konsole' });
+    const manager = linux(), saved = manager.save({ theme: 'dark', startHidden: true, closeToTray: false });
     expect(linux().get().settings).toEqual(saved.settings);
-    saved.settings.theme = 'light'; saved.terminalOptions.splice(0);
+    saved.settings.theme = 'light';
     expect(manager.get().settings.theme).toBe('dark');
-    expect(manager.get().terminalOptions.length).toBeGreaterThan(1);
     expect(existsSync(autostart())).toBe(false);
   });
-  it('strictly rejects malformed, unknown and wrong-platform fields before side effects', () => {
+  it('strictly rejects malformed, unknown and retired fields before side effects', () => {
     const manager = linux();
     for (const patch of [{ theme: 'blue' }, { startHidden: 'true' }, { launchAtLogin: 1 }, { closeToTray: null }, { terminal: 'cmd' }, { terminal: 'arbitrary-shell' }, { language: 'en' }, ['dark'], null]) expect(() => manager.save(patch as never)).toThrow();
     expect(store.writes).toBe(0);
     expect(existsSync(autostart())).toBe(false);
   });
-  it('rejects corrupt persisted schema and resets a terminal moved across platforms', () => {
-    store.values.set('app.settings', { version: 1, settings: { ...DEFAULT_SETTINGS, terminal: 'powershell' } });
-    expect(linux().get().settings.terminal).toBe('system');
+  it.each(['powershell', 'konsole', 'retired-custom-terminal'])('ignores obsolete persisted terminal preference %s without changing retained settings or startup', (terminal) => {
+    const settings: AppSettings = { ...DEFAULT_SETTINGS, theme: 'dark', startHidden: true, closeToTray: false, autoStartGateway: true, gatewayPort: 25000, proxyUrl: 'http://localhost:20081' };
+    const legacy = { version: 1, settings: { ...settings, terminal } };
+    store.values.set('app.settings', legacy);
+    const login = loginFixture(), manager = windows(login);
+    expect(manager.get().settings).toEqual(settings);
+    expect(manager.get().settings).not.toHaveProperty('terminal');
+    expect(manager.get()).not.toHaveProperty('terminalOptions');
+    expect(store.values.get('app.settings')).toEqual(legacy);
+    expect(store.writes).toBe(0);
+    expect(login.setLoginItemSettings).not.toHaveBeenCalled();
+    expect(existsSync(autostart())).toBe(false);
+
+    const saved = manager.save({ theme: 'light' });
+    expect(saved.settings).toEqual({ ...settings, theme: 'light' });
+    expect(store.values.get('app.settings')).toEqual({ version: 1, settings: saved.settings });
+    expect(windows(login).get().settings).toEqual(saved.settings);
+    expect(login.setLoginItemSettings).not.toHaveBeenCalled();
+  });
+  it('rejects corrupt persisted schema', () => {
     store.values.set('app.settings', { version: 1, settings: { ...DEFAULT_SETTINGS, launchAtLogin: 'yes' } });
     expect(() => linux()).toThrow('布尔值');
   });
@@ -391,42 +405,6 @@ describe('application settings', () => {
     expect(quoted).toBe('"/opt/Model Dock/100%%/a\\\\$\\\\`\\\\"\\\\\\\\file"');
     expect(() => quoteDesktopExec('/opt/evil\nExec=other')).toThrow();
     expect(() => quoteDesktopExec('relative')).toThrow();
-  });
-  it('opens terminals with argument arrays and a literal cwd, without a command shell', async () => {
-    const calls: { command: string; args: string[]; options: SpawnOptions }[] = [];
-    const spawn = (command: string, args: string[], options: SpawnOptions) => {
-      calls.push({ command, args, options });
-      const child = new EventEmitter() as ChildProcess; child.unref = vi.fn();
-      queueMicrotask(() => { child.emit('spawn'); child.emit('exit', 0); });
-      return child;
-    };
-    const dataDir = join(fixture, 'data & $()'); mkdirSync(dataDir);
-    const manager = new SettingsManager(store, { platform: 'win32', homeDir: fixture, execPath: 'C:\\ModelDock.exe', isPackaged: true, login: loginFixture(), spawn });
-    manager.save({ terminal: 'cmd' }); await manager.openTerminal(dataDir);
-    expect(calls[0]).toMatchObject({ command: 'cmd.exe', args: ['/d', '/s', '/c', 'start "" cmd.exe /d /k'], options: { cwd: resolve(dataDir), shell: false, detached: false, windowsHide: true } });
-    manager.save({ terminal: 'powershell' }); await manager.openTerminal(dataDir);
-    expect(calls[1].args).toEqual(['/d', '/s', '/c', 'start "" powershell.exe -NoLogo -NoExit']);
-    manager.save({ terminal: 'windows-terminal' }); await manager.openTerminal(dataDir);
-    expect(calls[2].args).toEqual(['-d', resolve(dataDir)]);
-    expect(calls[2].options).toMatchObject({ shell: false, detached: true, windowsHide: false });
-    expect(() => manager.save({ terminal: 'gnome-terminal' })).toThrow();
-  });
-  it('waits for the hidden Windows terminal launcher and rejects a failed exit', async () => {
-    const child = new EventEmitter() as ChildProcess; child.unref = vi.fn();
-    const manager = new SettingsManager(store, { platform: 'win32', homeDir: fixture, execPath: 'C:\\ModelDock.exe', isPackaged: true, login: loginFixture(), spawn: () => child });
-    let settled = false;
-    const opened = manager.openTerminal(fixture);
-    void opened.then(() => { settled = true; }, () => { settled = true; });
-    child.emit('spawn'); await Promise.resolve();
-    expect(settled).toBe(false);
-    child.emit('exit', 1);
-    await expect(opened).rejects.toThrow('终端无法启动');
-  });
-  it('normalizes terminal spawn failures without exposing child process details', async () => {
-    const spawn = () => { const child = new EventEmitter() as ChildProcess; queueMicrotask(() => child.emit('error', new Error('credential-should-never-surface'))); return child; };
-    const manager = new SettingsManager(store, { platform: 'linux', homeDir: fixture, execPath: '/opt/ModelDock', isPackaged: true, spawn });
-    await expect(manager.openTerminal(fixture)).rejects.toThrow('终端无法启动');
-    await expect(manager.openTerminal('relative')).rejects.toThrow('工作目录');
   });
   it('stores settings using the encrypted managed-state codec and survives reopening SQLite', async () => {
     const directory = join(fixture, 'sqlite');
