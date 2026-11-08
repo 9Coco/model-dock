@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Activity, FolderOpen, Monitor, Moon, RefreshCw, Sun, Terminal } from './MaterialIcon';
+import { Activity, FolderOpen, Monitor, Moon, RefreshCw, Sun } from './MaterialIcon';
 import type { Model, ModelDockApi, Provider } from '../shared/types';
 import type { AppSettings, SettingsSnapshot } from '../shared/settings-types';
 import type { AuthNetworkDiagnostic } from '../shared/network-types';
@@ -59,9 +59,6 @@ export function SettingsPanel({ api, snapshot, onSave, notify, dataDir, version,
       <div className="settings-row"><div className="settings-row-copy"><strong>随应用启动本地服务</strong><small>启动 ModelDock 时自动开启本地模型服务，使用端口 {settings.gatewayPort}。下次应用启动时生效。</small></div><div className="settings-control"><Toggle checked={settings.autoStartGateway} disabled={!api || !!busy} label="随应用启动本地服务" onChange={autoStartGateway => void change('gateway-autostart', { autoStartGateway })} /></div></div>
       <div className="settings-row"><div className="settings-row-copy"><strong>关闭时留在托盘</strong><small>开启后关闭窗口仍可使用本地服务；关闭此项后，关闭窗口会退出应用。</small></div><div className="settings-control"><Toggle checked={settings.closeToTray} disabled={!api || !!busy} label="关闭时留在托盘" onChange={closeToTray => void change('tray', { closeToTray })} /></div></div>
     </div></section>
-    <section className="settings-section"><h2 className="settings-heading">终端</h2><div className="panel">
-      <div className="settings-row"><div className="settings-row-copy"><strong>首选终端</strong><small>用于从 ModelDock 打开本地工作目录。</small></div><div className="settings-control"><select aria-label="首选终端" disabled={!api || !!busy} value={settings.terminal} onChange={event => void change('terminal', { terminal: event.target.value as AppSettings['terminal'] })}>{snapshot.terminalOptions.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}</select><button className="button small secondary" disabled={!api || !!busy} onClick={() => void action('open-terminal', () => api!.openTerminal())}><BusyIcon active={busy === 'open-terminal'}><Terminal size={15} /></BusyIcon>打开终端</button></div></div>
-    </div></section>
     <section className="settings-section"><h2 className="settings-heading">网络</h2><div className="panel">
       <div className="settings-row"><div className="settings-row-copy"><strong>应用网络代理</strong><small>用于账号授权、模型目录和聚合请求。留空跟随系统；支持本机 HTTP、HTTPS 或 SOCKS5 代理。</small><small>地址已保存时，再次保存可重新应用代理设置。</small></div><div className="settings-control" style={{ flexWrap: 'wrap' }}><input aria-label="应用网络代理地址" placeholder="http://127.0.0.1:端口" value={proxyDraft} disabled={!api || !!busy} onChange={event => { setProxyDraft(event.target.value); setNetworkError(''); }} style={{ width: 'min(280px, 100%)' }} /><button className="button small secondary" data-action="save-network-proxy" disabled={!api || !!busy} onClick={() => void change('network-proxy', { proxyUrl: proxyDraft })}><BusyIcon active={busy === 'network-proxy'}><RefreshCw size={15} /></BusyIcon>保存代理</button></div></div>
       <div className="settings-row"><div className="settings-row-copy"><strong>授权服务连接检测</strong><small>读取 Grok 公开授权服务信息，检查应用当前使用的网络路线；不登录账号。</small>{proxyDirty && <small style={{ color: 'var(--warning)' }}>代理地址尚未保存，请先保存后检测。</small>}</div><div className="settings-control"><button className="button small secondary" data-action="probe-auth-network" disabled={!api || !!busy || proxyDirty} onClick={() => void probeNetwork()}><BusyIcon active={busy === 'probe-auth-network'}><Activity size={15} /></BusyIcon>{busy === 'probe-auth-network' ? '检测中…' : '检测连接'}</button></div></div>
@@ -73,6 +70,6 @@ export function SettingsPanel({ api, snapshot, onSave, notify, dataDir, version,
       <div className="settings-row"><div className="settings-row-copy"><strong>ModelDock</strong><small>{version ? `v${version}` : '开发版'} · 设置保存在本机 SQLite 中</small></div><span className="settings-note">自动保存</span></div>
     </div></section>
     <ConnectionPrinciples providers={providers} models={models} />
-    {busy && <div className="settings-note" role="status"><RefreshCw size={13} className="spin" />{busy === 'open-terminal' ? '正在打开终端…' : busy === 'probe-auth-network' ? '正在检测应用网络…' : '正在应用设置…'}</div>}
+    {busy && <div className="settings-note" role="status"><RefreshCw size={13} className="spin" />{busy === 'probe-auth-network' ? '正在检测应用网络…' : '正在应用设置…'}</div>}
   </section>;
 }

@@ -1,5 +1,12 @@
 # ModelDock 验证记录
 
+## 2026-11-08 / 0.3.87 · 移除独立终端功能
+
+- 删除设置页的终端区块、终端选项类型/默认值、平台启动逻辑、preload/IPC 接口和诊断操作入口。实际 CLI 工具接入与模型的工具调用能力保留。旧版 `app.settings` 的 `terminal` 字段仅在读取时忽略，不在启动时重写；下次显式保存时剔除旧字段，其他设置和启动项所有权记录继续保留。
+- 类型检查、`npm run build`、生产入口去测试代码检查通过。三种旧终端偏好的兼容用例、默认设置、偏好保存、退役字段拒绝和 Windows 启动项行为等受影响用例通过。完整 `npm test -- --maxWorkers=2` 实际执行：2661 项中 2296 通过、310 失败、55 跳过，不能记为全量通过；失败仍包含本机 HTTP 连接/文件链接权限限制、Linux 启动项 fixture 及其他已有场景，完整结果为 `work/terminal-removal-final-tests.json`，未将未逐项核验的失败统一归为环境问题。
+- Windows x64 `npm run pack:win` 成功，更新 `release/win-unpacked`，未停止用户应用。生产入口、资源/许可、SQL WASM、图标和嵌入 ASAR 完整性校验全部通过。额外直接核对包内主进程、preload 和 renderer JS：不含 `openTerminal`、`terminalOptions`、首选终端或打开终端内容，包内主进程与本次构建逐字节相同；main SHA256 `038414052290b1f7e77e8a349d91557807e47348d94889f599c750f764bd9d51`。
+- Electron 实际界面专项已尝试，但运行时退出前未生成 `electron-smoke.json` 或截图，因此未获得原生界面验收；日志 `work/terminal-removal-ui.log`。本轮未改真实账号/外部客户端设置，没有云端查询或模型生成，Linux 原生界面和真实供应商未重测。
+
 ## 2026-11-06 / 0.3.86 · Windows 适配补充检查
 
 - 检查本轮 Linux 新增的当前/历史模型筛选、TRAE 客户端模型缓存和额度、JetBrains 多许可证及多厂商协议。TRAE 缓存在 Windows 使用 APPDATA，缺省回退到 AppData/Roaming，保持精确账号与 CN/SOLO 产品边界；JetBrains 仍走已有 Windows Registry64 只读账号导入和 APPDATA 许可证路径。未引入额外反代进程或监听端口。
