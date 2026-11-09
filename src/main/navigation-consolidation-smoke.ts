@@ -136,6 +136,9 @@ export async function verifyNavigationConsolidation(window: BrowserWindow, store
       await click('.auth-panel [data-action="add-subscription-provider"]');
       await waitFor(`document.querySelector('[role="dialog"] #modal-title')?.textContent==='添加订阅供应商'`, 'the authorized subscription entry opens its picker');
       for (const { provider, expected } of namingCases.slice(0, 5)) assert.equal(await evaluate<string>(`document.querySelector('[role="dialog"] [data-preset-id="${provider.presetId}"] strong').textContent`), expected, 'New subscription preset labels match the existing source display names');
+      await click('[data-preset-id="jetbrains-central"]');
+      assert.ok(await evaluate<boolean>(`!!document.querySelector('.form-info [data-action="import-jetbrains-account"].secondary')`));
+      await capture('jetbrains-picker-' + theme);
       await click('[aria-label="关闭对话框"]');
       for (const [index, provider] of subscriptions.entries()) {
         const model = models[index], scope = `[data-subscription-connection="${provider.id}"]`;
@@ -224,6 +227,20 @@ export async function verifyNavigationConsolidation(window: BrowserWindow, store
         await waitFor('!document.querySelector(\'[data-auth-kind="opencode-go"]\') && !document.querySelector(\'.sidebar [data-source-id="' + source.id + '"]\')', 'OpenCode Go removal clears both views');
       } else assert.notEqual(source.id, grok.id);
     }
+    const goDir = join(store.dataDir, 'feature-home', '.local', 'share', 'opencode');
+    mkdirSync(goDir, { recursive: true });
+    const goAuth = JSON.stringify({ 'opencode-go': { type: 'api', key: 'synthetic-navigation-go-key' } });
+    writeFileSync(join(goDir, 'auth.json'), goAuth, { flag: 'wx', mode: 0o600 });
+    await click('[data-action="add-subscription-provider"]'); await click('[data-preset-id="opencode-go"]');
+    await click('[data-action="import-opencode-go"]');
+    await waitFor(`!document.querySelector('[role="dialog"]') && !!document.querySelector('[data-subscription-connection]')`, 'Go client import opens its saved provider');
+    const go = store.listProviders().find(p => p.kind === 'opencode-go'); assert.ok(go && go.hasSecret);
+    assert.equal(store.getSecret(go.id)?.apiKey, 'synthetic-navigation-go-key');
+    await click('.sidebar [data-page="auth"]'); await click('[data-action="import-configured-opencode-go"]');
+    await waitFor(`!!document.querySelector('[data-subscription-connection="${go.id}"]')`, 'reimport selects the same Go workspace');
+    assert.equal(store.listProviders().filter(p => p.kind === 'opencode-go').length, 1);
+    assert.equal(readFileSync(join(goDir, 'auth.json'), 'utf8'), goAuth);
+    assert.ok(!(await evaluate<string>('document.body.innerText')).includes('synthetic-navigation-go-key'));
     writeFileSync(join(outputDir, 'navigation-consolidation-validation.json'), JSON.stringify({ ok: true, subscriptionRemovalAndReaddition: true, opencodeGoPickerAndRemoval: true, sidebarApiSubscriptionGroups: true, legacySubscriptionNamesStandardizedForDisplay: true, observedAuthTitles, numberedLegacyNamesRetainTheirSuffix: true, customAndApiNamesPreserved: true, selectedProviderHeaderAndDescriptionMatchSidebar: true, authGroupAndPresetNamesConsistent: true, rawProviderNamesAndRoutingIdsUnchanged: true, subscriptionAdditionOnlyInAuthCenter: true, explicitCopilotClientImportAvailable: true, syntheticCopilotClientImportSucceeded: true, clientImportSelectionAndProvenanceVerified: true, clientSourceConfigurationUnchanged: true, serviceInterfaceAndLogsConsolidated: true, subscriptionLocalUrlKeyAliasesCopied: true, localCatalogIncludesPublishedAliases: true, unpublishedAliasStatusMatchesCatalog: true, curlUsesNativeProtocolAndKeyPlaceholder: true, upstreamDetailsOnlyInPrinciples: true, credentialsAndToolBindingsPreserved: true, noRealAccountImportLoginOrRelayStartup: true, screenshots }, null, 2));
   } finally {
     clipboard.clear();

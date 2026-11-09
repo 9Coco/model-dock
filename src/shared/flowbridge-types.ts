@@ -22,7 +22,9 @@ export const NETWORK_SITES = ['Google', 'YouTube', 'GitHub', 'ChatGPT', 'Cloudfl
 export type NetworkSite = typeof NETWORK_SITES[number];
 export interface WebsiteResult { name: string; url: string; status_code: number | null; elapsed_ms: number; ok: boolean; detail: string; reachable: boolean; browser_verification: boolean; attempts: number }
 export interface NetworkCheck { system: WebsiteResult; proxy: WebsiteResult | null }
+export type ProxySpeedMetric = 'latency' | 'download' | 'upload';
 export interface FlowBridgeApi {
+  measureNetworkSpeed(address: string, metric: ProxySpeedMetric): Promise<number>;
   networkSnapshot(): Promise<FlowBridgeSnapshot>;
   saveNetworkSettings(patch: Partial<FlowBridgeSettings>): Promise<FlowBridgeSnapshot>;
   connectNetwork(upstream?: Pick<FlowBridgeSettings, 'address' | 'mode'>): Promise<FlowBridgeSnapshot>;

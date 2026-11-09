@@ -1,6 +1,6 @@
 {
   "name": "model-dock",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "description": "ModelDock — 配置一次，让模型连接你的工具。",
   "license": "GPL-3.0-or-later",
   "author": {

@@ -239,6 +239,7 @@ export interface ModelDockApi extends FlowBridgeApi {
   openDiagnosticsDir(): Promise<void>;
   snapshot(): Promise<Snapshot>;
   runtimeSnapshot(): Promise<RuntimeSnapshot>;
+  importOpenCodeGo(input: Pick<Provider, 'name' | 'enabled' | 'note'> & { id?: string }): Promise<Provider>;
   saveProvider(input: ProviderInput): Promise<Provider>;
   deleteProvider(id: string, scope?: 'local-subscription'): Promise<void>;
   listProviderDuplicates(): Promise<import('./provider-duplicates').ProviderDuplicateGroup[]>;

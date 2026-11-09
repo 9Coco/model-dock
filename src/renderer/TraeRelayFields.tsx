@@ -1,6 +1,6 @@
 import type { Provider, ProviderInput } from '../shared/types';
 import type { SettingsSnapshot } from '../shared/settings-types';
-import { ArrowDownToLine, Server } from './MaterialIcon';
+import { KeyRound, Server } from './MaterialIcon';
 
 export type TraeRelayDraft = Pick<ProviderInput, 'id' | 'baseUrl' | 'claudeBaseUrl' | 'relayMode'> & {
   apiKey: string;
@@ -16,13 +16,11 @@ export function TraeRelayFields({ draft, saved, pending, onChange, onImport }: {
 }) {
   const external = saved?.relayMode === 'manual' && draft.relayMode === 'manual';
   return <div data-trae-relay-mode={external ? 'manual' : 'managed'}>
-    <section className="form-info trae-relay-guide" aria-label="TRAE 账号接入"><Server size={18} /><div>
-      <strong>使用本机 TRAE 中国版账号</strong>
-      <p>在 TRAE 中国版或 TRAE SOLO 中国版登录，再从授权中心导入。账号由 ModelDock 网关直接转发，生成内容会及时返回。</p>
-      <p>导入后获取账号可用模型，再选择模型测试连接。使用时保持 ModelDock 和本地网关运行。</p>
-      <p>当前已核实文本与函数工具调用。Claude Code 必需的输出预算暂不兼容；其他客户端传入尚未支持的图片或生成参数时会明确提示。</p>
-      <button type="button" className="button small primary" data-action="import-trae-account" disabled={pending} onClick={onImport}><ArrowDownToLine size={14} />从客户端导入</button>
-      <p role="status">{saved?.nativeAdapter === 'trae' ? '已接入内置适配器，可重新导入更新登录状态。' : external ? '当前保留已有外部接口。重新导入账号后使用内置适配器。' : '导入账号后自动保存连接，无需单独启动反代。'}</p>
+    <section className="form-info" aria-label="TRAE 账号接入"><KeyRound size={19} /><div>
+      <strong>TRAE CN 订阅</strong>
+      <p>{external ? '当前使用已有外部接口。可从本机 TRAE 或 TRAE SOLO 中国版重新导入已登录的账号。' : '从本机已登录的 TRAE 或 TRAE SOLO 中国版导入订阅账号。'}</p>
+      <p>支持文本与工具调用；暂不支持 Claude Code 所需的输出预算。</p>
+      <div className="subscription-import-actions"><button type="button" className="button small secondary" data-action="import-trae-account" disabled={pending} onClick={onImport}>从客户端导入</button></div>
     </div></section>
     {external && <>
       <label className="form-field">已有外部接口地址<input type="url" value={draft.baseUrl} onChange={event => onChange({ baseUrl: event.target.value, apiKey: '' })} /></label>

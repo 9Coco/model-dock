@@ -99,6 +99,9 @@
 :root[data-theme="dark"] ::-webkit-scrollbar-track { background-color: transparent; }
 
 /* 订阅与账号反代共用入口，名称和选择标记保持完整。 */
+.subscription-import-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.preset-picker.subscription-presets > button .tool-logo { width: 18px; height: 18px; background: transparent; color: inherit; border: 0; border-radius: 0; }
+.preset-picker.subscription-presets > button .tool-logo-mark { width: 100%; height: 100%; }
 .preset-picker.subscription-presets { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 
 /* 修改点：持久诊断日志与请求统计分开，筛选和安全详情在小窗口内完整显示。 */
