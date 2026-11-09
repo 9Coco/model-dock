@@ -31,6 +31,8 @@
 .network-chart [data-direction="download"], .network-metrics [data-direction="download"] { color: var(--network-download); }
 :root[data-theme] .network-metrics [data-direction] > :is(small, strong, span) { color: inherit; }
 .network-chart { display: block; width: 100%; height: 100px; }
+.proxy-speed-panel { padding-bottom: 12px; margin-bottom: 14px; border-bottom: 1px solid var(--line); }
+.proxy-speed-values { margin-bottom: 0; }
 .network-checks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
 .network-checks > div { display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--line); border-radius: 6px; padding: 10px; }
 .network-checks small { line-height: 1.5; }

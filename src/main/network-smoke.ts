@@ -137,6 +137,13 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
     assert.equal(applied.settings.mode, 'global');
     assert.equal(applied.settings.address, 'socks5://127.0.0.1:19321');
     assert.equal(applied.state, 'idle', 'Applying a candidate must not start the session');
+    await click('[data-action="measure-proxy-speed"]');
+    for (const [key, value] of [['latency', '42 ms'], ['download', '80.0 Mbps'], ['upload', '20.0 Mbps']]) {
+      await wait(`${query('[data-speed-result="' + key + '"]')}.textContent === ${JSON.stringify(value)}`);
+    }
+    assert.deepEqual((await network()).settings, applied.settings);
+    assert.equal((await network()).state, 'idle', 'Measuring the upstream must not take over the system network');
+    writeFileSync(join(output, 'network-proxy-speed.png'), await capture());
     await openPage('service');
     await openPage('network');
     assert.equal(await evaluate(`${query('#network-address')}.value`), applied.settings.address);

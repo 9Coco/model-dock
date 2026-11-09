@@ -75,6 +75,9 @@ import { verifyJetBrainsConnections } from './jetbrains-smoke';
 import { jetBrainsWindowsSmokeOptions, verifyJetBrainsWindowsProfiles } from './jetbrains-windows-smoke';
 import { verifyAggregateModes } from './aggregate-modes-smoke';
 import { restoreToolBinding } from './tool-restore-binding';
+import { importOpenCodeGo } from './opencode-go-import';
+import { measureProxySpeed } from './proxy-speed-test';
+import type { ProxySpeedMetric } from '../shared/flowbridge-types';
 import { ApplicationNetworkSession } from './network-proxy';
 import { inspectAuthNetwork } from './network-diagnostic';
 import { createSystemNetworkFetch } from './system-network';
@@ -806,6 +809,27 @@ function registerIpc() {
   handle('saveNetworkSettings', patch => network.save(patch));
   handle('connectNetwork', upstream => network.connect(upstream));
   handle('disconnectNetwork', () => network.disconnect());
+  let measuringSpeed = false;
+  let speedProxy = '';
+  handle('measureNetworkSpeed', async (address: string, metric: ProxySpeedMetric) => {
+    const selected = network.snapshot().settings.address;
+    if (!selected || selected !== address || !['latency', 'download', 'upload'].includes(metric)) throw new Error('请先应用要测试的代理地址。');
+    if (measuringSpeed) throw new Error('代理测速正在进行。');
+    measuringSpeed = true;
+    try {
+      if (__MODELDOCK_SMOKE_BUILD__ && process.env.MODELDOCK_SMOKE_NETWORK_ONLY === '1') return { latency: 42, download: 80, upload: 20 }[metric];
+      const probe = session.fromPartition('modeldock-speed-test', { cache: false });
+      if (speedProxy !== selected) {
+        await probe.closeAllConnections();
+        await probe.setProxy({ mode: 'fixed_servers', proxyRules: selected });
+        speedProxy = selected;
+      }
+      return await measureProxySpeed(metric, (input, init) => probe.fetch(input, init));
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith('测速')) throw error;
+      throw new Error('通过上游代理访问测速节点失败或超时，请检查代理地址和连接。');
+    } finally { measuringSpeed = false; }
+  });
   handle('checkNetworkSite', site => network.check(site));
   handle('networkHotspotCandidates', () => hotspotCandidates());
   handle('networkLocalProxies', () => network.localProxies());
@@ -849,6 +873,12 @@ function registerIpc() {
   handle('rendererReady', () => {
     if (__MODELDOCK_SMOKE_BUILD__) windowPresentationProbe?.rendererPrepared();
     presentation?.rendererDidPrepare();
+  });
+  handle('importOpenCodeGo', input => {
+    assertEditable();
+    const provider = importOpenCodeGo(store, input, featureHome, __MODELDOCK_SMOKE_BUILD__ ? {} : process.env);
+    catalog.invalidate(provider.id);
+    return provider;
   });
   handle('saveProvider', (input: ProviderInput) => {
     assertEditable();

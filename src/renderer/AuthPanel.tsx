@@ -101,8 +101,9 @@ function ResetCredits({ usage, now }: { usage: SubscriptionUsage; now: number })
   </div>;
 }
 
-export function AuthPanel({ api, configuredProviders = [], onRemoveSource, onConfirmRemoveSource, platform, notify, onLogin, onCopilotLogin, onChanged, onManageProvider, onAddRelay, onAddSubscription, refreshRevision = 0, importRequest, onImportRequestHandled }: {
+export function AuthPanel({ api, configuredProviders = [], onImportGo, onRemoveSource, onConfirmRemoveSource, platform, notify, onLogin, onCopilotLogin, onChanged, onManageProvider, onAddRelay, onAddSubscription, refreshRevision = 0, importRequest, onImportRequestHandled }: {
   configuredProviders?: Provider[];
+  onImportGo: () => Promise<void>;
   onRemoveSource?: (provider: Provider) => void;
   onConfirmRemoveSource: (id: string) => Promise<void>;
   api?: ModelDockApi; notify: Notify;
@@ -463,7 +464,7 @@ export function AuthPanel({ api, configuredProviders = [], onRemoveSource, onCon
       </div>;
     })}
     {goSources.length > 0 && <div className="account-group" data-auth-kind="opencode-go">
-      <div className="account-group-header"><h2><ToolIcon tool="opencode" />OpenCode Go 订阅<span className="count-tag">{goSources.length}</span></h2></div>
+      <div className="account-group-header"><h2><ToolIcon tool="opencode" />OpenCode Go 订阅<span className="count-tag">{goSources.length}</span></h2><button className="button small secondary" data-action="import-configured-opencode-go" disabled={busy['import-go']} onClick={() => void run('import-go', onImportGo)}><ArrowDownToLine size={13} />从客户端导入</button></div>
       {goSources.map(renderSource)}
     </div>}
     {accounts.length > 0 && <p className="feature-footnote">账户额度包含其他客户端用量。访问凭据到期与套餐到期不同；反代密钥的保存状态不代表上游账号已登录。</p>}
