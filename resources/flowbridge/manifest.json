@@ -81,8 +81,8 @@
       "source": "linux/connectivity.py",
       "path": "linux/connectivity.py",
       "upstreamSha256": "e019d9618fc6510f7c0af93f918f79ab2efeb7f092da3dd63e83da7302f8feca",
-      "sha256": "fbbd3b6dda2a7a5c6c4a45848c0cb6c5d3c072760fdfd91f0723018a0dfcdc96",
-      "changes": "Describe HTTP connection failures for both desktop and phone upstreams."
+      "sha256": "71f207edbd6b344598e14f511e1f3c85c3b1bd1b15b623c5c3741d306f1e3a7f",
+      "changes": "Describe HTTP connection failures for both desktop and phone upstreams. Include X in the fixed public site list."
     },
     {
       "source": "linux/tun_client.py",
@@ -202,7 +202,8 @@
       "source": "linux/test_connectivity.py",
       "path": "linux/test_connectivity.py",
       "upstreamSha256": "8ff5ded5a64e8f2fb67e802abdb043647cec516296c6b184ff0ba1f17ba3850d",
-      "sha256": "8ff5ded5a64e8f2fb67e802abdb043647cec516296c6b184ff0ba1f17ba3850d"
+      "sha256": "3dbe55f8f6a5119e20de007614d6253428be82c940611610ce9af390b5eedfa1",
+      "changes": "Include X in the fixed public site list."
     },
     {
       "source": "linux/test_tun_client.py",

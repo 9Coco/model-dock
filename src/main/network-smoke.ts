@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { BrowserWindow, screen } from 'electron';
 import type { FlowBridgeSnapshot, NetworkEngineStatus } from '../shared/flowbridge-types';
+import { NETWORK_SITES } from '../shared/flowbridge-types';
 import type { Store } from './store';
 import type { NetworkEngine } from './flowbridge-engine';
 
@@ -138,12 +139,20 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
     assert.equal(applied.settings.address, 'socks5://127.0.0.1:19321');
     assert.equal(applied.state, 'idle', 'Applying a candidate must not start the session');
     await click('[data-action="measure-proxy-speed"]');
-    for (const [key, value] of [['latency', '42 ms'], ['download', '80.0 Mbps'], ['upload', '20.0 Mbps']]) {
+    for (const [index, site] of NETWORK_SITES.entries()) {
+      const tile = '[data-site="' + site + '"]';
+      const expected = site === 'X' ? '超时' : (42 + index) + ' ms';
+      await wait(`${query(tile + ' .site-latency')}.textContent === ${JSON.stringify(expected)}`);
+    }
+    assert.equal(await evaluate(`${query('[data-site="ChatGPT"] .site-http-status')}.textContent`), 'HTTP 403');
+    for (const [key, value] of [['download', '80.0 Mbps'], ['upload', '20.0 Mbps']]) {
       await wait(`${query('[data-speed-result="' + key + '"]')}.textContent === ${JSON.stringify(value)}`);
     }
     assert.deepEqual((await network()).settings, applied.settings);
     assert.equal((await network()).state, 'idle', 'Measuring the upstream must not take over the system network');
     writeFileSync(join(output, 'network-proxy-speed.png'), await capture());
+    await click('[data-site="X"]');
+    await wait(`!!${query('[data-site-details="X"]')}`);
     await openPage('service');
     await openPage('network');
     assert.equal(await evaluate(`${query('#network-address')}.value`), applied.settings.address);
@@ -209,7 +218,19 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
     await openPage('network');
     window.setContentSize(width, height);
     await wait(`innerWidth===${width} && ${networkState('connected')}`);
-    await wait(`!!${query('[aria-label="检测网站"]')} && !!${query('[aria-label="流量时间范围"]')}`);
+    await wait(`!!${query('[aria-label="网站延迟"]')} && !!${query('[aria-label="流量时间范围"]')}`);
+    await click('[data-action="measure-proxy-speed"]');
+    await wait(`${query('[data-speed-result="upload"]')}.textContent === '20.0 Mbps'`);
+    const geometry = await evaluate<{ sameRow: boolean; fullWidth: boolean; iconsAbove: boolean }>(`(() => {
+      const tiles = [...document.querySelectorAll('.site-tile')];
+      const panel = document.querySelector('.proxy-speed-panel'), grid = document.querySelector('.network-tools');
+      return {
+        sameRow: tiles.length === 6 && tiles.every(tile => tile.offsetTop === tiles[0].offsetTop),
+        fullWidth: Math.abs(panel.getBoundingClientRect().width - grid.getBoundingClientRect().width) <= 2,
+        iconsAbove: tiles.every(tile => tile.querySelector('.site-mark').getBoundingClientRect().bottom < tile.querySelector('.site-latency').getBoundingClientRect().top && getComputedStyle(tile.querySelector('.site-mark')).maskImage !== 'none')
+      };
+    })()`);
+    assert.deepEqual(geometry, { sameRow: true, fullWidth: true, iconsAbove: true });
     const layout = await evaluate<{ overflow: boolean; menuVisible: boolean }>(`(() => {
       const main=document.querySelector('main'), menu=${query('[data-page="network"]')}.getBoundingClientRect();
       return {overflow: document.documentElement.scrollWidth>innerWidth+1 || main.scrollWidth>main.clientWidth+1,

@@ -508,7 +508,7 @@ class ConnectivityTests(unittest.TestCase):
         return check_website("127.0.0.1", self.proxy.server_port, url, timeout)
 
     def test_presets_and_name_lookup(self):
-        self.assertEqual(list(SITES), ["Google", "YouTube", "GitHub", "ChatGPT", "Cloudflare"])
+        self.assertEqual(list(SITES), ["Google", "YouTube", "X", "GitHub", "ChatGPT", "Cloudflare"])
         self.assertEqual(lookup_site("谷歌"), ("Google", SITES["Google"]))
         self.assertEqual(lookup_site("youtube"), ("YouTube", SITES["YouTube"]))
         self.assertEqual(lookup_site("https://github.com/some/path")[0], "GitHub")

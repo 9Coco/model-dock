@@ -18,12 +18,20 @@ export interface FlowBridgeSnapshot {
   status: NetworkEngineStatus;
   history: NetworkSample[];
 }
-export const NETWORK_SITES = ['Google', 'YouTube', 'GitHub', 'ChatGPT', 'Cloudflare'] as const;
+export const NETWORK_SITES = ['Google', 'YouTube', 'X', 'ChatGPT', 'GitHub', 'Cloudflare'] as const;
 export type NetworkSite = typeof NETWORK_SITES[number];
+export const NETWORK_SITE_URLS: Record<NetworkSite, string> = {
+  Google: 'https://www.google.com/', YouTube: 'https://www.youtube.com/', X: 'https://x.com/',
+  ChatGPT: 'https://chatgpt.com/', GitHub: 'https://github.com/', Cloudflare: 'https://www.cloudflare.com/',
+};
+export type SiteLatency = { site: NetworkSite } & (
+  { state: 'response'; ms: number; httpStatus: number | null } | { state: 'timeout' | 'unreachable' }
+);
 export interface WebsiteResult { name: string; url: string; status_code: number | null; elapsed_ms: number; ok: boolean; detail: string; reachable: boolean; browser_verification: boolean; attempts: number }
 export interface NetworkCheck { system: WebsiteResult; proxy: WebsiteResult | null }
 export type ProxySpeedMetric = 'latency' | 'download' | 'upload';
 export interface FlowBridgeApi {
+  measureNetworkSites(address: string, onResult: (result: SiteLatency) => void): Promise<void>;
   measureNetworkSpeed(address: string, metric: ProxySpeedMetric): Promise<number>;
   networkSnapshot(): Promise<FlowBridgeSnapshot>;
   saveNetworkSettings(patch: Partial<FlowBridgeSettings>): Promise<FlowBridgeSnapshot>;

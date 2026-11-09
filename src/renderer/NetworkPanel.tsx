@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { useEffect, useRef, useState } from 'react';
 import type { ModelDockApi } from '../shared/types';
-import { NETWORK_SITES, type FlowBridgeSnapshot, type NetworkCheck, type NetworkMode, type NetworkSample, type NetworkSite, type ProxySpeedMetric } from '../shared/flowbridge-types';
+import { type FlowBridgeSnapshot, type NetworkMode, type NetworkSample } from '../shared/flowbridge-types';
 import { Toggle, type Notify } from './components';
 import { Activity } from './MaterialIcon';
+import { ProxySpeedPanel } from './ProxySpeedPanel';
 import './network.css';
 export const networkBytes = (value: number) => value >= 1024 ** 3 ? `${(value / 1024 ** 3).toFixed(2)} GB` : value >= 1024 ** 2 ? `${(value / 1024 ** 2).toFixed(1)} MB` : value >= 1024 ? `${(value / 1024).toFixed(1)} KB` : `${Math.round(value)} B`;
 export function NetworkChart({ samples }: { samples: NetworkSample[] }) {
@@ -131,59 +132,10 @@ function NetworkControls({ api, snapshot, onChanged, notify }: Required<NetworkC
   </section>;
 }
 
-const speedMetrics = [
-  { key: 'latency', label: '网络延迟', unit: 'ms' },
-  { key: 'download', label: '↓ 下载', unit: 'Mbps' },
-  { key: 'upload', label: '↑ 上传', unit: 'Mbps' },
-] as const;
-
-function ProxySpeedPanel({ api, address, disabled }: { api: ModelDockApi; address: string; disabled: boolean }) {
-  const [values, setValues] = useState<Partial<Record<ProxySpeedMetric, number>>>({});
-  const [stage, setStage] = useState<ProxySpeedMetric>();
-  const [error, setError] = useState('');
-  const run = useRef(0);
-  const active = useRef(false);
-  useEffect(() => () => { run.current++; }, []);
-  const measure = async () => {
-    if (active.current) return;
-    active.current = true;
-    const id = ++run.current;
-    setValues({}); setError('');
-    const failures: string[] = [];
-    try {
-      for (const { key, label } of speedMetrics) {
-        setStage(key);
-        try {
-          const value = await api.measureNetworkSpeed(address, key);
-          if (id !== run.current) return;
-          setValues(previous => ({ ...previous, [key]: value }));
-        } catch (failure) {
-          if (id !== run.current) return;
-          failures.push(label + '：' + (failure instanceof Error ? failure.message : '测试失败。'));
-          setError(failures.join(' '));
-          if (key === 'latency') break;
-        }
-      }
-    } finally {
-      active.current = false;
-      if (id === run.current) setStage(undefined);
-    }
-  };
-  return <section className="proxy-speed-panel" aria-label="代理测速">
-    <div className="section-heading"><h2>代理测速</h2><button className="button primary small" data-action="measure-proxy-speed" disabled={!address || disabled || !!stage} onClick={() => void measure()}>{stage ? '测速中…' : '一键测速'}</button></div>
-    <p className="network-hint">{address ? '经 ' + address + ' 测试到 Cloudflare 的往返延迟和传输速度。' : '请先填写并应用上游代理地址。'}</p>
-    <div className="network-metrics proxy-speed-values" aria-live="polite">{speedMetrics.map(({ key, label, unit }) => <div key={key} data-direction={key}><small>{label}</small><strong data-speed-result={key}>{values[key] !== undefined ? (key === 'latency' ? Math.round(values[key]!) : values[key]!.toFixed(1)) + ' ' + unit : stage === key ? '测量中…' : '—'}</strong></div>)}</div>
-    {error && <p className="feature-error" role="alert">{error}</p>}
-  </section>;
-}
 function NetworkTools({ api, snapshot, notify }: Required<NetworkProps>) {
-  const { busy, action } = useNetworkAction(notify);
-  const [site, setSite] = useState<NetworkSite>('ChatGPT');
-  const [checks, setChecks] = useState<NetworkCheck | null>(null);
+  const { action } = useNetworkAction(notify);
   const [range, setRange] = useState<'minute' | 'day'>('minute');
-  useEffect(() => setChecks(null), [snapshot?.settings.mode, snapshot?.settings.address, snapshot?.state]);
   const connected = snapshot.state === 'connected';
-  const connecting = snapshot.state === 'connecting' || snapshot.state === 'disconnecting';
   const latest = snapshot.history.at(-1);
   const samples = snapshot.history.filter(s => s.time >= Date.now() - (range === 'minute' ? 60_000 : 86_400_000)).sort((a, b) => a.time - b.time);
   return <>
@@ -191,10 +143,7 @@ function NetworkTools({ api, snapshot, notify }: Required<NetworkProps>) {
       <div className="network-metrics"><div data-direction="upload"><small>↑ 上传</small><strong>{networkBytes(connected ? latest?.uploadRate ?? 0 : 0)}/s</strong><span>本次 {networkBytes(snapshot.status.uploadBytes)}</span></div><div data-direction="download"><small>↓ 下载</small><strong>{networkBytes(connected ? latest?.downloadRate ?? 0 : 0)}/s</strong><span>本次 {networkBytes(snapshot.status.downloadBytes)}</span></div><div><small>活动连接</small><strong>{snapshot.status.connections}</strong><span>统计当前代理会话</span></div></div>
       <NetworkChart samples={samples} /><p className="network-hint">24 小时历史按分钟采样。</p>
     </div>
-    <div className="panel"><ProxySpeedPanel key={snapshot.settings.address} api={api} address={snapshot.settings.address} disabled={connecting} /><div className="section-heading"><h2>网站检测</h2><div className="network-actions"><select aria-label="检测网站" value={site} onChange={e => { setSite(e.target.value as NetworkSite); setChecks(null); }}>{NETWORK_SITES.map(name => <option key={name}>{name}</option>)}</select><button className="button secondary" disabled={!!busy || connecting} onClick={() => void action('check', async () => setChecks(await api.checkNetworkSite(site)))}>{busy === 'check' ? '检测中…' : '检测'}</button><button className="button secondary" onClick={() => void action('browser', () => api.openNetworkSite(site))}>浏览器验证</button></div></div>
-      <p className="network-hint">系统网络使用本机 DNS 与普通 TCP/TLS；代理出口通过当前连接。出口成功不代表全局接管正常，也不代表账号或对话可用。</p>
-      {checks && <div className="network-checks">{(['system', 'proxy'] as const).map(path => { const result = checks[path]; return <div key={path}><strong>{path === 'system' ? '系统网络' : '代理出口'}</strong><span>{result ? result.browser_verification ? '需浏览器验证' : result.ok ? '检测通过' : '自动检测未确认' : '请先连接代理'}</span>{result && <small>{result.detail} · {result.elapsed_ms} ms{result.status_code ? ` · HTTP ${result.status_code}` : ''}</small>}</div>; })}</div>}
-    </div>
+    <ProxySpeedPanel key={snapshot.settings.address} api={api} address={snapshot.settings.address} networkState={snapshot.state} />
     {snapshot.platform !== 'win32' && <div className="panel"><div className="section-heading"><div><h2>手机热点代理</h2><p>导出 FlowBridge Termux 安装器，在手机 Termux 手动执行；默认端口 38473，支持 HTTP、SOCKS5 与 UDP。</p></div><button className="button secondary" onClick={() => void action('export', async () => { const path = await api.exportPhoneProxy(); if (path) notify('手机脚本已导出，请在手机 Termux 中执行。', 'success'); })}>导出手机脚本</button></div><p className="network-hint">手机 VPN 须允许 Termux 联网。仅导出文件，不会连接手机或修改其配置。</p></div>}
   </>;
 }

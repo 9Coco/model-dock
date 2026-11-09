@@ -1,5 +1,27 @@
 import { expect, it } from 'vitest';
-import { measureProxySpeed } from '../src/main/proxy-speed-test';
+import { measureProxySpeed, measureSiteLatency } from '../src/main/proxy-speed-test';
+import { NETWORK_SITES, NETWORK_SITE_URLS } from '../src/shared/flowbridge-types';
+
+it('times each fixed official origin, including restricted and redirect replies, and isolates unreachable sites', async () => {
+  const results = await Promise.all(NETWORK_SITES.map(site => {
+    let clock = 0;
+    return measureSiteLatency(site, async (url, init) => {
+      expect(url).toBe(NETWORK_SITE_URLS[site]);
+      expect(init).toMatchObject({ method: 'HEAD', credentials: 'omit', redirect: 'manual', cache: 'no-store' });
+      clock = 123;
+      if (site === 'GitHub') throw new Error('Connection refused');
+      const status = { Google: 200, YouTube: 204, X: 302, ChatGPT: 403, Cloudflare: 407 }[site];
+      return new Response(null, { status });
+    }, () => clock);
+  }));
+  expect(results).toEqual([
+    { site: 'Google', state: 'response', ms: 123, httpStatus: 200 },
+    { site: 'YouTube', state: 'response', ms: 123, httpStatus: 204 },
+    { site: 'X', state: 'response', ms: 123, httpStatus: 302 },
+    { site: 'ChatGPT', state: 'response', ms: 123, httpStatus: 403 },
+    { site: 'GitHub', state: 'unreachable' }, { site: 'Cloudflare', state: 'unreachable' },
+  ]);
+});
 
 it('reports the median HTTPS round trip without treating warm-up as steady-state latency', async () => {
   const samples = [450, 41, 38]; let clock = 0;
