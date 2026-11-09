@@ -111,17 +111,23 @@ export class FlowBridgeManager {
       } finally { this.busy = false; }
     });
   }
-  connect(): Promise<FlowBridgeSnapshot> {
+  connect(upstream?: Pick<FlowBridgeSettings, 'address' | 'mode'>): Promise<FlowBridgeSnapshot> {
     if (this.busy || this.closing) return Promise.reject(new Error('网络操作仍在进行。'));
     this.busy = true; this.cancel = false;
-    return this.enqueue(async () => { try { await this.start(); return this.snapshot(); } finally { this.busy = false; } });
+    return this.enqueue(async () => { try { await this.start(upstream); return this.snapshot(); } finally { this.busy = false; } });
   }
-  private async start() {
-    if (this.state === 'connected') return;
+  private async start(upstream?: Pick<FlowBridgeSettings, 'address' | 'mode'>) {
+    if (this.state === 'connected') {
+      if (upstream !== undefined) throw new Error('请先断开当前连接再连接新地址。');
+      return;
+    }
     if (this.active) throw new Error('上次网络清理未确认，请先断开恢复。');
-    if (!this.settings.address) throw new Error('请先保存代理地址。');
     if (!['linux', 'win32'].includes(this.options.platform)) throw new Error('网络接管仅支持 Windows 和 Linux。');
-    this.settings = validateNetworkSettings(this.settings, this.settings, this.options.platform, this.options.gatewayPort());
+    const patch = upstream === undefined ? {} : { address: upstream?.address, mode: upstream?.mode };
+    const next = validateNetworkSettings(patch, this.settings, this.options.platform, this.options.gatewayPort());
+    if (!next.address) throw new Error('请填写上游代理地址。');
+    if (next.address !== this.settings.address || next.mode !== this.settings.mode) this.store.setManagedState(KEY, next);
+    this.settings = next;
     this.state = 'connecting'; this.message = '正在连接代理…'; this.previous = undefined;
     this.store.setManagedState(LEASE, true); this.active = true;
     try {

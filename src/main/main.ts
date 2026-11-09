@@ -803,7 +803,7 @@ function registerIpc() {
   handle('runtimeSnapshot', () => runtime.snapshot());
   handle('networkSnapshot', () => network.snapshot());
   handle('saveNetworkSettings', patch => network.save(patch));
-  handle('connectNetwork', () => network.connect());
+  handle('connectNetwork', upstream => network.connect(upstream));
   handle('disconnectNetwork', () => network.disconnect());
   handle('checkNetworkSite', site => network.check(site));
   handle('networkHotspotCandidates', () => hotspotCandidates());

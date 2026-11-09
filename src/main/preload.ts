@@ -14,7 +14,7 @@ const rendererErrorNames = new Set(['Error', 'TypeError', 'ReferenceError', 'Syn
 const api: ModelDockApi = {
   runtimeSnapshot: () => call('runtimeSnapshot'),
   networkSnapshot: () => call('networkSnapshot'), saveNetworkSettings: patch => call('saveNetworkSettings', patch),
-  connectNetwork: () => call('connectNetwork'), disconnectNetwork: () => call('disconnectNetwork'),
+  connectNetwork: upstream => call('connectNetwork', upstream), disconnectNetwork: () => call('disconnectNetwork'),
   checkNetworkSite: site => call('checkNetworkSite', site), networkHotspotCandidates: () => call('networkHotspotCandidates'),
   networkLocalProxies: () => call('networkLocalProxies'),
   exportPhoneProxy: () => call('exportPhoneProxy'), showNetworkMini: () => call('showNetworkMini'), openNetworkSite: site => call('openNetworkSite', site),
