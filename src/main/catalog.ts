@@ -24,7 +24,13 @@ export interface CatalogOAuth {
   prepareRequest(provider: Provider, path: string, body: Record<string, unknown>): Promise<PreparedUpstream>;
 }
 type RecordValue = Record<string, unknown>;
-interface CachedDiscovery { fingerprint: string; expiresAt: number; models: Map<string, DiscoveredModel> }
+interface CachedDiscovery {
+  fingerprint: string;
+  expiresAt: number;
+  models: Map<string, DiscoveredModel>;
+  refresh?: Promise<DiscoveryResult>;
+}
+const staleCatalog = () => new Error('模型目录已过期或供应商配置已变化，请重新获取模型列表。');
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 5 * 1024 * 1024;
 const MAX_PAGES = 5;
@@ -291,17 +297,24 @@ function nextPage(payload: unknown, current: string, initial: string, provider: 
 /** Discover actual upstream models, enriching missing metadata without fabricating a model list or forwarding raw error bodies. */
 export class ModelCatalog {
   private readonly fetcher: typeof fetch;
+  private readonly now: () => number;
   private readonly cache = new Map<string, CachedDiscovery>();
   private readonly revisions = new Map<string, number>();
-  constructor(private readonly store: CatalogStore, private readonly oauth: CatalogOAuth, private readonly options: { fetch?: typeof fetch; nativeModels?: (provider: Provider, signal: AbortSignal) => Promise<Response | undefined> } = {}) { this.fetcher = options.fetch ?? fetch; }
+  constructor(private readonly store: CatalogStore, private readonly oauth: CatalogOAuth, private readonly options: { fetch?: typeof fetch; now?: () => number; nativeModels?: (provider: Provider, signal: AbortSignal) => Promise<Response | undefined> } = {}) {
+    this.fetcher = options.fetch ?? fetch;
+    this.now = options.now ?? (() => Date.now());
+  }
   invalidate(providerId: string): void {
     this.cache.delete(providerId);
     this.revisions.set(providerId, (this.revisions.get(providerId) ?? 0) + 1);
   }
-  async discover(providerId: string): Promise<DiscoveryResult> {
+  discover(providerId: string): Promise<DiscoveryResult> {
     this.invalidate(providerId);
-    const revision = this.revisions.get(providerId)!;
+    return this.readDirectory(providerId, this.revisions.get(providerId)!);
+  }
+  private async readDirectory(providerId: string, revision: number): Promise<DiscoveryResult> {
     const provider = this.store.getProvider(providerId);
+    const sourceFingerprint = provider && fingerprint(provider);
     let statusCode: number | undefined;
     try {
       if (!provider) throw new CatalogFailure('invalid-provider', '供应商不存在。');
@@ -372,7 +385,7 @@ export class ModelCatalog {
         if (useNativeCatalog && next) throw new CatalogFailure('invalid-response', '内置适配器返回了无效的分页目录。');
       }
       const currentProvider = this.store.getProvider(providerId);
-      if (!currentProvider || this.revisions.get(providerId) !== revision || fingerprint(currentProvider) !== fingerprint(provider)) {
+      if (!currentProvider || this.revisions.get(providerId) !== revision || fingerprint(currentProvider) !== sourceFingerprint) {
         throw new CatalogFailure('invalid-provider', '供应商配置已变化，请重新获取模型列表。');
       }
       const existingModels = this.store.listModels();
@@ -394,7 +407,7 @@ export class ModelCatalog {
           ...(existing.defaultReasoningEffort ? { defaultReasoningEffort: existing.defaultReasoningEffort } : {}) };
       });
       history ??= subscriptionCatalogHistory(provider, discovered);
-      this.cache.set(providerId, { fingerprint: fingerprint(provider), expiresAt: Date.now() + CACHE_LIFETIME_MS, models: new Map(discovered.map(model => [model.upstreamId, structuredClone(model)])) });
+      this.cache.set(providerId, { fingerprint: fingerprint(provider), expiresAt: this.now() + CACHE_LIFETIME_MS, models: new Map(discovered.map(model => [model.upstreamId, structuredClone(model)])) });
       return { ok: true, providerId, statusCode, message: `已读取模型目录，发现 ${discovered.length} 个模型。目录可见性不代表模型调用已验证。`, models: discovered, ...(history ? { history } : {}) };
     } catch (error) {
       // Upstream bodies and arbitrary exception text can contain credentials.
@@ -405,10 +418,35 @@ export class ModelCatalog {
       return { ok: false, providerId, statusCode: failure.statusCode ?? statusCode, errorCategory: failure.category, message: failure.message, models: [] };
     }
   }
+  private selectedDirectory(providerId: string) {
+    const provider = this.store.getProvider(providerId), cached = this.cache.get(providerId);
+    if (!provider || !cached || cached.fingerprint !== fingerprint(provider)) throw staleCatalog();
+    return { cached, provider };
+  }
+  async addSelectedWithRefresh(providerId: string, selections: ModelSelection[], assertEditable: () => void): Promise<AddModelsResult> {
+    assertEditable();
+    const { cached } = this.selectedDirectory(providerId);
+    if (cached.expiresAt <= this.now()) {
+      // Refresh only the same source. An invalidated or replaced directory cannot authorize a pending selection.
+      const revision = this.revisions.get(providerId)!;
+      if (!Array.isArray(selections) || !selections.length || selections.length > MAX_MODELS || selections.some(row => !cached.models.has(row?.upstreamId))) {
+        throw new Error('所选模型不属于最近读取的模型目录，请重新获取。');
+      }
+      const refresh = cached.refresh ??= this.readDirectory(providerId, revision);
+      try {
+        const latest = await refresh;
+        if (this.revisions.get(providerId) !== revision) throw staleCatalog();
+        if (!latest.ok) throw new Error(`添加前重新获取模型列表失败：${latest.message}`);
+      } finally {
+        if (cached.refresh === refresh) delete cached.refresh;
+      }
+      assertEditable();
+    }
+    return this.addSelected(providerId, selections);
+  }
   addSelected(providerId: string, selections: ModelSelection[]): AddModelsResult {
-    const provider = this.store.getProvider(providerId);
-    const cached = this.cache.get(providerId);
-    if (!provider || !cached || cached.expiresAt <= Date.now() || cached.fingerprint !== fingerprint(provider)) throw new Error('模型目录已过期或供应商配置已变化，请重新获取模型列表。');
+    const { cached, provider } = this.selectedDirectory(providerId);
+    if (cached.expiresAt <= this.now()) throw staleCatalog();
     if (!Array.isArray(selections) || selections.length === 0 || selections.length > MAX_MODELS) throw new Error('请选择有效的模型。');
     const existing = this.store.listModels();
     const plannedModels: Pick<Model, 'id' | 'providerId' | 'alias'>[] = [...existing];

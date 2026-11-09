@@ -1033,7 +1033,7 @@ function registerIpc() {
   handle('skillsDelete', (id: string) => skills.remove(id));
   handle('testProvider', (id: string, input?: ConnectionTestInput) => connectionTester.test(id, input));
   handle('discoverModels', (id: string) => catalog.discover(id));
-  handle('addDiscoveredModels', (id: string, selected: ModelSelection[]) => { assertEditable(); return catalog.addSelected(id, selected); });
+  handle('addDiscoveredModels', (id: string, selected: ModelSelection[]) => catalog.addSelectedWithRefresh(id, selected, assertEditable));
 }
 
 function initializeApplication() {
@@ -1191,7 +1191,7 @@ function initializeApplication() {
       return nativeAdapter(provider)?.models(provider, signal) ?? Promise.resolve(undefined);
     };
     const nativeRequest = (provider: Provider, path: string, body: Record<string, unknown>, signal: AbortSignal) => nativeAdapter(provider)?.request(provider, path, body, signal) ?? Promise.resolve(undefined);
-    catalog = new ModelCatalog(store, upstream, { fetch: runtimeFetch, nativeModels });
+    catalog = new ModelCatalog(store, upstream, { fetch: runtimeFetch, nativeModels, now: historyModelsFixture?.now });
     connectionTester = new ConnectionTester(store, upstream, { fetch: runtimeFetch, nativeRequest, diagnostics: recordDiagnostic });
     const serviceSettings = preferences.get().settings;
     gateway = new Gateway(store, { diagnostics: recordDiagnostic, runWithDiagnostics: (context, action) => diagnosticScope.run(context, action), port: serviceSettings.gatewayPort, prepareRequest: (provider, _secret, path, body) => upstream.prepareRequest(provider, path, body), nativeRequest, fetch: runtimeFetch });
