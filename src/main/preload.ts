@@ -16,6 +16,7 @@ const api: ModelDockApi = {
   networkSnapshot: () => call('networkSnapshot'), saveNetworkSettings: patch => call('saveNetworkSettings', patch),
   connectNetwork: () => call('connectNetwork'), disconnectNetwork: () => call('disconnectNetwork'),
   checkNetworkSite: site => call('checkNetworkSite', site), networkHotspotCandidates: () => call('networkHotspotCandidates'),
+  networkLocalProxies: () => call('networkLocalProxies'),
   exportPhoneProxy: () => call('exportPhoneProxy'), showNetworkMini: () => call('showNetworkMini'), openNetworkSite: site => call('openNetworkSite', site),
   setJetBrainsPlugin: (tool, plugin) => call('setJetBrainsPlugin', tool, plugin),
   jetBrainsStatus: (tool, refresh) => call('jetBrainsStatus', tool, refresh),

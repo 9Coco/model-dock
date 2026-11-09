@@ -807,6 +807,7 @@ function registerIpc() {
   handle('disconnectNetwork', () => network.disconnect());
   handle('checkNetworkSite', site => network.check(site));
   handle('networkHotspotCandidates', () => hotspotCandidates());
+  handle('networkLocalProxies', () => network.localProxies());
   handle('showNetworkMini', () => networkMini.show());
   handle('openNetworkSite', async (site: NetworkSite) => {
     if (!NETWORK_SITES.includes(site)) throw new Error('未知网站。');

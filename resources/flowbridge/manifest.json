@@ -81,7 +81,8 @@
       "source": "linux/connectivity.py",
       "path": "linux/connectivity.py",
       "upstreamSha256": "e019d9618fc6510f7c0af93f918f79ab2efeb7f092da3dd63e83da7302f8feca",
-      "sha256": "e019d9618fc6510f7c0af93f918f79ab2efeb7f092da3dd63e83da7302f8feca"
+      "sha256": "fbbd3b6dda2a7a5c6c4a45848c0cb6c5d3c072760fdfd91f0723018a0dfcdc96",
+      "changes": "Describe HTTP connection failures for both desktop and phone upstreams."
     },
     {
       "source": "linux/tun_client.py",
@@ -335,8 +336,8 @@
       "source": "https://github.com/9Coco/model-dock/blob/7ea8d51e40b18b23c85eab905b7b6b421632b218/resources/flowbridge/bridge.py",
       "path": "resources/flowbridge/bridge.py",
       "upstreamSha256": "1ea86b5d63bc6189e04ef790e38de0f85b6794c2ff830539eb36caca8f738cf8",
-      "sha256": "49577958a0b30f5f5af5bc8989e4ad9840686e0d4e1e38128993ca93de377a9f",
-      "changes": "Escape non-ASCII characters on the network protocol pipe."
+      "sha256": "c38c8a0b68f7ccb2e304f8ebb26e49d6d8df04fe9d55885f2377d972182e8f34",
+      "changes": "Escape non-ASCII protocol output, expose read-only Windows proxy discovery, and restore on EOF only after session control requests."
     },
     {
       "source": "https://github.com/9Coco/model-dock/blob/7ea8d51e40b18b23c85eab905b7b6b421632b218/resources/flowbridge/tools/fetch_python.py",
@@ -351,6 +352,12 @@
       "upstreamSha256": "730406c31e78f3d8383e0addc14a96a8fff24cf2376df5f5f043d4661d0015ee",
       "sha256": "2eae17770e425bfb5d5fa34b79a5e5b30a3c3dc74673b19e3177d39e9d13220d",
       "changes": "Stages the fixed root-owned network components for inclusion in the ModelDock Debian package."
+    },
+    {
+      "source": "ModelDock Windows network integration",
+      "path": "resources/flowbridge/windows/local_proxy.py",
+      "sha256": "728a46235f846131991bce6b9efdb1d3390aec91c73fff2c932dc284e8668d21",
+      "changes": "Discover and probe local Windows proxy listeners for explicit upstream selection."
     }
   ]
 }

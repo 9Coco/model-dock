@@ -714,7 +714,7 @@ def probe_http_proxy(endpoint, timeout=6) -> None:
             raise TimeoutError("代理连接测试超时") from None
         if isinstance(exc, ValueError):
             raise
-        raise OSError("无法连接代理，请检查地址、端口及手机代理服务") from None
+        raise OSError("无法连接代理，请检查上游代理的地址、端口和运行状态") from None
     finally:
         deadline.close()
     if status == 407:

@@ -182,6 +182,16 @@ export class FlowBridgeManager {
     try { mkdirSync(this.options.dataDir, { recursive: true, mode: 0o700 }); const file = join(this.options.dataDir, 'history.json'); writeFileSync(file + '.tmp', JSON.stringify(this.history.slice(-1440)), { mode: 0o600 }); renameSync(file + '.tmp', file); }
     catch { this.message += '（流量历史保存失败）'; }
   }
+  async localProxies(): Promise<string[]> {
+    if (this.options.platform !== 'win32' || this.active || this.closing || this.busy || this.checking) {
+      throw new Error('请在 Windows 网络断开后查找本机代理。');
+    }
+    this.busy = true;
+    return this.enqueue(async () => {
+      try { return await this.getEngine().request<string[]>('localProxies', { gatewayPort: this.options.gatewayPort() }); }
+      finally { this.busy = false; }
+    });
+  }
   async check(site: NetworkSite): Promise<NetworkCheck> {
     if (!NETWORK_SITES.includes(site) || this.busy || this.closing || this.checking) throw new Error('网站无效或网络操作仍在进行。');
     this.checking = true;
@@ -209,10 +219,6 @@ export async function hotspotCandidates(platform = process.platform): Promise<st
   if (platform === 'linux') {
     const { stdout } = await run('/usr/sbin/ip', ['-j', 'route', 'show', 'default'], { timeout: 5000, maxBuffer: 64 * 1024 });
     return [...new Set((JSON.parse(stdout) as { gateway?: string }[]).map(r => r.gateway).filter((v): v is string => !!v && isIP(v) !== 0))];
-  }
-  if (platform === 'win32') {
-    const { stdout } = await run(join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoProfile', '-NonInteractive', '-Command', 'Get-NetRoute -DestinationPrefix 0.0.0.0/0 | Select-Object -ExpandProperty NextHop'], { timeout: 5000, maxBuffer: 64 * 1024, windowsHide: true });
-    return [...new Set(stdout.trim().split(/\s+/).filter(v => isIP(v) !== 0 && v !== '0.0.0.0'))];
   }
   return [];
 }
