@@ -3,8 +3,18 @@ import { lstat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 
-export interface TraeClientModel { id: string; name?: string }
-export interface TraeClientModelCatalog { models: TraeClientModel[]; client: 'trae-cn' | 'trae-solo-cn' }
+export interface TraeClientModel {
+  id: string;
+  name?: string;
+  configName?: string;
+  allowedIdentities?: number[];
+  locked?: true;
+}
+export interface TraeClientModelCatalog {
+  models: TraeClientModel[];
+  client: 'trae-cn' | 'trae-solo-cn';
+  excludedConfigIds?: string[];
+}
 export interface TraeClientModelOptions {
   homeDir?: string; platform?: NodeJS.Platform; env?: NodeJS.ProcessEnv;
   client?: TraeClientModelCatalog['client'];
@@ -14,16 +24,36 @@ const id = (value: unknown): value is string => typeof value === 'string' && /^[
 const label = (value: unknown): value is string => typeof value === 'string' && !!value.trim() && value.length <= 512 && !/[\x00-\x1f\x7f]/.test(value);
 const object = (value: unknown): Record<string, unknown> | undefined => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 
+// The installed picker's default restriction rules only run enabled feature
+// routes. access/download_work and access are distinct routes selected by subKey.
+export function traeModelAccess(rawFeatures: unknown): Pick<TraeClientModel, 'allowedIdentities' | 'locked'> {
+  const features = object(rawFeatures);
+  const early = object(features?.early_access);
+  if (early?.enable === true && early.subKey === undefined && object(early.data)?.enable_early_access === false) return { locked: true };
+  const access = object(features?.access);
+  if (access?.enable !== true) return {};
+  if (access.subKey === 'download_work') return { locked: true };
+  if (access.subKey !== undefined) return {};
+  const identities = object(access.data)?.identity_list;
+  if (identities === undefined || identities === null) return {};
+  if (!Array.isArray(identities) || !identities.every(value => typeof value === 'number' && Number.isSafeInteger(value))) return { locked: true };
+  return identities.length ? { allowedIdentities: [...new Set<number>(identities)].sort((a, b) => a - b) } : {};
+}
+
+export function canUseTraeClientModel(model: TraeClientModel, payIdentity: number | undefined): boolean {
+  return !model.locked && (!model.allowedIdentities || (payIdentity !== undefined && model.allowedIdentities.includes(payIdentity)));
+}
+
 /** Official IModelStore consumes native model_list_by_function snapshots.
  * Its CN chat picker uses chat_v3, excluding disabled/hard-offline/nonselectable
  * entries. Only built-in config_source=1 is part of this subscription catalog;
  * personal BYOK entries and their ak/sk/base_url are never returned. */
-export function parseTraeClientModelCatalog(value: string): TraeClientModel[] | undefined {
+function parseClientSnapshot(value: string): Omit<TraeClientModelCatalog, 'client'> | undefined {
   if (typeof value !== 'string' || Buffer.byteLength(value) > MAX_JSON) return;
   let data: Record<string, unknown> | undefined;
   try { data = object(JSON.parse(value)); } catch { return; }
   if (!Array.isArray(data?.chat_v3) || data.chat_v3.length > 1000) return;
-  const models: TraeClientModel[] = [], seen = new Set<string>();
+  const models: TraeClientModel[] = [], seen = new Set<string>(), excluded = new Set<string>();
   for (const raw of data.chat_v3) {
     const model = object(raw); if (!model) return;
     if (model.config_source !== 1) continue;
@@ -31,10 +61,25 @@ export function parseTraeClientModelCatalog(value: string): TraeClientModel[] | 
     seen.add(model.name);
     if ([model.status, model.selectable].some(value => value !== undefined && typeof value !== 'boolean')
       || model.provider_offline_status !== undefined && !['', 'soft', 'hard'].includes(String(model.provider_offline_status))) return;
-    if (model.status === false || model.selectable === false || model.provider_offline_status === 'hard') continue;
-    models.push({ id: model.name, ...(label(model.display_name) ? { name: model.display_name } : {}) });
+    const configName = model.config_name || model.name;
+    if (model.status === false || model.selectable === false || model.provider_offline_status === 'hard') {
+      excluded.add(model.name);
+      if (id(configName)) excluded.add(configName);
+      continue;
+    }
+    if (!id(configName)) return;
+    models.push({
+      id: model.name,
+      ...(label(model.display_name) ? { name: model.display_name } : {}),
+      ...(configName !== model.name ? { configName } : {}),
+      ...traeModelAccess(model.features),
+    });
   }
-  return models;
+  return { models, ...(excluded.size ? { excludedConfigIds: [...excluded].sort() } : {}) };
+}
+
+export function parseTraeClientModelCatalog(value: string): TraeClientModel[] | undefined {
+  return parseClientSnapshot(value)?.models;
 }
 function roots(options: TraeClientModelOptions): { path: string; client: TraeClientModelCatalog['client'] }[] {
   const home = options.homeDir ?? homedir(), platform = options.platform ?? process.platform, env = options.env ?? process.env;
@@ -61,14 +106,17 @@ export async function readTraeClientModelCatalog(accountId: string, options: Tra
         const key = accountId + separator + 'AI.agent.model.model_list_map';
         const row = db.prepare('SELECT value FROM ItemTable WHERE key=?').get(key);
         if (typeof row?.value !== 'string') continue;
-        const models = parseTraeClientModelCatalog(row.value);
-        if (models) { matches.push({ models, client: candidate.client }); break; }
+        const snapshot = parseClientSnapshot(row.value);
+        if (snapshot) { matches.push({ ...snapshot, client: candidate.client }); break; }
       }
     } catch { /* Missing/locked/unrecognized cache is not proof of visibility. */ }
     finally { try { db?.close(); } catch { /* No account state is changed. */ } }
   }
   if (!matches.length) return;
-  const canonical = (value: TraeClientModelCatalog) => JSON.stringify(value.models.map(model => model.id).sort());
+  const canonical = (value: TraeClientModelCatalog) => JSON.stringify([
+    value.models.map(model => JSON.stringify([model.id, model.configName, model.allowedIdentities, model.locked])).sort(),
+    value.excludedConfigIds ?? [],
+  ]);
   if (matches.some(match => canonical(match) !== canonical(matches[0]))) return;
   return matches[0];
 }

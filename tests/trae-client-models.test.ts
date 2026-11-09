@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
-import { parseTraeClientModelCatalog, readTraeClientModelCatalog } from '../src/main/trae-client-models';
+import { canUseTraeClientModel, parseTraeClientModelCatalog, readTraeClientModelCatalog } from '../src/main/trae-client-models';
 import { requireSymlinkCapability } from './helpers/windows-review-filesystem';
 const account='synthetic-account', directories:string[]=[];
 afterEach(async()=>{await Promise.all(directories.splice(0).map(path=>rm(path,{recursive:true,force:true})));});
@@ -14,6 +14,30 @@ async function fixture(entries:Record<string,string>,product='Trae CN',base?:str
  const file=join(root,product,'User','globalStorage','state.vscdb');await mkdir(join(file,'..'),{recursive:true});const db=new DatabaseSync(file);db.exec('CREATE TABLE ItemTable(key TEXT PRIMARY KEY,value TEXT)');for(const [key,value]of Object.entries(entries))db.prepare('INSERT INTO ItemTable VALUES(?,?)').run(key,value);db.close();return{root,file,options:{platform:'linux' as const,homeDir:root,env:{XDG_CONFIG_HOME:root}}};
 }
 describe('TRAE native current model cache, read-only account boundary',()=>{
+ it('keeps gated and ordinary built-ins visible, preserves native route names and uses the calling account identity', () => {
+  const models = parseTraeClientModelCatalog(JSON.stringify({ chat_v3: [
+   row('regular', { features: { access: { data: { identity_list: [0, 1] } } } }),
+   row('paid', { config_name: 'paid-route', features: { access: { enable: true, data: { identity_list: [5, 1, 2, 100] } } } }),
+   row('free-allowed', { features: { access: { enable: true, data: { identity_list: [0, 5] } } } }),
+  ] }))!;
+  expect(models.map(model => model.id)).toEqual(['regular', 'paid', 'free-allowed']);
+  expect(models[1]).toMatchObject({ id: 'paid', configName: 'paid-route', allowedIdentities: [1, 2, 5, 100] });
+  expect(models.map(model => canUseTraeClientModel(model, 0))).toEqual([true, false, true]);
+  expect(models.map(model => canUseTraeClientModel(model, 5))).toEqual([true, true, true]);
+  expect(models.map(model => canUseTraeClientModel(model, undefined))).toEqual([true, false, false]);
+ });
+ it('uses the enabled native feature route for early access, download, and identity restrictions independently', () => {
+  const features = [
+   { early_access: { enable: true, data: { enable_early_access: false } } },
+   { early_access: { data: { enable_early_access: false } } },
+   { early_access: { enable: true, data: { enable_early_access: true } } },
+   { access: { enable: true, subKey: 'download_work' } },
+   { access: { enable: true, data: { identity_list: [] } } },
+   { access: { enable: true, data: { identity_list: ['5'] } } },
+  ];
+  const models = parseTraeClientModelCatalog(JSON.stringify({ chat_v3: features.map((features, i) => row('m' + i, { features })) }))!;
+  expect(models.map(model => canUseTraeClientModel(model, 5))).toEqual([false, true, true, false, true, false]);
+ });
  it('uses exact native visibility and selection rules without deciding age from model names',()=>{
   const values=[row('old-looking-1'),row('new-looking-99',{status:false}),row('hard-offline',{provider_offline_status:'hard'}),row('not-selectable',{selectable:false}),row('soft-route',{provider_offline_status:'soft'}),row('private-byok',{config_source:3,ak:'PRIVATE_KEY',sk:'PRIVATE_SECRET',base_url:'https://private.invalid'})];
   expect(parseTraeClientModelCatalog(JSON.stringify({chat_v3:values}))).toEqual([{id:'old-looking-1',name:'Current model'},{id:'soft-route',name:'Current model'}]);
@@ -24,6 +48,22 @@ describe('TRAE native current model cache, read-only account boundary',()=>{
   const digest=(bytes:Uint8Array)=>createHash('sha256').update(bytes).digest('hex'),before=digest(await readFile(f.file));
   expect(await readTraeClientModelCatalog(account,f.options)).toEqual({client:'trae-cn',models:[{id:'current-model',name:'Current model'}]});expect(digest(await readFile(f.file))).toBe(before);expect(await readTraeClientModelCatalog('missing-account',f.options)).toBeUndefined();
  });
+ it('keeps explicitly excluded subscription IDs and routes separate from BYOK and the visible picker', async () => {
+  const rows = [
+   row('visible'), row('disabled-picker', { status: false, config_name: 'disabled-route' }),
+   row('unselectable-picker', { selectable: false, config_name: 'disabled-route' }),
+   row('offline', { provider_offline_status: 'hard' }),
+   row('private-byok', { config_source: 3, status: false, config_name: 'visible' }),
+  ];
+  const key = account + '_AI.agent.model.model_list_map';
+  const f = await fixture({ [key]: JSON.stringify({ chat_v3: rows }) });
+  expect(await readTraeClientModelCatalog(account, f.options)).toEqual({
+   client: 'trae-cn', models: [{ id: 'visible', name: 'Current model' }],
+   excludedConfigIds: ['disabled-picker', 'disabled-route', 'offline', 'unselectable-picker'],
+  });
+  await fixture({ [key]: JSON.stringify({ chat_v3: [row('visible')] }) }, 'TRAE SOLO CN', f.root);
+  expect(await readTraeClientModelCatalog(account, f.options)).toBeUndefined();
+ });
  it('accepts the two official account key separators but never substitutes another function or account',async()=>{
   const f=await fixture({[account+':AI.agent.model.model_list_map']:JSON.stringify({solo_agent:[row('solo-only')]}),[account+'_AI.agent.model.model_list_map']:JSON.stringify({chat_v3:[row('native-chat')]})});
   expect((await readTraeClientModelCatalog(account,f.options))?.models[0].id).toBe('native-chat');
@@ -33,6 +73,15 @@ describe('TRAE native current model cache, read-only account boundary',()=>{
   expect(await readTraeClientModelCatalog(account,f.options)).toBeUndefined();
   expect((await readTraeClientModelCatalog(account,{...f.options,client:'trae-cn'}))?.models[0].id).toBe('cn-model');
   expect((await readTraeClientModelCatalog(account,{...f.options,client:'trae-solo-cn'}))?.models[0].id).toBe('different-solo-model');
+ });
+ it('keeps source boundaries when products share names but disagree on model access', async () => {
+  const key = account + '_AI.agent.model.model_list_map';
+  const cn = await fixture({ [key]: JSON.stringify({ chat_v3: [row()] }) });
+  const access = { enable: true, data: { identity_list: [5] } };
+  await fixture({ [key]: JSON.stringify({ chat_v3: [row('current-model', { features: { access } })] }) }, 'TRAE SOLO CN', cn.root);
+  expect(await readTraeClientModelCatalog(account, cn.options)).toBeUndefined();
+  const solo = await readTraeClientModelCatalog(account, { ...cn.options, client: 'trae-solo-cn' });
+  expect(canUseTraeClientModel(solo!.models[0], 0)).toBe(false);
  });
  it('never falls back to another product when the exact imported client has no cache',async()=>{
   const f=await fixture({[account+'_AI.agent.model.model_list_map']:JSON.stringify({chat_v3:[row('cn-only-model')]})});

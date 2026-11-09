@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { catalogAccessMessages } from '../shared/catalog-types';
 import type { SubscriptionUsage } from '../shared/auth-types';
 import type { TraeClientCredentials } from './trae-client-import';
 import { parseTraeQuota, parseTraePlan } from './trae-relay-usage';
-import { readTraeClientModelCatalog, type TraeClientModelCatalog, type TraeClientModelOptions } from './trae-client-models';
+import { canUseTraeClientModel, readTraeClientModelCatalog, traeModelAccess, type TraeClientModel, type TraeClientModelCatalog, type TraeClientModelOptions } from './trae-client-models';
 
 /** TraeCode CN CustomModel / ChatMessageData protocol, fixed reference:
  * Trae2api-cn bb7b659 raw_client.build_traecode_chat_body/headers and installed
@@ -14,13 +15,17 @@ import { readTraeClientModelCatalog, type TraeClientModelCatalog, type TraeClien
 const GATEWAY = 'https://trae-api-cn.mchost.guru';
 const ACCOUNT = 'https://api.trae.cn';
 const FUNCTION = 'chat_v3';
+// The gateway selects the model directory by protocol revision. TRAE CN
+// 3.4.16 sends this value in both version-code headers for chat requests.
+const CHAT_PROTOCOL_REVISION = '20261029';
 const MAX_JSON = 4 * 1024 * 1024, MAX_EVENT = 1024 * 1024, MAX_OUTPUT = 32 * 1024 * 1024;
 type ObjectValue = Record<string, unknown>;
 const object = (value: unknown): ObjectValue | undefined => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as ObjectValue : undefined;
 const text = (value: unknown, max = 256): string | undefined => typeof value === 'string' && value.length > 0 && value.length <= max && !/[\x00-\x1f\x7f]/.test(value) ? value : undefined;
 const name = (value: unknown): string | undefined => { const result = text(value); return result && /^[\w.\-:/@+]+$/.test(result) ? result : undefined; };
-export type TraeApiErrorCode = 'credentials' | 'authorization' | 'network' | 'request' | 'response' | 'model' | 'cancelled' | 'limit' | 'upstream' | 'capability';
+export type TraeApiErrorCode = 'account-access' | 'access-unknown' | 'credentials' | 'authorization' | 'network' | 'request' | 'response' | 'model' | 'cancelled' | 'limit' | 'upstream' | 'capability';
 const errors: Record<TraeApiErrorCode, string> = {
+  ...catalogAccessMessages,
   credentials: 'TRAE 本机账号信息无效，请回到原客户端重新登录并导入。',
   authorization: 'TRAE 未接受当前账号授权，请回原客户端重新登录后再导入。',
   network: 'TRAE 官方服务暂时无法连接，请检查应用网络后重试。',
@@ -40,9 +45,20 @@ export interface TraeApiModel {
   id: string; object: 'model'; owned_by: 'trae'; name?: string; context_length?: number;
   modeldock_catalog_visibility?: 'current' | 'historical';
   modeldock_catalog_importable?: false;
+  modeldock_catalog_blocked_reason?: BlockedReason;
 }
 interface Route { model: TraeApiModel; providerId: string; configSource: number }
-interface Directory { at: number; routes: Map<string, Route> }
+type BlockedReason = 'account-access' | 'access-unknown';
+type Access = Pick<TraeClientModel, 'allowedIdentities' | 'locked'>;
+interface Directory { revision: number; at: number; routes: Map<string, Route>; blocked: Map<string, BlockedReason> }
+
+function directoryAccess(raw: unknown): Access | undefined {
+  if (raw == null || raw === '') return {};
+  try {
+    const features = object(typeof raw === 'string' ? JSON.parse(raw) : raw);
+    return features && traeModelAccess(features);
+  } catch { return undefined; }
+}
 export interface TraeApiOptions {
   fetch?: typeof globalThis.fetch; now?: () => number; timeoutMs?: number;
   clientModels?: (accountId: string, client?: TraeClientModelCatalog['client']) => Promise<TraeClientModelCatalog | undefined>;
@@ -66,8 +82,8 @@ function headers(value: TraeClientCredentials, accept = 'application/json'): Rec
   const device = createHash('sha256').update('modeldock-trae-device:' + value.userId).digest('hex');
   return { 'Content-Type': 'application/json', Accept: accept, Authorization: 'Cloud-IDE-JWT ' + value.token,
     'X-Cloudide-Token': value.token, 'X-Ide-Token': value.token, 'X-Uid': value.userId,
-    'X-App-Id': '6eefa01c-1036-4c7e-9ca5-d891f63bfcd8', 'X-App-Version': 'default',
-    'X-Ide-Version': '3.4.4', 'X-Ide-Version-Code': '20260212', 'X-App-Version-Code': '20260212',
+    'X-App-Id': '6eefa01c-1036-4c7e-9ca5-d891f63bfcd8', 'X-App-Version': '3.4.16',
+    'X-Ide-Version': '3.4.16', 'X-Ide-Version-Code': CHAT_PROTOCOL_REVISION, 'X-App-Version-Code': CHAT_PROTOCOL_REVISION,
     'X-Ide-Version-Type': 'stable', 'X-Plugin-Channel': 'desktop', 'X-App-Function': FUNCTION, 'X-Ide-Function': FUNCTION,
     'X-Device-Id': device, 'X-Machine-Id': device, 'X-System-Type': 'Windows', 'X-Device-Type': 'windows',
     'X-Request-Id': randomUUID(), 'request-traffic-type': 'prod' };
@@ -192,6 +208,11 @@ async function* translate(body: ReadableStream<Uint8Array>, model: string, allow
     if (event === 'error' || value.error || value.code !== undefined && value.code !== 0) throw fail('upstream');
     if (event === 'token_usage') { finalUsage = usage(value.usage ?? value); continue; }
     if (value.usage) finalUsage = usage(value.usage) ?? finalUsage;
+    // Raw v2 output frames carry token fragments and include the inactive
+    // channel as null. Legacy response-only output frames are snapshots.
+    const outputDelta = event === 'output' && (
+      'reasoning_content' in value || 'tool_calls' in value || 'phase' in value || 'multimodal_contents' in value
+    );
     const emitText = (raw: unknown, kind: 'content' | 'reasoning_content', incremental: boolean): ObjectValue | undefined => {
       if (raw === undefined || raw === '') return; if (typeof raw !== 'string') throw fail('response');
       const last = kind === 'content' ? previous : previousReasoning;
@@ -200,16 +221,20 @@ async function* translate(body: ReadableStream<Uint8Array>, model: string, allow
       else if (raw.startsWith(last)) delta = raw.slice(last.length);
       else if (last.startsWith(raw)) delta = '';
       else throw fail('response');
-      if (kind === 'content') previous = incremental ? last + raw : raw.length >= last.length ? raw : last;
-      else previousReasoning = incremental ? last + raw : raw.length >= last.length ? raw : last;
+      // Current output events are pure deltas and can be forwarded without
+      // retaining a second copy of the assembled answer in streaming mode.
+      if (!outputDelta) {
+        if (kind === 'content') previous = incremental ? last + raw : raw.length >= last.length ? raw : last;
+        else previousReasoning = incremental ? last + raw : raw.length >= last.length ? raw : last;
+      }
       total += Buffer.byteLength(delta); if (total > MAX_OUTPUT) throw fail('limit');
       if (delta) { seen = true; return chunk({ [kind]: delta }); }
     };
-    const incremental = ['text_delta', 'translated_text', 'reasoning_delta'].includes(event);
+    const incremental = outputDelta || ['text_delta', 'translated_text', 'reasoning_delta'].includes(event);
     const delta = deltaText(value);
     const contentChunk = emitText(value.response ?? (event === 'text_delta' || event === 'translated_text' ? delta : undefined), 'content', incremental);
     if (contentChunk) yield contentChunk;
-    const reasoningChunk = emitText(value.reasoning_content ?? (event === 'reasoning_delta' ? delta : undefined), 'reasoning_content', event === 'reasoning_delta');
+    const reasoningChunk = emitText(value.reasoning_content ?? (event === 'reasoning_delta' ? delta : undefined), 'reasoning_content', outputDelta || event === 'reasoning_delta');
     if (reasoningChunk) yield reasoningChunk;
     const rawCalls = value.tool_calls ?? (object(value.function_call) ? [{ id: value.id, index: 0, function_call: value.function_call }] : []);
     if (!Array.isArray(rawCalls)) throw fail('response');
@@ -250,6 +275,7 @@ export class TraeApi {
   private readonly timeout: number;
   private readonly clientModels: NonNullable<TraeApiOptions['clientModels']>;
   private readonly directories = new Map<string, Directory>();
+  private directoryRevision = 0;
   constructor(options: TraeApiOptions = {}) {
     this.fetch = options.fetch ?? globalThis.fetch; this.now = options.now ?? Date.now; this.timeout = options.timeoutMs ?? 300000;
     this.clientModels = options.clientModels ?? ((accountId, client) => client
@@ -266,56 +292,91 @@ export class TraeApi {
       return response;
     } catch (error) { throw error instanceof TraeApiError ? error : fail(life.signal.aborted ? 'cancelled' : 'network'); }
   }
-  private key(value: TraeClientCredentials): string { return createHash('sha256').update(value.userId + '\0' + value.token).digest('hex'); }
+  private key(value: TraeClientCredentials, client?: TraeClientModelCatalog['client']): string {
+    return createHash('sha256').update([value.userId, value.token, client ?? ''].join('\0')).digest('hex');
+  }
   async models(value: TraeClientCredentials, signal?: AbortSignal, clientSource?: TraeClientModelCatalog['client']): Promise<TraeModelsResult> {
     credentials(value); const life = lifetime(signal, Math.min(this.timeout, 30000));
+    const key = this.key(value, clientSource), revision = ++this.directoryRevision;
     try {
-      // Current official GetConfigDetail sends query parameters with GET; null
-      // optional filters are omitted by the client's HTTP serializer.
       const query = new URLSearchParams({ function: FUNCTION, need_prompt: 'false', poly_prompt: 'true' });
       const response = await this.send(GATEWAY + '/api/ide/v1/get_detail_param?' + query, value, undefined, life, 'application/json', {}, 'GET');
       const raw = await readJson(response, life.signal), list = raw.config_info_list ?? object(raw.data)?.config_info_list;
       if (!Array.isArray(list) || list.length > 1000) throw fail('response');
-      const routes = new Map<string, Route>(), publicRows = new Map<string, ObjectValue>();
+      const routes = new Map<string, Route>(), access = new Map<string, Access | undefined>(), hidden = new Set<string>();
       for (const item of list) {
-        const row = object(item); if (!row || row.usage !== undefined && row.usage !== '' && row.usage !== 'chat_completion' || row.custom_models) continue;
+        const row = object(item);
+        if (!row || row.usage !== undefined && row.usage !== '' && row.usage !== 'chat_completion' || row.custom_models) continue;
         if (row.raw_chat_function !== undefined && row.raw_chat_function !== FUNCTION) continue;
+        if ((row.config_source ?? 1) !== 1 || row.status === false || row.selectable === false || row.provider_offline_status === 'hard') continue;
         const id = name(row.config_name ?? row.name), details = Array.isArray(row.model_detail_list) ? row.model_detail_list.map(object).filter((item): item is ObjectValue => !!item && !!name(item.model_name)) : [];
         const detail = details.find(item => String(item.model_name).endsWith('__dev')) ?? details[0], providerId = name(detail?.model_name ?? row.model_name);
-        const configSource = row.config_source ?? 1;
-        if (!id || !providerId || typeof configSource !== 'number' || !Number.isSafeInteger(configSource) || configSource < 1 || configSource > 100) continue;
+        if (!id || !providerId) continue;
         if (routes.has(id)) throw fail('response');
         const display = text(row.display_name ?? object(row.display_config)?.display_name, 512);
-        routes.set(id, { model: { id, object: 'model', owned_by: 'trae', ...(display ? { name: display } : {}) }, providerId, configSource });
-        // Personal BYOK credentials and utility/disabled configurations are not
-        // subscription picker entries. Keep genuine routes independent of this
-        // display projection so hiding a row never deletes an existing model.
-        if (configSource === 1 && row.status !== false && row.selectable !== false && row.provider_offline_status !== 'hard') publicRows.set(id, row);
+        routes.set(id, { model: { id, object: 'model', owned_by: 'trae', ...(display ? { name: display } : {}) }, providerId, configSource: 1 });
+        access.set(id, directoryAccess(row.display_contact_config));
+        if (row.is_invisible_to_user === true) hidden.add(id);
       }
-      this.directories.set(this.key(value), { at: this.now(), routes }); if (this.directories.size > 32) this.directories.delete(this.directories.keys().next().value!);
       const client = await this.clientModels(value.userId, clientSource).catch(() => undefined);
-      if (life.signal.aborted) throw fail('cancelled');
-      const data: TraeApiModel[] = [], currentIds = new Set(client?.models.map(model => model.id));
-      let unsupported = 0;
-      // The current native picker and the legacy GetConfigDetail route catalog
-      // are different contracts. Show the complete verified client snapshot,
-      // but never invent a providerId or callable route for a missing config.
-      for (const model of client?.models ?? []) {
-        const route = publicRows.has(model.id) ? routes.get(model.id) : undefined;
-        if (!route) unsupported++;
-        data.push({ ...(route?.model ?? { id: model.id, object: 'model' as const, owned_by: 'trae' as const }),
-          ...(model.name ? { name: model.name } : {}), modeldock_catalog_visibility: 'current',
-          ...(!route ? { modeldock_catalog_importable: false as const } : {}) });
+      const excluded = new Set(client?.excludedConfigIds);
+      for (const id of excluded) { routes.delete(id); access.delete(id); }
+      const picker = (client?.models ?? []).filter(model => !excluded.has(model.id) && !excluded.has(model.configName ?? model.id));
+      let identity: number | undefined;
+      if ([...access.values(), ...picker].some(rule => rule?.allowedIdentities?.length)) {
+        const pay = lifetime(life.signal, 6500);
+        try {
+          const status = await this.send(ACCOUNT + '/trae/api/v2/pay/ide_user_pay_status', value, { trae_client: clientSource === 'trae-solo-cn' ? 'Lite' : 'IDE' }, pay);
+          const { user_pay_identity } = await readJson(status, pay.signal);
+          if (typeof user_pay_identity === 'number' && Number.isSafeInteger(user_pay_identity)) identity = user_pay_identity;
+        } catch { /* Unrestricted models do not depend on the pay-status service. */ }
+        finally { pay.close(); }
       }
-      for (const [id, row] of publicRows) {
-        if (currentIds.has(id)) continue;
-        const visibility = client || row.is_invisible_to_user === true ? 'historical' as const : undefined;
-        data.push({ ...routes.get(id)!.model, ...(visibility ? { modeldock_catalog_visibility: visibility } : {}) });
+      if (life.signal.aborted) throw fail('cancelled');
+
+      const blocked = new Map<string, BlockedReason>();
+      function checkAccess(id: string, rule: Access | undefined) {
+        if (rule && canUseTraeClientModel({ id, ...rule }, identity)) return;
+        const reason = rule && (rule.locked || identity !== undefined) ? 'account-access' : 'access-unknown';
+        if (blocked.get(id) !== 'account-access') blocked.set(id, reason);
+      }
+      for (const [id, rule] of access) checkAccess(id, rule);
+      for (const model of picker) checkAccess(model.configName ?? model.id, model);
+
+      const current = new Set<string>(), data: TraeApiModel[] = [], callable = new Map(routes);
+      let missing = 0, denied = 0, unknown = 0;
+      function entry(id: string, route: Route | undefined, visibility?: 'current' | 'historical', displayName?: string): TraeApiModel {
+        const reason = blocked.get(id);
+        return { ...(route?.model ?? { object: 'model' as const, owned_by: 'trae' as const }), id,
+          ...(displayName ? { name: displayName } : {}), ...(visibility ? { modeldock_catalog_visibility: visibility } : {}),
+          ...(!route || reason ? { modeldock_catalog_importable: false as const } : {}),
+          ...(reason ? { modeldock_catalog_blocked_reason: reason } : {}) };
+      }
+      for (const model of picker) {
+        const config = model.configName ?? model.id, route = routes.get(config), reason = blocked.get(config);
+        current.add(config);
+        if (config !== model.id) {
+          if (routes.has(model.id)) throw fail('response');
+          if (reason) blocked.set(model.id, reason);
+          if (route) callable.set(model.id, route);
+        }
+        if (reason === 'account-access') denied++;
+        else if (reason === 'access-unknown') unknown++;
+        else if (!route) missing++;
+        data.push(entry(model.id, route, 'current', model.name));
+      }
+      for (const [id, route] of routes) {
+        if (!current.has(id)) data.push(entry(id, route, client || hidden.has(id) ? 'historical' : undefined));
+      }
+      // A slower refresh must not replace newer account permissions.
+      if (revision > (this.directories.get(key)?.revision ?? 0)) {
+        this.directories.set(key, { revision, at: this.now(), routes: callable, blocked });
+        if (this.directories.size > 32) this.directories.delete(this.directories.keys().next().value!);
       }
       const message = client
-        ? `按本机同账号 ${client.client === 'trae-solo-cn' ? 'TRAE SOLO CN' : 'TRAE CN'} 客户端最近缓存的 Chat 模型清单显示，共 ${client.models.length} 项。`
-          + (unsupported ? `其中 ${unsupported} 项尚无已核实的官方直连配置，已列出但暂不支持添加。` : '')
-          + '清单变化时请先在 TRAE 刷新，再重新获取；历史选项仅控制显示。'
+        ? `本机同账号 ${client.client === 'trae-solo-cn' ? 'TRAE SOLO CN' : 'TRAE CN'} 的 Chat 清单共 ${picker.length} 项，可添加 ${picker.length - missing - denied - unknown} 项。`
+          + (denied ? `其中 ${denied} 项受账号权限限制。` : '') + (unknown ? `${unknown} 项的账号权限待确认。` : '')
+          + (missing ? `其中 ${missing} 项尚无已核实的官方直连配置。` : '')
         : '尚未读取到本机同账号 TRAE 客户端的 Chat 模型清单，无法核实当前展示状态。请先在 TRAE 刷新模型；勾选后可查看已识别的直连目录。';
       return { object: 'list', data, modeldock_history: { source: 'trae-client', currentVerified: !!client, message } };
     } finally { life.close(); }
@@ -331,7 +392,7 @@ export class TraeApi {
         message: quota.windows.length ? '当前 TRAE 账号的官方套餐与额度；省略的积分用量按官方客户端默认值计算。' : 'TRAE 未返回可识别的官方额度，余额保持未知。' } };
     } finally { life.close(); }
   }
-  async chat(value: TraeClientCredentials, body: ObjectValue, signal?: AbortSignal): Promise<Response> {
+  async chat(value: TraeClientCredentials, body: ObjectValue, signal?: AbortSignal, client?: TraeClientModelCatalog['client']): Promise<Response> {
     credentials(value); const model = name(body?.model); if (!model || body.stream !== undefined && typeof body.stream !== 'boolean') throw fail('request');
     const nativeMessages = messages(body.messages), nativeTools = tools(body.tools), allowed = new Set(nativeTools?.map(tool => String(object(tool.function)?.name)) ?? []);
     for (const field of ['response_format', 'audio', 'modalities', 'functions', 'function_call', 'max_tokens', 'max_completion_tokens', 'temperature', 'top_p', 'stop', 'seed', 'presence_penalty', 'frequency_penalty']) if (body[field] !== undefined) throw fail('capability');
@@ -345,10 +406,12 @@ export class TraeApi {
     const forcedTool = object(object(body.tool_choice)?.function)?.name;
     if (typeof forcedTool === 'string') { allowed.clear(); allowed.add(forcedTool); }
     if (body.parallel_tool_calls !== undefined && typeof body.parallel_tool_calls !== 'boolean') throw fail('request');
-    let directory = this.directories.get(this.key(value));
-    if (!directory || this.now() - directory.at > 300000) { await this.models(value, signal); directory = this.directories.get(this.key(value)); }
+    const key = this.key(value, client);
+    let directory = this.directories.get(key);
+    if (!directory || this.now() - directory.at > 300000) { await this.models(value, signal, client); directory = this.directories.get(key); }
+    const reason = directory?.blocked.get(model); if (reason) throw fail(reason, reason === 'account-access' ? 403 : 503);
     const route = directory?.routes.get(model); if (!route) throw fail('model');
-    const sid = randomUUID(), payload: ObjectValue = { config_name: model, model_name: route.providerId, config_source: route.configSource,
+    const sid = randomUUID(), payload: ObjectValue = { config_name: route.model.id, model_name: route.providerId, config_source: route.configSource,
       conversation_id: sid, session_id: sid, stream: true, raw_chat_function: FUNCTION, messages: nativeMessages,
       ...(body.reasoning_effort !== undefined ? { reasoning_effort: body.reasoning_effort } : {}),
       ...(nativeTools?.length ? { tools: nativeTools, ...(body.tool_choice !== undefined ? { tool_choice: body.tool_choice } : {}), ...(body.parallel_tool_calls !== undefined ? { parallel_tool_calls: body.parallel_tool_calls } : {}) } : {}) };

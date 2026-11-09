@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, ChevronDown, Download, Info, Layers3, RefreshCw, Search, Settings2 } from './MaterialIcon';
 import type { ModelDockApi, Provider, ReasoningEffort, WireApi } from '../shared/types';
 import type { AddModelsResult, DiscoveredModel, DiscoveryResult, ModelMetadataField, ModelSelection } from '../shared/catalog-types';
+import { catalogAccessMessages } from '../shared/catalog-types';
 import { MODEL_SPEC_FIELDS, REASONING_EFFORTS, modelSpecs } from '../shared/types';
 import { lookupModelMetadata, lookupModelReasoningDefaults } from '../shared/model-metadata';
 import { applyOfficialModelParameters, officialModelParameterFields, reasoningSelectionPatch, withReasoningWireApi } from '../shared/model-draft';
@@ -181,7 +182,7 @@ export function ModelDiscovery({ api, provider, notify, onClose, onAdded, onManu
                   <small>{protocolLabel(model.wireApi)} · {model.contextWindow ? `${model.contextWindow.toLocaleString('zh-CN')} 上下文` : '上下文未设置'}{model.tools ? defaultFields.includes('tools') ? ' · 可尝试工具调用' : ' · 工具调用' : ' · 工具调用关闭'}{model.vision ? ' · 图片输入' : ' · 图片输入关闭'}{model.thinking || model.reasoningEfforts?.length ? ' · 支持思考' : ''}{model.reasoningEfforts?.length ? ' · 可选思考等级' : ''}</small>
                   {historySupported && model.catalogVisibility === 'historical' && <span className="badge" data-model-historical>客户端未展示</span>}
                   {historySupported && model.catalogVisibility === undefined && <span className="badge" data-model-visibility-unknown>显示状态未核实</span>}
-                  {model.catalogImportable === false && <><span className="badge" data-model-unimportable>暂不支持添加</span><small>客户端中可见，官方直连配置尚未核实。</small></>}
+                  {model.catalogImportable === false && <><span className="badge" data-model-unimportable={model.catalogBlockedReason ?? ''}>暂不支持添加</span><small>{model.catalogBlockedReason ? catalogAccessMessages[model.catalogBlockedReason] : '客户端中可见，官方直连配置尚未核实。'}</small></>}
                   {model.existingModelId ? <span className="badge positive"><Check size={11} />已添加 · 保留已保存参数</span> : <>
                     {!!inferredFields.length && <small className="discovery-defaults">字典补全：{metadataFieldLabels(inferredFields)}</small>}
                     {!!defaultFields.length && <small className="discovery-defaults">缺少规格，使用本地默认：{metadataFieldLabels(defaultFields)}</small>}
