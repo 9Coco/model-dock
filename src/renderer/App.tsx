@@ -1,4 +1,5 @@
 import { GatewayControls } from './GatewayControls';
+import { NetworkWorkspace } from './NetworkPanel';
 import { ServiceWorkspace, type ServiceTab } from './ServiceWorkspace';
 import { useRuntimeSnapshot } from './useRuntimeSnapshot';
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
@@ -53,7 +54,7 @@ import { modelDisplayLabel, modelLocalAlias, suggestModelAlias } from '../shared
 import { firstConnectionModel } from '../shared/connection-types';
 import { useContextMenu, type ContextMenuItem } from './ContextMenu';
 
-type Page = 'providers' | 'tools' | 'service' | 'auth' | 'settings';
+type Page = 'providers' | 'tools' | 'service' | 'network' | 'auth' | 'settings';
 type Toast = { id: number; message: string; tone: 'success' | 'error' | 'info' };
 type ProviderDraft = ProviderInput & TraeRelayDraft & { note: string };
 type ModelDraft = ModelInput;
@@ -61,7 +62,7 @@ type ToolDelivery = { signature: string; kind: 'applied' | 'exported' | 'undone'
 const pageMeta: Record<Page, { label: string }> = {
   providers: { label: '供应商管理' },
   tools: { label: '工具接入' }, service: { label: '服务工作台' },
-  auth: { label: '授权中心' },
+  network: { label: '网络接管' }, auth: { label: '授权中心' },
   settings: { label: '设置' },
 };
 const providerKinds: Record<ProviderKind, { title: string; short: string; description: string; symbol: string }> = {
@@ -174,7 +175,7 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
   const [confirm, setConfirm] = useState<{ title: string; description: string; action: () => Promise<void>; actionKey?: string; actionLabel?: string } | null>(null);
   const [port, setPort] = useState('18181');
   const [logFilter, setLogFilter] = useState('all');
-  const onRuntimePage = page === 'service' || page === 'settings';
+  const onRuntimePage = page === 'service' || page === 'network' || page === 'settings';
   const runtime = useRuntimeSnapshot(bridge, onRuntimePage);
   const config = snapshot ?? emptySnapshot;
   const data = onRuntimePage && runtime.snapshot ? { ...config, gateway: runtime.snapshot.gateway } : config;
@@ -1033,6 +1034,7 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
         <ProviderNavigation providers={data.providers} selectedProviderId={selectedProviderId} active={page === 'providers'} category={sourceCategory} onCategoryChange={setSourceCategory} onSelect={selectProvider} onAddApi={() => setProviderDraft(freshProvider('deepseek'))} />
       </div>
       <nav className="sidebar-functions" aria-label="功能导航">
+        <button data-page="network" className={`nav-item ${page === 'network' ? 'active' : ''}`} aria-current={page === 'network' ? 'page' : undefined} onClick={() => navigate('network')}><Globe2 size={18} /><span>网络接管</span></button>
         <button data-page="auth" className={`nav-item ${page === 'auth' ? 'active' : ''}`} aria-current={page === 'auth' ? 'page' : undefined} onClick={() => navigate('auth')}><KeyRound size={18} /><span>授权中心</span></button>
         <button data-page="service" className={`nav-item ${page === 'service' ? 'active' : ''}`} aria-current={page === 'service' ? 'page' : undefined} onClick={() => navigate('service')}><Activity size={18} /><span>服务工作台</span><span className={`status-dot ${data.gateway.running ? 'green' : ''}`} /></button>
       </nav>
@@ -1043,6 +1045,7 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
       <main className="main-content">
         {(!bridge || loadError) && <div className="bridge-banner"><Unplug size={17} /><span>{!bridge ? '当前为界面预览。桌面桥未连接，未读取任何本机账号或模型。' : `暂时无法读取本机配置：${loadError}`}</span>{!!bridge && <button onClick={() => void refresh()}>重试<RefreshCw size={13} /></button>}</div>}
         {page === 'auth' && <AuthPanel importRequest={relayImportRequest} onImportRequestHandled={consumeRelayImportRequest} platform={preferences?.platform} onAddSubscription={() => setProviderDraft(freshProvider('codex-subscription'))} refreshRevision={authRefreshRevision} api={bridge} notify={notify} onChanged={refresh} onManageProvider={id => { const provider = data.providers.find(item => item.id === id); if (provider) editProvider(provider); }} onAddRelay={requestRelayImport} onCopilotLogin={loginCopilot} onLogin={id => run('auth-center-login', async () => { const latest = await bridge!.snapshot(); setSnapshot(latest); const provider = latest.providers.find(item => item.id === id); if (!provider) throw new Error('账号来源不存在，请刷新。'); await login(provider); })} />}
+        {page === 'network' && <NetworkWorkspace api={bridge} snapshot={runtime.snapshot?.network} error={runtime.error} onChanged={runtime.refresh} notify={notify} />}
         {page === 'settings' && <SettingsPanel api={bridge} network={runtime.snapshot?.network} onNetworkChanged={runtime.refresh} snapshot={preferences} onSave={savePreferences} notify={notify} dataDir={data.dataDir} version={data.version} providers={data.providers} models={data.models} />}
 
         {page === 'tools' && <div className={`tool-workspace ${currentSingleEntry ? 'single-entry-workspace' : currentAggregate ? 'with-model-sidebar' : ''}`} data-tool-workspace={selectedTool}>
@@ -1086,7 +1089,7 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
           {filteredProviders.length ? <div className="provider-list">{filteredProviders.map(provider => providerRow(provider))}</div> : <EmptyState compact icon={categoryProviders.length ? <Search size={25} /> : <Plug2 size={25} />} title={categoryProviders.length ? '没有匹配的供应商' : sourceCategory === 'api' ? '还没有 API 供应商' : '还没有订阅供应商'} description={categoryProviders.length ? '试试其他名称或服务地址。' : sourceCategory === 'api' ? '点击 API 分组旁的加号，填写自己的地址与 API Key。' : '前往授权中心添加订阅或导入客户端授权。'} />}
         </>)}
 
-        {page === 'service' && <ServiceWorkspace tab={serviceTab} setTab={setServiceTab} api={bridge} network={runtime.snapshot?.network} error={runtime.error} refresh={runtime.refresh} notify={notify}
+        {page === 'service' && <ServiceWorkspace tab={serviceTab} setTab={setServiceTab} error={runtime.error}
           gateway={<GatewayControls gateway={data.gateway} port={port} setPort={setPort} savedPort={preferences?.settings.gatewayPort}
             autoStart={preferences?.settings.autoStartGateway} setAutoStart={changeGatewayAutostart} toggle={data.gateway.running ? stopGateway : startGateway}
             copyKey={() => run('copy-key', async () => { await bridge!.copyGatewayKey(); notify('本地 API Key 已复制。'); })}

@@ -81,7 +81,7 @@ export class ApplicationNetworkSession {
       ready = this.pending;
       await ready;
     } while (ready !== this.pending);
-    if (this.relayInterrupted && !this.configured) throw new Error('网络连接正在恢复，请在服务工作台确认连接后重试。');
+    if (this.relayInterrupted && !this.configured) throw new Error('网络连接正在恢复，请在「网络接管」中确认连接后重试。');
     return this.session.fetch(input, init);
   }
 }

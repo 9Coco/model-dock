@@ -20,7 +20,7 @@ import sys
 
 GATEWAY_COMMAND = "nmcli -f GENERAL.CONNECTION,IP4.GATEWAY device show"
 HINT = "手机接口候选或以前保存的 IP 不保证当前可用，请从连接热点的电脑验证。"
-DESKTOP_HINT = "电脑连接手机热点后，打开 ModelDock 的“服务工作台 → 查询热点地址”，选择网关候选并保存，然后点击“连接”验证。"
+DESKTOP_HINT = "电脑连接手机热点后，打开 ModelDock 的“网络接管 → 查询热点地址”，选择网关候选并保存，然后点击“连接”验证。"
 VPN_OR_NON_LAN = re.compile(
     r"^(lo\d*$|tun|tap|utun|wg|wireguard|ppp|ipsec|vpn|clat|v4-|"
     r"dummy|docker|veth|virbr|br-|rmnet|r_rmnet|ccmni|pdp|p2p)",
