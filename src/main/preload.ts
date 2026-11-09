@@ -12,6 +12,7 @@ const relayImportCall = async (method: 'relayClientImportCandidates' | 'importRe
 };
 const rendererErrorNames = new Set(['Error', 'TypeError', 'ReferenceError', 'SyntaxError', 'RangeError', 'URIError', 'EvalError', 'AggregateError', 'AbortError', 'TimeoutError']);
 const api: ModelDockApi = {
+  runtimeSnapshot: () => call('runtimeSnapshot'),
   networkSnapshot: () => call('networkSnapshot'), saveNetworkSettings: patch => call('saveNetworkSettings', patch),
   connectNetwork: () => call('connectNetwork'), disconnectNetwork: () => call('disconnectNetwork'),
   checkNetworkSite: site => call('checkNetworkSite', site), networkHotspotCandidates: () => call('networkHotspotCandidates'),

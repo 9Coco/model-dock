@@ -1,5 +1,6 @@
-import { verifyNetworkUi } from './network-smoke';
-import { FlowBridgeManager, hotspotCandidates } from './flowbridge';
+import { createNetworkSmokeEngine, verifyNetworkUi } from './network-smoke';
+import { hotspotCandidates } from './flowbridge';
+import { ModelDockRuntime } from './modeldock-runtime';
 import { FlowBridgeEngine } from './flowbridge-engine';
 import { NetworkMini } from './network-mini';
 import { NETWORK_SITES, type NetworkSite } from '../shared/flowbridge-types';
@@ -9,7 +10,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { DiagnosticsLog, describeError, sanitizeDiagnosticEndpoint } from './diagnostic-log';
 import { diagnosticOperationContext, diagnosticOperationResult, ignoresDiagnosticOperation, isQuietDiagnosticOperation } from './diagnostic-operations';
 import type { DiagnosticContext, DiagnosticEvent, DiagnosticLevel, DiagnosticQuery } from '../shared/diagnostic-types';
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeTheme, net, session, shell, Tray } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeTheme, session, shell, Tray } from 'electron';
 import { getAppIcon } from './app-icon';
 import { dirname, join, relative, resolve } from 'node:path';
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
@@ -73,7 +74,7 @@ import { verifyJetBrainsConnections } from './jetbrains-smoke';
 import { jetBrainsWindowsSmokeOptions, verifyJetBrainsWindowsProfiles } from './jetbrains-windows-smoke';
 import { verifyAggregateModes } from './aggregate-modes-smoke';
 import { restoreToolBinding } from './tool-restore-binding';
-import { applyNetworkProxy } from './network-proxy';
+import { ApplicationNetworkSession } from './network-proxy';
 import { inspectAuthNetwork } from './network-diagnostic';
 import { createSystemNetworkFetch } from './system-network';
 import { resolveRuntimeConfig } from './runtime-mode';
@@ -106,7 +107,8 @@ import { createJetBrainsIdeFixture, verifyJetBrainsIdeImport } from './jetbrains
 let window: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let store: Store;
-let gateway: Gateway;
+let runtime: ModelDockRuntime;
+let applicationNetwork: ApplicationNetworkSession;
 let ideAccounts: JetBrainsIdeAccounts;
 let ideGatewayAdapter: JetBrainsGatewayAdapter;
 let centralNativeAccounts: CentralNativeAccounts;
@@ -120,7 +122,6 @@ let copilotProviders: CopilotProviderManager;
 let mcp: McpManager;
 let skills: SkillManager;
 let preferences: SettingsManager;
-let network: FlowBridgeManager;
 let networkMini: NetworkMini;
 let shutdownRunning = false;
 let shutdownComplete = false;
@@ -630,6 +631,7 @@ function relayKey(setting: string): string {
 }
 
 function registerIpc() {
+  const { gateway, network } = runtime;
   let providerRemovalPending = false;
   let jetBrainsImportPending = false;
   let toolRestorePending = false;
@@ -702,7 +704,7 @@ function registerIpc() {
     if (!preview.canApply) throw new Error('此工具使用导出配置入口。');
     const usesGateway = binding && bindingConnectionPolicy(binding, store.listModels(), store.listProviders()).groups.some(group => group.connection === 'local-managed' && group.modelIds.length > 0);
     if (usesGateway && !gateway.status().running) {
-      const status = await gateway.start(gateway.status().port);
+      const status = await runtime.startGateway();
       if (!status.running) throw new Error('本地入口未能启动，尚未写入工具配置。');
     }
     let operation: () => string | Promise<string>;
@@ -788,6 +790,7 @@ function registerIpc() {
   });
   handle('snapshot', () => ({ providers: store.listProviders(), models: store.listModels(), bindings: store.listBindings(),
     gateway: gateway.status(), gatewayExposure: store.gatewayExposure(), logs: store.logs(100), dataDir, version: app.getVersion() }));
+  handle('runtimeSnapshot', () => runtime.snapshot());
   handle('networkSnapshot', () => network.snapshot());
   handle('saveNetworkSettings', patch => network.save(patch));
   handle('connectNetwork', () => network.connect());
@@ -813,16 +816,17 @@ function registerIpc() {
         if (process.env.MODELDOCK_SMOKE_GROK_MODE === 'network-error') throw Object.assign(new TypeError('PRIVATE_NETWORK_DIAGNOSTIC'), { cause: { code: 'ERR_CONNECTION_RESET' } });
         return new Response(JSON.stringify({ issuer: 'https://auth.x.ai', device_authorization_endpoint: 'https://auth.x.ai/oauth2/device/code', token_endpoint: 'https://auth.x.ai/oauth2/token' }), { headers: { 'content-type': 'application/json' } });
       }
-      : createSystemNetworkFetch((input, init) => session.defaultSession.fetch(input instanceof URL ? input.href : input, init))));
+      : createSystemNetworkFetch((input, init) => applicationNetwork.fetch(input, init))));
   handle('saveSettings', async (patch: Partial<AppSettings>) => {
     const previous = preferences.get().settings;
     if (Object.hasOwn(patch, 'gatewayPort') && gateway.status().running && patch.gatewayPort !== gateway.status().port) throw new Error('请先停止本地服务，再修改服务端口。');
+    if (patch.gatewayPort !== undefined) network.validateGatewayPort(patch.gatewayPort);
     const result = preferences.save(patch);
     if (Object.hasOwn(patch, 'proxyUrl')) {
-      try { await applyNetworkProxy(session.defaultSession, result.settings.proxyUrl); }
+      try { await applicationNetwork.setConfiguredProxy(result.settings.proxyUrl); }
       catch (error) {
         const rollback = Object.fromEntries(Object.keys(patch).map(key => [key, previous[key as keyof AppSettings]])) as Partial<AppSettings>;
-        preferences.save(rollback); await applyNetworkProxy(session.defaultSession, previous.proxyUrl); throw error;
+        preferences.save(rollback); await applicationNetwork.setConfiguredProxy(previous.proxyUrl); throw error;
       }
     }
     if (Object.hasOwn(patch, 'gatewayPort')) gateway.configurePort(result.settings.gatewayPort);
@@ -948,11 +952,11 @@ function registerIpc() {
   handle('openTraeRelayLogin', async () => { throw new Error('请在 TRAE 中国版客户端完成登录，再到授权中心导入。'); });
   handle('stopTraeRelay', async () => { /* No independent TRAE relay process exists. */ });
   handle('startGateway', async (port?: number) => {
-    const status = await gateway.start(port ?? preferences.get().settings.gatewayPort);
+    const status = await runtime.startGateway(port ?? preferences.get().settings.gatewayPort);
     if (status.running) preferences.save({ gatewayPort: status.port });
     return status;
   });
-  handle('stopGateway', async () => { await gateway.stop(); return gateway.status(); });
+  handle('stopGateway', () => runtime.stopGateway());
   handle('setGatewayProviderEnabled', (id: string, enabled: boolean) => store.setGatewayProviderEnabled(id, enabled));
   handle('setGatewayModelEnabled', (id: string, enabled: boolean) => store.setGatewayModelEnabled(id, enabled));
   handle('copyText', (value: unknown) => writeClipboardText(value, text => clipboard.writeText(text)));
@@ -1076,11 +1080,15 @@ function initializeApplication() {
     store = await Store.create(dataDir, __MODELDOCK_SMOKE_BUILD__ && process.env.MODELDOCK_SMOKE_GATEWAY_STARTUP === '1'
       ? createGatewayStartupSmokeVault(dataDir) : createVault(dataDir));
     startupStage = 'managers';
+    applicationNetwork = new ApplicationNetworkSession({
+      setProxy: config => session.defaultSession.setProxy(config),
+      fetch: (input, init) => session.defaultSession.fetch(input instanceof URL ? input.href : input, init),
+    });
     const systemFetch = createSystemNetworkFetch(async (input, init) => {
       const startedAt = Date.now(), target = input instanceof Request ? input.url : input instanceof URL ? input.href : String(input);
       const context: DiagnosticContext = { endpoint: target };
       try {
-        const response = await net.fetch(input instanceof URL ? input.href : input, init);
+        const response = await applicationNetwork.fetch(input, init);
         const type = response.headers.get('content-type')?.toLowerCase();
         context.statusCode = response.status; context.durationMs = Date.now() - startedAt;
         context.contentType = type?.includes('json') ? 'json' : type?.includes('event-stream') ? 'sse' : type?.includes('html') ? 'html' : type ? 'other' : 'unknown';
@@ -1178,14 +1186,8 @@ function initializeApplication() {
     }
     nativeTheme.themeSource = preferences.get().settings.theme;
     nativeTheme.on('updated', () => { if (window && !window.isDestroyed()) window.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#19191c' : '#f8f9fb'); });
-    network = new FlowBridgeManager(store, { platform: process.platform, dataDir: join(dataDir, 'network'), gatewayPort: () => preferences.get().settings.gatewayPort,
-      engine: (progress, exit) => {
-        if (__MODELDOCK_SMOKE_BUILD__) throw new Error('隔离 UI 验证不允许操作系统网络。');
-        return new FlowBridgeEngine(networkResourceRoot(), join(dataDir, 'network'), progress, exit);
-      } });
-    networkMini = new NetworkMini(network, store, revealWindow, __dirname, __MODELDOCK_RUNTIME_MODE__ === 'development' ? devUrl : undefined);
     startupStage = 'proxy';
-    await applyNetworkProxy(session.defaultSession, preferences.get().settings.proxyUrl);
+    await applicationNetwork.setConfiguredProxy(preferences.get().settings.proxyUrl);
     startupStage = 'managers';
     accounts = new AuthCenter(store, oauth, { homeDir: featureHome, codexHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.codex') : process.env.CODEX_HOME, fetch: runtimeFetch });
     copilotAccounts = new CopilotAuthCenter(store, { fetch: runtimeFetch, clientImport: __MODELDOCK_SMOKE_BUILD__ ? { homeDir: featureHome, env: {}, readKeychain: async () => undefined, runGithubCli: async () => { throw new Error('Smoke import uses isolated plaintext fixtures only.'); } } : undefined, onAuthorized: (accountId, providerId) => {
@@ -1229,10 +1231,25 @@ function initializeApplication() {
     catalog = new ModelCatalog(store, upstream, { fetch: runtimeFetch, nativeModels, now: historyModelsFixture?.now });
     connectionTester = new ConnectionTester(store, upstream, { fetch: runtimeFetch, nativeRequest, diagnostics: recordDiagnostic });
     const serviceSettings = preferences.get().settings;
-    gateway = new Gateway(store, { diagnostics: recordDiagnostic, runWithDiagnostics: (context, action) => diagnosticScope.run(context, action), port: serviceSettings.gatewayPort, prepareRequest: (provider, _secret, path, body) => upstream.prepareRequest(provider, path, body), nativeRequest, fetch: runtimeFetch });
+    const gateway = new Gateway(store, { diagnostics: recordDiagnostic, runWithDiagnostics: (context, action) => diagnosticScope.run(context, action), port: serviceSettings.gatewayPort, prepareRequest: (provider, _secret, path, body) => upstream.prepareRequest(provider, path, body), nativeRequest, fetch: runtimeFetch });
+    runtime = new ModelDockRuntime(gateway, store, {
+      platform: process.platform,
+      dataDir: join(dataDir, 'network'),
+      engine: (progress, exit) => {
+        if (__MODELDOCK_SMOKE_BUILD__) {
+          if (process.env.MODELDOCK_SMOKE_NETWORK_ONLY === '1') return createNetworkSmokeEngine();
+          throw new Error('隔离 UI 验证不允许操作系统网络。');
+        }
+        return new FlowBridgeEngine(networkResourceRoot(), join(dataDir, 'network'), progress, exit);
+      },
+      setHttpRelay: port => applicationNetwork.setHttpRelay(port),
+      suspendHttpRelay: () => applicationNetwork.suspendHttpRelay(),
+    });
+    const { network } = runtime;
+    networkMini = new NetworkMini(network, store, revealWindow, __dirname, __MODELDOCK_RUNTIME_MODE__ === 'development' ? devUrl : undefined);
     startupStage = 'gateway';
     if (serviceSettings.autoStartGateway) {
-      try { await gateway.start(); }
+      try { await runtime.startGateway(); }
       catch { /* Keep the application available; the service page displays the gateway failure. */ }
     }
     session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
@@ -1245,7 +1262,7 @@ function initializeApplication() {
         { label: '打开 ModelDock', click: revealWindow },
         { label: '网速小窗', click: () => { void networkMini.show(); } },
         { label: '断开网络代理', click: () => { void network.disconnect().catch(error => dialog.showErrorBox('网络恢复未完成', error.message)); } },
-        { label: '停止本地网关', click: () => { void gateway.stop(); } },
+        { label: '停止本地网关', click: () => { void runtime.stopGateway().catch(error => dialog.showErrorBox('网关停止失败', error.message)); } },
         { type: 'separator' }, { label: '退出', click: () => { quitting = true; app.quit(); } },
       ]));
       tray.on('click', revealWindow);
@@ -1270,15 +1287,15 @@ function initializeApplication() {
     shutdownRunning = true; quitting = true;
     void (async () => {
       // Keep the window, store and gateway alive if OS cleanup needs a retry.
-      try { await network?.shutdown(); }
+      try { await runtime?.shutdown(); }
       catch (error) {
         shutdownRunning = false; quitting = false; revealWindow();
-        dialog.showErrorBox('网络恢复未完成', error instanceof Error ? error.message : '请重试断开后退出。');
+        dialog.showErrorBox('服务尚未退出', error instanceof Error ? error.message : '请重试断开后退出。');
         return;
       }
       if (!exitDiagnosticRecorded) { exitDiagnosticRecorded = true; recordDiagnostic('info', 'app.exit', { stage: 'shutdown' }); }
       accounts?.dispose(); copilotProviders?.dispose(); copilotAccounts?.dispose(); oauth?.dispose(); traeNativeAccounts?.dispose(); centralNativeAccounts?.dispose();
-      await Promise.allSettled([gateway?.stop(), ideAccounts?.dispose()]);
+      try { await ideAccounts?.dispose(); } catch { /* Continue closing local resources. */ }
       networkMini?.close(); store?.close(); tray?.destroy(); shutdownComplete = true; app.quit();
     })();
   });

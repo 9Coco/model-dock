@@ -1,43 +1,222 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import assert from 'node:assert/strict';
 import { writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { BrowserWindow } from 'electron';
+import type { FlowBridgeSnapshot, NetworkEngineStatus } from '../shared/flowbridge-types';
 import type { Store } from './store';
-export async function verifyNetworkUi(window: BrowserWindow, store: Store, output: string, capture: () => Promise<Buffer>) {
-  const before = JSON.stringify({ providers: store.listProviders(), models: store.listModels(), bindings: store.listBindings() });
-  const evaluate = <T>(script: string): Promise<T> => window.webContents.executeJavaScript(script);
-  const wait = async (expression: string) => {
-    for (let i = 0; i < 100; i++) { if (await evaluate<boolean>(expression)) return; await new Promise(r => setTimeout(r, 50)); }
-    throw new Error(`Network UI condition failed: ${expression}`);
+import type { NetworkEngine } from './flowbridge-engine';
+
+const cancellationAddress = 'socks5://192.0.2.31:38473';
+
+// Exercise the real manager, IPC and controls while keeping privileged system networking out of QA.
+export function createNetworkSmokeEngine(): NetworkEngine {
+  let running = false;
+  let releaseConnect: (() => void) | undefined;
+  return {
+    async request<T>(method: string, args?: Record<string, unknown>) {
+      switch (method) {
+        case 'connect': {
+          const settings = args?.settings as FlowBridgeSnapshot['settings'];
+          if (settings.address === cancellationAddress) {
+            await new Promise<void>(resolve => { releaseConnect = resolve; });
+            releaseConnect = undefined;
+          }
+          running = true;
+          break;
+        }
+        case 'cancel':
+          releaseConnect?.();
+          break;
+        case 'disconnect':
+          running = false;
+          break;
+        case 'snapshot':
+          break;
+        default:
+          throw new Error(`Unsupported network UI fixture request: ${method}`);
+      }
+      const status: NetworkEngineStatus = { running, cleanupConfirmed: !running, localPort: null,
+        connections: 0, uploadBytes: 0, downloadBytes: 0, message: '' };
+      return status as T;
+    },
+    async close() { releaseConnect?.(); running = false; },
   };
-  await evaluate(`document.querySelector('[data-page="network"]').click()`);
-  await wait(`!!document.querySelector('[data-network-panel]')`);
-  assert.equal(await evaluate(`document.querySelector('[data-action="connect-network"]').disabled`), true);
-  await evaluate(`window.modelDock.saveNetworkSettings({address:'192.0.2.30:38473'})`);
-  await wait(`document.querySelector('#network-address').value==='http://192.0.2.30:38473'`);
-  await evaluate(`document.querySelector('[aria-label="网络连接模式"] button:nth-child(2)').click()`);
-  await wait(`document.querySelector('#network-address').value==='socks5://192.0.2.30:38473'`);
-  assert.equal(await evaluate(`document.querySelector('[data-action="connect-network"]').disabled`), false);
-  const layout = await evaluate<{overflow: boolean; labels: string[]}>(`({overflow:document.documentElement.scrollWidth>innerWidth,labels:[...document.querySelectorAll('.network-panel h2')].map(e=>e.textContent)})`);
-  assert.equal(layout.overflow, false); assert.equal(layout.labels.length, 4);
-  writeFileSync(join(output, 'network-light.png'), await capture());
-  await evaluate(`document.querySelector('[data-page="settings"]').click()`);
-  await wait(`!!document.querySelector('[aria-label="随 ModelDock 自动连接网络"]')`);
-  await evaluate(`document.querySelector('[data-theme-choice="dark"]').click()`);
-  await wait(`document.querySelector('[data-theme-choice="dark"]').getAttribute('aria-pressed')==='true'`);
-  await evaluate(`document.querySelector('[data-page="network"]').click()`);
-  await wait(`!!document.querySelector('[data-network-panel]')`);
-  writeFileSync(join(output, 'network-dark.png'), await capture());
-  await evaluate(`window.modelDock.showNetworkMini()`);
-  const mini = BrowserWindow.getAllWindows().find(w => w !== window)!;
+}
+
+async function availableGatewayPort() {
+  const probe = createServer();
+  await new Promise<void>((resolve, reject) => probe.once('error', reject).listen(0, '127.0.0.1', resolve));
+  const address = probe.address();
+  await new Promise<void>((resolve, reject) => probe.close(error => error ? reject(error) : resolve()));
+  assert.ok(address && typeof address === 'object');
+  return address.port;
+}
+
+export async function verifyNetworkUi(window: BrowserWindow, store: Store, output: string, capture: () => Promise<Buffer>) {
+  const modelConfig = () => ({ providers: store.listProviders(), models: store.listModels(), bindings: store.listBindings() });
+  const before = modelConfig();
+  const evaluate = <T>(script: string): Promise<T> => window.webContents.executeJavaScript(script);
+  async function wait(expression: string, contents = window.webContents) {
+    for (let i = 0; i < 100; i++) {
+      if (await contents.executeJavaScript(expression)) return;
+      await delay(50);
+    }
+    throw new Error(`Network UI condition failed: ${expression}`);
+  }
+  const query = (selector: string) => `document.querySelector(${JSON.stringify(selector)})`;
+  async function click(selector: string) {
+    await wait(`!!${query(selector)} && !${query(selector)}.disabled`);
+    await evaluate(`${query(selector)}.click()`);
+  }
+  async function fill(selector: string, value: string) {
+    await evaluate(`(() => {const input=${query(selector)};
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,${JSON.stringify(value)});
+      input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+  }
+  const network = () => evaluate<FlowBridgeSnapshot>('window.modelDock.networkSnapshot()');
+  const bothCards = `!!${query('[data-service-workspace] [data-gateway-panel]')} && !!${query('[data-service-workspace] [data-network-panel]')}`;
+  const networkState = (state: string) => `!!${query(`[data-network-service-status="${state}"]`)}`;
+  const gatewayButton = '[data-gateway-panel] .port-control button';
+  const gatewayState = (state: string) => `!!${query(`[data-gateway-service-status="${state}"]`)}`;
+
+  // These records were written before the application opened the legacy fixture database.
+  for (const suffix of ['a', 'b']) {
+    const id = `duplicate-deepseek-${suffix}`;
+    assert.ok(before.providers.some(provider => provider.id === id && provider.hasSecret));
+    assert.ok(before.models.some(model => model.providerId === id && model.alias === `duplicate-${suffix}`));
+  }
+  assert.ok(before.bindings.length);
+  await wait(bothCards);
+  assert.equal(await evaluate(`${query('[data-page="service"]')}.getAttribute('aria-current')`), 'page');
+  assert.equal(await evaluate(`!!${query('[data-page="network"]')}`), false);
+  assert.equal(await evaluate(`${query('[data-action="connect-network"]')}.disabled`), true);
+  const idle = await network();
+  assert.equal(idle.state, 'idle');
+  assert.equal(idle.settings.autoConnect, false);
+  assert.equal(await evaluate(gatewayState('stopped')), true);
+
+  const port = await availableGatewayPort();
+  await fill('#service-port', String(port));
+  await click(gatewayButton);
+  await wait(gatewayState('running'));
+  assert.deepEqual(await network(), idle, 'Starting the local gateway must preserve the network session');
+  await fill('#network-address', '192.0.2.30:38473');
+  await click('[data-action="save-network-address"]');
+  await wait(`${query('#network-address')}.value==='http://192.0.2.30:38473'`);
+  await click('[aria-label="网络连接模式"] button:nth-child(2)');
+  await wait(`${query('#network-address')}.value==='socks5://192.0.2.30:38473'`);
+  const configured = await network();
+  assert.equal(configured.settings.mode, 'global');
+  assert.equal(configured.state, 'idle');
+  assert.equal(configured.status.running, false);
+  assert.equal(await evaluate(`${query('[data-action="connect-network"]')}.disabled`), false);
+  const gateway = await evaluate<{ running: boolean; port: number; host: string }>('window.modelDock.snapshot().then(s=>s.gateway)');
+  assert.equal(gateway.running, true);
+  assert.equal(gateway.port, port);
+  assert.equal(gateway.host, '127.0.0.1');
+  await click('[data-action="connect-network"]');
+  await wait(networkState('connected'));
+  assert.equal((await network()).status.running, true);
+  assert.equal(await evaluate(gatewayState('running')), true);
+
+  await evaluate(`document.querySelectorAll('.toast-stack [aria-label="关闭提示"]').forEach(button=>button.click())`);
+  const layouts = [];
+  const screenshots = [];
+  window.setMinimumSize(780, 580);
+  for (const [theme, width, height, filename] of [
+    ['light', 1320, 880, 'network-light.png'], ['dark', 1320, 880, 'network-dark.png'],
+    ['dark', 980, 680, 'network-compact.png'], ['dark', 780, 620, 'network-narrow.png'],
+  ] as const) {
+    await click('[data-page="settings"]');
+    await wait(`!!${query('[aria-label="随 ModelDock 自动连接网络"]')}`);
+    await click(`[data-theme-choice="${theme}"]`);
+    await wait(`document.documentElement.dataset.theme===${JSON.stringify(theme)}`);
+    await click('[data-page="service"]');
+    window.setContentSize(width, height);
+    await wait(`innerWidth===${width} && ${bothCards}`);
+    const layout = await evaluate<{ overflow: boolean; stacked: boolean; sideBySide: boolean }>(`(() => {
+      const model=${query('[data-gateway-panel]')}.getBoundingClientRect(), network=${query('[data-network-panel]')}.getBoundingClientRect();
+      const main=document.querySelector('main'), overflow=document.documentElement.scrollWidth>innerWidth+1 || main.scrollWidth>main.clientWidth+1;
+      return {overflow, stacked:network.top>=model.bottom-1, sideBySide:network.left>=model.right-1 && Math.abs(network.top-model.top)<2};
+    })()`);
+    assert.equal(layout.overflow, false, `Workspace overflow at ${width}px`);
+    if (width === 1320) assert.ok(layout.sideBySide, 'Wide layout presents both controls next to each other');
+    if (width === 780) assert.ok(layout.stacked, 'Narrow layout stacks the controls');
+    layouts.push({ theme, width, ...layout });
+    writeFileSync(join(output, filename), await capture());
+    screenshots.push(filename);
+  }
+  for (const tab of ['logs', 'network', 'interface']) {
+    await click(`[data-service-tab="${tab}"]`);
+    await wait(bothCards);
+    if (tab === 'network') {
+      await wait(`!!${query('[aria-label="检测网站"]')} && !!${query('[aria-label="流量时间范围"]')}`);
+    }
+  }
+  await click(gatewayButton);
+  await wait(gatewayState('stopped'));
+  assert.equal((await network()).state, 'connected', 'Stopping the gateway must leave a connected network alone');
+  await click(gatewayButton);
+  await wait(gatewayState('running'));
+  assert.equal((await network()).state, 'connected', 'Starting the gateway must leave a connected network alone');
+  await click('[data-action="disconnect-network"]');
+  await wait(networkState('idle'));
+  assert.deepEqual((await network()).settings, configured.settings);
+  assert.equal(await evaluate(gatewayState('running')), true);
+
+  await fill('#network-address', cancellationAddress);
+  await click('[data-action="save-network-address"]');
+  await click('[data-action="connect-network"]');
+  await wait(networkState('connecting'));
+  await click('[data-action="disconnect-network"]');
+  await wait(networkState('idle'));
+  assert.equal((await network()).status.cleanupConfirmed, true);
+  assert.equal(await evaluate(gatewayState('running')), true, 'Canceling a network connection must leave the gateway running');
+  await click(gatewayButton);
+  await wait(gatewayState('stopped'));
+  await click('[data-action="show-network-mini"]');
+  let mini: BrowserWindow | undefined;
+  for (let attempt = 0; attempt < 100 && !mini; attempt++) {
+    mini = BrowserWindow.getAllWindows().find(item => item !== window && item.isVisible() && item.webContents.getURL().endsWith('#network-mini'));
+    if (!mini) await delay(50);
+  }
   assert.ok(mini);
-  assert.equal(await mini.webContents.executeJavaScript(`typeof window.modelDock`), 'undefined');
-  assert.equal(await mini.webContents.executeJavaScript(`typeof window.networkMonitor.snapshot`), 'function');
-  writeFileSync(join(output, 'network-mini.png'), (await mini.webContents.capturePage()).toPNG());
-  await mini.webContents.executeJavaScript(`window.networkMonitor.action('hide')`);
-  assert.equal(JSON.stringify({ providers: store.listProviders(), models: store.listModels(), bindings: store.listBindings() }), before);
+  assert.equal(await mini.webContents.executeJavaScript('typeof window.modelDock'), 'undefined');
+  assert.equal(await mini.webContents.executeJavaScript('typeof window.networkMonitor.snapshot'), 'function');
+  await wait(`!!document.querySelector('[aria-label="展开曲线"]')`, mini.webContents);
+  const miniLayout = `(() => {
+    const controls = Array.from(document.querySelectorAll('.network-mini header button,.network-mini .network-metrics strong'));
+    return controls.length === 5 && controls.every(control => {
+      const rect = control.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0 && rect.left >= 0 && rect.right <= innerWidth + 1
+        && rect.top >= 0 && rect.bottom <= innerHeight + 1;
+    });
+  })()`;
+  assert.equal(await mini.webContents.executeJavaScript(miniLayout), true, 'Collapsed mini monitor must show both rates and all buttons');
+  await mini.webContents.executeJavaScript(`document.querySelector('[aria-label="展开曲线"]').click()`);
+  let miniCapture;
+  for (let attempt = 0; attempt < 40; attempt++) {
+    if (await mini.webContents.executeJavaScript("!!document.querySelector('.network-mini .network-chart')")) {
+      const frame = await mini.webContents.capturePage();
+      const pixels = frame.toBitmap();
+      // The first compositor frame can still contain only the window background.
+      if (pixels.some((byte, i) => byte !== pixels[i % 4])) { miniCapture = frame; break; }
+    }
+    await delay(100);
+  }
+  assert.ok(miniCapture, 'Expanded mini monitor must show a painted frame');
+  assert.equal(await mini.webContents.executeJavaScript(miniLayout), true, 'Expanded mini monitor must show both rates and all buttons');
+  writeFileSync(join(output, 'network-mini.png'), miniCapture.toPNG());
+  screenshots.push('network-mini.png');
+  await mini.webContents.executeJavaScript("window.networkMonitor.action('hide')");
+  assert.deepEqual(modelConfig(), before);
   assert.equal(store.getManagedState('network.flowbridge.lease', false), false);
-  writeFileSync(join(output, 'network-validation.json'), JSON.stringify({ ok:true, modeSwitchSaved:true, osNetworkUntouched:true, existingDataPreserved:true, miniPreloadIsolated:true, layout, screenshots:['network-light.png','network-dark.png','network-mini.png'] }, null, 2));
-  if (process.env.MODELDOCK_SMOKE_NETWORK_HOLD === '1') { window.show(); await new Promise(r => setTimeout(r, 60_000)); }
+  writeFileSync(join(output, 'network-validation.json'), JSON.stringify({ ok: true, defaultServiceWorkspace: true,
+    modeSwitchSaved: true, gatewayControlsIndependent: true, simulatedNetworkConnectDisconnectAndCancel: true,
+    osNetworkUntouched: true, existingDataPreserved: true,
+    miniPreloadIsolated: true, layouts, screenshots }, null, 2));
+  if (process.env.MODELDOCK_SMOKE_NETWORK_HOLD === '1') { window.show(); await delay(60_000); }
 }

@@ -36,6 +36,15 @@ function status(value: NetworkEngineStatus): NetworkEngineStatus {
   if (!plain(value) || typeof value.running !== 'boolean' || typeof value.cleanupConfirmed !== 'boolean' || typeof value.message !== 'string' || ![value.uploadBytes, value.downloadBytes, value.connections].every(v => Number.isSafeInteger(v) && v >= 0) || value.localPort !== null && (!Number.isInteger(value.localPort) || value.localPort < 1 || value.localPort > 65535)) throw new Error('网络组件状态无效，清理状态未知。');
   return { ...value, message: value.message.slice(0, 500) };
 }
+export interface FlowBridgeOptions {
+  platform: string;
+  dataDir: string;
+  gatewayPort: () => number;
+  engine: (progress: (message: string) => void, exit: () => void) => NetworkEngine;
+  setHttpRelay?: (port: number | null) => Promise<void>;
+  suspendHttpRelay?: () => void;
+  now?: () => number;
+}
 export class FlowBridgeManager {
   private settings: FlowBridgeSettings = { ...DEFAULT_FLOWBRIDGE };
   private state: FlowBridgeSnapshot['state'] = 'idle';
@@ -53,7 +62,7 @@ export class FlowBridgeManager {
   private timer?: ReturnType<typeof setInterval>;
   private polling = false;
   private checking = false;
-  constructor(private store: SettingsStore, private options: { platform: string; dataDir: string; gatewayPort: () => number; engine: (progress: (message: string) => void, exit: () => void) => NetworkEngine; now?: () => number }) {
+  constructor(private store: SettingsStore, private options: FlowBridgeOptions) {
     try { this.settings = validateNetworkSettings(store.getManagedState(KEY, {}), this.settings, options.platform, options.gatewayPort()); }
     catch { this.state = 'error'; this.message = '已保留无法读取的网络设置，请重新保存网络配置；原有模型数据未改动。'; }
     this.active = store.getManagedState(LEASE, false);
@@ -67,6 +76,9 @@ export class FlowBridgeManager {
     } catch { /* Optional traffic history never prevents existing ModelDock data opening. */ }
     this.prune();
   }
+  validateGatewayPort(port: number) {
+    validateNetworkSettings({}, this.settings, this.options.platform, port);
+  }
   private now() { return this.options.now?.() ?? Date.now(); }
   private prune() { this.history = this.history.filter(v => v.time > this.now() - 86_400_000 && v.time <= this.now()); }
   snapshot(): FlowBridgeSnapshot {
@@ -75,7 +87,7 @@ export class FlowBridgeManager {
   }
   private getEngine() {
     return this.engine ??= this.options.engine(message => { this.message = message; }, () => {
-      if (this.active) { this.current = { ...this.current, running: false, cleanupConfirmed: false }; this.state = 'error'; this.message = '网络组件意外退出，请点击断开检查恢复记录。'; }
+      if (this.active) { this.options.suspendHttpRelay?.(); this.current = { ...this.current, running: false, cleanupConfirmed: false }; this.state = 'error'; this.message = '网络组件意外退出，请点击断开检查恢复记录。'; }
     });
   }
   private enqueue<T>(operation: () => Promise<T>): Promise<T> {
@@ -115,6 +127,10 @@ export class FlowBridgeManager {
     try {
       this.current = status(await this.getEngine().request<NetworkEngineStatus>('connect', { settings: this.settings }));
       if (!this.current.running || this.cancel) { await this.stop(); if (this.cancel) return; throw new Error('未确认网络连接就绪。'); }
+      if (this.settings.mode === 'http' && this.current.localPort === null) throw new Error('未确认 HTTP 代理监听端口。');
+      await this.options.setHttpRelay?.(this.settings.mode === 'http' ? this.current.localPort : null);
+      if (this.cancel) { await this.stop(); return; }
+      if (!this.current.running) throw new Error('网络组件在连接期间退出。');
       this.state = 'connected'; this.message = '已连接';
       this.timer ??= setInterval(() => { void this.sample(); }, 1000);
       this.timer.unref();
@@ -136,10 +152,12 @@ export class FlowBridgeManager {
   private async stop() {
     if (this.timer) clearInterval(this.timer); this.timer = undefined;
     if (!this.active) { this.state = 'idle'; this.message = ''; return; }
+    this.options.suspendHttpRelay?.();
     this.state = 'disconnecting'; this.message = '正在恢复网络设置…';
     try {
       this.current = status(await this.getEngine().request<NetworkEngineStatus>('disconnect', { recover: this.active, settings: this.settings }));
       if (!this.current.cleanupConfirmed || this.current.running) throw new Error('清理尚未确认，请重试断开。');
+      await this.options.setHttpRelay?.(null);
       this.store.setManagedState(LEASE, false); this.active = false;
       this.state = 'idle'; this.message = this.current.message || '已断开，网络设置已恢复'; this.previous = undefined;
       this.persistHistory();
@@ -152,12 +170,12 @@ export class FlowBridgeManager {
       const value = status(await this.getEngine().request<NetworkEngineStatus>('snapshot'));
       if (this.state !== 'connected') return;
       this.current = value;
-      if (!value.running) { this.state = 'error'; this.message = value.message || '网络内核已停止，请点击断开恢复。'; return; }
+      if (!value.running) { this.options.suspendHttpRelay?.(); this.state = 'error'; this.message = value.message || '网络内核已停止，请点击断开恢复。'; return; }
       const time = this.now(), delta = this.previous ? (time - this.previous.time) / 1000 : 0;
       const sample = { time, uploadBytes: value.uploadBytes, downloadBytes: value.downloadBytes, uploadRate: delta > 0 ? Math.max(0, value.uploadBytes - this.previous!.uploadBytes) / delta : 0, downloadRate: delta > 0 ? Math.max(0, value.downloadBytes - this.previous!.downloadBytes) / delta : 0 };
       this.previous = sample; this.live.push(sample); this.live = this.live.slice(-60);
       if (!this.history.length || time - this.history.at(-1)!.time >= 60_000) { this.history.push(sample); this.prune(); this.persistHistory(); }
-    } catch (error) { this.state = 'error'; this.message = error instanceof Error ? error.message : '无法读取网络状态。'; }
+    } catch (error) { this.options.suspendHttpRelay?.(); this.state = 'error'; this.message = error instanceof Error ? error.message : '无法读取网络状态。'; }
     finally { this.polling = false; }
   }
   private persistHistory() {

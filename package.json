@@ -1,6 +1,6 @@
 {
   "name": "model-dock",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "ModelDock — 配置一次，让模型连接你的工具。",
   "license": "GPL-3.0-or-later",
   "author": {
@@ -31,8 +31,8 @@
     "pack": "npm run build && electron-builder --dir",
     "pack:win": "node scripts/pack-windows.mjs",
     "dist:win": "node scripts/pack-windows.mjs --portable",
-    "dist:linux": "npm run network:prepare -- linux && npm run network:helper && npm run build && electron-builder --linux AppImage deb",
-    "dist:deb": "npm run network:prepare -- linux && npm run network:helper && npm run build && electron-builder --linux deb",
+    "dist:linux": "npm run build && electron-builder --linux AppImage deb",
+    "dist:deb": "npm run build && electron-builder --linux deb",
     "test:network": "node scripts/test-network.mjs",
     "network:prepare": "node scripts/prepare-network.mjs",
     "network:helper": "python3 scripts/build-network-helper.py",
@@ -164,11 +164,15 @@
         "libatspi2.0-0",
         "libuuid1",
         "libsecret-1-0",
-        "python3",
+        "python3 (>= 3.10)",
         "python3-secretstorage",
-        "modeldock-network (= 0.4.0)"
+        "iproute2",
+        "polkitd",
+        "pkexec",
+        "systemd"
       ]
     },
-    "afterPack": "scripts/pack-network.cjs"
+    "afterPack": "scripts/pack-network.cjs",
+    "extends": "file:scripts/deb-package.cjs"
   }
 }

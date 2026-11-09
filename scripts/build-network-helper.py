@@ -1,79 +1,96 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Build the root-owned Linux network helper package; never installs it."""
-from pathlib import Path
+"""Stage system-owned FlowBridge files for the main ModelDock Debian package."""
+import argparse
 import hashlib
 import json
+from pathlib import Path
 import platform
 import shutil
 import subprocess
+import sys
+
+
 ROOT = Path(__file__).resolve().parent.parent
-SOURCE = ROOT / 'resources/flowbridge'
-version = json.loads((ROOT/'package.json').read_text())['version']
-arch = {'x86_64':'amd64','aarch64':'arm64'}[platform.machine()]
-core = SOURCE/'vendor'/f'sing-box-1.14.4-{arch}'
-verification = json.loads((core/'verified.json').read_text())
-if hashlib.sha256((core/'sing-box').read_bytes()).hexdigest()!=verification['binary_sha256']: raise RuntimeError('Network core checksum mismatch')
-staging = ROOT/'work/network-debian'
-if staging.exists(): shutil.rmtree(staging)
-appdir = staging/'opt/modeldock-network'; appdir.mkdir(parents=True)
-for name in ['tun_helper.py','tun_config.py','tun_access.py','tun_setup.py']:
-    shutil.copyfile(SOURCE/'linux'/name, appdir/name)
-(appdir/'core').mkdir(); shutil.copyfile(core/'sing-box',appdir/'core/sing-box')
-helperdir=staging/'usr/libexec'; helperdir.mkdir(parents=True)
-for executable,module in [('modeldock-network-tun-helper','tun_helper.py'),('modeldock-network-accessd','tun_access.py'),('modeldock-network-setup','tun_setup.py')]:
-    (helperdir/executable).write_text('''#!/usr/bin/python3 -IS
+SOURCE = ROOT / "resources/flowbridge"
+DEFAULT_STAGING = ROOT / "work/network-debian"
+
+LAUNCHER = """#!/usr/bin/python3 -IS
 from pathlib import Path
-import runpy, stat
-source=Path('/opt/modeldock-network/'''+module+''"""')
-for path in (source,*source.parents):
-    info=path.lstat()
-    if stat.S_ISLNK(info.st_mode) or info.st_uid!=0 or info.st_mode & 0o022:
+import runpy
+import stat
+
+source = Path('/opt/modeldock-network/{module}')
+for path in (source, *source.parents):
+    info = path.lstat()
+    if stat.S_ISLNK(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
         raise SystemExit('Unsafe ModelDock network installation')
-    if not (stat.S_ISREG(info.st_mode) if path==source else stat.S_ISDIR(info.st_mode)):
+    if not (stat.S_ISREG(info.st_mode) if path == source else stat.S_ISDIR(info.st_mode)):
         raise SystemExit('Invalid ModelDock network installation')
-runpy.run_path(str(source),run_name='__main__')
-""")
-units=staging/'usr/lib/systemd/system';units.mkdir(parents=True)
-for name in ['modeldock-network-access@.socket','modeldock-network-access@.service']: shutil.copyfile(SOURCE/'linux'/name,units/name)
-policies=staging/'usr/share/polkit-1/actions';policies.mkdir(parents=True)
-for name in ['tun','setup']: shutil.copyfile(SOURCE/'linux'/f'modeldock-network-{name}.policy',policies/f'local.modeldock.network.{name}.policy')
-docs=staging/'usr/share/doc/modeldock-network';docs.mkdir(parents=True)
-for path in [SOURCE/'LICENSE',SOURCE/'linux/NOTICE-sing-box.md',SOURCE/'linux/THIRD-PARTY-LICENSE-sing-box.txt']:
-    shutil.copyfile(path,docs/path.name)
-control=staging/'DEBIAN';control.mkdir()
-(control/'control').write_text(f'''Package: modeldock-network
-Version: {version}
-Section: net
-Priority: optional
-Architecture: {arch}
-Maintainer: ModelDock contributors <116045250+9Coco@users.noreply.github.com>
-Depends: python3 (>= 3.10), iproute2, polkitd, pkexec, systemd
-Description: ModelDock restricted FlowBridge network helper
- Root-owned fixed-protocol TCP/UDP/DNS takeover with per-user authorization.
-''')
-(control/'postinst').write_text('''#!/bin/sh
-set -eu
-if [ "$1" = configure ] && [ -d /run/systemd/system ]; then /usr/bin/systemctl daemon-reload; fi
-''')
-(control/'prerm').write_text('''#!/bin/sh
-set -eu
-if [ "$1" = remove ] || [ "$1" = deconfigure ]; then
- for marker in /var/lib/modeldock-network-access/*.enabled; do
-  [ -f "$marker" ] || continue
-  uid=${marker##*/}; uid=${uid%.enabled}
-  case "$uid" in ''|*[!0-9]*) continue ;; esac
-  if [ -d /run/systemd/system ]; then
-   /usr/bin/systemctl disable --now "modeldock-network-access@$uid.socket"
-   /usr/bin/systemctl stop "modeldock-network-access@$uid.service"
-  fi
-  rm -f -- "$marker"
- done
-fi
-''')
-staging.chmod(0o755)
-for path in staging.rglob('*'):
-    path.chmod(0o755 if path.is_dir() or path.parent==helperdir or path.name in ['sing-box','postinst','prerm'] else 0o644)
-release=ROOT/'release';release.mkdir(exist_ok=True)
-output=release/f'modeldock-network_{version}_{arch}.deb'
-subprocess.run(['dpkg-deb','--root-owner-group','--build',str(staging),str(output)],check=True)
-print(output)
+runpy.run_path(str(source), run_name='__main__')
+"""
+
+
+def install_file(source, destination, *, mode=0o644):
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, destination)
+    destination.chmod(mode)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--arch", choices=("amd64", "arm64"),
+                        default={"x86_64": "amd64", "aarch64": "arm64"}.get(platform.machine()))
+    parser.add_argument("--payload", type=Path, help="New empty output directory for this build")
+    args = parser.parse_args()
+    if args.arch is None:
+        parser.error("Specify a supported Debian architecture")
+    arch = args.arch
+    subprocess.run([sys.executable, SOURCE / "tools/fetch_tun_core.py", "--arch", arch], check=True)
+    manifest = json.loads((SOURCE / "tools/tun-core.json").read_text())
+    core = SOURCE / "vendor" / f"sing-box-{manifest['version']}-{arch}"
+    record = json.loads((core / "verified.json").read_text())
+    if (record["archive_sha256"] != manifest["assets"][arch]["sha256"]
+            or record["binary_sha256"] != hashlib.sha256((core / "sing-box").read_bytes()).hexdigest()):
+        raise RuntimeError("Network core checksum mismatch")
+
+    if args.payload:
+        payload = args.payload
+    else:
+        payload = DEFAULT_STAGING / "root"
+        if payload.exists():
+            shutil.rmtree(payload)
+    payload.mkdir(parents=True, exist_ok=False)
+    system_dir = payload / "opt/modeldock-network"
+    for name in ("tun_helper.py", "tun_config.py", "tun_access.py", "tun_setup.py"):
+        install_file(SOURCE / "linux" / name, system_dir / name)
+    install_file(core / "sing-box", system_dir / "core/sing-box", mode=0o755)
+
+    libexec = payload / "usr/libexec"
+    libexec.mkdir(parents=True)
+    for executable, module in (("tun-helper", "tun_helper.py"), ("accessd", "tun_access.py"),
+                               ("setup", "tun_setup.py")):
+        launcher = libexec / f"modeldock-network-{executable}"
+        launcher.write_text(LAUNCHER.format(module=module))
+        launcher.chmod(0o755)
+
+    for suffix in ("socket", "service"):
+        name = f"modeldock-network-access@.{suffix}"
+        install_file(SOURCE / "linux" / name, (payload / "usr/lib/systemd/system") / name)
+    for name in ("tun", "setup"):
+        install_file(SOURCE / "linux" / f"modeldock-network-{name}.policy",
+                     payload / f"usr/share/polkit-1/actions/local.modeldock.network.{name}.policy")
+    for license_file in (SOURCE / "LICENSE", SOURCE / "linux/NOTICE-sing-box.md",
+                         SOURCE / "linux/THIRD-PARTY-LICENSE-sing-box.txt"):
+        install_file(license_file, (payload / "usr/share/doc/modeldock-network") / license_file.name)
+
+    # FPM assigns root:root. Explicit modes keep privileged paths independent
+    # of the builder's umask, including shared directories such as /usr.
+    payload.chmod(0o755)
+    for path in payload.rglob("*"):
+        if path.is_dir():
+            path.chmod(0o755)
+    print(f"Staged {arch} network components for the ModelDock Debian package.")
+
+
+if __name__ == "__main__":
+    main()

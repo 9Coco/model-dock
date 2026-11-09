@@ -113,7 +113,7 @@ def validate_request(message) -> SimpleNamespace:
     if not isinstance(message, dict) or set(message) != {"version", "host", "port"}:
         raise HelperError("全局接管启动请求格式无效。")
     if type(message["version"]) is not int or message["version"] != 2:
-        raise HelperError("全局接管通信版本不匹配，请安装 0.4.0 或更新版本的流桥。")
+        raise HelperError("全局模式的通信版本不匹配。请更新 ModelDock 的 deb 安装包，再重新启动应用。")
     if type(message["port"]) is not int or not 1 <= message["port"] <= 65535:
         raise HelperError("手机代理端口无效。")
     host = message["host"]
@@ -253,7 +253,7 @@ def find_ip_command() -> str:
             resolved = candidate.resolve()
             require_root_path(resolved, executable=True)
             return str(resolved)
-    raise HelperError("未找到 iproute2，请安装包含 全局接管依赖的软件包。")
+    raise HelperError("全局模式需要 iproute2，请使用系统包管理器安装。")
 
 
 class RouteResources:

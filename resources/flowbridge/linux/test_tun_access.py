@@ -86,14 +86,27 @@ class IdentityAndPathTests(unittest.TestCase):
 
     def test_setup_marker_has_root_private_mode_and_bounded_single_link(self):
         with patch.object(access,'require_root_path'):
-            with patch.object(Path,'lstat',return_value=metadata(stat.S_IFREG|0o600)):
+            with patch.object(Path,'lstat',return_value=metadata(stat.S_IFREG|0o600,size=len(access.GRANT_CONTENT))):
                 self.assertTrue(access.configured(1000))
             for details in (metadata(stat.S_IFREG|0o644), metadata(stat.S_IFREG|0o600,links=2),
-                            metadata(stat.S_IFREG|0o600,size=129)):
+                            metadata(stat.S_IFREG|0o600,size=0), metadata(stat.S_IFREG|0o600,size=129)):
                 with patch.object(Path,'lstat',return_value=details),self.assertRaises(access.AccessError):
                     access.configured(1000)
         with patch.object(access,'require_root_path',side_effect=FileNotFoundError):
             self.assertFalse(access.configured(1000))
+
+    def test_daemon_requires_exact_root_marker_content(self):
+        with tempfile.TemporaryDirectory() as name:
+            marker = Path(name) / '1000.enabled'
+            with patch.object(access, 'SETUP_DIR', Path(name)), patch.object(access, 'configured', return_value=True):
+                self.assertFalse(access.authorized(1000))
+                marker.write_bytes(b'x' * len(access.GRANT_CONTENT))
+                self.assertFalse(access.authorized(1000))
+                marker.write_bytes(access.GRANT_CONTENT)
+                self.assertTrue(access.authorized(1000))
+        for problem in (PermissionError(), access.AccessError()):
+            with patch.object(access, 'configured', side_effect=problem):
+                self.assertFalse(access.authorized(1000))
 
     def test_peer_identity_comes_from_kernel_credentials_and_requires_live_pid(self):
         connection=FakeConnection(uid=1000)
@@ -136,14 +149,15 @@ class ListenerTests(unittest.TestCase):
 
 
 class DaemonTests(unittest.TestCase):
-    def serve_connections(self,connections,processes):
+    def serve_connections(self,connections,processes,*,grants=None):
         stopping=threading.Event();listener=Mock();pending=iter(connections)
         def accept():
             try:return next(pending),None
             except StopIteration:stopping.set();raise socket.timeout()
         listener.accept.side_effect=accept
         factory=Mock(side_effect=processes)
-        access.serve(listener,1000,stopping=stopping,popen=factory)
+        with patch.object(access, 'authorized', return_value=True, side_effect=grants):
+            access.serve(listener,1000,stopping=stopping,popen=factory)
         listener.close.assert_called_once()
         return factory
 
@@ -161,6 +175,21 @@ class DaemonTests(unittest.TestCase):
         self.assertEqual(owner.events()[0],{'event':'access-ready','uid':1000})
         self.assertEqual(owner.events()[-1],{'event':'access-ended','returncode':0})
         self.assertEqual(process.actions[0],'term');self.assertTrue(owner.closed)
+
+    def test_same_uid_without_grant_never_receives_a_helper(self):
+        owner = FakeConnection()
+        factory = self.serve_connections([owner], [], grants=[False])
+        factory.assert_not_called()
+        self.assertEqual(owner.events(), [{'event':'access-denied','reason':'grant'}])
+        self.assertTrue(owner.closed)
+
+    def test_removing_grant_ends_the_active_helper_gracefully(self):
+        owner = FakeConnection()
+        process = FakeProcess()
+        factory = self.serve_connections([owner], [process], grants=[True, False])
+        factory.assert_called_once()
+        self.assertEqual(process.actions, ['term', ('wait',25)])
+        self.assertEqual(owner.events()[-1], {'event':'access-ended','returncode':0})
 
     def test_same_uid_second_connection_is_denied_until_exact_child_exits(self):
         first=FakeConnection();second=FakeConnection();process=FakeProcess()
@@ -187,6 +216,23 @@ class DaemonTests(unittest.TestCase):
 
 
 class ClientTransportTests(unittest.TestCase):
+    def setUp(self):
+        grant = patch.object(access, 'configured', return_value=True)
+        self.marker = grant.start()
+        self.addCleanup(grant.stop)
+
+    def test_stale_socket_without_grant_requests_initial_authorization(self):
+        self.marker.return_value = False
+        with patch.object(access.socket, 'socket') as sock, self.assertRaises(access.AccessUnavailable):
+            access.connect_service(1000)
+        sock.assert_not_called()
+
+    def test_revoked_server_handshake_cannot_expose_a_control_stream(self):
+        connection=FakeConnection(uid=0,body=b'{"event":"access-denied","reason":"grant"}\n')
+        with patch.object(access,'validate_socket'), patch.object(access.socket,'socket',return_value=connection), self.assertRaises(access.AccessUnavailable):
+            access.connect_service(1000)
+        self.assertTrue(connection.closed)
+        self.assertEqual(connection.sent, [])
     def test_service_peer_must_be_root_before_any_request_is_sent(self):
         connection=FakeConnection(uid=1001,body=b'{"event":"access-ready","uid":1000}\n')
         with patch.object(access,'validate_socket',return_value=Path('/run/modeldock-network-access/1000.sock')), \
