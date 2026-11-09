@@ -29,6 +29,7 @@ export interface FlowBridgeApi {
   disconnectNetwork(): Promise<FlowBridgeSnapshot>;
   checkNetworkSite(site: NetworkSite): Promise<NetworkCheck>;
   networkHotspotCandidates(): Promise<string[]>;
+  networkLocalProxies(): Promise<string[]>;
   exportPhoneProxy(): Promise<string | null>;
   showNetworkMini(): Promise<void>;
   openNetworkSite(site: NetworkSite): Promise<void>;

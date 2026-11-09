@@ -192,16 +192,23 @@ def main():
         finally:
             closed.set(); network.cancelled.set(); network.check_cancel.cancel()
     threading.Thread(target=read,daemon=True).start()
+    # Read-only requests have no OS state to restore on EOF.
+    cleanup_on_exit = False
     try:
         while not closed.is_set():
             try: request = commands.get(timeout=.1)
             except queue.Empty: continue
             try:
                 method = request.get('method')
+                if method in ('connect', 'disconnect'):
+                    cleanup_on_exit = True
                 if method=='connect':
                     result = network.connect(request['settings'])
                 elif method=='disconnect': result = network.disconnect()
                 elif method=='snapshot': result = network.snapshot()
+                elif method=='localProxies' and sys.platform == 'win32':
+                    from windows.local_proxy import discover_local_proxies
+                    result = discover_local_proxies(network.desktop.backend.read(), request['gatewayPort'])
                 elif method=='check': result = network.check(request.get('site'))
                 else: raise ValueError('未知网络操作。')
                 emit({'id':request['id'],'ok':True,'result':result})
@@ -209,7 +216,8 @@ def main():
                 message = str(error)[:500] if isinstance(error,(ValueError,RuntimeError,OSError)) else '网络操作失败，请检查配置与权限。'
                 emit({'id':request['id'],'ok':False,'message':message})
     finally:
-        try: network.disconnect()
-        except Exception: pass  # Durable journal + guardian retain crash recovery.
+        if cleanup_on_exit:
+            try: network.disconnect()
+            except Exception: pass  # Durable journal + guardian retain crash recovery.
         if network.guard is not None: network.guard.stdin.close()
 if __name__=='__main__': main()

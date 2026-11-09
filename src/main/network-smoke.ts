@@ -14,10 +14,13 @@ const cancellationAddress = 'socks5://192.0.2.31:38473';
 // Exercise the real manager, IPC and controls while keeping privileged system networking out of QA.
 export function createNetworkSmokeEngine(): NetworkEngine {
   let running = false;
+  let samples = 0;
   let releaseConnect: (() => void) | undefined;
   return {
     async request<T>(method: string, args?: Record<string, unknown>) {
       switch (method) {
+        case 'localProxies':
+          return ['socks5://127.0.0.1:19321'] as T;
         case 'connect': {
           const settings = args?.settings as FlowBridgeSnapshot['settings'];
           if (settings.address === cancellationAddress) {
@@ -25,6 +28,7 @@ export function createNetworkSmokeEngine(): NetworkEngine {
             releaseConnect = undefined;
           }
           running = true;
+          samples = 0;
           break;
         }
         case 'cancel':
@@ -34,12 +38,13 @@ export function createNetworkSmokeEngine(): NetworkEngine {
           running = false;
           break;
         case 'snapshot':
+          if (running) samples++;
           break;
         default:
           throw new Error(`Unsupported network UI fixture request: ${method}`);
       }
       const status: NetworkEngineStatus = { running, cleanupConfirmed: !running, localPort: null,
-        connections: 0, uploadBytes: 0, downloadBytes: 0, message: '' };
+        connections: running ? 1 : 0, uploadBytes: samples * 2048, downloadBytes: samples * 8192, message: '' };
       return status as T;
     },
     async close() { releaseConnect?.(); running = false; },
@@ -120,6 +125,18 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
   assert.deepEqual(await network(), idle, 'Starting the local gateway must preserve the network session');
   await openPage('network');
   assert.equal(await evaluate(`${query('[data-action="connect-network"]')}.disabled`), true);
+  if (process.platform === 'win32') {
+    assert.equal(await evaluate("document.body.innerText.includes('手机热点')"), false);
+    await click('[data-action="discover-network-proxy"]');
+    await click('.network-candidates button');
+    assert.equal(await evaluate(`${query('#network-address')}.value`), 'socks5://127.0.0.1:19321');
+    assert.deepEqual((await network()).settings, idle.settings);
+    await click('[data-action="save-network-address"]');
+    await wait(`${query('[data-action="connect-network"]')}.disabled===false`);
+    assert.equal((await network()).settings.mode, 'global');
+    await click('[aria-label="网络连接模式"] button:first-child');
+    await wait(`${query('#network-address')}.value==='http://127.0.0.1:19321'`);
+  }
   await fill('#network-address', '192.0.2.30:38473');
   await click('[data-action="save-network-address"]');
   await wait(`${query('#network-address')}.value==='http://192.0.2.30:38473'`);
@@ -142,6 +159,18 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
   await evaluate(`document.querySelectorAll('.toast-stack [aria-label="关闭提示"]').forEach(button=>button.click())`);
   const layouts = [];
   const screenshots = [];
+  async function verifyTrafficColors(contents = window.webContents) {
+    const colors: { text: string[]; line: string }[] = await contents.executeJavaScript(`['upload', 'download'].map(direction => {
+      const metrics = document.querySelectorAll('.network-metrics [data-direction="' + direction + '"] > *');
+      const series = getComputedStyle(document.querySelector('polyline[data-direction="' + direction + '"]'));
+      return { text: Array.from(metrics, metric => getComputedStyle(metric).color), line: series.stroke.toLowerCase() === 'currentcolor' ? series.color : series.stroke };
+    })`);
+    for (const { text, line } of colors) {
+      assert.ok(text.length >= 2);
+      for (const color of text) assert.equal(color, line, 'Traffic labels, values and curve must have the same color');
+    }
+    assert.notEqual(colors[0].line, colors[1].line, 'Upload and download must have different colors');
+  }
   window.setMinimumSize(780, 580);
   for (const [theme, width, height, filename] of [
     ['light', 1320, 880, 'network-light.png'], ['dark', 1320, 880, 'network-dark.png'],
@@ -162,6 +191,8 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
     })()`);
     assert.equal(layout.overflow, false, `Network page overflow at ${width}px`);
     assert.ok(layout.menuVisible, `Network menu must remain reachable at ${width}px`);
+    await verifyTrafficColors();
+    await wait("document.querySelector('.network-metrics [data-direction=upload] strong').textContent !== '0 B/s'");
     layouts.push({ theme, width, ...layout });
     writeFileSync(join(output, filename), await capture());
     screenshots.push(filename);
@@ -238,6 +269,7 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
     await delay(100);
   }
   assert.ok(miniCapture, 'Expanded mini monitor must show a painted frame');
+  await verifyTrafficColors(mini.webContents);
   if (process.platform === 'win32') {
     const { x, y, width, height } = mini.getBounds();
     assert.ok(x >= area.x && y >= area.y && x + width <= area.x + area.width + 1 && y + height <= area.y + area.height + 1,

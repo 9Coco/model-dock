@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { useEffect, useRef, useState } from 'react';
 import type { ModelDockApi } from '../shared/types';
-import { NETWORK_SITES, type FlowBridgeSnapshot, type NetworkCheck, type NetworkSample, type NetworkSite } from '../shared/flowbridge-types';
+import { NETWORK_SITES, type FlowBridgeSnapshot, type NetworkCheck, type NetworkMode, type NetworkSample, type NetworkSite } from '../shared/flowbridge-types';
 import { Toggle, type Notify } from './components';
 import { Activity } from './MaterialIcon';
 import './network.css';
@@ -9,7 +9,11 @@ export const networkBytes = (value: number) => value >= 1024 ** 3 ? `${(value / 
 export function NetworkChart({ samples }: { samples: NetworkSample[] }) {
   const max = Math.max(1, ...samples.flatMap(s => [s.uploadRate, s.downloadRate]));
   const points = (key: 'uploadRate' | 'downloadRate') => samples.map((s, i) => `${i * 600 / Math.max(1, samples.length - 1)},${94 - s[key] / max * 86}`).join(' ');
-  return <svg className="network-chart" viewBox="0 0 600 100" preserveAspectRatio="none" role="img" aria-label="网络上传与下载速率曲线"><path d="M0 94H600 M0 50H600 M0 8H600" stroke="var(--line)" strokeWidth="1" fill="none" /><polyline points={points('downloadRate')} fill="none" stroke="var(--accent)" strokeWidth="2" vectorEffect="non-scaling-stroke" /><polyline points={points('uploadRate')} fill="none" stroke="var(--success)" strokeWidth="2" vectorEffect="non-scaling-stroke" /></svg>;
+  return <svg className="network-chart" viewBox="0 0 600 100" preserveAspectRatio="none" role="img" aria-label="网络上传与下载速率曲线">
+    <path d="M0 94H600 M0 50H600 M0 8H600" stroke="var(--line)" strokeWidth="1" fill="none" />
+    <polyline points={points('downloadRate')} data-direction="download" fill="none" stroke="currentColor" strokeWidth="2" vectorEffect="non-scaling-stroke" />
+    <polyline points={points('uploadRate')} data-direction="upload" fill="none" stroke="currentColor" strokeWidth="2" strokeDasharray="6 4" vectorEffect="non-scaling-stroke" />
+  </svg>;
 }
 interface NetworkProps {
   api?: ModelDockApi;
@@ -46,13 +50,33 @@ export function NetworkPreferences({ api, snapshot, onChanged, notify }: Network
   </div></section>;
 }
 function NetworkControls({ api, snapshot, onChanged, notify }: Required<NetworkControlProps>) {
-  const [address, setAddress] = useState('');
-  const [candidates, setCandidates] = useState<string[]>([]);
+  const [address, setAddress] = useState(snapshot.settings.address);
+  const [mode, setMode] = useState<NetworkMode>(snapshot.settings.mode);
+  const [candidates, setCandidates] = useState<string[] | null>(null);
+  const windows = snapshot.platform === 'win32';
   const { busy, action } = useNetworkAction(notify);
-  useEffect(() => setAddress(snapshot?.settings.address ?? ''), [snapshot?.settings.address]);
+  useEffect(() => {
+    setAddress(snapshot.settings.address);
+    setMode(snapshot.settings.mode);
+    setCandidates(null);
+  }, [snapshot.settings.address, snapshot.settings.mode]);
   const connecting = snapshot.state === 'connecting' || snapshot.state === 'disconnecting';
-  const dirty = address !== snapshot.settings.address;
-  const global = snapshot.settings.mode === 'global';
+  const dirty = address !== snapshot.settings.address || mode !== snapshot.settings.mode;
+  const global = mode === 'global';
+  const canDiscover = !busy && !connecting && (!windows || snapshot.status.cleanupConfirmed);
+  const discover = () => action('discover', async () => {
+    setCandidates(null);
+    const values = windows ? await api.networkLocalProxies() : await api.networkHotspotCandidates();
+    setCandidates(values);
+  });
+  const chooseCandidate = (value: string) => {
+    if (windows) {
+      setMode(value.startsWith('socks5://') ? 'global' : 'http');
+      setAddress(value);
+    } else {
+      setAddress(`${global ? 'socks5' : 'http'}://${value.includes(':') ? `[${value}]` : value}:38473`);
+    }
+  };
   const stateLabel = { idle: '未连接', connecting: '连接中', connected: '已连接', disconnecting: '恢复中', error: '需要处理' }[snapshot.state];
   const change = (name: string, run: () => Promise<unknown>) => action(name, async () => {
     try { await run(); }
@@ -66,14 +90,18 @@ function NetworkControls({ api, snapshot, onChanged, notify }: Required<NetworkC
   return <section className="service-network-card" data-network-panel>
     <div className="gateway-top"><span className={`gateway-icon ${snapshot.state === 'connected' ? 'on' : ''}`}><Activity size={26} /></span><div><h2>网络接管</h2><p>{global ? '通过 SOCKS5 转发 TCP、UDP 和 DNS。' : '为桌面应用设置 HTTP / HTTPS 代理。'}</p></div><span className={`badge ${snapshot.state === 'connected' ? 'positive' : 'neutral'}`} data-network-service-status={snapshot.state} role="status"><span className="status-dot" />{stateLabel}</span></div>
     <div className="service-network-body">
-      <div className="network-mode" role="group" aria-label="网络连接模式">{(['http', 'global'] as const).map(mode => <button key={mode} aria-pressed={snapshot.settings.mode === mode} disabled={!!busy || connecting || dirty} onClick={() => void change('mode', () => api.saveNetworkSettings({ mode }))}>{mode === 'http' ? 'HTTP 代理' : '全局流量'}</button>)}</div>
+      <div className="network-mode" role="group" aria-label="网络连接模式">{(['http', 'global'] as const).map(option => <button key={option} aria-pressed={mode === option} disabled={!!busy || connecting || dirty} onClick={() => void change('mode', () => api.saveNetworkSettings({ mode: option }))}>{option === 'http' ? 'HTTP 代理' : '全局流量'}</button>)}</div>
       <label className="network-address-label" htmlFor="network-address">上游代理</label>
-      <div className="network-address"><input id="network-address" value={address} placeholder={global ? 'socks5://手机IP:38473' : 'http://手机IP:38473'} disabled={!!busy || connecting} onChange={e => setAddress(e.target.value)} /><button className="button small secondary" data-action="save-network-address" disabled={!!busy || connecting || !dirty} onClick={() => void change('save', () => api.saveNetworkSettings({ address }))}>保存</button></div>
+      <div className="network-address"><input id="network-address" value={address} placeholder={`${global ? 'socks5' : 'http'}://${windows ? '127.0.0.1:端口' : '手机IP:38473'}`} disabled={!!busy || connecting} onChange={e => setAddress(e.target.value)} /><button className="button small secondary" data-action="save-network-address" disabled={!!busy || connecting || !dirty} onClick={() => void change('save', () => api.saveNetworkSettings({ address, mode }))}>保存</button></div>
       <div className="network-actions"><button className="button primary" data-action="connect-network" disabled={!!busy || snapshot.state === 'connected' || connecting || dirty || !address} onClick={() => void change('connect', () => api.connectNetwork())}>连接</button>
         <button className="button secondary" data-action="disconnect-network" disabled={snapshot.state === 'disconnecting' || (snapshot.state === 'idle' && busy !== 'connect')} onClick={() => void disconnect()}>{connecting ? '取消并恢复' : '断开 / 恢复'}</button>
         <button className="text-button" onClick={() => void action('mini', () => api.showNetworkMini())} data-action="show-network-mini">网速小窗</button></div>
-      <button className="text-button network-hotspot" disabled={!!busy || connecting} onClick={() => void action('hotspot', async () => { const values = await api.networkHotspotCandidates(); setCandidates(values); if (!values.length) notify('未找到默认网关，请手动填写手机地址。', 'info'); })}>查询热点地址</button>
-      {!!candidates.length && <div className="network-candidates">网关候选{candidates.map(ip => <button className="button small secondary" key={ip} onClick={() => setAddress(`${global ? 'socks5' : 'http'}://${ip.includes(':') ? `[${ip}]` : ip}:38473`)}>{ip}</button>)}</div>}
+      <button className="text-button network-hotspot" data-action="discover-network-proxy" disabled={!canDiscover} onClick={() => void discover()}>{busy === 'discover' ? '正在查找…' : windows ? '查找本机代理' : '查询热点地址'}</button>
+      {candidates && canDiscover && <div className="network-candidates" role="status">
+        {candidates.length ? (windows ? '选择代理' : '网关候选') : (windows ? '未发现可用的本机代理。可手动填写代理软件显示的地址和端口。' : '未找到默认网关，请手动填写手机地址。')}
+        {candidates.map(value => <button className="button small secondary" key={value} onClick={() => chooseCandidate(value)}>{value}</button>)}
+      </div>}
+      {dirty && windows && <button className="text-button" onClick={() => { setAddress(snapshot.settings.address); setMode(snapshot.settings.mode); }}>还原输入</button>}
       <p className="network-hint" role="status">{dirty ? '地址尚未保存。请先保存，再连接或切换模式。' : snapshot.message || (global ? snapshot.platform === 'linux' ? 'Linux deb 版包含全局模式。首次连接需系统授权，上游请填写远端 IP。' : 'Windows 全局模式需要以管理员身份运行。' : '保存上游地址，然后点击连接。')}</p>
     </div>
   </section>;
@@ -91,14 +119,14 @@ function NetworkTools({ api, snapshot, notify }: Required<NetworkProps>) {
   const samples = snapshot.history.filter(s => s.time >= Date.now() - (range === 'minute' ? 60_000 : 86_400_000)).sort((a, b) => a.time - b.time);
   return <>
     <div className="panel"><div className="section-heading"><h2>网络流量</h2><select aria-label="流量时间范围" value={range} onChange={e => setRange(e.target.value as 'minute' | 'day')}><option value="minute">最近 60 秒</option><option value="day">最近 24 小时</option></select></div>
-      <div className="network-metrics"><div><small>↑ 上传</small><strong>{networkBytes(connected ? latest?.uploadRate ?? 0 : 0)}/s</strong><span>本次 {networkBytes(snapshot.status.uploadBytes)}</span></div><div><small>↓ 下载</small><strong>{networkBytes(connected ? latest?.downloadRate ?? 0 : 0)}/s</strong><span>本次 {networkBytes(snapshot.status.downloadBytes)}</span></div><div><small>活动连接</small><strong>{snapshot.status.connections}</strong><span>只统计经过此网络会话的字节</span></div></div>
-      <NetworkChart samples={samples} /><p className="network-hint">蓝色下载 · 绿色上传。24 小时历史按分钟采样，不是模型 Token 用量或运营商计费。</p>
+      <div className="network-metrics"><div data-direction="upload"><small>↑ 上传</small><strong>{networkBytes(connected ? latest?.uploadRate ?? 0 : 0)}/s</strong><span>本次 {networkBytes(snapshot.status.uploadBytes)}</span></div><div data-direction="download"><small>↓ 下载</small><strong>{networkBytes(connected ? latest?.downloadRate ?? 0 : 0)}/s</strong><span>本次 {networkBytes(snapshot.status.downloadBytes)}</span></div><div><small>活动连接</small><strong>{snapshot.status.connections}</strong><span>统计当前代理会话</span></div></div>
+      <NetworkChart samples={samples} /><p className="network-hint">24 小时历史按分钟采样。</p>
     </div>
     <div className="panel"><div className="section-heading"><h2>网站检测</h2><div className="network-actions"><select aria-label="检测网站" value={site} onChange={e => { setSite(e.target.value as NetworkSite); setChecks(null); }}>{NETWORK_SITES.map(name => <option key={name}>{name}</option>)}</select><button className="button secondary" disabled={!!busy || connecting} onClick={() => void action('check', async () => setChecks(await api.checkNetworkSite(site)))}>{busy === 'check' ? '检测中…' : '检测'}</button><button className="button secondary" onClick={() => void action('browser', () => api.openNetworkSite(site))}>浏览器验证</button></div></div>
       <p className="network-hint">系统网络使用本机 DNS 与普通 TCP/TLS；代理出口通过当前连接。出口成功不代表全局接管正常，也不代表账号或对话可用。</p>
       {checks && <div className="network-checks">{(['system', 'proxy'] as const).map(path => { const result = checks[path]; return <div key={path}><strong>{path === 'system' ? '系统网络' : '代理出口'}</strong><span>{result ? result.browser_verification ? '需浏览器验证' : result.ok ? '检测通过' : '自动检测未确认' : '请先连接代理'}</span>{result && <small>{result.detail} · {result.elapsed_ms} ms{result.status_code ? ` · HTTP ${result.status_code}` : ''}</small>}</div>; })}</div>}
     </div>
-    <div className="panel"><div className="section-heading"><div><h2>手机热点代理</h2><p>导出 FlowBridge Termux 安装器，在手机 Termux 手动执行；默认端口 38473，支持 HTTP、SOCKS5 与 UDP。</p></div><button className="button secondary" onClick={() => void action('export', async () => { const path = await api.exportPhoneProxy(); if (path) notify('手机脚本已导出，请在手机 Termux 中执行。', 'success'); })}>导出手机脚本</button></div><p className="network-hint">手机 VPN 须允许 Termux 联网。仅导出文件，不会连接手机或修改其配置。</p></div>
+    {snapshot.platform !== 'win32' && <div className="panel"><div className="section-heading"><div><h2>手机热点代理</h2><p>导出 FlowBridge Termux 安装器，在手机 Termux 手动执行；默认端口 38473，支持 HTTP、SOCKS5 与 UDP。</p></div><button className="button secondary" onClick={() => void action('export', async () => { const path = await api.exportPhoneProxy(); if (path) notify('手机脚本已导出，请在手机 Termux 中执行。', 'success'); })}>导出手机脚本</button></div><p className="network-hint">手机 VPN 须允许 Termux 联网。仅导出文件，不会连接手机或修改其配置。</p></div>}
   </>;
 }
 
