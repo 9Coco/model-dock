@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { isDeepStrictEqual } from 'node:util';
 import type { Provider, ProviderInput, ProviderSecret, Model, ModelInput, ToolBinding, ToolId, RequestLog, GatewayExposure, JetBrainsPlugin } from '../shared/types';
 import { isReasoningEffort, MODEL_SPEC_FIELDS, modelSpecs, sanitizeReasoningEfforts } from '../shared/types';
-import { JETBRAINS_RELAY_BASE_URL, isLocalTraeRelayUrl, providerPresets, presetById, TRAE_RELAY_BASE_URL } from '../shared/presets';
+import { OPENCODE_GO_BASE_URL, JETBRAINS_RELAY_BASE_URL, isLocalTraeRelayUrl, providerPresets, presetById, TRAE_RELAY_BASE_URL } from '../shared/presets';
 import { resolveBindingModels } from '../shared/bindings';
 import { directModelsForProvider, isSingleEntryTool, updateSingleEntryBinding } from '../shared/single-entry';
 import { isJetBrainsTool } from '../shared/jetbrains';
@@ -36,7 +36,7 @@ interface ProviderRemovalData {
   bindingsAfter: Record<string, unknown>[];
 }
 const TOOL_NAMES: Record<ToolId, string> = { codex: 'Codex', opencode: 'OpenCode', dsh: 'DeepSeek Harness', vscode: 'VS Code', copilot: 'GitHub Copilot', 'copilot-cli': 'Copilot CLI', 'claude-code': 'Claude Code', junie: 'Junie', webstorm: 'WebStorm', 'intellij-idea': 'IntelliJ IDEA', rider: 'Rider', pycharm: 'PyCharm' };
-const kinds = new Set(['openai-compatible', 'codex', 'grok', 'copilot']);
+const kinds = new Set(['openai-compatible', 'codex', 'grok', 'copilot', 'opencode-go']);
 let sqlPromise: Promise<SqlJsStatic> | undefined;
 
 /** HTTP is allowed only for a local upstream; credentials never belong in a URL. */
@@ -84,7 +84,7 @@ export class Store {
     if (!store.one("SELECT value FROM settings WHERE key='initialized'")) {
       // Existing databases keep their accounts exactly as stored. Templates are
       // seeded only for an empty, never-initialized store.
-      if (!store.one('SELECT id FROM providers LIMIT 1')) for (const preset of providerPresets.filter(p => p.id !== 'custom' && p.id !== 'copilot-subscription' && p.id !== 'trae-cn-relay' && p.id !== 'jetbrains-central')) {
+      if (!store.one('SELECT id FROM providers LIMIT 1')) for (const preset of providerPresets.filter(p => p.id !== 'custom' && p.category === 'api')) {
         db.run('INSERT INTO providers(id,name,kind,base_url,enabled,auth_status,note,preset_id,messages_auth) VALUES(?,?,?,?,?,?,?,?,?)', [preset.id, preset.name, preset.kind, preset.baseUrl, 1, 'missing', preset.note, preset.id, preset.id === 'anthropic' ? 'api-key' : 'bearer']);
       }
       db.run('INSERT INTO settings(key,value) VALUES(?,?)', ['initialized', '1']);
@@ -249,7 +249,7 @@ export class Store {
     if (input.messagesAuth !== undefined && (!['api-key', 'bearer'].includes(input.messagesAuth) || input.kind !== 'openai-compatible')) throw new Error('Messages 鉴权方式无效。');
     let existing = this.getProvider(providerId);
     if (input.id && !existing) throw new Error('供应商不存在，请刷新后重试。');
-    const preset = presetById(input.presetId ?? existing?.presetId ?? (input.kind === 'codex' ? 'codex-subscription' : input.kind === 'grok' ? 'grok-build' : input.kind === 'copilot' ? 'copilot-subscription' : 'custom'));
+    const preset = presetById(input.presetId ?? existing?.presetId ?? (input.kind === 'codex' ? 'codex-subscription' : input.kind === 'grok' ? 'grok-build' : input.kind === 'copilot' ? 'copilot-subscription' : input.kind === 'opencode-go' ? 'opencode-go' : 'custom'));
     if (!preset) throw new Error('供应商预设不存在。');
     if (preset.kind !== input.kind) throw new Error('供应商类型与预设不一致。');
     if (typeof input.baseUrl !== 'string') throw new Error('上游地址无效。');
@@ -258,6 +258,7 @@ export class Store {
     const identityOnly = preset.id === 'jetbrains-central' && input.baseUrl.trim() === JETBRAINS_RELAY_BASE_URL
       || preset.id === 'trae-cn-relay' && (input.relayMode ?? existing?.relayMode) === 'managed' && input.baseUrl.trim() === TRAE_RELAY_BASE_URL;
     const baseUrl = input.baseUrl.trim() ? validateUpstreamUrl(input.baseUrl, identityOnly ? 0 : this.gatewayPort) : '';
+    if (input.kind === 'opencode-go' && (baseUrl !== OPENCODE_GO_BASE_URL || input.claudeBaseUrl || input.messagesAuth)) throw new Error('OpenCode Go 订阅仅使用官方 Go 接口。');
     if (input.kind === 'copilot' && baseUrl !== 'https://api.githubcopilot.com') throw new Error('Copilot 订阅只使用官方服务地址。');
     if (existing && existing.kind !== input.kind && existing.hasSecret) throw new Error('已有凭据的供应商不能直接改变类型，请新建供应商。');
     const note = typeof input.note === 'string' ? input.note.slice(0, 1000) : '';
@@ -307,7 +308,7 @@ export class Store {
     return this.mutate(() => {
       this.db.run('INSERT INTO providers(id,name,kind,base_url,enabled,auth_status,note,preset_id,messages_auth,claude_base_url,trae_relay_mode) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,kind=excluded.kind,base_url=excluded.base_url,enabled=excluded.enabled,note=excluded.note,preset_id=excluded.preset_id,messages_auth=excluded.messages_auth,claude_base_url=excluded.claude_base_url,trae_relay_mode=excluded.trae_relay_mode', [providerId, name, input.kind, baseUrl, Number(input.enabled), existing?.authStatus ?? 'missing', note, preset.id, input.messagesAuth ?? existing?.messagesAuth ?? (preset.id === 'anthropic' ? 'api-key' : 'bearer'), claudeBaseUrl, relayMode]);
       if (apiKey) {
-        if (input.kind !== 'openai-compatible') throw new Error('订阅供应商请使用 OAuth 登录。');
+        if (input.kind !== 'openai-compatible' && input.kind !== 'opencode-go') throw new Error('订阅供应商请使用 OAuth 登录。');
         this.putSecret(providerId, { apiKey });
       }
       const saved = this.getProvider(providerId)!;

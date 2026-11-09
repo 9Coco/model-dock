@@ -18,7 +18,7 @@ import type {
 import { REASONING_EFFORTS } from '../shared/types';
 import { lookupModelMetadata, lookupModelReasoningDefaults } from '../shared/model-metadata';
 import { applyOfficialModelParameters, autoFillModelDraft, freshModelDraft, officialModelParameterFields, reasoningSelectionPatch, withReasoningWireApi, type ModelDraftParameterField } from '../shared/model-draft';
-import type { AuthAccount, RelayAccountKind } from '../shared/auth-types';
+import type { AuthAccount, AuthAccountKind } from '../shared/auth-types';
 import { subscriptionDisplayName, SUBSCRIPTION_NAMES } from '../shared/subscription-names';
 import { isLocalTraeRelayUrl, isRelayProvider, providerCategory, providerPresets, presetById, TRAE_RELAY_BASE_URL } from '../shared/presets';
 import { bindingConnectionPolicy, resolveBindingModels } from '../shared/bindings';
@@ -66,6 +66,7 @@ const pageMeta: Record<Page, { label: string }> = {
   settings: { label: '设置' },
 };
 const providerKinds: Record<ProviderKind, { title: string; short: string; description: string; symbol: string }> = {
+  'opencode-go': { title: 'OpenCode Go 订阅', short: 'Go', description: '使用 OpenCode Go 工作区 API Key', symbol: 'O' },
   'openai-compatible': { title: '自定义 API', short: 'API', description: '用服务地址和 API 密钥连接', symbol: 'A' },
   codex: { title: SUBSCRIPTION_NAMES.codex, short: 'CODEX', description: '使用自己的 ChatGPT 账号登录', symbol: 'C' },
   copilot: { title: SUBSCRIPTION_NAMES.copilot, short: 'COPILOT', description: '使用自己的 GitHub Copilot 订阅', symbol: 'P' },
@@ -122,7 +123,7 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
   const snapshotRevision = useRef(0);
   const [secretVisibilityRevision, setSecretVisibilityRevision] = useState(0);
   const [authRefreshRevision, setAuthRefreshRevision] = useState(0);
-  const [relayImportRequest, setRelayImportRequest] = useState<{ kind: RelayAccountKind; id: number }>();
+  const [relayImportRequest, setRelayImportRequest] = useState<{ kind: AuthAccountKind; id: number; options?: boolean }>();
   const relayImportSequence = useRef(0);
   const consumeRelayImportRequest = useCallback((id: number) => setRelayImportRequest(current => current?.id === id ? undefined : current), []);
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -191,7 +192,7 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
   const providerUnavailableReason = (provider: Provider, tool: ToolId) => isSingleEntryTool(tool) && bindingFor(tool).mode !== 'aggregate' && provider.kind !== 'openai-compatible' ? '账号订阅请使用聚合接口'
     : isSingleEntryTool(tool) && bindingFor(tool).mode !== 'aggregate' && !nativeDirectBaseUrl(tool, provider, directModelsForProvider(tool, provider, data.models)) ? '此来源没有兼容的原生接口，请使用聚合接口'
     : !provider.enabled ? '供应商已停用'
-    : !provider.hasSecret ? isRelayProvider(provider) ? '请先配置反代密钥' : provider.kind === 'openai-compatible' ? '请先配置 API Key' : '请先授权账号'
+    : !provider.hasSecret ? isRelayProvider(provider) ? '请先配置反代密钥' : (provider.kind === 'openai-compatible' || provider.kind === 'opencode-go') ? '请先配置 API Key' : '请先授权账号'
       : !provider.baseUrl && provider.kind === 'openai-compatible' && !(tool === 'claude-code' && nativeClaudeBaseUrl(provider)) ? '请先填写服务地址'
         : !providerToolModels(provider, tool).length ? tool === 'claude-code' ? '请先添加并启用此来源的兼容模型' : tool === 'codex' && data.models.some(model => model.providerId === provider.id && model.enabled) ? 'Codex 需要 Responses 模型' : data.models.some(model => model.providerId === provider.id && model.enabled && model.wireApi === 'messages') ? '此工具暂不支持 Messages 模型' : '请先添加并启用模型' : '';
   const toolSignature = (binding: ToolBinding) => JSON.stringify({ binding: Object.fromEntries(Object.entries(binding).sort(([left], [right]) => left.localeCompare(right))), models: toolModels(binding), providers: data.providers.filter(provider => sourceIdsFor(binding).includes(provider.id)), port: data.gateway.port });
@@ -342,14 +343,14 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
   useEffect(() => {
     if (snapshot && selectedProviderId && !snapshot.providers.some(provider => provider.id === selectedProviderId)) setSelectedProviderId(null);
   }, [snapshot, selectedProviderId]);
-  const editProvider = (provider: Provider) => setProviderDraft({ id: provider.id, name: provider.name, kind: provider.kind, presetId: provider.presetId ?? (provider.kind === 'codex' ? 'codex-subscription' : provider.kind === 'grok' ? 'grok-build' : provider.kind === 'copilot' ? 'copilot-subscription' : 'custom'), baseUrl: provider.baseUrl, ...(provider.presetId === 'trae-cn-relay' ? { relayMode: provider.relayMode ?? 'manual' } : {}), enabled: provider.enabled, note: provider.note, apiKey: '', ...(provider.kind === 'openai-compatible' ? { messagesAuth: provider.messagesAuth ?? 'bearer', claudeBaseUrl: provider.claudeBaseUrl ?? '' } : {}), ...(provider.kind === 'copilot' ? { copilotAccountId: provider.copilotAccountId ?? '' } : {}) });
-  const requestRelayImport = (kind: RelayAccountKind) => {
-    setProviderDraft(null); navigate('auth'); setRelayImportRequest({ kind, id: ++relayImportSequence.current });
+  const editProvider = (provider: Provider) => setProviderDraft({ id: provider.id, name: provider.name, kind: provider.kind, presetId: provider.presetId ?? (provider.kind === 'codex' ? 'codex-subscription' : provider.kind === 'grok' ? 'grok-build' : provider.kind === 'copilot' ? 'copilot-subscription' : provider.kind === 'opencode-go' ? 'opencode-go' : 'custom'), baseUrl: provider.baseUrl, ...(provider.presetId === 'trae-cn-relay' ? { relayMode: provider.relayMode ?? 'manual' } : {}), enabled: provider.enabled, note: provider.note, apiKey: '', ...(provider.kind === 'openai-compatible' ? { messagesAuth: provider.messagesAuth ?? 'bearer', claudeBaseUrl: provider.claudeBaseUrl ?? '' } : {}), ...(provider.kind === 'copilot' ? { copilotAccountId: provider.copilotAccountId ?? '' } : {}) });
+  const requestAccountImport = (kind: AuthAccountKind, options = false) => {
+    setProviderDraft(null); navigate('auth'); setRelayImportRequest({ kind, options, id: ++relayImportSequence.current });
   };
   const saveProvider = async () => {
     if (!providerDraft) return;
     if ((providerDraft.presetId === 'jetbrains-central' || providerDraft.presetId === 'trae-cn-relay' && managedRelayMode(providerDraft)) && !providerDraft.id) {
-      requestRelayImport(providerDraft.presetId); return;
+      requestAccountImport(providerDraft.presetId); return;
     }
     if (providerDraft.presetId === 'trae-cn-relay') {
       const saved = data.providers.find(provider => provider.id === providerDraft.id);
@@ -376,7 +377,7 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
       setProviderDraft(null); await refresh(); setAuthRefreshRevision(value => value + 1);
       if (isNew) { setSourceCategory(providerCategory(provider)); selectProvider(provider.id); }
       // 修改点：保存来源不强制获取模型目录；没有目录接口的厂商也可手动添加后测试推理。
-      notify(isRelayProvider(provider) ? '账号设置已保存。可在授权中心更新授权，获取模型后测试连接。' : provider.kind === 'openai-compatible' ? provider.baseUrl ? 'API 供应商已保存。可获取模型列表或手动添加模型，再测试连接。' : '供应商草稿已保存。补全地址并添加模型后即可测试连接。'
+      notify(provider.kind === 'opencode-go' ? 'OpenCode Go 已保存，可获取模型列表或手动添加模型。' : isRelayProvider(provider) ? '账号设置已保存。可在授权中心更新授权，获取模型后测试连接。' : provider.kind === 'openai-compatible' ? provider.baseUrl ? 'API 供应商已保存。可获取模型列表或手动添加模型，再测试连接。' : '供应商草稿已保存。补全地址并添加模型后即可测试连接。'
         : provider.hasSecret ? '订阅供应商已关联账号。可获取模型列表或手动添加模型，再测试连接。' : '订阅供应商已保存。登录账号后，可获取模型列表或手动添加模型。');
     });
   };
@@ -603,16 +604,30 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
     // 修改点：隐私选项与来源选择使用同一显式保存、备份及同步流程。
     await run('tool-binding-claude-code', async () => { await persistInlineBinding('claude-code', { ...bindingFor('claude-code'), claudeDisableTelemetry }); });
   };
-  const deleteProvider = (provider: Provider) => {
-    if (pendingActions.current.has('delete') || anyToolOperationPending()) return;
+  const removeLocalSubscription = async (providerId: string) => {
+    const affected = data.bindings.filter(binding => sourceIdsFor(binding).includes(providerId));
+    for (const binding of affected) {
+      if (isJetBrainsTool(binding.id)) {
+        jetBrainsAuto.current?.cancel(binding.id);
+        delete jetBrainsRequestedBindings.current[binding.id];
+      } else await toolAuto.current?.cancel(binding.id);
+    }
+    await bridge!.deleteProvider(providerId, 'local-subscription');
+    setToolDeliveries(previous => Object.fromEntries(Object.entries(previous).filter(([, delivery]) => !delivery?.providerIds.includes(providerId))));
+  };
+  const deleteProvider = (provider: Provider, localSubscription = false) => {
+    if (pendingActions.current.has('delete') || !localSubscription && anyToolOperationPending()) return;
     const affectedTools = data.bindings.filter(binding => sourceIdsFor(binding).includes(provider.id)).map(binding => binding.id);
-    setConfirm({ title: `删除全局供应商「${subscriptionDisplayName(provider)}」？`, description: '此供应商及关联模型会从全部工具选择中移除。受影响的自动同步工具将更新配置并备份；手动导入的工具需要重新导出。其他供应商及模型保留。', action: async () => {
-      if (anyToolOperationPending()) throw new Error('工具配置正在同步，请稍候再删除供应商。');
-      await bridge!.deleteProvider(provider.id);
-      setToolDeliveries(previous => Object.fromEntries(Object.entries(previous).filter(([, delivery]) => !delivery?.providerIds.includes(provider.id))));
+    setConfirm({ title: localSubscription ? `移除本地订阅「${subscriptionDisplayName(provider)}」？` : `删除全局供应商「${subscriptionDisplayName(provider)}」？`, description: localSubscription ? '移除这个本地来源、关联模型及工具中的来源引用。以后可以通过「添加订阅」重新添加。' : '此供应商及关联模型会从全部工具选择中移除。受影响的自动同步工具将更新配置并备份；手动导入的工具需要重新导出。其他供应商及模型保留。', action: async () => {
+      if (localSubscription) await removeLocalSubscription(provider.id);
+      else {
+        if (anyToolOperationPending()) throw new Error('工具配置正在同步，请稍候再删除供应商。');
+        await bridge!.deleteProvider(provider.id);
+        setToolDeliveries(previous => Object.fromEntries(Object.entries(previous).filter(([, delivery]) => !delivery?.providerIds.includes(provider.id))));
+      }
       setToolSyncErrors(previous => { const next = { ...previous }; for (const tool of affectedTools) delete next[tool]; return next; });
       setTests(previous => { const next = { ...previous }; delete next[provider.id]; return next; });
-      await refresh(); notify('全局供应商及关联模型已删除。', 'info');
+      await refresh(); notify(localSubscription ? '已移除本地订阅来源及其模型。' : '全局供应商及关联模型已删除。', 'info');
     } });
   };
   const showPreview = (tool: ToolId) => {
@@ -1044,7 +1059,7 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
       <header className="topbar"><div className="breadcrumbs"><strong>{detailTitle}</strong></div><div className="topbar-right"><span className={`bridge-status ${isConnected ? 'connected' : ''}`} title={isConnected ? '桌面已连接' : loadError || '桌面未连接'}><span className="status-dot" />{!bridge ? '界面预览' : loadError ? '连接异常' : !snapshot ? '读取配置中' : '桌面已连接'}</span><span className={`local-status ${data.gateway.running ? 'running' : ''}`}><Radio size={14} />{data.gateway.running ? '服务运行中' : '服务未启动'}</span><button className="icon-button" aria-label="刷新本机配置" title="刷新" onClick={() => { setSecretVisibilityRevision(value => value + 1); void run('refresh', refresh); }}><RefreshCw size={15} className={busy.refresh ? 'spin' : ''} /></button></div></header>
       <main className="main-content">
         {(!bridge || loadError) && <div className="bridge-banner"><Unplug size={17} /><span>{!bridge ? '当前为界面预览。桌面桥未连接，未读取任何本机账号或模型。' : `暂时无法读取本机配置：${loadError}`}</span>{!!bridge && <button onClick={() => void refresh()}>重试<RefreshCw size={13} /></button>}</div>}
-        {page === 'auth' && <AuthPanel importRequest={relayImportRequest} onImportRequestHandled={consumeRelayImportRequest} platform={preferences?.platform} onAddSubscription={() => setProviderDraft(freshProvider('codex-subscription'))} refreshRevision={authRefreshRevision} api={bridge} notify={notify} onChanged={refresh} onManageProvider={id => { const provider = data.providers.find(item => item.id === id); if (provider) editProvider(provider); }} onAddRelay={requestRelayImport} onCopilotLogin={loginCopilot} onLogin={id => run('auth-center-login', async () => { const latest = await bridge!.snapshot(); setSnapshot(latest); const provider = latest.providers.find(item => item.id === id); if (!provider) throw new Error('账号来源不存在，请刷新。'); await login(provider); })} />}
+        {page === 'auth' && <AuthPanel onConfirmRemoveSource={removeLocalSubscription} configuredProviders={data.providers} onRemoveSource={provider => deleteProvider(provider, true)} importRequest={relayImportRequest} onImportRequestHandled={consumeRelayImportRequest} platform={preferences?.platform} onAddSubscription={() => setProviderDraft(freshProvider('codex-subscription'))} refreshRevision={authRefreshRevision} api={bridge} notify={notify} onChanged={refresh} onManageProvider={id => { const provider = data.providers.find(item => item.id === id); if (provider) editProvider(provider); }} onAddRelay={requestAccountImport} onCopilotLogin={loginCopilot} onLogin={id => run('auth-center-login', async () => { const latest = await bridge!.snapshot(); setSnapshot(latest); const provider = latest.providers.find(item => item.id === id); if (!provider) throw new Error('账号来源不存在，请刷新。'); await login(provider); })} />}
         {page === 'network' && <NetworkWorkspace api={bridge} snapshot={runtime.snapshot?.network} error={runtime.error} onChanged={runtime.refresh} notify={notify} />}
         {page === 'settings' && <SettingsPanel api={bridge} network={runtime.snapshot?.network} onNetworkChanged={runtime.refresh} snapshot={preferences} onSave={savePreferences} notify={notify} dataDir={data.dataDir} version={data.version} providers={data.providers} models={data.models} />}
 
@@ -1111,29 +1126,32 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
     {modelDiscovery && <ModelDiscovery key={modelDiscovery.provider.id} api={bridge} provider={modelDiscovery.provider} initialResult={modelDiscovery.initialResult} notify={notify} onClose={() => setModelDiscovery(null)} onManualAdd={() => { const id = modelDiscovery.provider.id; setModelDiscovery(null); addModel(id); }} onAdded={refresh} />}
     {showProviderDuplicates && <ProviderDuplicates api={bridge} notify={notify} gatewayRunning={data.gateway.running} onClose={() => setShowProviderDuplicates(false)} onChanged={refresh} onEdit={id => { const provider = data.providers.find(item => item.id === id); if (provider) { setShowProviderDuplicates(false); editProvider(provider); } }} />}
 
-    {providerDraft && <Modal title={providerDraft.id ? '编辑供应商' : providerCategory(providerDraft) === 'api' ? '添加 API 供应商' : '添加订阅供应商'} subtitle={providerDraft.presetId === 'jetbrains-central' ? '连接自己的 JetBrains AI 账号，通过 ModelDock 网关使用。' : providerDraft.presetId === 'trae-cn-relay' ? '导入自己的 TRAE 中国版账号，通过 ModelDock 网关使用。' : providerCategory(providerDraft) === 'api' ? '选择服务，填写地址与 API Key。' : '选择订阅服务，保存后登录本人的账号。'} onClose={() => setProviderDraft(null)}>
+    {providerDraft && <Modal title={providerDraft.id ? '编辑供应商' : providerCategory(providerDraft) === 'api' ? '添加 API 供应商' : '添加订阅供应商'} subtitle={providerDraft.presetId === 'jetbrains-central' ? '连接自己的 JetBrains AI 账号，通过 ModelDock 网关使用。' : providerDraft.presetId === 'trae-cn-relay' ? '导入自己的 TRAE 中国版账号，通过 ModelDock 网关使用。' : providerDraft.kind === 'opencode-go' ? '使用 OpenCode Console 中已开通 Go 套餐的工作区。' : providerCategory(providerDraft) === 'api' ? '选择服务，填写地址与 API Key。' : '选择要添加的订阅服务。'} onClose={() => setProviderDraft(null)}>
       <form onSubmit={event => { event.preventDefault(); void saveProvider(); }}>
         <div className="modal-body">
           <div className="field-label">{providerCategory(providerDraft) === 'api' ? 'API 服务预设' : '订阅服务'}{providerDraft.id && <span className="optional">保留原有接入方式</span>}</div>
           <div className={`provider-kind-picker preset-picker ${providerCategory(providerDraft) === 'api' ? 'api-presets' : 'subscription-presets'}`}>
             {providerPresets.filter(preset => preset.category === providerCategory(providerDraft)).map(preset => <button type="button" key={preset.id} data-preset-id={preset.id} className={providerDraft.presetId === preset.id ? 'selected' : ''} disabled={!!providerDraft.id} onClick={() => setProviderDraft(freshProvider(preset.id))}>
-              {isRelayProvider({ kind: preset.kind, presetId: preset.id }) ? <Server size={18} /> : preset.category === 'api' ? <KeyRound size={17} /> : preset.kind === 'codex' ? <Sparkles size={18} /> : preset.kind === 'copilot' ? <ToolIcon tool="copilot" /> : <Zap size={18} />}<strong>{preset.name}</strong>{providerDraft.presetId === preset.id && <Check size={14} className="kind-check" />}
+              {isRelayProvider({ kind: preset.kind, presetId: preset.id }) ? <Server size={18} /> : preset.category === 'api' ? <KeyRound size={17} /> : preset.kind === 'codex' ? <Sparkles size={18} /> : preset.kind === 'copilot' || preset.kind === 'opencode-go' ? <ToolIcon tool={preset.kind === 'copilot' ? 'copilot' : 'opencode'} /> : <Zap size={18} />}<strong>{preset.name}</strong>{providerDraft.presetId === preset.id && <Check size={14} className="kind-check" />}
             </button>)}
           </div>
           <label className="form-field">供应商名称<input required maxLength={80} placeholder="给这个服务或账号取一个名称" value={providerDraft.name} onChange={event => setProviderDraft({ ...providerDraft, name: event.target.value })} /></label>
           {providerDraft.kind === 'copilot' && <label className="form-field">GitHub 账号<select data-field="copilot-account" value={providerDraft.copilotAccountId ?? ''} onChange={event => setProviderDraft({ ...providerDraft, copilotAccountId: event.target.value })}><option value="">保存后登录 GitHub</option>{copilotAccountChoices.map(account => <option key={account.providerId} value={account.providerId} disabled={account.authStatus !== 'ready'}>{account.displayName || account.email || subscriptionDisplayName({name: account.providerName,kind:'copilot',presetId:'copilot-subscription'})}{account.authStatus !== 'ready' ? '（需重新登录）' : ''}</option>)}</select><small>{copilotAccountError || '选择授权中心已登录的 GitHub 账号，可直接复用订阅授权。'}</small></label>}
           {!!draftExistingProviders.length && <div className="provider-draft-existing"><CircleHelp size={17} /><div><strong>同名、同地址的供应商已存在</strong><p>相同密钥会复用已有记录。更换密钥请编辑原记录；不同账号请使用不同名称。</p></div><button type="button" className="button small secondary" onClick={() => draftExistingProviders.length > 1 ? (setProviderDraft(null), setShowProviderDuplicates(true)) : editProvider(draftExistingProviders[0])}>{draftExistingProviders.length > 1 ? '整理重复记录' : '编辑已有记录'}</button></div>}
           {providerDraft.presetId === 'trae-cn-relay' ? <TraeRelayFields platform={preferences?.platform} draft={providerDraft} saved={data.providers.find(provider => provider.id === providerDraft.id)} pending={!!busy['save-provider']}
-            onChange={patch => setProviderDraft({ ...providerDraft, ...patch })} onImport={() => requestRelayImport('trae-cn-relay')} />
+            onChange={patch => setProviderDraft({ ...providerDraft, ...patch })} onImport={() => requestAccountImport('trae-cn-relay')} />
           : providerDraft.presetId === 'jetbrains-central' ? <JetBrainsRelayGuide pending={!!busy['save-provider']}
-              savedKey={data.providers.some(provider => provider.id === providerDraft.id && provider.hasSecret)} onImport={() => requestRelayImport('jetbrains-central')} />
-          : providerDraft.kind === 'openai-compatible' ? <>
+              savedKey={data.providers.some(provider => provider.id === providerDraft.id && provider.hasSecret)} onImport={() => requestAccountImport('jetbrains-central')} onOptions={() => requestAccountImport('jetbrains-central', true)} />
+          : providerDraft.kind === 'opencode-go' ? <>
+            <label className="form-field">OpenCode Go 工作区 API Key<input data-field="opencode-go-key" type="password" autoComplete="new-password" required={!data.providers.some(p => p.id === providerDraft.id && p.hasSecret)} placeholder={providerDraft.id ? '留空保留已保存的密钥' : '粘贴 Go 工作区的 API Key'} value={providerDraft.apiKey} onChange={event => setProviderDraft({ ...providerDraft, apiKey: event.target.value })} /></label>
+            <div className="preset-help"><CircleHelp size={16} /><div><p>{draftPreset?.note}</p><a href={draftPreset?.docsUrl} target="_blank" rel="noopener noreferrer">OpenCode Go 官方说明</a></div></div>
+          </> : providerDraft.kind === 'openai-compatible' ? <>
             <label className="form-field">API 服务地址<input type="url" placeholder="填写控制台提供的 API 根地址" value={providerDraft.baseUrl} onChange={event => setProviderDraft({ ...providerDraft, baseUrl: event.target.value })} /><small>{!providerDraft.baseUrl ? '地址可以稍后填写；当前可保存为草稿，补全后再检测连接。' : '预设地址可编辑，请使用与你的账号或套餐对应的入口。'}</small></label>
             <label className="form-field">Claude Code 接口地址（可选）<input data-field="claude-base-url" type="url" placeholder="留空使用官方对应入口或本机服务" value={providerDraft.claudeBaseUrl ?? ''} onChange={event => setProviderDraft({ ...providerDraft, claudeBaseUrl: event.target.value })} /><small>填写时须是支持 Anthropic Messages 的服务地址，使用同一 API Key。留空按已知官方入口映射，其他来源使用本机服务转换；上方已有 OpenAI 地址保留。</small></label>
             {draftPreset && <div className="preset-help"><CircleHelp size={16} /><div><p>{draftPreset.note}</p>{draftPreset.docsUrl && <a href={draftPreset.docsUrl} target="_blank" rel="noopener noreferrer">查看供应商说明<ArrowUpRight size={12} /></a>}</div></div>}
             <label className="form-field">API Key<span className="input-with-icon"><KeyRound size={15} /><input type={draftKeyVisible ? 'text' : 'password'} autoComplete="new-password" placeholder={providerDraft.id ? '留空保留已保存的 API Key' : '粘贴此服务的 API Key'} value={providerDraft.apiKey} onChange={event => setProviderDraft({ ...providerDraft, apiKey: event.target.value })} /><button type="button" className="icon-button" aria-label={draftKeyVisible ? '隐藏输入的 API Key' : '显示输入的 API Key'} aria-pressed={draftKeyVisible} onClick={() => setDraftKeyVisible(!draftKeyVisible)}><Eye size={15} /></button></span>{providerDraft.id && <small>已有密钥不回填；输入新密钥即可替换。</small>}</label>
             <label className="form-field">Messages 鉴权方式<select data-field="messages-auth" value={providerDraft.messagesAuth ?? 'bearer'} onChange={event => setProviderDraft({ ...providerDraft, messagesAuth: event.target.value as 'api-key' | 'bearer' })}><option value="api-key">API Key（x-api-key）</option><option value="bearer">Bearer Token（Authorization）</option></select><small>仅用于 Anthropic Messages 接口，请按供应商要求选择；其他 OpenAI 接口不受影响。Anthropic 新模板默认 API Key，自定义及未设置的历史来源默认 Bearer Token。</small></label>
-          </> : <div className="form-info"><KeyRound size={19} /><div><strong>{draftPreset?.name ?? providerKinds[providerDraft.kind].title}</strong><p>{draftPreset?.note} {providerDraft.kind === 'copilot' && providerDraft.copilotAccountId ? '保存后即可使用此账号的订阅模型。' : '保存后点击「登录账号」，在官方页面完成授权。'}</p></div></div>}
+          </> : <div className="form-info"><KeyRound size={19} /><div><strong>{draftPreset?.name ?? providerKinds[providerDraft.kind].title}</strong><p>{draftPreset?.note} {providerDraft.kind === 'copilot' && providerDraft.copilotAccountId ? '保存后即可使用此账号的订阅模型。' : '保存后点击「登录账号」，在官方页面完成授权。'}</p>{!providerDraft.id && <button type="button" className="button small secondary" data-action="import-subscription-client" onClick={() => { const kind = providerDraft.kind; if (kind === 'codex' || kind === 'grok' || kind === 'copilot') requestAccountImport(kind); }}>从客户端导入</button>}{!providerDraft.id && providerDraft.kind === 'copilot' && <button type="button" className="text-button" data-action="copilot-login" onClick={() => { setProviderDraft(null); void loginCopilot(); }}>登录 GitHub</button>}</div></div>}
           <label className="form-field">备注<input placeholder="可选，记录账号或服务的用途" maxLength={300} value={providerDraft.note} onChange={event => setProviderDraft({ ...providerDraft, note: event.target.value })} /></label>
           <div className="form-switch-row"><div><strong>启用供应商</strong><small>让工具可以选择此来源的模型。</small></div><Toggle checked={providerDraft.enabled} onChange={enabled => setProviderDraft({ ...providerDraft, enabled })} label="启用供应商" /></div>
         </div>
@@ -1146,7 +1164,7 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
         <label className="form-field">上游模型 ID<input data-field="upstream-id" required placeholder="例如：gpt-6.1-sol / glm-5.3" list="discovered-models" value={modelDraft.upstreamId} onChange={event => updateModelIdentity({ upstreamId: event.target.value, alias: !modelDraft.alias || modelDraft.alias === modelDraft.upstreamId ? event.target.value : modelDraft.alias, displayName: !modelDraft.displayName || modelDraft.displayName === modelDraft.upstreamId ? event.target.value : modelDraft.displayName })} /><datalist id="discovered-models">{[...new Set(data.models.filter(model => model.providerId === modelDraft.providerId).map(model => model.upstreamId))].map(id => <option key={id} value={id} />)}</datalist><small>填写供应商实际接受的模型 ID，也可通过获取模型列表批量添加。</small></label>
         <div className="form-columns"><label className="form-field">模型简称<input data-field="model-local-alias" required placeholder="例如：glm-5.3" value={modelDraft.alias} onChange={event => setModelDraft({ ...modelDraft, alias: event.target.value })} /><small>仅在当前供应商内区分；跨供应商可重名。</small></label><label className="form-field">显示名称<input data-field="model-display-name" placeholder="可与其他模型相同" value={modelDraft.displayName} onChange={event => setModelDraft({ ...modelDraft, displayName: event.target.value })} /><small>聚合时显示“套餐名 - 模型名”。</small></label></div>
         {modelDraftProvider && modelDraft.alias.trim() && <div className="model-route-preview">{modelRoutePreview.error ? <span role="alert">{modelRoutePreview.error}</span> : <><strong>{modelDisplayLabel({ ...modelDraft, displayName: modelDraft.displayName || modelDraft.alias }, modelDraftProvider)}</strong><small>聚合接口 ID：<code data-field="model-route-preview">{modelRoutePreview.alias}</code></small></>}</div>}
-        <div className="form-columns"><label className="form-field">调用接口<select data-field="wire-api" disabled={modelDraftProvider?.nativeAdapter === 'jetbrains-ide'} value={modelDraft.wireApi} onChange={event => updateModelIdentity({ wireApi: event.target.value as Model['wireApi'] })}><option value="responses">Responses</option><option value="chat-completions">Chat Completions</option><option value="messages">Messages · Anthropic</option></select></label><label className="form-field">上下文长度（0 表示未设置）<input data-field="context-window" type="number" required min="0" step="1" value={modelDraft.contextWindow} onChange={event => updateModelParameters({ contextWindow: Number(event.target.value) }, ['contextWindow'])} /></label></div>
+        <div className="form-columns"><label className="form-field">调用接口<select data-field="wire-api" disabled={modelDraftProvider?.nativeAdapter === 'jetbrains-ide'} value={modelDraft.wireApi} onChange={event => updateModelIdentity({ wireApi: event.target.value as Model['wireApi'] })}><option value="responses">Responses</option><option value="chat-completions">Chat Completions</option>{modelDraftProvider?.kind === 'openai-compatible' && <option value="messages">Messages · Anthropic</option>}</select></label><label className="form-field">上下文长度（0 表示未设置）<input data-field="context-window" type="number" required min="0" step="1" value={modelDraft.contextWindow} onChange={event => updateModelParameters({ contextWindow: Number(event.target.value) }, ['contextWindow'])} /></label></div>
         <div className="model-official-parameters" data-field="official-parameters">
           <div className="model-official-heading"><strong>{modelDraftMetadata || modelDraftReasoningMetadata ? '模型维护参数' : '可手动配置模型参数'}</strong><button type="button" className="button secondary" data-action="apply-official-model-parameters" disabled={!modelDraftMetadata && !modelDraftReasoningMetadata} onClick={applyOfficialParameters}>{modelOfficialParametersApplied ? <Check size={14} /> : <RefreshCw size={14} />}{modelOfficialParametersApplied ? '已填入草稿' : '应用维护参数'}</button></div>
           {modelOfficialParametersApplied && <small role="status" data-field="official-parameters-applied">参数已填入当前草稿；请保存，再重新同步所用工具。</small>}

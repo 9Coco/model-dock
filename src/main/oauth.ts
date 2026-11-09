@@ -1,4 +1,5 @@
 import type { AuthFailureCategory, AuthProgress, AuthStage, Provider, ProviderSecret } from '../shared/types';
+import { OPENCODE_GO_BASE_URL, OPENCODE_GO_MODELS_URL } from '../shared/presets';
 import { normalizeApiKey } from './credentials';
 import { anthropicEndpoint } from './anthropic-endpoint';
 import { normalizeUpstreamReasoning } from './upstream-compat';
@@ -113,6 +114,7 @@ export function upstreamEndpoint(baseUrl: string, path: string): string {
 
 /** Preserve the configured route while adding the native Codex catalog contract. */
 export function modelCatalogEndpoint(provider: Provider): string {
+  if (provider.kind === 'opencode-go') return OPENCODE_GO_MODELS_URL;
   if (provider.kind === 'openai-compatible' && provider.presetId === 'anthropic') return anthropicEndpoint(provider.baseUrl, '/models');
   const url = new URL(upstreamEndpoint(provider.baseUrl, '/models'));
   if (provider.kind === 'codex') url.searchParams.set('client_version', CODEX_CATALOG_CLIENT_VERSION);
@@ -176,6 +178,13 @@ export function prepareUpstream(provider: Provider, secret: ProviderSecret, path
   const route = path.replace(/^\/v1\//, '/');
   const body = normalizeUpstreamReasoning(provider, route, structuredClone(input));
   const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: body.stream ? 'text/event-stream' : 'application/json' };
+  if (provider.kind === 'opencode-go') {
+    if (!secret.apiKey || provider.baseUrl !== OPENCODE_GO_BASE_URL) throw new Error('请配置 OpenCode Go 工作区密钥。');
+    if (!['/models', '/chat/completions', '/responses'].includes(route)) throw new Error('OpenCode Go 支持 Chat Completions 和 Responses。');
+    headers.Authorization = 'Bearer ' + normalizeApiKey(secret.apiKey);
+    headers['User-Agent'] = 'ModelDock/' + appVersion;
+    return { url: route === '/models' ? OPENCODE_GO_MODELS_URL : upstreamEndpoint(OPENCODE_GO_BASE_URL, route), headers, body };
+  }
   if (provider.kind === 'openai-compatible') {
     if (!secret.apiKey) throw new Error('该来源还没有配置 API Key');
     // 修改点：原生 Messages 不经 OpenAI 协议转换，使用独立路径和鉴权头。

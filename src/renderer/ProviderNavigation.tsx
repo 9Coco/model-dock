@@ -19,7 +19,7 @@ const categories: { id: ProviderCategory; label: string }[] = [
   { id: 'api', label: 'API' },
   { id: 'subscription', label: '订阅' },
 ];
-const symbols: Record<ProviderKind, string> = { 'openai-compatible': 'A', codex: 'C', copilot: 'P', grok: 'G' };
+const symbols: Record<ProviderKind, string> = { 'openai-compatible': 'A', 'opencode-go': 'O', codex: 'C', copilot: 'P', grok: 'G' };
 
 /** Category changes only switch this list; selecting a source remains an explicit action. */
 export function ProviderNavigation({ providers, selectedProviderId, active, category, onCategoryChange, onSelect, onAddApi }: ProviderNavigationProps) {

@@ -131,7 +131,7 @@ function parseModel(entry: unknown, provider: Provider, messagesCatalog = false)
   if (provider.kind === 'copilot' && Array.isArray(endpoints) && !endpoints.some(endpoint => endpoint === 'responses' || endpoint === '/responses' || endpoint === 'chat_completions' || endpoint === 'chat-completions' || endpoint === '/chat/completions')) return undefined;
   const nativeWire = provider.nativeAdapter && ['chat-completions', 'responses', 'messages'].includes(String(data.wire_api)) ? data.wire_api as WireApi : undefined;
   const wireApi: WireApi = nativeWire ?? (provider.kind === 'copilot' ? Array.isArray(endpoints) && (endpoints.includes('responses') || endpoints.includes('/responses')) ? 'responses' : 'chat-completions'
-    : provider.kind === 'openai-compatible' ? messagesCatalog ? 'messages' : presetById(provider.presetId)?.defaultWireApi ?? 'chat-completions' : 'responses');
+    : provider.kind === 'openai-compatible' || provider.kind === 'opencode-go' ? messagesCatalog ? 'messages' : presetById(provider.presetId)?.defaultWireApi ?? 'chat-completions' : 'responses');
   const knownMetadata = lookupModelMetadata(upstreamId, provider, wireApi);
   // 订阅目录只借用缺少的思考默认值，不能借用公共 API 的容量或模态。
   const reasoningMetadata = knownMetadata ?? lookupModelReasoningDefaults(upstreamId, provider, wireApi);
@@ -319,7 +319,7 @@ export class ModelCatalog {
     let statusCode: number | undefined;
     try {
       if (!provider) throw new CatalogFailure('invalid-provider', '供应商不存在。');
-      if (!provider.hasSecret) throw new CatalogFailure('missing-credentials', provider.kind === 'openai-compatible' ? '请先保存 API Key，再获取模型列表。' : '请先完成订阅授权，再获取模型列表。');
+      if (!provider.hasSecret) throw new CatalogFailure('missing-credentials', (provider.kind === 'openai-compatible' || provider.kind === 'opencode-go') ? '请先保存 API Key，再获取模型列表。' : '请先完成订阅授权，再获取模型列表。');
       const signal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
       // Resolve the narrow main-process port once. Ordinary providers return
       // undefined and continue through the authenticated HTTP catalog path.
@@ -333,7 +333,7 @@ export class ModelCatalog {
       try { request = useNativeCatalog ? { url: expected, headers: {}, body: {} } : await this.oauth.prepareRequest(provider, messagesCatalog ? '/v1/models' : '/models', {}); }
       catch {
         if (provider.presetId === 'jetbrains-central') throw new CatalogFailure('authentication', '请先在 JetBrains 供应商详情中启动本机反代，再获取模型列表。');
-        throw new CatalogFailure('authentication', provider.kind === 'openai-compatible' ? '无法准备 API 凭据，请重新保存 API Key。' : '无法准备订阅授权，请在授权中心检查账号或重新登录。'); }
+        throw new CatalogFailure('authentication', (provider.kind === 'openai-compatible' || provider.kind === 'opencode-go') ? '无法准备 API 凭据，请重新保存 API Key。' : '无法准备订阅授权，请在授权中心检查账号或重新登录。'); }
       if (provider.kind === 'copilot' ? !isCopilotUpstream(request.url, '/models') : request.url !== expected) throw new CatalogFailure('invalid-provider', '模型目录请求地址与当前供应商不一致。');
       if (messagesCatalog) {
         // 修改点：custom 来源已明确选择 Messages 时使用 Anthropic 目录合同。
@@ -476,7 +476,7 @@ export class ModelCatalog {
       if (!displayName) throw new Error('模型显示名称无效。');
       const wireApi = selection.wireApi ?? found.wireApi;
       if (!['chat-completions', 'responses', 'messages'].includes(wireApi) || (provider.kind === 'codex' || provider.kind === 'grok') && wireApi !== 'responses'
-        || provider.kind === 'copilot' && wireApi === 'messages') throw new Error('模型协议无效；Codex 和 Grok 订阅仅支持原生 Responses，Copilot 不支持 Messages。');
+        || (provider.kind === 'copilot' || provider.kind === 'opencode-go') && wireApi === 'messages') throw new Error('模型协议无效；Codex 和 Grok 订阅仅支持原生 Responses，Copilot 和 OpenCode Go 使用 Chat 或 Responses。');
       const contextWindow = selection.contextWindow ?? found.contextWindow;
       const tools = selection.tools ?? found.tools;
       const vision = selection.vision ?? found.vision;

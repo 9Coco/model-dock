@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowDownToLine, ChevronDown, Clock3, Ellipsis, Info, KeyRound, LogOut, Plus, RefreshCw, Trash2, UserRound } from './MaterialIcon';
-import type { ModelDockApi } from '../shared/types';
+import type { ModelDockApi, Provider } from '../shared/types';
 import type { SettingsSnapshot } from '../shared/settings-types';
 import type { AuthAccount, AuthAccountKind, CopilotImportCandidate, JetBrainsIdeImportResult, QuotaWindow, RelayAccountKind, RelayClientImportCandidate, RelayClientImportProvenance, SubscriptionKind, SubscriptionUsage } from '../shared/auth-types';
 import { SUBSCRIPTION_NAMES, subscriptionDisplayName } from '../shared/subscription-names';
@@ -101,10 +101,13 @@ function ResetCredits({ usage, now }: { usage: SubscriptionUsage; now: number })
   </div>;
 }
 
-export function AuthPanel({ api, platform, notify, onLogin, onCopilotLogin, onChanged, onManageProvider, onAddRelay, onAddSubscription, refreshRevision = 0, importRequest, onImportRequestHandled }: {
+export function AuthPanel({ api, configuredProviders = [], onRemoveSource, onConfirmRemoveSource, platform, notify, onLogin, onCopilotLogin, onChanged, onManageProvider, onAddRelay, onAddSubscription, refreshRevision = 0, importRequest, onImportRequestHandled }: {
+  configuredProviders?: Provider[];
+  onRemoveSource?: (provider: Provider) => void;
+  onConfirmRemoveSource: (id: string) => Promise<void>;
   api?: ModelDockApi; notify: Notify;
   platform?: SettingsSnapshot['platform'];
-  importRequest?: { kind: RelayAccountKind; id: number };
+  importRequest?: { kind: AuthAccountKind; id: number; options?: boolean };
   onImportRequestHandled?: (id: number) => void;
   onLogin: (providerId: string) => void | Promise<void>;
   onCopilotLogin?: () => void | Promise<void>;
@@ -336,7 +339,12 @@ export function AuthPanel({ api, platform, notify, onLogin, onCopilotLogin, onCh
     openedImportRequest.current = importRequest.id;
     // Consume the parent request before asynchronous work. This component is
     // recreated on navigation; its local ref alone cannot prevent a replay.
-    onImportRequestHandled?.(importRequest.id); void openRelayImport(importRequest.kind);
+    onImportRequestHandled?.(importRequest.id);
+    const { kind, options } = importRequest;
+    if (kind === 'copilot') void openCopilotImport();
+    else if (kind === 'codex' || kind === 'grok') void importLocal(kind);
+    else if (kind === 'jetbrains-central' && options) openJetBrainsImportOptions();
+    else void openRelayImport(kind);
   }, [importRequest, onImportRequestHandled]);
   const closeRelayImport = () => {
     if (actions.current.has('import-relay-account') || busy['import-relay-account']) return;
@@ -357,7 +365,10 @@ export function AuthPanel({ api, platform, notify, onLogin, onCopilotLogin, onCh
     const { account, action } = confirm;
     if (account.kind === 'copilot') await api!.copilotLogoutAccount(account.providerId);
     else if (action === 'logout') await api!.logoutAccount(account.providerId);
-    else await api!.deleteProvider(account.providerId);
+    else {
+      await onConfirmRemoveSource(account.providerId);
+      setAccounts(current => current.filter(row => row.providerId !== account.providerId));
+    }
     notify(account.kind === 'copilot' ? '已移除 ModelDock 中的 GitHub 账号授权和额度缓存。' : action === 'logout' ? '已清除 ModelDock 中的本地授权。' : '账号来源及其模型已删除。'); setConfirm(null);
   });
 
@@ -386,21 +397,29 @@ export function AuthPanel({ api, platform, notify, onLogin, onCopilotLogin, onCh
     ];
     if (contextMenu.open(event, items, account.email ?? account.displayName ?? accountProviderName(account))) setMenuId(null);
   };
+  const renderSource = (provider: Provider) => <article className="account-row auth-source-row" key={provider.id} data-auth-source={provider.id}>
+    <div className="account-identity"><KeyRound size={16} /><div><strong>{subscriptionDisplayName(provider)}</strong><small>{provider.kind === 'opencode-go' ? provider.hasSecret ? '已配置工作区 API Key' : '待填写工作区 API Key' : '本地供应商来源'}</small></div></div>
+    <div className="account-actions"><button className="button small secondary" onClick={() => onManageProvider?.(provider.id)}>编辑</button><button className="icon-button" data-action="remove-local-source" aria-label={'移除 ' + subscriptionDisplayName(provider)} onClick={() => onRemoveSource?.(provider)}><Trash2 size={14} /></button></div>
+  </article>;
+  const goSources = configuredProviders.filter(provider => provider.kind === 'opencode-go');
   const inspectedAccount = detailAccount ? accounts.find(account => account.providerId === detailAccount.providerId) ?? null : null;
   return <section className="feature-panel auth-panel auth-compact">
     <div className="feature-toolbar auth-compact-toolbar"><p>订阅账号、反代与授权</p><div className="row-actions"><button className="button small primary" data-action="add-subscription-provider" disabled={!onAddSubscription} onClick={onAddSubscription}><Plus size={13} />添加订阅</button><button className="button small secondary" data-action="reload-auth-accounts" onClick={() => void run('reload', load)} disabled={busy.reload}><BusyIcon active={!!busy.reload}><RefreshCw size={13} /></BusyIcon>刷新列表</button></div></div>
     {error && <p className="feature-error" role="alert">{error}</p>}
     {kinds.map(kind => {
       const group = accounts.filter(account => account.kind === kind);
+      const sources = kind === 'copilot' ? configuredProviders.filter(provider => provider.kind === 'copilot') : [];
+      if (!group.length && !sources.length) return null;
       const relay = kind === 'trae-cn-relay' || kind === 'jetbrains-central';
       return <div className="account-group" key={kind} data-auth-kind={kind}>
-        <div className="account-group-header"><h2><AccountBrand kind={kind} />{titles[kind]}<span className="count-tag">{group.length}</span></h2><div className="row-actions">
+        <div className="account-group-header"><h2><AccountBrand kind={kind} />{titles[kind]}<span className="count-tag">{group.length + sources.length}</span></h2><div className="row-actions">
           {relay ? <><button className="button small secondary" data-auth-import-account={kind} disabled={!!relayImport || busy['import-relay-account'] || kind === 'jetbrains-central' && !ideImportSupported} onClick={() => void openRelayImport(kind)} title={kind === 'trae-cn-relay' ? '读取本机已登录的 TRAE 中国版或 TRAE SOLO 中国版账号' : !ideImportSupported ? platform ? '当前系统暂不支持 IDE / Air 导入，请使用其他连接方式' : '正在确认系统支持范围' : '导入本机 IDE / Air 本人账号下的可用 AI 许可证'}><BusyIcon active={kind === 'jetbrains-central' && !!busy['import-relay-account']}><ArrowDownToLine size={13} /></BusyIcon>从客户端导入</button>{kind === 'jetbrains-central' && <button className="icon-button" data-action="jetbrains-import-options" aria-label="其他连接方式" title="其他连接方式" disabled={!!relayImport || busy['import-relay-account']} onClick={openJetBrainsImportOptions}><Ellipsis size={14} /></button>}<button className="button small secondary" data-auth-add-relay={kind} disabled={!onAddRelay || kind === 'jetbrains-central' && !!busy['import-relay-account']} onClick={() => onAddRelay?.(kind)}><Plus size={13} />添加订阅</button></> : kind === 'copilot' ? <><button className="button small secondary" data-auth-import-account="copilot" disabled={busy['import-copilot-list']} onClick={() => void openCopilotImport()} title="选择已登录的 Copilot CLI 或 GitHub CLI 账号"><BusyIcon active={!!busy['import-copilot-list']}><ArrowDownToLine size={13} /></BusyIcon>从客户端导入</button><button className="button small secondary" data-action="copilot-login" data-auth-add-account={kind} disabled={busy['login-copilot']} onClick={() => void run('login-copilot', loginCopilot)}><Plus size={13} />登录 GitHub</button></> : <>
             <button className="button small secondary" data-auth-import-account={kind} disabled={busy['import-' + kind]} onClick={() => void importLocal(kind)} title="仅在点击时导入本机客户端已有授权"><BusyIcon active={!!busy['import-' + kind]}><ArrowDownToLine size={13} /></BusyIcon>从客户端导入</button>
             <button className="button small secondary" data-auth-add-account={kind} onClick={() => setDraft({ kind, name: titles[kind] + ' ' + (group.length + 1) })}><Plus size={13} />添加账号</button>
           </>}
         </div></div>
-        {group.length === 0 ? <div className="auth-empty-row" data-auth-empty={kind}><UserRound size={14} /><span>{relay ? '尚未添加反代订阅' : '尚未添加账号'}</span><small>{relay ? '从客户端导入自己的账号' : kind === 'copilot' ? '登录 GitHub 后查看额度' : '登录或导入已有授权'}</small></div> : group.map(account => {
+        {sources.map(renderSource)}
+        {group.map(account => {
           const isRelay = account.source === 'relay';
           const stale = quotaCacheExpired(account.usage, now), opened = menuId === account.providerId;
           const identity = isRelay ? account.accountId ? account.email ?? account.displayName ?? account.accountId : '当前账号未确认' : account.email ?? account.displayName ?? accountProviderName(account);
@@ -443,7 +462,11 @@ export function AuthPanel({ api, platform, notify, onLogin, onCopilotLogin, onCh
         })}
       </div>;
     })}
-    <p className="feature-footnote">账户额度包含其他客户端用量。访问凭据到期与套餐到期不同；反代密钥的保存状态不代表上游账号已登录。</p>
+    {goSources.length > 0 && <div className="account-group" data-auth-kind="opencode-go">
+      <div className="account-group-header"><h2><ToolIcon tool="opencode" />OpenCode Go 订阅<span className="count-tag">{goSources.length}</span></h2></div>
+      {goSources.map(renderSource)}
+    </div>}
+    {accounts.length > 0 && <p className="feature-footnote">账户额度包含其他客户端用量。访问凭据到期与套餐到期不同；反代密钥的保存状态不代表上游账号已登录。</p>}
     {inspectedAccount && <Modal title="账号详情" onClose={() => setDetailAccount(null)}><div className="modal-body auth-account-details" data-auth-account-details={inspectedAccount.providerId}><dl>
       <div><dt>账号</dt><dd>{inspectedAccount.source === 'relay' ? inspectedAccount.accountId ? inspectedAccount.email ?? inspectedAccount.displayName ?? inspectedAccount.accountId : '当前账号未确认' : inspectedAccount.email ?? inspectedAccount.displayName ?? accountProviderName(inspectedAccount)}</dd></div>
       <div><dt>账号名称</dt><dd>{accountProviderName(inspectedAccount)}</dd></div>

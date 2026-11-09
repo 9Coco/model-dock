@@ -1,6 +1,8 @@
 import { SUBSCRIPTION_NAMES } from './subscription-names';
 import type { Provider, ProviderPreset } from './types';
 
+export const OPENCODE_GO_BASE_URL = 'https://opencode.ai/inference/go/openai/v1';
+export const OPENCODE_GO_MODELS_URL = 'https://opencode.ai/inference/go/v1/models';
 export const TRAE_RELAY_BASE_URL = 'http://127.0.0.1:18080/v1';
 export const JETBRAINS_RELAY_BASE_URL = 'http://127.0.0.1:18081/v1';
 export const JETBRAINS_CENTRAL_SETUP_URL = 'https://www.jetbrains.com/help/central-cli/cli-setup.html';
@@ -36,6 +38,8 @@ export const providerPresets: ProviderPreset[] = [
     note: '使用本人 ChatGPT/Codex 账号授权，凭据由 ModelDock 管理续期。', docsUrl: 'https://developers.openai.com/codex/auth/' },
   { id: 'copilot-subscription', name: SUBSCRIPTION_NAMES.copilot, category: 'subscription', kind: 'copilot', baseUrl: 'https://api.githubcopilot.com', defaultWireApi: 'chat-completions',
     note: '使用本人 GitHub Copilot 订阅；可选择已登录账号或保存后登录，授权由本地入口管理，按模型实际支持的接口转发。', docsUrl: 'https://github.com/github/copilot-sdk' },
+  { id: 'opencode-go', name: 'OpenCode Go 订阅', category: 'subscription', kind: 'opencode-go', baseUrl: OPENCODE_GO_BASE_URL, defaultWireApi: 'chat-completions',
+    note: '填写已开通 Go 套餐的工作区 API Key，通过 ModelDock 网关调用订阅模型。', docsUrl: 'https://opencode.ai/docs/console/go/' },
   { id: 'grok-build', name: SUBSCRIPTION_NAMES.grok, category: 'subscription', kind: 'grok', baseUrl: 'https://cli-chat-proxy.grok.com/v1', defaultWireApi: 'responses',
     note: '使用本人 Grok Build 套餐账号授权，凭据由 ModelDock 管理续期。', docsUrl: 'https://x.ai/news/grok-opencode' },
 ];

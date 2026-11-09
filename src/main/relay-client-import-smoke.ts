@@ -48,7 +48,12 @@ export async function verifyRelayClientImport(window: BrowserWindow, store: Stor
     const filename = `relay-client-import-${name}.png`; writeFileSync(join(outputDir, filename), await captureUi()); screenshots.push(filename);
   }
   async function open(kind: RelayAccountKind): Promise<string> {
-    await clearToasts(); await click(kind === 'jetbrains-central' ? '[data-action="jetbrains-import-options"]' : `[data-auth-import-account="${kind}"]`);
+    await clearToasts();
+    if (kind === 'jetbrains-central' && !await evaluate<boolean>('!!document.querySelector(\'[data-auth-kind="jetbrains-central"]\')')) {
+      await click('[data-action="add-subscription-provider"]');
+      await click('[data-preset-id="jetbrains-central"]');
+    }
+    await click(kind === 'jetbrains-central' ? '[data-action="jetbrains-import-options"]' : `[data-auth-import-account="${kind}"]`);
     const scope = `[data-relay-client-import="${kind}"]`;
     if (kind === 'jetbrains-central') {
       await waitFor(`!!document.querySelector(${JSON.stringify(scope)}+' [data-jetbrains-ide-account-boundary]')`, 'JetBrains explains the IDE and Air session boundary before checking Central');
@@ -66,7 +71,7 @@ export async function verifyRelayClientImport(window: BrowserWindow, store: Stor
   try {
     window.setMinimumSize(980, 680); window.setSize(1180, 800);
     await click('[aria-label="刷新本机配置"]'); await click('[data-page="auth"]');
-    for (const kind of kinds) assert.equal(await evaluate<number>(`document.querySelectorAll('[data-auth-kind="${kind}"] [data-auth-import-account="${kind}"]').length`), 1, 'Both relay groups offer native client import');
+    await waitFor(`!!document.querySelector('[data-auth-import-account="trae-cn-relay"]')`, 'existing TRAE source offers client import');
     for (const theme of ['light', 'dark']) for (const viewport of [1180, 980]) {
       window.setSize(viewport, viewport === 1180 ? 800 : 680);
       await evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)};document.documentElement.style.colorScheme=${JSON.stringify(theme)}`);
@@ -121,7 +126,10 @@ export async function verifyRelayClientImport(window: BrowserWindow, store: Stor
       const repeated = (await evaluate<AuthAccount[]>('window.modelDock.authAccounts()')).find(account => account.kind === kind && !!account.clientImport);
       assert.equal(repeated?.providerId, provider.id, 'Re-import reuses the same strict relay provider');
       assert.deepEqual({ provider: store.getProvider(provider.id), secret: store.getSecret(provider.id), providers: store.listProviders().length, models: store.listModels(), bindings: store.listBindings() }, repeatedBefore, 'Re-import preserves connection identity, key, source count, models and tool references');
-      await waitFor(`document.querySelector('[data-auth-account="${provider.id}"] .account-identity strong')?.textContent===${JSON.stringify(customName)}`, 're-import preserves and refreshes the customized account name');
+      await click(`[data-auth-account="${provider.id}"] [data-action="account-menu"]`);
+      await click(`[data-auth-account-menu="${provider.id}"] [data-action="relay-account-details"]`);
+      await waitFor(`[...document.querySelectorAll('[data-auth-account-details="${provider.id}"] dd')].some(field => field.textContent === ${JSON.stringify(customName)})`, 'subscription details show the preserved custom source name');
+      await closeDialog();
       await capture(`${kind}-reimport-name-dark-980`);
       await privacy(); results.push({ kind, providerReused: true, source: imported.source, client: imported.clientImport!.client });
     }

@@ -283,7 +283,7 @@ describe('explicit legacy duplicate preview and safe merge', () => {
 
   it('does not merge subscription providers or separate named accounts', async () => {
     const { store } = await setup();
-    const subscription = store.getProvider('grok-build')!;
+    const subscription = store.saveProvider({ name: 'Grok', kind: 'grok', presetId: 'grok-build', baseUrl: 'https://cli-chat-proxy.grok.com/v1', enabled: true });
     duplicate(store, subscription, 'another-grok');
     source(store, 'One'); source(store, 'Two');
     expect(store.listProviderDuplicates()).toEqual([]);

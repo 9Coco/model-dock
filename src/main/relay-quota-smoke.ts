@@ -69,11 +69,15 @@ export async function verifyRelayQuota(window: BrowserWindow, store: Store, outp
     }
     await click('[aria-label="刷新本机配置"]'); await click('[data-action="reload-auth-accounts"]');
     await waitFor(`(async()=>{const values=await window.modelDock.authAccounts();return ${JSON.stringify(ids)}.every(id=>values.find(item=>item.providerId===id)?.usage.status==='ready')})()`, 'synthetic Grok and Codex quota rows');
-    await click('[data-action="copilot-login"]');
+    await click('[data-action="add-subscription-provider"]');
+    await click('[data-preset-id="copilot-subscription"]');
+    await click('[role="dialog"] [data-action="copilot-login"]');
     await waitFor(`(async()=>{const values=await window.modelDock.authAccounts();return values.some(item=>item.kind==='copilot'&&item.usage.status==='ready')})()`, 'synthetic Copilot account row');
     if (await evaluate<boolean>(`!!document.querySelector('[role="dialog"]')`)) await closeDialog();
     store.setManagedState('qa-unified-auth-layout', true); store.setManagedState('qa-jetbrains-ide-mode', 'ready');
-    await click('[data-auth-import-account="jetbrains-central"]');
+    await click('[data-action="add-subscription-provider"]');
+    await click('[data-preset-id="jetbrains-central"]');
+    await click('[data-action="import-jetbrains-account"]');
     await waitFor(`(async()=>{const values=await window.modelDock.authAccounts();return values.some(item=>item.clientImport?.client==='jetbrains-ide'&&item.usage.status==='ready')})()`, 'synthetic native JetBrains row');
     const values = await accounts();
     const representative = ['copilot', 'codex', 'grok', 'trae-cn-relay', 'jetbrains-central'].map(kind => values.find(account => account.kind === kind && (kind === 'trae-cn-relay' ? account.providerId === managed.id : kind === 'jetbrains-central' ? account.clientImport?.client === 'jetbrains-ide' : kind === 'codex' || kind === 'grok' ? ids.includes(account.providerId) : account.usage.status === 'ready')));

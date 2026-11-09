@@ -6,7 +6,7 @@ import type { AppSettings, SettingsSnapshot } from './settings-types';
 import type { DiscoveryResult, ModelSelection, AddModelsResult } from './catalog-types';
 import type { ConnectionResult, ConnectionTestInput } from './connection-types';
 export type { ConnectionResult, ConnectionTestInput } from './connection-types';
-export type ProviderKind = 'openai-compatible' | 'codex' | 'grok' | 'copilot';
+export type ProviderKind = 'openai-compatible' | 'codex' | 'grok' | 'copilot' | 'opencode-go';
 export type ToolId = 'codex' | 'opencode' | 'dsh' | 'vscode' | 'copilot' | 'copilot-cli' | 'claude-code' | 'junie' | 'webstorm' | 'intellij-idea' | 'rider' | 'pycharm';
 export type WireApi = 'chat-completions' | 'responses' | 'messages';
 export type ToolMode = 'direct' | 'aggregate' | 'auto';
@@ -23,7 +23,7 @@ export function sanitizeReasoningEfforts(value: unknown): ReasoningEffort[] {
   for (const entry of value) if (isReasoningEffort(entry) && !levels.includes(entry)) levels.push(entry);
   return levels;
 }
-export type ProviderPresetId = 'custom' | 'openai' | 'anthropic' | 'deepseek' | 'volcengine-agent' | 'volcengine-token' | 'qwen-token' | 'trae-cn-relay' | 'jetbrains-central' | 'codex-subscription' | 'grok-build' | 'copilot-subscription';
+export type ProviderPresetId = 'custom' | 'openai' | 'anthropic' | 'deepseek' | 'volcengine-agent' | 'volcengine-token' | 'qwen-token' | 'trae-cn-relay' | 'jetbrains-central' | 'codex-subscription' | 'grok-build' | 'copilot-subscription' | 'opencode-go';
 export interface ProviderPreset {
   id: ProviderPresetId;
   name: string;
@@ -240,7 +240,7 @@ export interface ModelDockApi extends FlowBridgeApi {
   snapshot(): Promise<Snapshot>;
   runtimeSnapshot(): Promise<RuntimeSnapshot>;
   saveProvider(input: ProviderInput): Promise<Provider>;
-  deleteProvider(id: string): Promise<void>;
+  deleteProvider(id: string, scope?: 'local-subscription'): Promise<void>;
   listProviderDuplicates(): Promise<import('./provider-duplicates').ProviderDuplicateGroup[]>;
   mergeProviderDuplicates(providerIds: string[], fingerprint: string): Promise<import('./provider-duplicates').ProviderMergeResult>;
   saveModel(input: ModelInput): Promise<Model>;

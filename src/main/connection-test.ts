@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { Model, Provider, WireApi } from '../shared/types';
 import type { ConnectionOutcome, ConnectionResult, ConnectionTestInput } from '../shared/connection-types';
 import { firstConnectionModel } from '../shared/connection-types';
@@ -307,7 +308,7 @@ export class ConnectionTester {
       const provider = this.store.getProvider(providerId);
       if (!provider) throw new ConnectionFailure('configuration', '供应商不存在，请重新选择。');
       if (!input || typeof input !== 'object' || Array.isArray(input)) throw new ConnectionFailure('configuration', '测试模型参数无效。');
-      if (!provider.hasSecret) throw new ConnectionFailure('configuration', provider.kind === 'openai-compatible' ? '请先保存 API Key，再测试连接。' : '请先完成订阅授权，再测试连接。');
+      if (!provider.hasSecret) throw new ConnectionFailure('configuration', (provider.kind === 'openai-compatible' || provider.kind === 'opencode-go') ? '请先保存 API Key，再测试连接。' : '请先完成订阅授权，再测试连接。');
       let modelOutputLimit: number | undefined;
       if (input.modelId !== undefined || input.upstreamId === undefined) {
         const model = input.modelId !== undefined ? typeof input.modelId === 'string' ? this.store.listModels().find(item => item.id === input.modelId) : undefined : firstConnectionModel(providerId, this.store.listModels());
@@ -350,7 +351,7 @@ export class ConnectionTester {
         catch {
           assertActive(controller.signal);
           if (provider.presetId === 'jetbrains-central') throw new ConnectionFailure('configuration', '请先在 JetBrains 供应商详情中启动本机反代，再测试模型。');
-          throw new ConnectionFailure('authentication', provider.kind === 'openai-compatible' ? '无法准备 API 凭据，请重新保存 API Key。' : '无法准备或续期订阅授权，请在授权中心检查账号或重新登录。');
+          throw new ConnectionFailure('authentication', (provider.kind === 'openai-compatible' || provider.kind === 'opencode-go') ? '无法准备 API 凭据，请重新保存 API Key。' : '无法准备或续期订阅授权，请在授权中心检查账号或重新登录。');
         }
         assertActive(controller.signal);
         if (!matchesEndpoint(prepared.url)) throw new ConnectionFailure('configuration', '推理请求地址与当前供应商不一致，已停止发送凭据。');
@@ -366,6 +367,7 @@ export class ConnectionTester {
         if (!validAuth) {
           throw new ConnectionFailure('configuration', '推理请求认证头无效，已停止发送请求。');
         }
+        if (provider.kind === 'opencode-go') prepared.headers['x-opencode-session'] = 'ses_' + randomUUID();
         response = await this.fetcher(prepared.url, { method: 'POST', headers: prepared.headers, body: JSON.stringify(prepared.body), signal: controller.signal, redirect: 'manual' });
         }
         statusCode = response.status;

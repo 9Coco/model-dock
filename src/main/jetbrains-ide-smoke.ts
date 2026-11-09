@@ -186,6 +186,7 @@ export async function verifyJetBrainsIdeImport(window: BrowserWindow, store: Sto
     // A successful Central fixture is deliberately available. IDE failure or
     // empty discovery must not inspect or fall back to that different client.
     store.setManagedState('qa-relay-client-import-stage', 'success'); store.setManagedState(MODE_KEY, 'empty');
+    store.saveProvider({ name: '已有 JetBrains 来源', kind: 'openai-compatible', presetId: 'jetbrains-central', baseUrl: JETBRAINS_RELAY_BASE_URL, enabled: false });
     const untouched = observed();
     await click('[aria-label="刷新本机配置"]'); await click('.sidebar [data-page="auth"]');
     await click('.sidebar [data-tool-id="codex"]'); await click('.sidebar [data-page="auth"]'); await pause(100);
