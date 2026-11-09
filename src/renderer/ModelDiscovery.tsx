@@ -20,7 +20,8 @@ interface Props {
   onManualAdd?: () => void;
   initialResult?: DiscoveryResult;
 }
-const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
+const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error))
+  .replace(/^(?:Error:\s*)?Error invoking remote method ['"]modeldock:(?:discoverModels|addDiscoveredModels)['"]:\s*(?:Error:\s*)?/, '');
 const protocolLabel = (wireApi: WireApi) => wireApi === 'messages' ? 'Anthropic Messages' : wireApi === 'responses' ? 'Responses' : 'Chat Completions';
 const reasoningEffortLabels: Record<ReasoningEffort, string> = { none: '无', minimal: '最小', low: '低', medium: '中', high: '高', xhigh: '超高', max: '最大' };
 const candidateDraft = (model: DiscoveredModel, providerId: string): CandidateDraft => ({ ...model, alias: modelLocalAlias({ providerId, alias: model.alias }), selected: !model.existingModelId && model.catalogImportable !== false });
@@ -152,7 +153,7 @@ export function ModelDiscovery({ api, provider, notify, onClose, onAdded, onManu
     <div className="discovery-body">
       <div className="discovery-source"><span>模型来源</span><code title={provider.baseUrl}>{provider.baseUrl}</code><button className="button secondary small" disabled={loading || adding} onClick={() => void fetchModels()}><BusyIcon active={loading}><RefreshCw size={14} /></BusyIcon>{loading ? '获取中' : '重新获取'}</button></div>
       {loading ? <div className="discovery-loading" role="status"><BusyIcon active><Download size={24} /></BusyIcon><strong>正在获取供应商模型列表…</strong><span>使用已保存的凭据连接上游服务。</span></div> : <>
-        {(error || result && !result.ok) && <div className="discovery-error" role="alert"><strong>{result && !result.ok ? result.errorCategory === 'unsupported' ? '此供应商没有模型列表接口' : result.statusCode ? `获取失败 · HTTP ${result.statusCode}` : '获取失败' : result?.ok ? '添加未完成' : '获取失败'}</strong><span>{error || result?.message}</span>{result && !result.ok && <small>模型列表不可用不代表模型无法调用；可以手动添加模型后测试连接。</small>}</div>}
+        {!result?.ok && (error || result) && <div className="discovery-error" role="alert"><strong>{result?.errorCategory === 'unsupported' ? '此供应商没有模型列表接口' : result?.statusCode ? `获取失败 · HTTP ${result.statusCode}` : '获取失败'}</strong><span>{error || result?.message}</span>{result && <small>模型列表不可用不代表模型无法调用；可以手动添加模型后测试连接。</small>}</div>}
         {result?.ok && <>
           <div className="discovery-toolbar"><label className="search-box"><Search size={15} /><input aria-label="搜索模型" placeholder="搜索模型 ID 或名称" value={search} disabled={adding} onChange={event => setSearch(event.target.value)} /></label>{historySupported && <label className="discovery-history-toggle"><input type="checkbox" aria-label="显示历史模型" data-action="show-history-models" checked={showHistorical} disabled={loading || adding} onChange={event => { setShowHistorical(event.target.checked); setError(''); setAdded(null); }} />显示历史模型</label>}<span data-discovery-count>{search.trim() ? `${visible.length} / ${eligible.length}` : eligible.length} 个模型{eligible.some(model => model.existingModelId) ? ` · ${eligible.filter(model => model.existingModelId).length} 个已添加` : ''}</span><button className={`button secondary small ${advanced ? 'selected' : ''}`} aria-expanded={advanced} disabled={adding} onClick={() => setAdvanced(value => !value)}><Settings2 size={14} />高级设置<ChevronDown size={13} className={advanced ? 'discovery-chevron-open' : ''} /></button></div>
           {historySupported && <p className="discovery-history-note" data-discovery-history-message>{result.history?.message || (result.history?.currentVerified ? '默认仅显示已确认的当前模型；勾选后可查看客户端未展示或显示状态未核实的条目。已添加的模型保持不变。' : '尚未核实完整的当前客户端清单；默认仅显示已确认的当前模型，勾选可查看其他已识别条目。')}</p>}
@@ -218,9 +219,10 @@ export function ModelDiscovery({ api, provider, notify, onClose, onAdded, onManu
           <div className="discovery-note"><Info size={14} /><span>参数优先采用供应商声明，缺少时按内置字典补全，可展开「参数设置」手动修正。不同供应商可以添加同名模型；目录和工具中按「套餐名 - 模型名」展示。无法核实的工具和图片能力默认关闭，可自行启用。模型可见和字典规格不代表实际调用权限，仍需推理验证。上下文未设置时，工具配置使用 32K 上下文 / 4K 输出的保守预算，以上预算并非上游规格。</span></div>
         </>}
         {!result && !error && <EmptyState compact icon={<Layers3 size={24} />} title="尚未获取模型" description="点击重新获取，从供应商读取真实模型列表。" />}
-        {added && <div className="discovery-success" role="status"><Check size={15} /><span>已添加 {added.added.length} 个模型{added.skipped.length ? `，跳过 ${added.skipped.length} 个已存在模型` : ''}，可在供应商模型列表和工具配置中使用。</span></div>}
       </>}
     </div>
+    {result?.ok && error && <div className="discovery-feedback discovery-error" role="alert"><strong>添加未完成</strong><span>{error}</span></div>}
+    {added && <div className="discovery-feedback discovery-success" role="status"><Check size={15} /><span>已添加 {added.added.length} 个模型{added.skipped.length ? `，跳过 ${added.skipped.length} 个已存在模型` : ''}。</span></div>}
     <div className="modal-footer discovery-footer"><span>{loading ? '正在读取模型列表' : result?.ok ? `已选择 ${selected.length} 个待添加模型` : '可手动添加模型并测试连接'}</span><div className="footer-actions">{onManualAdd && <button type="button" className="button secondary" disabled={loading || adding} onClick={onManualAdd}>手动添加</button>}<button className="button secondary" disabled={adding} onClick={onClose}>{added ? '完成' : '取消'}</button><button className="button primary" disabled={loading || adding || !api || !result?.ok || !selected.length} onClick={() => void addSelected()}><BusyIcon active={adding}><Download size={15} /></BusyIcon>{adding ? '添加中…' : `添加所选 ${selected.length} 个模型`}</button></div></div>
   </Modal>;
 }

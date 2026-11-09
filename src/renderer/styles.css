@@ -1057,6 +1057,7 @@ td { padding: 12px; color: #5b7152; }
 .discovery-note > svg { margin-top: 2px; }
 .discovery-success { display: flex; align-items: flex-start; gap: 7px; padding: 10px 12px; margin-top: 12px; color: var(--success); background: var(--success-soft); border-radius: 6px; font-size: 11px; line-height: 1.7; }
 .discovery-success > svg { margin-top: 2px; }
+.discovery-feedback { flex-shrink: 0; max-height: 25vh; overflow: auto; margin: 0 23px 12px; }
 .discovery-footer > span { color: var(--muted); font-size: 11px; }
 .discovery-footer .button { white-space: nowrap; }
 

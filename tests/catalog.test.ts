@@ -609,6 +609,76 @@ describe('real model catalog discovery and batch selection', () => {
   });
 });
 
+describe('submitting a discovery dialog after the catalog expires', () => {
+  const ids = ['kimi-k3', 'mimo-v2.6-flash', 'mimo-v2.6-pro', 'minimax-m3.1-flash', 'minimax-m3', 'step-5-preview', 'qwen3.8-flash', 'qwen3.8-max'];
+  const directory = (rows: Record<string, unknown>[] = ids.map(id => ({ id }))) => json({
+    data: rows, modeldock_history: { source: 'trae-client', currentVerified: true, message: 'Fixture directory' },
+  });
+  async function open() {
+    const { store, prepareRequest } = fixture();
+    store.provider = { ...store.provider, nativeAdapter: 'trae', presetId: 'trae-cn-relay' };
+    let now = 0;
+    const nativeModels = vi.fn(async () => directory());
+    const catalog = new ModelCatalog(store, { prepareRequest }, { nativeModels, now: () => now });
+    const result = await catalog.discover('api');
+    expect(result.ok).toBe(true);
+    now += 11 * 60 * 1000;
+    const selected = ids.map(upstreamId => ({ upstreamId, alias: 'user-' + upstreamId, contextWindow: 65536 }));
+    return { catalog, store, nativeModels, selected };
+  }
+  it('refreshes once for concurrent clicks, preserves all eight selections and edits, and skips duplicates', async () => {
+    const f = await open(), editable = vi.fn();
+    const [first, second] = await Promise.all([f.catalog.addSelectedWithRefresh('api', f.selected, editable), f.catalog.addSelectedWithRefresh('api', f.selected, editable)]);
+    expect(first.added.map(m => ({ upstreamId: m.upstreamId, alias: m.alias, contextWindow: m.contextWindow }))).toEqual(f.selected);
+    expect(second.skipped).toEqual(ids);
+    expect(f.nativeModels).toHaveBeenCalledTimes(2);
+    expect(editable).toHaveBeenCalledTimes(4);
+    expect(f.store.batches).toHaveLength(1);
+    expect((await f.catalog.addSelectedWithRefresh('api', f.selected, editable)).skipped).toEqual(ids);
+    expect(f.nativeModels).toHaveBeenCalledTimes(2);
+  });
+  it.each(['removed', 'restricted'])('rejects the entire batch when a selected route is now %s', async state => {
+    const f = await open();
+    const rows = ids.slice(0, -1).map(id => ({ id }));
+    f.nativeModels.mockResolvedValueOnce(directory(state === 'removed' ? rows : [...rows,
+      { id: ids.at(-1), modeldock_catalog_importable: false, modeldock_catalog_blocked_reason: 'account-access' }]));
+    await expect(f.catalog.addSelectedWithRefresh('api', f.selected, vi.fn())).rejects.toThrow(state === 'removed' ? '最近读取' : '没有此模型的使用权限');
+    expect(f.store.batches).toEqual([]);
+  });
+  it('retries a failed automatic refresh only on the next submission and never writes using the expired result', async () => {
+    const f = await open();
+    f.nativeModels.mockResolvedValueOnce(json({}, 503));
+    await expect(f.catalog.addSelectedWithRefresh('api', f.selected, vi.fn())).rejects.toThrow('503');
+    expect(f.nativeModels).toHaveBeenCalledTimes(2);
+    expect(f.store.batches).toEqual([]);
+    expect((await f.catalog.addSelectedWithRefresh('api', f.selected, vi.fn())).added).toHaveLength(8);
+    expect(f.nativeModels).toHaveBeenCalledTimes(3);
+  });
+  it.each(['new-login', 'config-edit', 'manual-refresh'])('refuses an automatic submission superseded by %s', async change => {
+    const f = await open();
+    let finish!: (response: Response) => void;
+    f.nativeModels.mockImplementationOnce(() => new Promise<Response>(resolve => { finish = resolve; }));
+    const added = f.catalog.addSelectedWithRefresh('api', f.selected, vi.fn());
+    if (change === 'new-login') f.catalog.invalidate('api');
+    if (change === 'config-edit') f.store.provider.baseUrl += '/changed';
+    if (change === 'manual-refresh') expect((await f.catalog.discover('api')).ok).toBe(true);
+    finish(directory());
+    await expect(added).rejects.toThrow('供应商配置已变化');
+    expect(f.store.batches).toEqual([]);
+  });
+  it('does not revive invalidated or edited sources, and rechecks the edit lock after I/O', async () => {
+    const f = await open();
+    await expect(f.catalog.addSelectedWithRefresh('api', f.selected, vi.fn().mockImplementationOnce(() => {}).mockImplementation(() => { throw new Error('正在还原'); }))).rejects.toThrow('正在还原');
+    expect(f.nativeModels).toHaveBeenCalledTimes(2);
+    expect(f.store.batches).toEqual([]);
+    f.store.provider.baseUrl += '/changed';
+    await expect(f.catalog.addSelectedWithRefresh('api', f.selected, vi.fn())).rejects.toThrow('供应商配置已变化');
+    f.catalog.invalidate('api');
+    await expect(f.catalog.addSelectedWithRefresh('api', f.selected, vi.fn())).rejects.toThrow('目录已过期');
+    expect(f.nativeModels).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('native discovery history metadata and the complete selection directory', () => {
   function nativeFixture(adapter: NonNullable<Provider['nativeAdapter']>, payload: unknown) {
     const fetcher = vi.fn(async () => { throw new Error('Unexpected external catalog request'); });

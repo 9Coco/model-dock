@@ -9,6 +9,7 @@ import type { Store } from './store';
 
 const IDS_KEY = 'qa-model-history-provider-ids', MODE_KEY = 'qa-model-history-mode', CALLS_KEY = 'qa-model-history-calls';
 const PRIVATE_KEY = 'SYNTHETIC_PRIVATE_MODEL_HISTORY_KEY';
+const CATALOG_CLOCK_OFFSET_KEY = 'qa-model-history-clock-offset';
 // Public names and picker shape only; this is never a live account response.
 const TRAE_PUBLIC_SCOPE = "按本机同账号 TRAE 客户端最近缓存的 Chat 模型清单显示，共 18 项。当前账号可添加 17 项，有 1 项受账号权限限制。清单变化时请先在 TRAE 刷新，再重新获取；历史选项仅控制显示。";
 const TRAE_PUBLIC_DIRECTORY = [
@@ -240,7 +241,7 @@ const source = (family: Family) => family === 'jetbrains' ? 'jetbrains-client' :
 
 /** Main-process fixture only. It supplies the real Catalog's native model port
  * with synthetic data; no renderer API, DOM or real account is replaced. */
-export function createHistoryModelsFixture(store: Store): { models(provider: Provider, signal: AbortSignal): Response | undefined } {
+export function createHistoryModelsFixture(store: Store): { now(): number; models(provider: Provider, signal: AbortSignal): Response | undefined } {
   assert.equal(__MODELDOCK_SMOKE_BUILD__, true); assert.equal(process.env.MODELDOCK_SMOKE_AUTH_MOCK, '1'); assert.equal(process.env.MODELDOCK_SMOKE_MODEL_HISTORY_ONLY, '1');
   const ids: Partial<Record<Family, string>> = {}, oldModels: Model[] = [];
   for (const family of families) {
@@ -257,7 +258,7 @@ export function createHistoryModelsFixture(store: Store): { models(provider: Pro
   const binding = store.listBindings().find(value => value.id === 'dsh'); assert.ok(binding);
   store.saveBinding({ ...binding, mode: 'aggregate', enabled: false, providerIds: Object.values(ids), modelIds: oldModels.map(value => value.id), modelSelection: 'selected', defaultModelId: oldModels[0].id });
   store.setManagedState(IDS_KEY, ids); store.setManagedState(MODE_KEY, 'verified'); store.setManagedState(CALLS_KEY, 0);
-  return { models(provider, signal) {
+  return { now: () => Date.now() + store.getManagedState(CATALOG_CLOCK_OFFSET_KEY, 0), models(provider, signal) {
     const family = families.find(value => ids[value] === provider.id); if (!family) return;
     if (signal.aborted) throw new Error('Synthetic catalog canceled');
     store.setManagedState(CALLS_KEY, store.getManagedState(CALLS_KEY, 0) + 1);
@@ -396,8 +397,34 @@ export async function verifyHistoryModels(window: BrowserWindow, store: Store, o
     await evaluate(`document.querySelector(${JSON.stringify(publicHistoryRow)}).scrollIntoView({block:'center'})`); await capture('public-shape-history-dark-980');
     await click(toggle); await waitFor(`document.querySelectorAll('.discovery-model').length===18`, 'default current inventory is restored');
     assert.match(await evaluate<string>(`document.querySelector('.discovery-footer').textContent`), /已选择 17 个待添加模型/);
-    assert.equal(store.getManagedState(CALLS_KEY, 0), publicCalls); assert.deepEqual(store.listModels(), publicModelsBefore); assert.deepEqual(store.listBindings(), publicBindingsBefore); await close();
+    assert.equal(store.getManagedState(CALLS_KEY, 0), publicCalls);
+    assert.deepEqual(store.listModels(), publicModelsBefore);
+    const eight = TRAE_PUBLIC_DIRECTORY.filter(model => model.visibility === 'current' && model.importable).slice(-8);
+    await click(selectAll);
+    for (const { id: modelId } of eight) await click(`input[aria-label="选择模型 ${modelId}"]`);
+    const last = eight[eight.length - 1].id, aliasField = `input[aria-label="${last} 模型简称"]`, submit = '.discovery-footer .button.primary';
+    await textInput(aliasField, 'invalid alias');
+    await evaluate("document.querySelector('.discovery-body').scrollTop=document.querySelector('.discovery-body').scrollHeight");
+    await click(submit);
+    await waitFor(`document.querySelector('[role="alert"]')?.textContent.includes('简称')`, 'invalid edit explains the refusal');
+    assert.equal(await evaluate<boolean>(`(()=>{const alert=document.querySelector('[role="alert"]').getBoundingClientRect();const bounds=document.querySelector('.modal').getBoundingClientRect();return alert.top>=bounds.top && alert.bottom<=bounds.bottom && document.elementFromPoint(alert.left+6,alert.top+6)?.closest('[role="alert"]')!==null})()`),true);
+    assert.deepEqual(store.listModels(), publicModelsBefore);
+    await capture('add-error-at-list-bottom');
+    await textInput(aliasField, 'qa-edited-qwen-max');
+    await textInput(`input[aria-label="${last} 显示名称"]`, 'Qwen 已编辑');
+    store.setManagedState(CATALOG_CLOCK_OFFSET_KEY, 11 * 60_000);
+    await click(submit);
+    await waitFor(`document.querySelector('.discovery-success')?.textContent.includes('已添加 8 个模型')`, 'one click after 11 minutes saves the eight edited choices');
+    assert.equal(store.getManagedState(CALLS_KEY, 0), publicCalls + 1);
+    const newlySaved = store.listModels().filter(model => !publicModelsBefore.some(old => old.id === model.id));
+    assert.deepEqual(newlySaved.map(model => model.upstreamId).sort(), eight.map(model => model.id).sort());
+    const edited = newlySaved.find(model => model.upstreamId === last);
+    assert.equal(edited?.alias, 'qa-edited-qwen-max'); assert.equal(edited.displayName, 'Qwen 已编辑');
+    assert.deepEqual(store.listBindings(), publicBindingsBefore);
+    await capture('added-eight-after-expiry');
+    await close();
+    await open('trae'); await waitFor(`document.querySelectorAll('.discovery-model.existing').length === 8`, 'saved choices survive reopening'); await close();
     const publicView = await evaluate<string>('(async()=>JSON.stringify({snapshot:await window.modelDock.snapshot(),body:document.body.innerText,diagnostics:await window.modelDock.queryDiagnostics({limit:200})}))()'); assert.equal(publicView.includes(PRIVATE_KEY), false);
-    writeFileSync(join(outputDir, 'history-models-validation.json'), JSON.stringify({ ok: true, families: checked, defaultHistoryHidden: true, toggleDoesNotRefetch: true, hiddenHistoryNeverSubmittedOrBulkEdited: true, currentUnroutableVisibleButNotImportable: true, forgedCheckboxCannotSubmitUnroutable: true, backendRejectsUnroutableModel: true, searchSelectionSemanticsPreserved: true, existingHistoricalModelsAndBindingsPreserved: true, reopenDefaultsToCurrent: true, unknownVisibilityNotInvented: true, unknownHiddenByDefault: true, unverifiedCurrentMessageVisible: true, emptyCurrentRequiresExplicitHistory: true, genericApiNoHistoryCheckbox: true, publicTraeShape: { current: 18, historical: 19, total: 37, currentImportable: 17, currentReadOnly: 1, longScopeFits: true, historicalModelAndBindingPreserved: true }, noRealAccountsOrNetwork: true, screenshots }, null, 2));
+    writeFileSync(join(outputDir, 'history-models-validation.json'), JSON.stringify({ ok: true, families: checked, defaultHistoryHidden: true, toggleDoesNotRefetch: true, hiddenHistoryNeverSubmittedOrBulkEdited: true, currentUnroutableVisibleButNotImportable: true, forgedCheckboxCannotSubmitUnroutable: true, backendRejectsUnroutableModel: true, searchSelectionSemanticsPreserved: true, existingHistoricalModelsAndBindingsPreserved: true, reopenDefaultsToCurrent: true, unknownVisibilityNotInvented: true, unknownHiddenByDefault: true, unverifiedCurrentMessageVisible: true, emptyCurrentRequiresExplicitHistory: true, genericApiNoHistoryCheckbox: true, expiredSelection: { minutesOpen: 11, saved: 8, refreshes: 1, editsPreserved: true }, publicTraeShape: { current: 18, historical: 19, total: 37, currentImportable: 17, currentReadOnly: 1, longScopeFits: true, historicalModelAndBindingPreserved: true }, noRealAccountsOrNetwork: true, screenshots }, null, 2));
   } finally { store.setManagedState(MODE_KEY, 'verified'); await evaluate(`(()=>{const original=${JSON.stringify(originalTheme)};if(original.theme===undefined)delete document.documentElement.dataset.theme;else document.documentElement.dataset.theme=original.theme;document.documentElement.style.colorScheme=original.colorScheme})()`); window.setMinimumSize(minimum[0], minimum[1]); window.setSize(initialSize[0], initialSize[1]); }
 }
