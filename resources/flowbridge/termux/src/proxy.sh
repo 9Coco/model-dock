@@ -222,7 +222,7 @@ banner() {
     echo
     addresses
     echo "HTTP / HTTPS 和 SOCKS5 共用入口端口 $PROXY_PORT，支持 TCP 与标准 SOCKS5 UDP 转发。"
-    echo '电脑端：打开流桥，点击“查询热点地址”，确认地址后选择“接管全局流量”。'
+    echo '电脑打开 ModelDock 首页的“网络接管”，选择“全局流量”，查询并保存热点地址，再点击“连接”。'
     echo '全局模式由电脑接管普通 TCP、UDP 和 DNS；手机需先更新到本版代理。'
     echo '实时上传 / 下载：hotspot-proxy monitor'
     echo '重新查看地址：hotspot-proxy info'

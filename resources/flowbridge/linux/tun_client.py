@@ -82,7 +82,7 @@ def _check_installed_helper() -> None:
             trusted = False
         if not trusted:
             raise TunStartError(
-                "全局接管需要安装当前版本 ModelDock 网络权限包 及其管理员辅助程序；源码模式不会提权运行用户目录中的脚本。",
+                "全局模式缺少可信的系统组件。请用 APT 安装或重新安装 ModelDock 的 deb 安装包。",
                 cleanup_confirmed=True,
             )
 
@@ -223,7 +223,7 @@ class TunController:
                     with self._lock:
                         self._cleanup_confirmed = True
                         self._state = "error"
-                    raise TunStartError("无法启动管理员认证，请确认已安装 polkit 和当前版本 ModelDock 网络权限包。", cleanup_confirmed=True) from None
+                    raise TunStartError("无法启动管理员认证，请检查系统的 polkit 服务和 ModelDock 的 deb 安装。", cleanup_confirmed=True) from None
                 self._abort_start("无法向管理员辅助程序发送启动请求。")
             deadline = time.monotonic() + self._start_timeout
             while True:
@@ -513,7 +513,7 @@ class TunController:
             except Exception:
                 with self._lock:
                     self._state = "error"
-                    self._helper_error = "无法启动网络恢复，请确认当前版本 ModelDock 网络权限包 和管理员认证可用。原 全局接管网络清理尚未确认。"
+                    self._helper_error = "无法启动网络恢复，请检查 ModelDock 的 deb 安装和系统管理员认证。上次全局连接的网络清理尚未确认。"
                 raise TunStopError(self._helper_error, controller=self) from None
             attempt = _RecoveryAttempt(process)
             with self._lock:
@@ -646,7 +646,7 @@ class ReusableTunController(TunController):
                     text=True, encoding='utf-8', errors='replace', close_fds=True, cwd='/')
                 self._setup_process = process
         except (OSError, tun_access.AccessError):
-            raise TunStartError('首次使用全局模式需要安装完整的ModelDock 网络权限服务。', cleanup_confirmed=True) from None
+            raise TunStartError('无法启动首次授权。请用 APT 安装或重新安装 ModelDock 的 deb 安装包。', cleanup_confirmed=True) from None
         try:
             process.communicate(timeout=self._start_timeout)
         except subprocess.TimeoutExpired:
@@ -662,7 +662,7 @@ class ReusableTunController(TunController):
         if process.returncode == 126:
             raise TunStartError('已取消首次授权设置，全局模式未开启。', cleanup_confirmed=True)
         if process.returncode:
-            raise TunStartError('首次授权设置未完成，请确认 systemd 权限服务已随新版完整安装。', cleanup_confirmed=True)
+            raise TunStartError('首次授权设置未完成，请检查系统的 polkit 和 systemd 服务后重试。', cleanup_confirmed=True)
 
     def _open_service(self):
         import tun_access
@@ -672,9 +672,9 @@ class ReusableTunController(TunController):
         except tun_access.AccessUnavailable:
             try:already_configured = tun_access.configured(os.getuid())
             except (OSError, tun_access.AccessError):
-                raise TunStartError('已保存的流桥权限服务授权记录异常，未重新请求密码。', cleanup_confirmed=True) from None
+                raise TunStartError('已保存的 ModelDock 网络服务授权记录异常，未重新请求密码。', cleanup_confirmed=True) from None
             if already_configured:
-                raise TunStartError('流桥权限服务暂不可用；首次授权已保存，无需再次输入密码，请检查系统服务或重启电脑。', cleanup_confirmed=True) from None
+                raise TunStartError('ModelDock 网络服务暂不可用；首次授权已保存，无需再次输入密码，请检查系统服务或重启电脑。', cleanup_confirmed=True) from None
             (self._setup_runner or self._run_initial_setup)()
             deadline=time.monotonic()+5
             while True:
@@ -684,9 +684,9 @@ class ReusableTunController(TunController):
                         raise TunStartError('首次授权已完成，但权限服务尚未就绪，请稍后重试。', cleanup_confirmed=True) from None
                     time.sleep(.05)
                 except (OSError,tun_access.AccessError):
-                    raise TunStartError('无法验证流桥权限服务身份，未发送代理请求。', cleanup_confirmed=True) from None
+                    raise TunStartError('无法验证 ModelDock 网络服务身份，未发送代理请求。', cleanup_confirmed=True) from None
         except (OSError,tun_access.AccessError):
-            raise TunStartError('无法验证流桥权限服务身份，未发送代理请求。', cleanup_confirmed=True) from None
+            raise TunStartError('无法验证 ModelDock 网络服务身份，未发送代理请求。', cleanup_confirmed=True) from None
 
     def set_endpoint(self, endpoint):
         host, port = _normalize_endpoint(endpoint)
@@ -770,7 +770,7 @@ class ReusableTunController(TunController):
                     with self._lock:
                         self._cleanup_confirmed = True
                         self._state = "error"
-                    raise TunStartError("无法连接流桥权限服务，请确认已安装完整新版。", cleanup_confirmed=True) from None
+                    raise TunStartError("无法连接 ModelDock 网络服务。请检查 systemd 服务和 ModelDock 的 deb 安装。", cleanup_confirmed=True) from None
                 self._abort_start("无法向管理员辅助程序发送启动请求。")
             deadline = time.monotonic() + self._start_timeout
             while True:

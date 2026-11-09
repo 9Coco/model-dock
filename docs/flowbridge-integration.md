@@ -1,4 +1,4 @@
-# ModelDock 0.4.0 · FlowBridge 整合与验收
+# ModelDock · FlowBridge 整合与验收
 
 ## 来源与许可证
 
@@ -16,11 +16,18 @@ resources/flowbridge/manifest.json、THIRD_PARTY_NOTICES.md。
 
 ## 结构与数据保留
 
-React 网络页面通过窄 preload 调用 TypeScript FlowBridgeManager；主进程控制设置、
-串行连接/模式切换/退出、自动连接和历史。GPL Python 标准库组件只处理 OS 网络事务、
+默认首页「服务工作台」并列显示模型网关和网络接管的状态与控制。前端通过窄 preload 的
+`runtimeSnapshot()` 读取两个服务的运行状态。实时刷新仅取内存中的服务状态，供应商、
+模型及日志沿用配置快照。接口与模型、网络工具、请求与日志在同一工作台切换。主进程管理
+模型网关和网络设置、串行连接/模式切换/退出、自动连接和历史。GPL Python 标准库组件只处理 OS 网络事务、
 TCP 字节转发和公开网站检测，没有账号/推理 API。所有账号仍使用原 TypeScript Gateway，
 不会把账号 Token、模型请求参数、MCP 或工具配置交给网络组件。网络子进程仅继承 OS
 必需环境，不继承 API Key 环境变量。转发监听和 core 管理 API 均为回环，管理密钥不进 UI。
+
+账号授权、模型目录和网关上游请求共用主进程的 `ApplicationNetworkSession`。用户在设置中
+显式填写的应用代理优先。留空且工作台已连接 HTTP 代理时，新请求通过当前会话的本机转发
+端口访问上游。全局模式或正常断开后使用系统网络规则。若转发意外中断，应用会阻止新请求
+使用旧端口，直到恢复完成或用户指定了可用的应用代理。临时转发端口仅保存在内存中。
 
 ModelDock appId、userData、SQLite schema、加密、供应商、模型、绑定、app.settings 和
 历史表不变。新设置使用 `network.flowbridge.v1`；恢复门禁为 `network.flowbridge.lease`；
@@ -46,9 +53,10 @@ sing-tun GUID 匹配值也按新接口名重新计算。路由保留区、Window
 | 流量小窗 | 同一 Electron 生命周期，拖动、锁定、展开曲线、隐藏、双击主窗口；保存位置并纠正离屏 |
 | 手机端 | 随包保留 Termux 源码和安装器，UI 导出后在手机手动执行，保留原手机 HTTP/SOCKS5/UDP、地址查询、监控与启动功能 |
 
-Linux 全局需相同版本的 modeldock-network 权限包，首次连接经系统授权启用当前用户
-固定 systemd socket；AppImage 同样需先装权限包，绝不提权运行用户目录脚本。Linux
-全局不接受回环上游，需远端数值 IP。Windows x64 包附 CPython、core 和官方签名 Wintun；
+从 0.4.1 起，ModelDock 的 deb 同时安装桌面应用、sing-box、固定路径的权限助手、
+systemd 单元及 Polkit 策略。全局模式使用 root 所有的系统组件，首次连接经系统授权
+启用当前用户的 systemd socket。服务同时校验连接者的 UID 和 root 所有的授权记录，撤销授权后会结束已有会话并清理网络。单独运行 AppImage 可使用 HTTP 模式，需要全局模式时
+请使用 deb 版。Linux 全局上游需填写远端数值 IP。Windows x64 包附 CPython、core 和官方签名 Wintun；
 全局需管理员启动，HTTP 可普通用户运行。本机 SOCKS5 必须通过监听者/进程路径防循环
 检查，拒绝 ModelDock 自身、未知/活跃接口、转发网卡等冲突。
 
@@ -69,7 +77,7 @@ Windows Job 保留原崩溃保护。全局另有 marker，异常重启后显式�
 仅恢复协议，不启动新 TUN。未知/损坏所有权记录拒绝覆盖。强杀、断电后的真实路由、
 DNS/WeakHostSend 恢复必须在目标系统验收，不能只以进程退出为证据。
 
-## 云端验证（2026-11-09）
+## 0.4.0 云端验证（2026-11-09）
 
 全部操作在 Codex Cloud Linux 完成，没有连接或依赖用户本机。npm ci 使用公开锁文件。
 官方 release 下载超时后通过同一官方 release asset API 取回相同文件并验证原固定
@@ -93,7 +101,7 @@ SHA-256，没有跳过校验。Electron UI 使用临时合成资料和 QA 入口
 重新检查时使用新的取消状态，避免上一次取消污染下一次检测。GUI 的合成数据与图片
 保存在构建工作目录，不包含用户数据。
 
-构建命令（已经准备并校验官方固定组件）：
+0.4.0 验收时使用的历史构建命令如下。当前版本构建 Linux deb 使用 `npm run dist:deb`。
 
 ```sh
 npm run network:prepare -- linux
@@ -125,6 +133,8 @@ Windows 目录包未签名，未制作/执行原生 Windows portable 安装包�
    长期吞吐稳定性、IPv6/局域网/其他 VPN 冲突。
 4. 真实供应商账号授权/推理；原 ModelDock 回归使用合成上游。
 
-分发 Linux deb 时同时提供相同版本的 modeldock-network deb；Windows 完整目录保留
-flowbridge/python、core、Wintun 与许可证。源码包与二进制一同提供，构建不安装或启动
-系统网络服务。Windows cloud 构建必须标为交叉目录构建，不宣称原生执行验证。
+## 当前版本分发
+
+Linux 完整安装仅需一个 `model-dock` deb。Windows 完整目录保留 flowbridge/python、
+core、Wintun 与许可证。源码包与二进制一同提供，构建不安装或启动系统网络服务。Windows
+cloud 构建必须标为交叉目录构建，不宣称原生执行验证。

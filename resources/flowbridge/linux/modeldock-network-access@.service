@@ -1,5 +1,5 @@
 [Unit]
-Description=FlowBridge authorized access service for user %i
+Description=ModelDock network access service for user %i
 Requires=modeldock-network-access@%i.socket
 After=modeldock-network-access@%i.socket
 

@@ -1,8 +1,10 @@
-import { NetworkPanel } from './NetworkPanel';
+import { GatewayControls } from './GatewayControls';
+import { ServiceWorkspace, type ServiceTab } from './ServiceWorkspace';
+import { useRuntimeSnapshot } from './useRuntimeSnapshot';
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import {
   Activity, ArrowDownToLine, ArrowRight, ArrowUpRight, Box, Check,
-  CheckCheck, ChevronDown, CircleHelp, Clock3, Copy, Database, Download,
+  CheckCheck, ChevronDown, CircleHelp, Copy, Database, Download,
   FileCode2, FolderOpen, Globe2, KeyRound, Layers3, LoaderCircle,
   Pencil, Plug2, Plus, Power, Radio, RefreshCw, RotateCcw, Search,
   Eye, Server, Settings2, ShieldCheck, Sparkles, Terminal, Trash2, Unplug,
@@ -51,16 +53,16 @@ import { modelDisplayLabel, modelLocalAlias, suggestModelAlias } from '../shared
 import { firstConnectionModel } from '../shared/connection-types';
 import { useContextMenu, type ContextMenuItem } from './ContextMenu';
 
-type Page = 'providers' | 'tools' | 'service' | 'auth' | 'settings' | 'network';
+type Page = 'providers' | 'tools' | 'service' | 'auth' | 'settings';
 type Toast = { id: number; message: string; tone: 'success' | 'error' | 'info' };
 type ProviderDraft = ProviderInput & TraeRelayDraft & { note: string };
 type ModelDraft = ModelInput;
 type ToolDelivery = { signature: string; kind: 'applied' | 'exported' | 'undone'; location: string; providerIds: string[] };
 const pageMeta: Record<Page, { label: string }> = {
   providers: { label: '供应商管理' },
-  tools: { label: '工具接入' }, service: { label: '服务与日志' },
+  tools: { label: '工具接入' }, service: { label: '服务工作台' },
   auth: { label: '授权中心' },
-  settings: { label: '设置' }, network: { label: '网络' },
+  settings: { label: '设置' },
 };
 const providerKinds: Record<ProviderKind, { title: string; short: string; description: string; symbol: string }> = {
   'openai-compatible': { title: '自定义 API', short: 'API', description: '用服务地址和 API 密钥连接', symbol: 'A' },
@@ -107,7 +109,8 @@ const authStageLabels: Record<NonNullable<AuthProgress['stage']>, string> = { 'd
 export default function App({ initialSettings }: { initialSettings?: SettingsSnapshot }) {
   const bridge = typeof window !== 'undefined' ? window.modelDock : undefined;
   const [preferences, setPreferences] = useState<SettingsSnapshot | null>(initialSettings ?? null);
-  const [page, setPage] = useState<Page>('tools');
+  const [page, setPage] = useState<Page>('service');
+  const [serviceTab, setServiceTab] = useState<ServiceTab>('interface');
   const [selectedTool, setSelectedTool] = useState<ToolId>('codex');
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
@@ -124,7 +127,6 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [search, setSearch] = useState('');
   const [sourceCategory, setSourceCategory] = useState<'api' | 'subscription'>('api');
-  const [serviceTab, setServiceTab] = useState<'interface' | 'logs'>('interface');
   const [providerDraft, setProviderDraft] = useState<ProviderDraft | null>(null);
   const [draftKeyVisible, setDraftKeyVisible] = useState(false);
   useEffect(() => { setDraftKeyVisible(false); }, [providerDraft?.id, !!providerDraft]);
@@ -172,13 +174,14 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
   const [confirm, setConfirm] = useState<{ title: string; description: string; action: () => Promise<void>; actionKey?: string; actionLabel?: string } | null>(null);
   const [port, setPort] = useState('18181');
   const [logFilter, setLogFilter] = useState('all');
-  const data = snapshot ?? emptySnapshot;
+  const onRuntimePage = page === 'service' || page === 'settings';
+  const runtime = useRuntimeSnapshot(bridge, onRuntimePage);
+  const config = snapshot ?? emptySnapshot;
+  const data = onRuntimePage && runtime.snapshot ? { ...config, gateway: runtime.snapshot.gateway } : config;
   const localBaseUrl = data.gateway.baseUrl || `http://127.0.0.1:${data.gateway.port}/v1`;
   const consumerModelId = (model: Model) => providerCategory(data.providers.find(provider => provider.id === model.providerId) ?? { kind: 'openai-compatible' }) === 'subscription' ? model.alias : model.upstreamId;
   const isConnected = !!bridge && !!snapshot && !loadError;
   const enabledModels = data.models.filter(model => model.enabled).length;
-  const lastRequestError = data.gateway.lastRequestError;
-  const requestSucceededAfterError = !!lastRequestError && Date.parse(data.gateway.lastSuccessfulRequestAt ?? '') > Date.parse(lastRequestError.time);
   const bindingFor = (id: ToolId): ToolBinding => pendingBindings[id] ?? data.bindings.find(binding => binding.id === id) ?? ({ id, name: toolInfo[id].name, enabled: false, mode: 'direct', providerIds: [], modelIds: [], defaultModelId: '', note: '', ...(id === 'claude-code' ? { claudeDisableTelemetry: true } : {}) });
   const sourceIdsFor = (binding: ToolBinding) => binding.providerIds ?? [...new Set(data.models.filter(model => binding.modelIds.includes(model.id)).map(model => model.providerId))];
   const toolModels = (binding: ToolBinding) => resolveBindingModels(binding, data.models, data.providers).filter(model => binding.id !== 'codex' || model.wireApi === 'responses');
@@ -287,7 +290,7 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
     void loadJetBrainsStatus(selectedTool);
   }, [page, selectedTool, loadJetBrainsStatus]);
   useEffect(() => { void refresh(); const timer = window.setInterval(() => void refresh(), 5000); return () => window.clearInterval(timer); }, [refresh]);
-  useEffect(() => { if (snapshot) setPort(String(snapshot.gateway.port)); }, [snapshot?.gateway.port]);
+  useEffect(() => { setPort(String(data.gateway.port)); }, [data.gateway.port]);
   useEffect(() => {
     if (!bridge || !auth || auth.state !== 'pending') return;
     let stopped = false;
@@ -764,14 +767,14 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
   const startGateway = async () => {
     const value = Number(port);
     if (!Number.isInteger(value) || value < 1024 || value > 65535) { notify('请使用 1024–65535 之间的端口。', 'error'); return; }
-    await run('gateway', async () => { const status = await bridge!.startGateway(value); await refresh(); setPreferences(await bridge!.getSettings()); if (!status.running) throw new Error(status.lastError || '本地服务未能启动，请查看错误提示。'); notify('本地服务已启动。'); });
+    await run('gateway', async () => { const status = await bridge!.startGateway(value); await Promise.all([runtime.refresh(), refresh()]); setPreferences(await bridge!.getSettings()); if (!status.running) throw new Error(status.lastError || '本地服务未能启动，请查看错误提示。'); notify('本地服务已启动。'); });
   };
-  const stopGateway = () => run('gateway', async () => { await bridge!.stopGateway(); await refresh(); notify('本地服务已停止。', 'info'); });
+  const stopGateway = () => run('gateway', async () => { await bridge!.stopGateway(); await Promise.all([runtime.refresh(), refresh()]); notify('本地服务已停止。', 'info'); });
   const changeGatewayAutostart = (autoStartGateway: boolean) => run('gateway-settings', async () => {
     const value = Number(port);
     if (autoStartGateway && (!Number.isInteger(value) || value < 1024 || value > 65535)) throw new Error('请使用 1024–65535 之间的端口。');
     await savePreferences(autoStartGateway ? { autoStartGateway, gatewayPort: value } : { autoStartGateway });
-    await refresh(); notify(autoStartGateway ? '已开启随应用启动本地服务，下次启动生效。' : '已关闭本地服务自动启动。', 'info');
+    await Promise.all([runtime.refresh(), refresh()]); notify(autoStartGateway ? '已开启随应用启动本地服务，下次启动生效。' : '已关闭本地服务自动启动。', 'info');
   });
   const categoryProviders = data.providers.filter(provider => providerCategory(provider) === sourceCategory);
   const filteredProviders = categoryProviders.filter(provider => `${provider.name} ${subscriptionDisplayName(provider)} ${provider.baseUrl}`.toLowerCase().includes(search.toLowerCase()));
@@ -1024,25 +1027,23 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
 
   return <div className="app-shell" onContextMenu={handleContextMenu} onKeyDown={handleContextKey}>
     <ResizableSidebar>
-      <button className="brand" onClick={() => selectTool('codex')} aria-label="ModelDock 首页"><span className="brand-mark"><img src={brandIcon} alt="" data-app-brand-icon /></span><span>ModelDock</span></button>
+      <button className="brand" onClick={() => selectProvider(null)} aria-label="ModelDock 首页"><span className="brand-mark"><img src={brandIcon} alt="" data-app-brand-icon /></span><span>ModelDock</span></button>
       <div className="sidebar-navigation" data-sidebar-navigation>
       <ToolNavigation tools={toolIds.map(id => ({ id, name: id === 'dsh' ? 'DSH' : id === 'copilot' ? 'Copilot app' : toolInfo[id].name, connected: bindingFor(id).enabled }))} selectedTool={selectedTool} active={page === 'tools'} onSelect={selectTool} />
         <ProviderNavigation providers={data.providers} selectedProviderId={selectedProviderId} active={page === 'providers'} category={sourceCategory} onCategoryChange={setSourceCategory} onSelect={selectProvider} onAddApi={() => setProviderDraft(freshProvider('deepseek'))} />
       </div>
       <nav className="sidebar-functions" aria-label="功能导航">
-        <button data-page="network" className={`nav-item ${page === 'network' ? 'active' : ''}`} aria-current={page === 'network' ? 'page' : undefined} onClick={() => navigate('network')}><Activity size={18} /><span>网络</span></button>
         <button data-page="auth" className={`nav-item ${page === 'auth' ? 'active' : ''}`} aria-current={page === 'auth' ? 'page' : undefined} onClick={() => navigate('auth')}><KeyRound size={18} /><span>授权中心</span></button>
-        <button data-page="service" className={`nav-item ${page === 'service' ? 'active' : ''}`} aria-current={page === 'service' ? 'page' : undefined} onClick={() => navigate('service')}><Activity size={18} /><span>服务与日志</span><span className={`status-dot ${data.gateway.running ? 'green' : ''}`} /></button>
+        <button data-page="service" className={`nav-item ${page === 'service' ? 'active' : ''}`} aria-current={page === 'service' ? 'page' : undefined} onClick={() => navigate('service')}><Activity size={18} /><span>服务工作台</span><span className={`status-dot ${data.gateway.running ? 'green' : ''}`} /></button>
       </nav>
       <div className="sidebar-bottom"><div className="sidebar-local-info"><strong>本地工作空间</strong><small title={`${data.version ? `v${data.version}` : '桌面预览'} · 127.0.0.1`}>{data.version ? `v${data.version}` : '桌面预览'} · 127.0.0.1</small></div><div className="sidebar-bottom-actions"><button data-page="settings" className={`sidebar-icon sidebar-settings ${page === 'settings' ? 'active' : ''}`} aria-current={page === 'settings' ? 'page' : undefined} title="设置" aria-label="打开设置" onClick={() => navigate('settings')}><Settings2 size={18} /></button><button className="sidebar-icon" title="打开数据目录" aria-label="打开数据目录" onClick={() => void run('open-dir', () => bridge!.openDataDir())}><FolderOpen size={17} /></button></div></div>
     </ResizableSidebar>
     <div className="main-shell">
-      <header className="topbar"><div className="breadcrumbs"><strong>{detailTitle}</strong></div><div className="topbar-right"><span className={`bridge-status ${isConnected ? 'connected' : ''}`} title={isConnected ? '桌面已连接' : loadError || '桌面未连接'}><span className="status-dot" />{!bridge ? '界面预览' : loadError ? '连接异常' : !snapshot ? '读取配置中' : '已连接'}</span><span className={`local-status ${data.gateway.running ? 'running' : ''}`}><Radio size={14} />{data.gateway.running ? '服务运行中' : '服务未启动'}</span><button className="icon-button" aria-label="刷新本机配置" title="刷新" onClick={() => { setSecretVisibilityRevision(value => value + 1); void run('refresh', refresh); }}><RefreshCw size={15} className={busy.refresh ? 'spin' : ''} /></button></div></header>
+      <header className="topbar"><div className="breadcrumbs"><strong>{detailTitle}</strong></div><div className="topbar-right"><span className={`bridge-status ${isConnected ? 'connected' : ''}`} title={isConnected ? '桌面已连接' : loadError || '桌面未连接'}><span className="status-dot" />{!bridge ? '界面预览' : loadError ? '连接异常' : !snapshot ? '读取配置中' : '桌面已连接'}</span><span className={`local-status ${data.gateway.running ? 'running' : ''}`}><Radio size={14} />{data.gateway.running ? '服务运行中' : '服务未启动'}</span><button className="icon-button" aria-label="刷新本机配置" title="刷新" onClick={() => { setSecretVisibilityRevision(value => value + 1); void run('refresh', refresh); }}><RefreshCw size={15} className={busy.refresh ? 'spin' : ''} /></button></div></header>
       <main className="main-content">
         {(!bridge || loadError) && <div className="bridge-banner"><Unplug size={17} /><span>{!bridge ? '当前为界面预览。桌面桥未连接，未读取任何本机账号或模型。' : `暂时无法读取本机配置：${loadError}`}</span>{!!bridge && <button onClick={() => void refresh()}>重试<RefreshCw size={13} /></button>}</div>}
         {page === 'auth' && <AuthPanel importRequest={relayImportRequest} onImportRequestHandled={consumeRelayImportRequest} platform={preferences?.platform} onAddSubscription={() => setProviderDraft(freshProvider('codex-subscription'))} refreshRevision={authRefreshRevision} api={bridge} notify={notify} onChanged={refresh} onManageProvider={id => { const provider = data.providers.find(item => item.id === id); if (provider) editProvider(provider); }} onAddRelay={requestRelayImport} onCopilotLogin={loginCopilot} onLogin={id => run('auth-center-login', async () => { const latest = await bridge!.snapshot(); setSnapshot(latest); const provider = latest.providers.find(item => item.id === id); if (!provider) throw new Error('账号来源不存在，请刷新。'); await login(provider); })} />}
-        {page === 'network' && <NetworkPanel api={bridge} notify={notify} />}
-        {page === 'settings' && <SettingsPanel api={bridge} snapshot={preferences} onSave={savePreferences} notify={notify} dataDir={data.dataDir} version={data.version} providers={data.providers} models={data.models} />}
+        {page === 'settings' && <SettingsPanel api={bridge} network={runtime.snapshot?.network} onNetworkChanged={runtime.refresh} snapshot={preferences} onSave={savePreferences} notify={notify} dataDir={data.dataDir} version={data.version} providers={data.providers} models={data.models} />}
 
         {page === 'tools' && <div className={`tool-workspace ${currentSingleEntry ? 'single-entry-workspace' : currentAggregate ? 'with-model-sidebar' : ''}`} data-tool-workspace={selectedTool}>
           <div className="tool-primary-column">
@@ -1085,28 +1086,21 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
           {filteredProviders.length ? <div className="provider-list">{filteredProviders.map(provider => providerRow(provider))}</div> : <EmptyState compact icon={categoryProviders.length ? <Search size={25} /> : <Plug2 size={25} />} title={categoryProviders.length ? '没有匹配的供应商' : sourceCategory === 'api' ? '还没有 API 供应商' : '还没有订阅供应商'} description={categoryProviders.length ? '试试其他名称或服务地址。' : sourceCategory === 'api' ? '点击 API 分组旁的加号，填写自己的地址与 API Key。' : '前往授权中心添加订阅或导入客户端授权。'} />}
         </>)}
 
-        {page === 'service' && <>
-          <div className="source-category-tabs service-tabs" role="tablist" aria-label="本地服务内容"><button role="tab" id="service-interface-tab" aria-controls="service-interface-panel" data-service-tab="interface" aria-selected={serviceTab === 'interface'} className={serviceTab === 'interface' ? 'selected' : ''} onClick={() => setServiceTab('interface')}><Waypoints size={15} />接口与模型</button><button role="tab" id="service-logs-tab" aria-controls="service-logs-panel" data-service-tab="logs" aria-selected={serviceTab === 'logs'} className={serviceTab === 'logs' ? 'selected' : ''} onClick={() => setServiceTab('logs')}><Activity size={15} />请求与日志</button></div>
-          <section className="gateway-panel" data-gateway-panel>
-            <div className="gateway-top"><span className={`gateway-icon ${data.gateway.running ? 'on' : ''}`}><Server size={26} /></span><div><h2>本地模型服务</h2><p>连接你的供应商，为工具提供一个统一入口。</p></div><span className={`badge ${data.gateway.running ? 'positive' : 'neutral'}`} data-gateway-service-status={data.gateway.running ? 'running' : 'stopped'}><span className="status-dot" />{data.gateway.running ? '正在运行' : '已停止'}</span></div>
-            <div className="gateway-body">
-              <div className="gateway-entry"><label>本机 API 入口</label><div className="endpoint-field"><code>{data.gateway.baseUrl || '启动服务后显示入口'}</code><button className="icon-button" disabled={!data.gateway.baseUrl} title="复制 API 入口" aria-label="复制 API 入口" onClick={() => void copy(data.gateway.baseUrl, 'API 入口已复制。')}><Copy size={16} /></button></div><div className="entry-meta"><span><ShieldCheck size={13} />仅监听 127.0.0.1</span><span><KeyRound size={13} />使用本地密钥验证</span><button className="text-button" onClick={() => void run('copy-key', async () => { await bridge!.copyGatewayKey(); notify('本地 API Key 已复制。'); })}>复制本地密钥<Copy size={12} /></button></div></div>
-              <div className="gateway-control"><label htmlFor="service-port">服务端口</label><div className="port-control"><input id="service-port" aria-label="服务端口" type="number" min="1024" max="65535" disabled={data.gateway.running || !!busy.gateway || !!busy['gateway-settings']} value={port} onChange={event => setPort(event.target.value)} /><button className={`button ${data.gateway.running ? 'secondary' : 'primary'}`} disabled={!bridge || !!busy.gateway || !!busy['gateway-settings']} onClick={() => void (data.gateway.running ? stopGateway() : startGateway())}><BusyIcon active={!!busy.gateway}><Power size={16} /></BusyIcon>{data.gateway.running ? '停止服务' : '启动服务'}</button></div></div>
-            </div>
-            <div className="gateway-autostart settings-row" data-action="gateway-autostart"><div className="settings-row-copy"><strong>随应用启动本地服务</strong><small>每次启动 ModelDock 时自动开启服务，使用已保存端口 {preferences?.settings.gatewayPort ?? data.gateway.port}。下次应用启动时生效。</small></div><div className="settings-control"><Toggle label="随应用启动本地服务" checked={preferences?.settings.autoStartGateway ?? false} disabled={!bridge || !preferences || !!busy.gateway || !!busy['gateway-settings']} onChange={autoStartGateway => void changeGatewayAutostart(autoStartGateway)} /></div></div>
-            {data.gateway.lastError && <div className="gateway-error" data-gateway-service-error><Activity size={15} /><div><strong>服务错误</strong><p>{data.gateway.lastError}</p></div></div>}
-            {lastRequestError && <div className="gateway-request-error" data-gateway-request-error data-request-error-status={lastRequestError.status} data-request-error-time={lastRequestError.time} data-success-after-error={requestSucceededAfterError}><Clock3 size={15} /><div><div className="gateway-request-error-heading"><strong>最近一次请求错误</strong><span className="badge neutral">HTTP {lastRequestError.status}</span></div><div className="gateway-request-error-meta"><time dateTime={lastRequestError.time}>{new Date(lastRequestError.time).toLocaleString('zh-CN', { hour12: false })}</time>{lastRequestError.endpoint && <code data-request-error-endpoint>{lastRequestError.endpoint}</code>}</div><p>{lastRequestError.message}</p><small>此错误只影响该次请求。{requestSucceededAfterError && <span data-gateway-request-success-after-error>此后已有请求成功。</span>}</small></div></div>}
-            <div className="gateway-footer"><span>供应商凭据留在本机，由 ModelDock 转发请求。</span><span><span className="tiny-dot" />{enabledModels} 个已启用模型</span></div>
-          </section>
-          {serviceTab === 'interface' ? <div id="service-interface-panel" role="tabpanel" aria-labelledby="service-interface-tab">
+        {page === 'service' && <ServiceWorkspace tab={serviceTab} setTab={setServiceTab} api={bridge} network={runtime.snapshot?.network} error={runtime.error} refresh={runtime.refresh} notify={notify}
+          gateway={<GatewayControls gateway={data.gateway} port={port} setPort={setPort} savedPort={preferences?.settings.gatewayPort}
+            autoStart={preferences?.settings.autoStartGateway} setAutoStart={changeGatewayAutostart} toggle={data.gateway.running ? stopGateway : startGateway}
+            copyKey={() => run('copy-key', async () => { await bridge!.copyGatewayKey(); notify('本地 API Key 已复制。'); })}
+            copyUrl={() => copy(data.gateway.baseUrl, 'API 入口已复制。')} busy={!!busy.gateway || !!busy['gateway-settings']} available={!!bridge} enabledModels={enabledModels} />}
+          interfaces={<>
             {!!duplicateProviderGroups && <div className="provider-duplicate-banner"><Copy size={17} /><div><strong>发现 {duplicateProviderGroups} 组重复供应商</strong><span>核对凭据后可合并，保留模型和工具选择。</span></div><button type="button" className="button small secondary" data-action="review-provider-duplicates" onClick={() => setShowProviderDuplicates(true)}>整理重复供应商</button></div>}
             <AggregatePanel showServiceSummary={false} secretRevision={secretVisibilityRevision} data={data} api={bridge} search={search} onSearch={setSearch} onChanged={refresh} onProvider={selectProvider} onService={() => selectProvider(null)} copy={copy} notify={notify} />
-          </div> : <div id="service-logs-panel" role="tabpanel" aria-labelledby="service-logs-tab">
+          </>}
+          logs={<>
           <div className="service-metrics"><div><span>本次服务请求</span><strong>{number(data.gateway.requests)}</strong></div><div><span>已记录请求</span><strong>{number(data.logs.length)}</strong></div><div><span>已记录错误请求</span><strong className={data.logs.some(log => log.status >= 400 || !log.status) ? 'orange-text' : ''}>{data.logs.filter(log => log.status >= 400 || !log.status).length}</strong></div><div><span>数据存储</span><strong className="storage-label"><Database size={17} />本机</strong></div></div>
           <section className="panel logs-panel"><div className="section-heading"><h2>请求日志<span className="count-tag">{data.logs.length}</span></h2><div className="log-tabs">{[{ id: 'all', label: '全部' }, { id: 'success', label: '成功' }, { id: 'error', label: '错误' }].map(item => <button key={item.id} className={logFilter === item.id ? 'selected' : ''} onClick={() => setLogFilter(item.id)}>{item.label}</button>)}</div></div>{logs.length ? <div className="table-scroll" role="region" aria-label="请求日志" tabIndex={0}><table className="logs-table"><thead><tr><th>时间</th><th>模型</th><th>供应商</th><th>接口</th><th>状态</th><th>耗时</th></tr></thead><tbody>{[...logs].reverse().map(log => <tr key={log.id} data-log-id={log.id} tabIndex={0} aria-haspopup="menu"><td className="log-time">{new Date(log.time).toLocaleTimeString('zh-CN', { hour12: false })}</td><td><strong>{log.alias}</strong></td><td>{log.providerName}</td><td><code>{log.endpoint}</code></td><td><span className={`log-status ${log.status >= 200 && log.status < 400 ? 'ok' : 'error'}`}><span className="status-dot" />{log.status || '失败'}</span></td><td className="log-duration">{number(log.durationMs)} ms</td></tr>)}</tbody></table></div> : <EmptyState compact icon={<Activity size={25} />} title={logFilter === 'all' ? '还没有请求记录' : '暂无这类请求'} description="通过工具向本地服务发起调用后，这里会显示模型、状态与耗时。" />}<div className="panel-footnote"><ShieldCheck size={13} /><span>仅展示请求元数据，不展示提示词、回答或供应商密钥。</span></div></section>
           <DiagnosticsPanel api={bridge} notify={notify} />
-          </div>}
-        </>}
+          </>} />}
+
 
       </main>
     </div>

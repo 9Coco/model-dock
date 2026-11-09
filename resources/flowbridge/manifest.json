@@ -2,7 +2,7 @@
   "source": "https://github.com/9Coco/flowbridge",
   "revision": "f80139e040ca51cd0e7036659b350e692b9c495c",
   "license": "GPL-3.0-or-later",
-  "changes": "Isolated ModelDock system paths/interface names; recomputed Windows Wintun interface GUID; independent recovery state directories without selecting test backends; ModelDock self-loop rejection; fixed script entry for embedded Python signal delivery; tests pin KDE or inject POSIX cache paths only for mock Windows cores. Original Qt GUI/storage/autostart are not imported. Namespace harness expects the ModelDock root-helper runtime path.",
+  "changes": "Isolated ModelDock system paths/interface names; recomputed Windows Wintun interface GUID; independent recovery state directories without selecting test backends; ModelDock self-loop rejection; fixed script entry for embedded Python signal delivery; tests pin KDE or inject POSIX cache paths only for mock Windows cores. Original Qt GUI/storage/autostart are not imported. Namespace harness expects the ModelDock root-helper runtime path. ModelDock owns the Linux authorization prompts and service descriptions. Linux setup guidance and the bundled phone instructions refer to the integrated ModelDock application. Per-user system sockets require a trusted root grant as well as kernel peer identity; grant revocation gracefully shuts down the active helper.",
   "files": [
     {
       "source": "LICENSE",
@@ -32,13 +32,13 @@
       "source": "termux/README.md",
       "path": "termux/README.md",
       "upstreamSha256": "e49cc32aa3f09f908fba65abde2c54cc5d925fb5fdf30b7e4127f45c6af1b05d",
-      "sha256": "e49cc32aa3f09f908fba65abde2c54cc5d925fb5fdf30b7e4127f45c6af1b05d"
+      "sha256": "6bfa96d8b0d9b641c6728f0e089a6f7217635adb55e1d4fdf919b59dd865d4e3"
     },
     {
       "source": "termux/termux-hotspot-proxy.sh",
       "path": "termux/termux-hotspot-proxy.sh",
       "upstreamSha256": "26dc871c4dd55362cf5a361f9bb49e6f0d2b394e1e7c019f74129fcf70cb4853",
-      "sha256": "26dc871c4dd55362cf5a361f9bb49e6f0d2b394e1e7c019f74129fcf70cb4853"
+      "sha256": "6637e77350590093c4bfc75bc9431c08fabb44e343b7b32b6fe469f850f17aa3"
     },
     {
       "source": "tools/fetch_tun_core.py",
@@ -86,13 +86,13 @@
       "source": "linux/tun_client.py",
       "path": "linux/tun_client.py",
       "upstreamSha256": "cc98e1ca0fca1bcc082b46ec46ba0116e13f0b65028fdb50713fd78407fbb059",
-      "sha256": "134c19485fcb4b16af1396932d7a327df7fe6ad216fe285c277b51be067c9f77"
+      "sha256": "5f24b285a17703e4b64820181281da62df00ad191ebad8162c0ff1a81346193c"
     },
     {
       "source": "linux/tun_helper.py",
       "path": "linux/tun_helper.py",
       "upstreamSha256": "eefd220d0d42f2e633616dbd2a87786e9a0b164426f5af6572b30aff25421b0c",
-      "sha256": "50bf40f5deba614110b80bcd9675fc7bb520f4ec0c2cc9e2892d881d123a9b88"
+      "sha256": "8f3c14c68414e3a10b1ff2aa9b5200610f5c29af73f5826cde6738066fc4e0e8"
     },
     {
       "source": "linux/tun_config.py",
@@ -104,7 +104,7 @@
       "source": "linux/tun_access.py",
       "path": "linux/tun_access.py",
       "upstreamSha256": "436a45a33d10eaf78f25adc88267d89372e702edf03e84e88c0d9ad1f9f3c3f7",
-      "sha256": "a2176ab5cdfca35fc7eb2d5ae67c2c519e66873230d7803970fd53296b066006"
+      "sha256": "ae88c83aa457a8f6148dd8b60ade7ed539fbdbea6e8e55d52352e619ade628cb"
     },
     {
       "source": "linux/tun_setup.py",
@@ -164,25 +164,25 @@
       "source": "linux/flowbridge-proxy-access@.service",
       "path": "linux/modeldock-network-access@.service",
       "upstreamSha256": "6434d251336e7946f87e5f38766385168c96a6ecc5e7301d4586b8f86581e6e0",
-      "sha256": "87cdbab2a93d647d88293ddc4b913dffa2fb0aaceb340fbc5366baff1acbfa71"
+      "sha256": "ec4545d3ab04f14fcf12c3633cacdae2022ebbdb7973e8ca6df4b85fe49d1564"
     },
     {
       "source": "linux/flowbridge-proxy-access@.socket",
       "path": "linux/modeldock-network-access@.socket",
       "upstreamSha256": "898b4d4393c9650b32f828487c6fa4c0c19c1cc9bff8ca505d2b9aabc7993184",
-      "sha256": "96eb0c49dbc481921d12bde02983efd6321326d1deb0485b0db0ae57012c3d00"
+      "sha256": "f32924d884f630fd7a3fcd9ae12418e6017833b1ef0f69b8e6dcfb721784d542"
     },
     {
       "source": "linux/flowbridge-proxy-tun.policy",
       "path": "linux/modeldock-network-tun.policy",
       "upstreamSha256": "283597361a903795f2aa3e4c6d4966962523e4305dd5179d54e4ffb0fbd74873",
-      "sha256": "085e21f4c0614e451fb80bf5792813fe719d887188a31562f1714f583dac53d1"
+      "sha256": "67f4f3d94601792d0601e0ae16e7af054cccb61995eea9675b32bbe0b1553f47"
     },
     {
       "source": "linux/flowbridge-proxy-setup.policy",
       "path": "linux/modeldock-network-setup.policy",
       "upstreamSha256": "d592c386c26993c3f6010092f2cc9e9724c8f78a366bcec04b29dae8e4d6e50b",
-      "sha256": "582a0b76503070d9050e465ea517458ae8857b9a3053ac04383b18b5abb740e5"
+      "sha256": "0bb7d6f4c6aab73f41b6b1446966a6a92f72ae6d4a3bccca7ccde23b666d7bf5"
     },
     {
       "source": "linux/test_relay.py",
@@ -224,7 +224,7 @@
       "source": "linux/test_tun_access.py",
       "path": "linux/test_tun_access.py",
       "upstreamSha256": "4b99b7b023b72cc91ceafc236587792431fd544b69e527db593f60ff97ac0a8f",
-      "sha256": "626570fe5dac880dd32810db0e0b1c9278e0d1f424c2e782340641987eb7f913"
+      "sha256": "cce0816374076513fd0e086660027acefd2cb5280515ce47aa04ba97167d8130"
     },
     {
       "source": "linux/test_guardian.py",
@@ -284,13 +284,13 @@
       "source": "termux/src/install-suffix.sh",
       "path": "termux/src/install-suffix.sh",
       "upstreamSha256": "a3c4b0ecafd021a8af060bae2f39bcff785da29a2071497d99915f35d0055598",
-      "sha256": "a3c4b0ecafd021a8af060bae2f39bcff785da29a2071497d99915f35d0055598"
+      "sha256": "3694230dd0226e3f610a19a74126a0b4e37d8e9265d2dec4dc1cb42374bc66b1"
     },
     {
       "source": "termux/src/address.py",
       "path": "termux/src/address.py",
       "upstreamSha256": "380f6e94288c6ed8556953dd5f3edf1557c2b2c79cfb4982b6222c922a44e811",
-      "sha256": "380f6e94288c6ed8556953dd5f3edf1557c2b2c79cfb4982b6222c922a44e811"
+      "sha256": "581aa7a05564a6c79c2e1445aab40ebd8f9f2b42da92815536d6b9b743b83227"
     },
     {
       "source": "termux/src/monitor.py",
@@ -302,7 +302,7 @@
       "source": "termux/src/proxy.sh",
       "path": "termux/src/proxy.sh",
       "upstreamSha256": "2e23ce2977334c12ec44f6cd97f4f3875f686903ff8979066bf1887461288ef1",
-      "sha256": "2e23ce2977334c12ec44f6cd97f4f3875f686903ff8979066bf1887461288ef1"
+      "sha256": "d33fe93defe3b6b0225e842801e59c6af083638dcf75a7664498296bff1a387a"
     },
     {
       "source": "tools/build_termux.py",
@@ -314,13 +314,19 @@
       "source": "tools/test_termux_proxy.py",
       "path": "tools/test_termux_proxy.py",
       "upstreamSha256": "adca25eec36c7a5350d0c18ed6192c829dedde6a727fd1d8d3577c3ecb89e58c",
-      "sha256": "adca25eec36c7a5350d0c18ed6192c829dedde6a727fd1d8d3577c3ecb89e58c"
+      "sha256": "e142ff4c94f4eae1db2607207cf7daf441d3c8c40d7c9dbfc19e95eb4b880110"
     },
     {
       "source": "tools/test_tun_namespace.py",
       "path": "tools/test_tun_namespace.py",
       "upstreamSha256": "9b1b959c025efbc9a4c7a5e47bbef9a5b33bb064de881fdad978ff2354159786",
       "sha256": "f58d0bd8a4608df9d64f77059b76f4fbaca6bde409c74817ac555acf4023c4d1"
+    },
+    {
+      "source": "termux/验证记录.txt",
+      "path": "termux/验证记录.txt",
+      "upstreamSha256": "afd8a0c0e38f2c41ee5c97124ce962ec5a09a785af2983ca8b248baa268417cf",
+      "sha256": "afd8a0c0e38f2c41ee5c97124ce962ec5a09a785af2983ca8b248baa268417cf"
     }
   ],
   "integrationSources": [
@@ -328,8 +334,8 @@
       "source": "tools/build_linux.py",
       "path": "scripts/build-network-helper.py",
       "upstreamSha256": "730406c31e78f3d8383e0addc14a96a8fff24cf2376df5f5f043d4661d0015ee",
-      "sha256": "c318a1a4883cac3cc17f89a4daf1d8bfe9f40db472316305291d536d856d94f7",
-      "changes": "Adapted package assembly to root-owned network-only helper; no Qt app or desktop/startup registration."
+      "sha256": "2eae17770e425bfb5d5fa34b79a5e5b30a3c3dc74673b19e3177d39e9d13220d",
+      "changes": "Stages the fixed root-owned network components for inclusion in the ModelDock Debian package."
     }
   ]
 }

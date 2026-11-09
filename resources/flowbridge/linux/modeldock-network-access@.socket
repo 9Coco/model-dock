@@ -1,5 +1,5 @@
 [Unit]
-Description=FlowBridge authorized control socket for user %i
+Description=ModelDock network control socket for user %i
 
 [Socket]
 ListenStream=/run/modeldock-network-access/%i.sock

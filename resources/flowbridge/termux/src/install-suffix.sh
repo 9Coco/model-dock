@@ -96,7 +96,7 @@ echo
 echo '安装完成。以后新建 Termux 交互会话时会启动代理并打印地址、监控命令。'
 echo '已有会话从后台切回前台不会重新执行 shell 启动文件，可手动执行 hotspot-proxy start。'
 echo '新安装默认端口 38473；重装保留已有端口，可用 --port 显式修改。'
-echo '手机同一入口支持 HTTP / SOCKS5 TCP+UDP；电脑在流桥中选择“接管全局流量”。'
+echo '手机的同一端口支持 HTTP 和 SOCKS5 TCP/UDP。电脑可在 ModelDock 首页的“网络接管”选择“HTTP 代理”或“全局流量”。'
 echo '更新只重启本脚本管理的代理，不会结束其他程序；原端口、手动 IP 和自启动开关均保留。'
 if [[ "$NO_START" == 0 ]]; then
     # Restart our managed process so a running old HTTP-only configuration is

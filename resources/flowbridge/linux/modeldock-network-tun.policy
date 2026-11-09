@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN" "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
 <policyconfig>
-  <vendor>FlowBridge</vendor>
+  <vendor>ModelDock</vendor>
   <action id="local.modeldock.network.tun">
-    <description>Enable FlowBridge global traffic takeover</description>
-    <description xml:lang="zh_CN">开启流桥全局流量接管</description>
-    <message>Authentication is required to manage FlowBridge's global traffic takeover.</message>
-    <message xml:lang="zh_CN">开启流桥全局流量接管需要管理员认证，以创建虚拟网卡并管理本次连接的路由。</message>
+    <description>Enable ModelDock global traffic takeover</description>
+    <description xml:lang="zh_CN">开启 ModelDock 全局流量接管</description>
+    <message>Authentication is required to manage ModelDock's global traffic takeover.</message>
+    <message xml:lang="zh_CN">开启 ModelDock 全局流量接管需要管理员认证，以创建虚拟网卡并管理本次连接的路由。</message>
     <defaults>
       <allow_any>no</allow_any>
       <allow_inactive>no</allow_inactive>

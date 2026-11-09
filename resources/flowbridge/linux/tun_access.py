@@ -27,6 +27,7 @@ SETUP_DIR = Path('/var/lib/modeldock-network-access')
 HELPER = Path('/usr/libexec/modeldock-network-tun-helper')
 SOURCE = Path('/opt/modeldock-network/tun_access.py')
 MAX_HANDSHAKE = 4096
+GRANT_CONTENT = b'flowbridge-access-v1\n'
 _PEER = struct.Struct('3i')
 
 
@@ -74,9 +75,20 @@ def configured(uid):
         require_root_path(path)
         info=path.lstat()
     except FileNotFoundError:return False
-    if stat.S_IMODE(info.st_mode)!=0o600 or info.st_nlink!=1 or info.st_size>128:
+    if stat.S_IMODE(info.st_mode)!=0o600 or info.st_nlink!=1 or info.st_size != len(GRANT_CONTENT):
         raise AccessError('流桥首次授权记录权限异常，请重新安装或修复系统服务。')
     return True
+
+
+def authorized(uid):
+    """Only the root daemon reads the private grant, including on lease renewal."""
+    try:
+        if not configured(uid):
+            return False
+        with setup_path(uid).open('rb') as marker:
+            return marker.read(len(GRANT_CONTENT) + 1) == GRANT_CONTENT
+    except (OSError, AccessError):
+        return False
 
 
 def validate_socket(uid):
@@ -146,6 +158,8 @@ class SocketProcess:
 
 def connect_service(uid=None,timeout=5):
     uid=os.getuid() if uid is None else uid
+    if not configured(uid):
+        raise AccessUnavailable('ModelDock 全局模式需要首次授权。')
     try:path=validate_socket(uid)
     except FileNotFoundError:raise AccessUnavailable('流桥权限服务尚未启动。') from None
     connection=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)
@@ -163,7 +177,9 @@ def connect_service(uid=None,timeout=5):
         if (not isinstance(value,dict) or set(value)!={'event','uid'}
                 or value['event']!='access-ready' or type(value['uid']) is not int or value['uid']!=uid):
             if isinstance(value,dict) and value.get('event')=='access-denied':
-                raise AccessError('另一个流桥窗口正在使用权限服务，请先退出另一窗口。')
+                if value.get('reason') == 'grant':
+                    raise AccessUnavailable('ModelDock 全局模式的授权记录无效或已撤销。')
+                raise AccessError('另一网络会话正在使用 ModelDock 权限服务。')
             raise AccessError('流桥权限服务握手无效。')
         connection.settimeout(None)
         return SocketProcess(connection,stream)
@@ -208,6 +224,10 @@ def serve(listener,uid,*,stopping=None,popen=subprocess.Popen):
                 connection,process=active
                 _send(connection,{'event':'access-ended','returncode':process.poll()})
                 connection.close();active=None
+            if active is not None and not authorized(uid):
+                # End the private control stream through the helper's normal
+                # graceful shutdown when a grant is revoked during a session.
+                break
             try:connection,_=listener.accept()
             except socket.timeout:continue
             # Bounded writes also apply in the child sharing this socket. A
@@ -215,6 +235,9 @@ def serve(listener,uid,*,stopping=None,popen=subprocess.Popen):
             connection.setsockopt(socket.SOL_SOCKET,socket.SO_SNDTIMEO,struct.pack('ll',5,0))
             try:
                 if peer_uid(connection)!=uid:
+                    connection.close();continue
+                if not authorized(uid):
+                    _send(connection, {'event':'access-denied','reason':'grant'})
                     connection.close();continue
                 if active is not None:
                     _send(connection,{'event':'access-denied','reason':'busy'})

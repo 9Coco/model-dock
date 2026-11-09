@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { applyNetworkProxy, validateProxyUrl } from '../src/main/network-proxy';
+import { ApplicationNetworkSession, applyNetworkProxy, validateProxyUrl } from '../src/main/network-proxy';
 
 describe('application-session proxy validation', () => {
   it.each([
@@ -69,5 +69,43 @@ describe('explicit per-application proxy updates', () => {
     const error = await applyNetworkProxy({ setProxy }, 'http://localhost:7890').catch(failure => failure as Error);
     expect(error).toBeInstanceOf(Error); expect((error as Error).message).toBe('无法应用应用内代理设置，请检查本机代理服务和端口后重试。');
     expect(String(error)).not.toMatch(/PRIVATE_|synthetic|secret-user|secret-password|localhost|7890/);
+  });
+});
+
+describe('model requests over the active application network', () => {
+  it('prefers a configured proxy, resumes a connected HTTP relay when cleared, then restores system networking', async () => {
+    const native = { setProxy: vi.fn(), fetch: vi.fn(async () => new Response('ok')) };
+    const application = new ApplicationNetworkSession(native);
+    await application.setConfiguredProxy('');
+    await application.setHttpRelay(41321);
+    expect(native.setProxy.mock.lastCall?.[0].proxyRules).toBe('http://127.0.0.1:41321');
+    await application.setConfiguredProxy('socks5://localhost:1080');
+    await application.setHttpRelay(41322);
+    expect(native.setProxy.mock.lastCall?.[0].proxyRules).toBe('socks5://localhost:1080');
+    await application.setConfiguredProxy('');
+    expect(native.setProxy.mock.lastCall?.[0].proxyRules).toBe('http://127.0.0.1:41322');
+    application.suspendHttpRelay();
+    await expect(application.fetch('https://model.test')).rejects.toThrow('恢复');
+    expect(native.fetch).not.toHaveBeenCalled();
+    await application.setHttpRelay(null);
+    expect(native.setProxy.mock.lastCall?.[0]).toEqual({ mode: 'system' });
+    await application.fetch('https://model.test');
+    expect(native.fetch).toHaveBeenCalledOnce();
+  });
+
+  it('waits for pending route changes before starting a request and refuses to use the previous route on failure', async () => {
+    let complete!: () => void;
+    const native = { setProxy: vi.fn(() => new Promise<void>(resolve => { complete = resolve; })), fetch: vi.fn(async () => new Response()) };
+    const application = new ApplicationNetworkSession(native);
+    const firstChange = application.setHttpRelay(21345);
+    const pendingRequest = application.fetch('https://model.test');
+    await vi.waitFor(() => expect(complete).toBeTypeOf('function'));
+    const failedChange = application.setConfiguredProxy('http://localhost:12345');
+    native.setProxy.mockRejectedValueOnce(new Error('test'));
+    complete();
+    await firstChange;
+    await expect(failedChange).rejects.toThrow('无法应用');
+    await expect(pendingRequest).rejects.toThrow('无法应用');
+    expect(native.fetch).not.toHaveBeenCalled();
   });
 });

@@ -2,7 +2,7 @@ import type { ModelDockApi } from '../shared/types';
 import type { DiagnosticContext, DiagnosticEvent, DiagnosticLevel, DiagnosticOperation, DiagnosticOutcome } from '../shared/diagnostic-types';
 
 // 修改点：只从操作结果挑选诊断字段，禁止把 IPC 参数、任意错误文案或返回正文交给日志。
-const ignored = new Set(['networkSnapshot', 'reportRendererError', 'queryDiagnostics', 'diagnosticsText', 'exportDiagnostics', 'openDiagnosticsDir', 'copyText', 'copyGatewayKey', 'copyConnectionKey', 'copyProviderKey', 'revealProviderKey', 'revealGatewayKey']);
+const ignored = new Set(['runtimeSnapshot', 'networkSnapshot', 'reportRendererError', 'queryDiagnostics', 'diagnosticsText', 'exportDiagnostics', 'openDiagnosticsDir', 'copyText', 'copyGatewayKey', 'copyConnectionKey', 'copyProviderKey', 'revealProviderKey', 'revealGatewayKey']);
 const quiet = new Set(['jetBrainsStatus', 'toolSyncUndoStatus', 'snapshot', 'getSettings', 'rendererReady', 'authAccounts', 'authProgress', 'copilotAuthProgress', 'copilotImportCandidates', 'relayClientImportCandidates', 'jetBrainsIdeImportCandidates', 'mcpList', 'skillsList', 'skillsReadFile', 'listProviderDuplicates']);
 const providerIdOperations = new Set(['deleteProvider', 'testProvider', 'discoverModels', 'addDiscoveredModels', 'beginLogin', 'authProgress', 'cancelLogin', 'refreshAccountUsage', 'logoutAccount', 'copilotLogoutAccount']);
 const toolIdOperations = new Set(['previewConfig', 'exportConfig', 'applyConfig', 'setJetBrainsPlugin', 'restoreOfficialConfig', 'toolSyncUndoStatus', 'undoToolSync']);

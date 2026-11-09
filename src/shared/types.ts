@@ -1,4 +1,4 @@
-import type { FlowBridgeApi } from './flowbridge-types';
+import type { FlowBridgeApi, FlowBridgeSnapshot } from './flowbridge-types';
 import type { AuthAccount, CopilotImportCandidate, JetBrainsIdeImportResult, RelayAccountKind, RelayClientImportPreview, SubscriptionKind } from './auth-types';
 import type { McpServer, McpServerInput, McpImportResult, McpConfigPreview, McpApplyResult } from './mcp-types';
 import type { ManagedSkill, SkillSnapshot, SkillRepositoryInput, SkillImportResult, SkillFilePreview, SkillRemovePreview } from './skill-types';
@@ -200,6 +200,10 @@ export interface GatewayExposure {
   excludedProviderIds: string[];
   excludedModelIds: string[];
 }
+export interface RuntimeSnapshot {
+  gateway: GatewayStatus;
+  network: FlowBridgeSnapshot;
+}
 export interface Snapshot {
   providers: Provider[];
   models: Model[];
@@ -234,6 +238,7 @@ export interface ModelDockApi extends FlowBridgeApi {
   exportDiagnostics(query?: import('./diagnostic-types').DiagnosticQuery): Promise<string | null>;
   openDiagnosticsDir(): Promise<void>;
   snapshot(): Promise<Snapshot>;
+  runtimeSnapshot(): Promise<RuntimeSnapshot>;
   saveProvider(input: ProviderInput): Promise<Provider>;
   deleteProvider(id: string): Promise<void>;
   listProviderDuplicates(): Promise<import('./provider-duplicates').ProviderDuplicateGroup[]>;

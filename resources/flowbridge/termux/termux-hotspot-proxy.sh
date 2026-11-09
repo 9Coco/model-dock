@@ -283,7 +283,7 @@ banner() {
     echo
     addresses
     echo "HTTP / HTTPS 和 SOCKS5 共用入口端口 $PROXY_PORT，支持 TCP 与标准 SOCKS5 UDP 转发。"
-    echo '电脑端：打开流桥，点击“查询热点地址”，确认地址后选择“接管全局流量”。'
+    echo '电脑打开 ModelDock 首页的“网络接管”，选择“全局流量”，查询并保存热点地址，再点击“连接”。'
     echo '全局模式由电脑接管普通 TCP、UDP 和 DNS；手机需先更新到本版代理。'
     echo '实时上传 / 下载：hotspot-proxy monitor'
     echo '重新查看地址：hotspot-proxy info'
@@ -859,7 +859,7 @@ import sys
 
 GATEWAY_COMMAND = "nmcli -f GENERAL.CONNECTION,IP4.GATEWAY device show"
 HINT = "手机接口候选或以前保存的 IP 不保证当前可用，请从连接热点的电脑验证。"
-DESKTOP_HINT = "电脑端点击“流桥 → 查询热点地址”，可读取当前 Wi-Fi 网关并验证代理；请先让电脑连接手机热点。"
+DESKTOP_HINT = "电脑连接手机热点后，打开 ModelDock 的“服务工作台 → 查询热点地址”，选择网关候选并保存，然后点击“连接”验证。"
 VPN_OR_NON_LAN = re.compile(
     r"^(lo\d*$|tun|tap|utun|wg|wireguard|ppp|ipsec|vpn|clat|v4-|"
     r"dummy|docker|veth|virbr|br-|rmnet|r_rmnet|ccmni|pdp|p2p)",
@@ -1042,9 +1042,9 @@ if __name__ == "__main__":
 __HOTSPOT_PROXY_ADDRESS_PY__
 
 cat > "$DESTINATION/README.md" <<'__HOTSPOT_PROXY_README_MD__'
-# Termux 配套代理：FlowBridge 0.4.0
+# ModelDock 手机热点代理
 
-电脑连接手机热点后，手机在 **同一端口**提供 HTTP 与标准 SOCKS5 TCP/UDP 代理。电脑流桥选择 **“接管全局流量”**，普通 TCP/UDP 应用无需逐个配置代理。手机 VPN 和热点仍须开启，VPN 须允许 Termux 使用对应 TCP/UDP 出口。
+电脑连接手机热点后，手机在 **同一端口**提供 HTTP 与标准 SOCKS5 TCP/UDP 代理。在电脑的 ModelDock 中选择 **“服务工作台 → 网络接管 → 全局流量”**，普通 TCP/UDP 应用无需逐个配置代理。手机 VPN 和热点仍须开启，VPN 须允许 Termux 使用对应 TCP/UDP 出口。
 
 ## 安装或从旧版更新
 
@@ -1090,7 +1090,7 @@ hotspot-proxy autostart on
 
 ## 找到正确手机地址
 
-优先在电脑连接手机热点后点击 **“流桥 → 查询热点地址”**。电脑读取当前 Wi-Fi/USB 网关并验证所选模式；自定义端口先在设置中调整。
+电脑连接手机热点后，打开 ModelDock 的 **“服务工作台 → 查询热点地址”**，选择热点的网关候选。若手机使用自定义端口，请修改上游代理地址中的端口并保存，再点击“连接”验证。
 
 手机脚本列出的接口候选、历史手动 IP 不保证当前仍可连接。Android 可能限制接口查询；电脑连接普通路由器时查到的是路由器，不能当成手机地址。
 
@@ -1105,9 +1105,9 @@ hotspot-proxy set-ip auto
 
 ## 电脑使用
 
-安装流桥0.4.0，填写手机 IP 与代理端口，选择“接管全局流量”，完成管理员认证。启用前会验证 TCP 及经手机中继的 UDP DNS 往返，失败时检查脚本版本、VPN UDP策略、热点及动态 UDP relay 端口是否被系统阻挡。
+打开 ModelDock 首页的“网络接管”，选择“全局流量”，填写手机 IP 与代理端口并保存，然后点击“连接”。Linux 请使用 ModelDock 的 deb 版并在首次连接时完成系统授权，Windows 请以管理员身份运行。启用前会验证 TCP 及经手机中继的 UDP DNS 往返，失败时检查脚本版本、VPN UDP策略、热点及动态 UDP relay 端口是否被系统阻挡。
 
-HTTP 模式仍可使用同一端口。仅设置系统 HTTP/HTTPS 代理时，不遵循系统代理的应用不会自动经过它；全局接管的范围见 [电脑说明](../linux/全局流量接管-说明.md)。
+HTTP 模式可使用同一端口。在 ModelDock 首页的“网络接管”选择“HTTP 代理”，遵循系统代理设置的应用会通过手机连接。
 
 ## 上传与下载监控
 
@@ -1115,13 +1115,13 @@ HTTP 模式仍可使用同一端口。仅设置系统 HTTP/HTTPS 代理时，不
 
 已实测 GOST3.3.0 的原始 Prometheus UDP方向与TCP相反。本脚本启用同服务的TCP基线，通过私有 `state/gost-api.sock` Unix API校正混合计数；无额外TCP管理端口或常驻采集进程。API位于权限700的应用目录内。
 
-该方向校正仅在已验证的 GOST3.3.0 启用；其他版本暂不显示未经验证的上下行，明确提示，但不影响转发。可以在电脑流桥查看计数。繁忙时 API 与 metrics 的读取不是原子的，监控会标记近似采样及误差界，不承诺每次采样逐字节一致。
+该方向校正仅在已验证的 GOST3.3.0 启用；其他版本暂不显示未经验证的上下行，明确提示，但不影响转发。可以在 ModelDock 首页的“网络工具”中查看电脑端计数。繁忙时 API 与 metrics 的读取不是原子的，监控会标记近似采样及误差界，不承诺每次采样逐字节一致。
 
 ## 访问与验证边界
 
 代理未设置电脑 IP 白名单或认证；能访问手机该端口的设备可以使用服务，沿用原有本地热点用途。统计接口只监听手机回环，管理API只在私有Unix socket，不对热点公开。
 
-真实 GOST3.3.0 的 HTTP、SOCKS TCP/UDP、混合计数及 Linux 内核互通已在本机回环/隔离网络验证；未在真实 Android 手机升级并验证 VPN UDP出口、锁屏保活、热点重开或省电策略。具体测试与未覆盖范围见 [验收记录](../linux/验收记录.md)。
+真实 GOST3.3.0 的 HTTP、SOCKS TCP/UDP、混合计数及 Linux 内核互通已在本机回环/隔离网络验证；未在真实 Android 手机升级并验证 VPN UDP出口、锁屏保活、热点重开或省电策略。手机脚本的测试范围见随附的 [验证记录](验证记录.txt)。
 __HOTSPOT_PROXY_README_MD__
 
 cat > "$DESTINATION/验证记录.txt" <<'__HOTSPOT_PROXY_验证记录_TXT__'
@@ -1276,7 +1276,7 @@ echo
 echo '安装完成。以后新建 Termux 交互会话时会启动代理并打印地址、监控命令。'
 echo '已有会话从后台切回前台不会重新执行 shell 启动文件，可手动执行 hotspot-proxy start。'
 echo '新安装默认端口 38473；重装保留已有端口，可用 --port 显式修改。'
-echo '手机同一入口支持 HTTP / SOCKS5 TCP+UDP；电脑在流桥中选择“接管全局流量”。'
+echo '手机的同一端口支持 HTTP 和 SOCKS5 TCP/UDP。电脑可在 ModelDock 首页的“网络接管”选择“HTTP 代理”或“全局流量”。'
 echo '更新只重启本脚本管理的代理，不会结束其他程序；原端口、手动 IP 和自启动开关均保留。'
 if [[ "$NO_START" == 0 ]]; then
     # Restart our managed process so a running old HTTP-only configuration is
