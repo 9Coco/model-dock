@@ -9,6 +9,7 @@ import type { DiagnosticContext, DiagnosticEvent, DiagnosticLevel } from '../sha
 import { TraeNativeAccountError } from './trae-native-account';
 import { CentralNativeAccountError } from './central-native-account';
 import { JetBrainsIdeAccountError } from './jetbrains-ide-account';
+import { JetBrainsIdeApiError } from './jetbrains-ide-api';
 
 export interface ConnectionStore {
   getProvider(id: string): Provider | undefined;
@@ -388,7 +389,10 @@ export class ConnectionTester {
       const message = evidence === 'limited' ? '模型已处理推理请求，连接通顺；本次短测试达到输出上限。' : evidence === 'processed' ? '模型已处理推理请求，连接通顺；本次测试未返回最终回答。' : '模型推理已成功完成，连接通顺。';
       return { ok: true, outcome: 'success', message, testedModel, wireApi, statusCode, durationMs: Date.now() - start };
     } catch (error) {
-      const failure = error instanceof ConnectionFailure ? error : error instanceof TraeNativeAccountError || error instanceof CentralNativeAccountError || error instanceof JetBrainsIdeAccountError
+      const failure = error instanceof ConnectionFailure ? error : error instanceof JetBrainsIdeAccountError || error instanceof JetBrainsIdeApiError
+        ? new ConnectionFailure(error.status === 451 || error.status === 402 || error.status === 403 ? 'permission' : error.status === 401 ? 'authentication'
+          : error.status === 429 ? 'rate-limit' : error.status === 504 ? 'timeout' : error.code === 'network' ? 'network' : 'upstream', error.message, error.status)
+        : error instanceof TraeNativeAccountError || error instanceof CentralNativeAccountError
         ? new ConnectionFailure('authentication', error.message, 401) : controller.signal.aborted ? new ConnectionFailure('timeout', '推理测试超时（30 秒），请稍后重试或检查网络。') : new ConnectionFailure('network', '无法连接推理接口，请检查网络与 API 地址后重试。');
       return { ok: false, outcome: failure.outcome, message: failure.message, statusCode: failure.statusCode ?? statusCode, durationMs: Date.now() - start, ...(testedModel ? { testedModel } : {}), ...(wireApi ? { wireApi } : {}) };
     } finally { if (timer) clearTimeout(timer); controller.abort(); }

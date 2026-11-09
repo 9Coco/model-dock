@@ -71,8 +71,11 @@ function ownsCodexCatalog(raw: string): boolean {
     return Array.isArray(value.models) && value.models.every((model: any) => typeof model.description === 'string' && model.description.startsWith('ModelDock · '));
   } catch { return false; }
 }
+function modelProvider(store: AdapterStore, model: Model): Provider | undefined {
+  return store.getProvider?.(model.providerId) ?? store.listProviders?.().find(item => item.id === model.providerId);
+}
 function clientModel(store: AdapterStore, model: Model, directApi = false): Model {
-  const provider = store.getProvider?.(model.providerId) ?? store.listProviders?.().find(item => item.id === model.providerId);
+  const provider = modelProvider(store, model);
   return { ...model, displayName: modelDisplayLabel(model, provider), alias: directApi ? model.upstreamId : model.alias };
 }
 function selected(store: AdapterStore, id: ToolId, allowEmpty = false) {
@@ -163,7 +166,9 @@ const CODEX_REASONING_DESCRIPTIONS: Record<ReasoningEffort, string> = {
   xhigh: 'Extra high reasoning depth for complex problems', max: 'Maximum reasoning depth for the hardest problems',
 };
 /** Main-process serializer only; exposing schema fields does not expand client/protocol bindings. */
-export function vsCodeModelConfig(m: Model, base: string, key: string) {
+export function vsCodeModelConfig(model: Model, base: string, key: string, provider?: Provider) {
+  const m = traeRelayClientModel('vscode', model, provider);
+  const nativeTraeChat = provider?.nativeAdapter === 'trae' && m.wireApi === 'chat-completions';
   const budget = clientBudget(m);
   return {
     id: m.alias, name: m.displayName || m.alias, apiType: m.wireApi,
@@ -174,6 +179,9 @@ export function vsCodeModelConfig(m: Model, base: string, key: string) {
     ...(m.maxInputTokens !== undefined && m.maxInputTokens > 0 ? { maxInputTokens: clientInputBudget(m) } : { contextWindow: budget.context }),
     maxOutputTokens: budget.output,
     requestHeaders: { authorization: `Bearer ${key}` },
+    // Suppress only Copilot defaults. Explicit sampling requests still reach
+    // the adapter and receive its unsupported-control error.
+    ...(nativeTraeChat ? { modelOptions: { temperature: null, top_p: null } } : {}),
     ...(m.thinking !== undefined || m.reasoningEfforts?.length ? { thinking: m.thinking ?? true } : {}),
     // Without supportsReasoningEffort VS Code shows no Thinking Effort picker.
     // 修改点：档位由保存的模型设置决定；传参格式随当前接口，防止旧
@@ -186,11 +194,11 @@ export function vsCodeModelConfig(m: Model, base: string, key: string) {
     } : {}),
   };
 }
-function vscode(groups: ClientGroup[]) {
+function vscode(store: AdapterStore, groups: ClientGroup[]) {
   // VS Code customendpoint apiKey references its secret storage. requestHeaders
   // preserve the existing explicit synchronization credential contract.
   return groups.map(group => ({ name: group.name, vendor: 'customendpoint', apiKey: group.key,
-    models: group.models.map(model => vsCodeModelConfig(model, group.base, group.key)) }));
+    models: group.models.map(model => vsCodeModelConfig(model, group.base, group.key, modelProvider(store, model))) }));
 }
 function nativeCopilotId(namespace: string, kind: 'provider' | 'model', id: string): string {
   const value = createHash('sha1').update(`ModelDock/Copilot/v1/${namespace}/${kind}/${id}`).digest().subarray(0, 16);
@@ -290,10 +298,13 @@ export function buildConfig(store: AdapterStore, tool: ToolId, port: number, rev
         : '通过本机入口按模型别名分发到所选供应商，不把 OAuth 凭据写入工具。';
   const defaultModel = models.find(m => m.id === binding.defaultModelId) ?? models[0];
   if (tool === 'vscode') return {
-    filename: 'modeldock-vscode.json', content: JSON.stringify(vscode(groups), null, 2), canApply: true,
+    filename: 'modeldock-vscode.json', content: JSON.stringify(vscode(store, groups), null, 2), canApply: true,
     instructions: connection + '使用 VS Code Copilot Chat 的 Custom Endpoint schema；凭据随每个模型的 requestHeaders 写入（apiKey 明文字段会被 VS Code 当作秘密存储引用忽略）。'
       + (binding.vscodeSyncScope === 'managed' ? '当前范围仅替换 ModelDock 分组，保留其他自定义来源。' : '当前范围仅保留所选自定义供应商：原文件先备份，所有 customendpoint 分组会替换为当前选择；保留其他 vendor 和注释。')
-      + '默认仅写入 Code/User/chatLanguageModels.json；其他 profile 需在对应的模型配置文件中手动合并导出内容。同步后重新加载窗口。' + clientBudgetNotice(models),
+      + '默认仅写入 Code/User/chatLanguageModels.json；其他 profile 需在对应的模型配置文件中手动合并导出内容。同步后重新加载窗口。'
+      + (models.some(model => model.wireApi === 'chat-completions' && modelProvider(store, model)?.nativeAdapter === 'trae')
+        ? 'TRAE 原生连接的输出预算与采样使用上游原生默认值；思考仍由上游生成，已配置的推理强度选项保留。请重新同步 VS Code 配置并重新加载窗口以使用此适配。' : '')
+      + clientBudgetNotice(models),
   };
   if (tool === 'opencode') {
     const provider = Object.fromEntries(groups.map(group => [group.id, { name: group.name,

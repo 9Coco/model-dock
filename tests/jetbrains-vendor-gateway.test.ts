@@ -151,6 +151,14 @@ function assertPrivate(f: Awaited<ReturnType<typeof fixture>>, text = '') {
 }
 
 describe('JetBrains native vendors through the real local Gateway', () => {
+  it('returns an upstream regional HTTP 451 without changing it into an authentication failure', async () => {
+    const f = await fixture(() => new Response('PRIVATE_UPSTREAM_ERROR', { status: 451 }));
+    const response = await f.post(requestBody(f.models.a.Anthropic.alias, false));
+    expect(response.status).toBe(451);
+    const text = await response.text(); expect(text).toContain('HTTP 451'); expect(text).not.toContain('重新登录');
+    expect(f.inferences()).toHaveLength(1); assertPrivate(f, text);
+  });
+
   it.each(vendors.flatMap(vendor => [false, true].map(stream => ({ vendor, stream }))))('$vendor converts native V9 text and tools with stream=$stream exactly once', async ({ vendor, stream }) => {
     const f = await fixture(() => nativeResponse([
       content('SYNTHETIC_NATIVE_ANSWER🙂'),
@@ -260,12 +268,12 @@ describe('JetBrains native vendors through the real local Gateway', () => {
     expect(f.inferences()).toHaveLength(2); assertPrivate(f, JSON.stringify(completion) + await same.text());
   });
 
-  it.each(['empty', 'malformed', 'event-error', 'http-error'] as const)('returns a sanitized 502 before any output for %s native failure without retry', async mode => {
+  it.each(['empty', 'malformed', 'event-error', 'http-error'] as const)('returns a sanitized native %s failure before any output without retry', async mode => {
     const f = await fixture(() => mode === 'http-error' ? Response.json({ error: `PRIVATE_UPSTREAM_ERROR ${tokens.a}` }, { status: 429 })
       : mode === 'empty' ? nativeResponse([]) : mode === 'malformed' ? nativeResponse([{ type: 'Content', event_type: 'data', content: 42 }])
         : nativeResponse([{ type: 'Content', event_type: 'error', message: `PRIVATE_UPSTREAM_ERROR ${tokens.a}` }]));
     const result = await readHttp(f.url, f.headers, requestBody(f.models.a.Anthropic.alias, true));
-    expect(result).toMatchObject({ status: 502, complete: true, aborted: false, errors: [] }); expect(result.contentType).toContain('application/json');
+    expect(result).toMatchObject({ status: mode === 'http-error' ? 429 : 502, complete: true, aborted: false, errors: [] }); expect(result.contentType).toContain('application/json');
     expect(JSON.parse(result.text)).toMatchObject({ error: { message: expect.any(String) } }); expect(result.text).not.toMatch(/data:|\[DONE\]|"choices"/);
     expect(f.inferences()).toHaveLength(1); assertPrivate(f, result.text);
   });

@@ -19,6 +19,17 @@ function mockTransport(handle: (url: string, init: RequestInit) => Response | Pr
 const signal = () => new AbortController().signal;
 
 describe('JetBrains native IDE API', () => {
+  it.each(['exchange', 'models', 'quota'] as const)('preserves a regional HTTP 451 at %s without exposing its body or retrying', async operation => {
+    let cancelled = false;
+    const fetch = mockTransport(() => new Response(new ReadableStream({ cancel() { cancelled = true; } }), { status: 451 }));
+    const api = new JetBrainsIdeApi({ fetch, now: () => NOW });
+    const request = operation === 'exchange' ? api.exchange({ idToken: ID, licenseId: 'fixture-license' }) : api[operation](AI);
+    const error = await request.catch(value => value);
+    expect(error).toMatchObject({ code: 'region', status: 451 });
+    expect(error.message).toContain('应用网络代理'); expect(error.message).not.toContain('重新登录');
+    expect(cancelled).toBe(true); expect(fetch).toHaveBeenCalledOnce();
+  });
+
   it('exchanges an ID JWT plus selected license and verifies the derived JWT with the exact native paths', async () => {
     const fetch = mockTransport((url, init) => {
       expect(url.startsWith('https://api.jetbrains.ai/')).toBe(true);

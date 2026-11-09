@@ -50,6 +50,12 @@ async function fixture(onRaw?: (request: RawRequest) => void) {
 const paths = [
   { name: 'Chat', path: '/v1/chat/completions', body: { messages: [{ role: 'user', content: 'SYNTHETIC_PRIVATE_PROMPT' }] }, delta: '"content":"FIRST🙂"', terminal: '[DONE]' },
   { name: 'JetBrains Chat', path: '/tool/rider/v1/chat/completions', body: { messages: [{ role: 'user', content: 'SYNTHETIC_PRIVATE_PROMPT' }] }, delta: '"content":"FIRST🙂"', terminal: '[DONE]' },
+  // Copilot 0.73 customendpoint Chat omits its automatic output/sampling
+  // controls when thinking=false and modelOptions temperature/top_p are null.
+  // Reasoning effort remains an independent client setting.
+  { name: 'VS Code Copilot', path: '/tool/vscode/v1/chat/completions', body: { messages: [{ role: 'user', content: 'SYNTHETIC_PRIVATE_PROMPT' }],
+    reasoning_effort: 'max', tools: [{ type: 'function', function: { name: 'read_fixture', parameters: { type: 'object' } } }],
+    tool_choice: 'auto', stream_options: { include_usage: true } }, delta: '"content":"FIRST🙂"', terminal: '[DONE]' },
   { name: 'Responses', path: '/tool/codex/v1/responses', body: { input: [{ role: 'user', content: 'SYNTHETIC_PRIVATE_PROMPT' }], store: false }, delta: '"type":"response.output_text.delta"', terminal: 'response.completed' },
 ] as const;
 async function readUntil(reader: ReadableStreamDefaultReader<Uint8Array>, marker: string): Promise<string> {
@@ -82,6 +88,10 @@ describe('TRAE TypeScript adapter through the existing loopback gateway', () => 
       finish(upstream); const all = first + await rest(reader);
       expect(all).toContain('SECOND'); expect(all).toContain(route.terminal); expect(all).toContain('local-trae-alias');
       expect(f.requests).toHaveLength(1); expect(f.routes).toEqual(['/api/ide/v1/get_detail_param', '/api/ide/v2/llm_raw_chat']);
+      if (route.name === 'VS Code Copilot') {
+        expect(f.requests[0].body).toMatchObject({ reasoning_effort: 'max', tool_choice: 'auto', tools: [{ type: 'function', function: { name: 'read_fixture', parameters: JSON.stringify(route.body.tools[0].function.parameters) } }] });
+        for (const field of ['max_tokens', 'max_completion_tokens', 'temperature', 'top_p']) expect(f.requests[0].body).not.toHaveProperty(field);
+      }
       expect(f.prepareRequest).not.toHaveBeenCalled(); expect(f.fallbackFetch).not.toHaveBeenCalled();
       expect(JSON.stringify(f.store.logs())).not.toMatch(/SYNTHETIC_PRIVATE_PROMPT|SYNTHETIC_TRAE_PRIVATE_TOKEN|FIRST|SECOND/);
     } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
@@ -119,7 +129,50 @@ describe('TRAE TypeScript adapter through the existing loopback gateway', () => 
     expect(response.status).toBe(200); expect(await response.json()).toMatchObject({ model: 'local-trae-alias', status: 'completed', output: [{ content: [{ text: 'RESULT' }] }] });
     expect(f.requests[0].body).toMatchObject({ config_name: 'ExactCase-fixture', model_name: 'ExactCase-fixture__dev', messages: [
       { role: 'system', content: [{ type: 'text', text: 'SYSTEM_FIXTURE' }] }, { role: 'user', content: [{ type: 'text', text: 'USER_FIXTURE' }] },
-      { role: 'assistant', tool_calls: [{ id: 'call_1', function: { name: 'read_fixture', arguments: '{"path":"a"}' } }] }, { role: 'tool', tool_call_id: 'call_1', content: [{ type: 'text', text: 'TOOL_RESULT_FIXTURE' }] },
-    ] }); expect(f.requests).toHaveLength(1); expect(f.fallbackFetch).not.toHaveBeenCalled();
+      { role: 'assistant', tool_calls: [{ id: 'call_1', function_call: { name: 'read_fixture', arguments: '{"path":"a"}' } }] }, { role: 'tool', tool_call_id: 'call_1', content: [{ type: 'text', text: 'TOOL_RESULT_FIXTURE' }] },
+    ], tools: [{ type: 'function', function: { name: 'read_fixture', parameters: '{"type":"object"}' } }] }); expect(f.requests).toHaveLength(1); expect(f.fallbackFetch).not.toHaveBeenCalled();
+  });
+  it.each(['Chat', 'Responses'] as const)('round-trips a native function call and its Unicode result through %s', async protocol => {
+    let round = 0;
+    const argumentsText = JSON.stringify({ path: '资料/说明.txt' });
+    const f = await fixture(request => {
+      if (round++ === 0) {
+        request.stream.enqueue(rawEvent('output', { tool_calls: [{ index: 0, id: 'call_unicode', function_call: { name: 'read_fixture', arguments: argumentsText } }] }));
+        request.stream.enqueue(rawEvent('done', { finish_reason: 'tool_calls' }));
+      } else {
+        request.stream.enqueue(rawEvent('text_delta', { text: '已读取文件' }));
+        request.stream.enqueue(rawEvent('done', { finish_reason: 'stop' }));
+      }
+      request.stream.close(); request.closed = true;
+    });
+    const fn = { name: 'read_fixture', description: '读取本地资料', parameters: { type: 'object', properties: { path: { type: 'string', description: '资料/说明.txt' } }, required: ['path'], additionalProperties: false } };
+    const isChat = protocol === 'Chat', path = isChat ? '/v1/chat/completions' : '/tool/codex/v1/responses';
+    const tools = isChat ? [{ type: 'function', function: fn }] : [{ type: 'function', ...fn }];
+    const toolsSnapshot = structuredClone(tools);
+    const user = { role: 'user', content: '读取资料/说明.txt' };
+    const firstResponse = await f.post(path, { stream: false, ...(isChat ? { messages: [user] } : { input: [user], store: false }), tools });
+    expect(firstResponse.status).toBe(200);
+    const first = await firstResponse.json();
+    const call = isChat ? first.choices[0].message.tool_calls[0] : first.output.find((item: { type: string }) => item.type === 'function_call');
+    expect(isChat ? call.function : call).toMatchObject({ name: 'read_fixture', arguments: argumentsText });
+    const secondResponse = await f.post(path, { stream: false, tools, ...(isChat ? {
+      messages: [user, first.choices[0].message, { role: 'tool', tool_call_id: call.id, content: '文件内容：你好，世界' }],
+    } : { store: false, input: [user, call, { type: 'function_call_output', call_id: call.call_id, output: '文件内容：你好，世界' }] }) });
+    expect(secondResponse.status).toBe(200);
+    const second = await secondResponse.json();
+    expect(second.model).toBe('local-trae-alias');
+    expect(isChat ? second.choices[0].message.content : second.output[0].content[0].text).toBe('已读取文件');
+    expect(f.requests).toHaveLength(2);
+    for (const request of f.requests) {
+      expect(request.body).toMatchObject({ config_name: 'ExactCase-fixture', model_name: 'ExactCase-fixture__dev' });
+      const definition = (request.body.tools as { function: { parameters: string } }[])[0].function;
+      expect(typeof definition.parameters).toBe('string'); expect(JSON.parse(definition.parameters)).toEqual(fn.parameters);
+    }
+    expect(f.requests[1].body.messages).toMatchObject([{ role: 'user' },
+      { role: 'assistant', tool_calls: [{ id: 'call_unicode', function_call: { name: 'read_fixture', arguments: argumentsText } }] },
+      { role: 'tool', tool_call_id: 'call_unicode', name: 'read_fixture', content: [{ type: 'text', text: '文件内容：你好，世界' }] },
+    ]);
+    expect(tools).toEqual(toolsSnapshot);
+    expect(f.fallbackFetch).not.toHaveBeenCalled();
   });
 });

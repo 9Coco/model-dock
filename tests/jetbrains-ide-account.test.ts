@@ -447,6 +447,15 @@ describe('IDE 导入保留已有连接与并发编辑', () => {
 });
 
 describe('IDE 授权会话缓存、额度修订与原生 adapter', () => {
+  it.each([['region', 451], ['network', 503], ['authorization', 401]] as const)('preserves %s failures through account authorization instead of treating every failure as HTTP 401', async (code, status) => {
+    const f = await setup();
+    const imported = await f.manager.import('ticket-a'), before = state(f.store);
+    const manager = f.newManager();
+    f.api.exchange.mockRejectedValueOnce(new JetBrainsIdeApiError(code, status));
+    await expect(manager.credentials(imported.providerId)).rejects.toMatchObject({ code, status });
+    expect(state(f.store)).toEqual(before);
+  });
+
   it('另一账号导入成为独立来源，旧账号额度晚返回只更新原账号', async () => {
     const { manager, api, store, account } = await setup();
     const first = await manager.import('ticket-a'), delayed = deferred<SubscriptionUsage>();

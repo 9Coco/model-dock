@@ -159,8 +159,8 @@ async function sendEventStream(reader: ReadableStreamDefaultReader<Uint8Array>, 
 function controlledFailure(error: unknown): { status: number; message: string } | undefined {
   if (error instanceof GatewayError || error instanceof AnthropicBridgeError || error instanceof ChatResponsesBridgeError || error instanceof ResponsesChatBridgeError
     || error instanceof NativeMessagesError || error instanceof JetBrainsChatError || error instanceof JetBrainsCompletionError) return error;
-  if (error instanceof TraeNativeAccountError || error instanceof CentralNativeAccountError || error instanceof JetBrainsIdeAccountError) return { status: 401, message: error.message };
-  if (error instanceof JetBrainsIdeApiError) return { status: ['credentials', 'authorization', 'entitlement'].includes(error.code) ? 401 : ['request', 'model', 'capability'].includes(error.code) ? 400 : error.code === 'cancelled' ? 504 : error.code === 'limit' ? 413 : 502, message: error.message };
+  if (error instanceof TraeNativeAccountError || error instanceof CentralNativeAccountError) return { status: 401, message: error.message };
+  if (error instanceof JetBrainsIdeAccountError || error instanceof JetBrainsIdeApiError) return { status: error.status, message: error.message };
   if (error instanceof TraeApiError) {
     const status = error.status && error.status >= 400 && error.status <= 599 ? error.status
       : ['request', 'capability', 'model'].includes(error.code) ? 400 : error.code === 'credentials' || error.code === 'authorization' ? 401
