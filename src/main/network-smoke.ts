@@ -127,25 +127,41 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
   assert.equal(await evaluate(`${query('[data-action="connect-network"]')}.disabled`), true);
   if (process.platform === 'win32') {
     assert.equal(await evaluate("document.body.innerText.includes('手机热点')"), false);
+    assert.equal(await evaluate(`!!${query('[data-action="save-network-address"]')}`), false);
     await click('[data-action="discover-network-proxy"]');
+    await wait(`!!${query('.network-candidates button')}`);
+    assert.deepEqual((await network()).settings, idle.settings, 'Discovery alone must leave settings alone');
     await click('.network-candidates button');
-    assert.equal(await evaluate(`${query('#network-address')}.value`), 'socks5://127.0.0.1:19321');
-    assert.deepEqual((await network()).settings, idle.settings);
-    await click('[data-action="save-network-address"]');
-    await wait(`${query('[data-action="connect-network"]')}.disabled===false`);
-    assert.equal((await network()).settings.mode, 'global');
+    await wait(`${query('#network-address')}.value==='socks5://127.0.0.1:19321' && !${query('[data-action="connect-network"]')}.disabled`);
+    const applied = await network();
+    assert.equal(applied.settings.mode, 'global');
+    assert.equal(applied.settings.address, 'socks5://127.0.0.1:19321');
+    assert.equal(applied.state, 'idle', 'Applying a candidate must not start the session');
+    await openPage('service');
+    await openPage('network');
+    assert.equal(await evaluate(`${query('#network-address')}.value`), applied.settings.address);
+    await click('[data-action="connect-network"]');
+    await wait(networkState('connected'));
+    await click('[data-action="disconnect-network"]');
+    await wait(networkState('idle'));
+
+    await fill('#network-address', 'invalid-address');
+    await click('[data-action="connect-network"]');
+    await wait("document.querySelector('.toast-stack .toast.error')?.textContent.includes('端口')");
+    assert.equal((await network()).state, 'idle');
+    assert.deepEqual((await network()).settings, applied.settings);
+    await fill('#network-address', '127.0.0.1:19322');
     await click('[aria-label="网络连接模式"] button:first-child');
-    await wait(`${query('#network-address')}.value==='http://127.0.0.1:19321'`);
+    await click('[aria-label="网络连接模式"] button:nth-child(2)');
+    assert.deepEqual((await network()).settings, applied.settings, 'Editing must wait for an explicit action');
+  } else {
+    await fill('#network-address', '192.0.2.30:38473');
+    await click('[data-action="save-network-address"]');
+    await wait(`${query('#network-address')}.value==='http://192.0.2.30:38473'`);
+    await click('[aria-label="网络连接模式"] button:nth-child(2)');
+    await wait(`${query('#network-address')}.value==='socks5://192.0.2.30:38473'`);
   }
-  await fill('#network-address', '192.0.2.30:38473');
-  await click('[data-action="save-network-address"]');
-  await wait(`${query('#network-address')}.value==='http://192.0.2.30:38473'`);
-  await click('[aria-label="网络连接模式"] button:nth-child(2)');
-  await wait(`${query('#network-address')}.value==='socks5://192.0.2.30:38473'`);
-  const configured = await network();
-  assert.equal(configured.settings.mode, 'global');
-  assert.equal(configured.state, 'idle');
-  assert.equal(configured.status.running, false);
+  assert.equal((await network()).state, 'idle');
   assert.equal(await evaluate(`${query('[data-action="connect-network"]')}.disabled`), false);
   const activeGateway = await gateway();
   assert.equal(activeGateway.running, true);
@@ -153,7 +169,10 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
   assert.equal(activeGateway.host, '127.0.0.1');
   await click('[data-action="connect-network"]');
   await wait(networkState('connected'));
-  assert.equal((await network()).status.running, true);
+  const configured = await network();
+  assert.equal(configured.status.running, true);
+  assert.equal(configured.settings.mode, 'global');
+  assert.equal(configured.settings.address, process.platform === 'win32' ? 'socks5://127.0.0.1:19322' : 'socks5://192.0.2.30:38473');
   assert.equal((await gateway()).running, true);
 
   await evaluate(`document.querySelectorAll('.toast-stack [aria-label="关闭提示"]').forEach(button=>button.click())`);
@@ -218,7 +237,7 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
   assert.equal((await gateway()).running, true);
 
   await fill('#network-address', cancellationAddress);
-  await click('[data-action="save-network-address"]');
+  if (process.platform !== 'win32') await click('[data-action="save-network-address"]');
   await click('[data-action="connect-network"]');
   await wait(networkState('connecting'));
   await openPage('service');

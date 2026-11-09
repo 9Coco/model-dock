@@ -25,7 +25,7 @@ export interface NetworkCheck { system: WebsiteResult; proxy: WebsiteResult | nu
 export interface FlowBridgeApi {
   networkSnapshot(): Promise<FlowBridgeSnapshot>;
   saveNetworkSettings(patch: Partial<FlowBridgeSettings>): Promise<FlowBridgeSnapshot>;
-  connectNetwork(): Promise<FlowBridgeSnapshot>;
+  connectNetwork(upstream?: Pick<FlowBridgeSettings, 'address' | 'mode'>): Promise<FlowBridgeSnapshot>;
   disconnectNetwork(): Promise<FlowBridgeSnapshot>;
   checkNetworkSite(site: NetworkSite): Promise<NetworkCheck>;
   networkHotspotCandidates(): Promise<string[]>;
