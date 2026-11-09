@@ -6,6 +6,9 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Store } from '../src/main/store';
 import { Gateway, type GatewayOptions } from '../src/main/gateway';
+import { ModelCatalog } from '../src/main/catalog';
+import { prepareUpstream } from '../src/main/oauth';
+import { OPENCODE_GO_BASE_URL, OPENCODE_GO_MODELS_URL } from '../src/shared/presets';
 import type { Model, WireApi } from '../src/shared/types';
 
 const cleanups: (() => void | Promise<void>)[] = [];
@@ -29,6 +32,36 @@ async function requestBody(req: IncomingMessage) { const chunks: Buffer[] = []; 
 function event(value: unknown) { return `data: ${JSON.stringify(value)}\n\n`; }
 
 describe('loopback gateway', () => {
+  it('discovers Go models and forwards Chat and Responses using the workspace key and client session', async () => {
+    const seen: { url: string; headers: Headers; model?: string }[] = [];
+    const fetchGo: typeof fetch = async (input, init) => {
+      const url = String(input), headers = new Headers(init?.headers);
+      const body = init?.body && JSON.parse(String(init.body));
+      seen.push({ url, headers, model: body?.model });
+      if (url === OPENCODE_GO_MODELS_URL) return Response.json({ data: [{ id: 'go-text' }] });
+      return Response.json(url.endsWith('/responses')
+        ? { id: 'resp_go', object: 'response', status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Go response' }] }] }
+        : { id: 'chat_go', object: 'chat.completion', choices: [{ message: { role: 'assistant', content: 'Go chat' } }] });
+    };
+    const f = await fixture('https://unrelated.invalid/v1', 'chat-completions', { fetch: fetchGo });
+    const source = f.store.saveProvider({ name: 'OpenCode Go', kind: 'opencode-go', baseUrl: OPENCODE_GO_BASE_URL, enabled: true, apiKey: 'synthetic-go-key' });
+    const catalog = new ModelCatalog(f.store, { prepareRequest: async (provider, path, body) => prepareUpstream(provider, f.store.getSecret(provider.id)!, path, body) }, { fetch: fetchGo });
+    const directory = await catalog.discover(source.id);
+    expect(directory.ok).toBe(true);
+    expect(directory.models).toMatchObject([{ upstreamId: 'go-text', wireApi: 'chat-completions' }]);
+    for (const [wireApi, route, sessionHeader] of [['chat-completions', 'chat/completions', 'x-opencode-session'], ['responses', 'responses', 'session_id']] as const) {
+      const model = f.store.saveModel({ ...f.model, id: undefined, providerId: source.id, upstreamId: 'go-text', alias: 'go-' + wireApi, wireApi });
+      const body = JSON.stringify({ model: model.alias, ...(wireApi === 'responses' ? { input: 'hello' } : { messages: [{ role: 'user', content: 'hello' }] }) });
+      const endpoint = f.url + '/' + route;
+      expect((await fetch(endpoint, { method: 'POST', headers: f.headers, body })).status).toBe(400);
+      const reply = await fetch(endpoint, { method: 'POST', headers: { ...f.headers, [sessionHeader]: 'ses_example' }, body });
+      expect(reply.status).toBe(200);
+      expect(await reply.text()).toContain(wireApi === 'responses' ? 'Go response' : 'Go chat');
+    }
+    expect(seen.map(call => call.url)).toEqual([OPENCODE_GO_MODELS_URL, OPENCODE_GO_BASE_URL + '/chat/completions', OPENCODE_GO_BASE_URL + '/responses']);
+    expect(seen.every(call => call.headers.get('authorization') === 'Bearer synthetic-go-key' && call.headers.get('user-agent')?.startsWith('ModelDock/'))).toBe(true);
+    expect(seen.slice(1).every(call => call.model === 'go-text' && call.headers.get('x-opencode-session') === 'ses_example')).toBe(true);
+  });
   it('never advertises or forwards Messages-only models through OpenAI routes', async () => {
     let requests = 0;
     const mock = await upstream((_req, res) => { requests++; res.end('{}'); });
@@ -232,8 +265,9 @@ describe('loopback gateway', () => {
     let calls = 0;
     const mock = await upstream((_req, res) => { calls++; res.end('{}'); });
     const f = await fixture(mock.url);
-    f.store.setSecret('codex-subscription', { accessToken: 'native-test-token' });
-    const native = f.store.saveModel({ providerId: 'codex-subscription', alias: 'native-history', upstreamId: 'native-id', displayName: 'Native History', wireApi: 'responses', contextWindow: 128000, tools: true, vision: false, enabled: true });
+    const subscription = f.store.saveProvider({ name: 'Codex', kind: 'codex', presetId: 'codex-subscription', baseUrl: 'https://chatgpt.com/backend-api/codex', enabled: true });
+    f.store.setSecret(subscription.id, { accessToken: 'native-test-token' });
+    const native = f.store.saveModel({ providerId: subscription.id, alias: 'native-history', upstreamId: 'native-id', displayName: 'Native History', wireApi: 'responses', contextWindow: 128000, tools: true, vision: false, enabled: true });
     for (const continuation of [{ previous_response_id: 'old-response' }, { conversation: 'old-conversation' }]) {
       const response = await fetch(`${f.url}/responses`, { method: 'POST', headers: f.headers, body: JSON.stringify({ model: native.alias, input: 'continue', ...continuation }) });
       expect(response.status).toBe(400);

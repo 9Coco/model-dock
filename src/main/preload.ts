@@ -33,7 +33,7 @@ const api: ModelDockApi = {
   stopTraeRelay: () => call('stopTraeRelay'),
   snapshot: () => call('snapshot'), saveProvider: input => call('saveProvider', input),
   listProviderDuplicates: () => call('listProviderDuplicates'), mergeProviderDuplicates: (ids, fingerprint) => call('mergeProviderDuplicates', ids, fingerprint),
-  deleteProvider: id => call('deleteProvider', id), saveModel: input => call('saveModel', input),
+  deleteProvider: (id, scope) => call('deleteProvider', id, scope), saveModel: input => call('saveModel', input),
   deleteModel: id => call('deleteModel', id), saveBinding: binding => call('saveBinding', binding),
   testProvider: (id, input) => call('testProvider', id, input), startGateway: port => call('startGateway', port),
   discoverModels: id => call('discoverModels', id), addDiscoveredModels: (id, selected) => call('addDiscoveredModels', id, selected),

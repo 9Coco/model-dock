@@ -3,6 +3,8 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { Store } from '../src/main/store';
+import { providerApiKey } from '../src/main/connection-keys';
+import { OPENCODE_GO_BASE_URL } from '../src/shared/presets';
 import { resolveBindingModels } from '../src/shared/bindings';
 import { restoreToolBinding } from '../src/main/tool-restore-binding';
 import initSqlJs from 'sql.js';
@@ -233,7 +235,7 @@ describe('real SQLite storage', () => {
   });
   it('retains main-only ID tokens through the credential codec and reopen without exposing provider snapshots', async () => {
     const { store, dir, codec } = await setup();
-    const source = store.listProviders().find(provider => provider.kind === 'codex')!;
+    const source = store.saveProvider({ name: 'Codex', kind: 'codex', baseUrl: 'https://chatgpt.com/backend-api/codex', enabled: true });
     const secret = { accessToken: 'PRIVATE_SQL_ACCESS', idToken: 'PRIVATE_SQL_ID_TOKEN', refreshToken: 'PRIVATE_SQL_REFRESH', accountId: 'synthetic-workspace' };
     store.setSecret(source.id, secret);
     const reopened = await Store.create(dir, codec); stores.push(reopened);
@@ -246,10 +248,30 @@ describe('real SQLite storage', () => {
     expect(reopened.getSecret(source.id)).toEqual(secret);
   });
 
-  it('seeds unconfigured sources, no invented usable models, and eleven disabled tool bindings', async () => {
+  it('keeps an explicitly removed subscription absent on reopen and accepts a fresh subscription later', async () => {
+    const { store, dir, codec } = await setup();
+    const input = { kind: 'opencode-go', name: 'My Go plan', baseUrl: OPENCODE_GO_BASE_URL, enabled: true, apiKey: 'synthetic-private-workspace-key' } as const;
+    expect(() => store.saveProvider({ ...input, baseUrl: 'https://unrelated.invalid/v1' })).toThrow();
+    const source = store.saveProvider(input);
+    store.saveModel(model(source.id));
+    expect(() => providerApiKey(store, source.id)).toThrow();
+    expect(readFileSync(join(dir, 'modeldock.sqlite')).includes(Buffer.from(input.apiKey))).toBe(false);
+    store.finishProviderRemoval(store.beginProviderRemoval(source.id));
+    store.close();
+    const reopened = await Store.create(dir, codec); stores.push(reopened);
+    expect(reopened.getProvider(source.id)).toBeUndefined();
+    expect(reopened.getSecret(source.id)).toBeUndefined();
+    expect(reopened.listModels()).toHaveLength(0);
+    const restored = reopened.saveProvider(input);
+    expect(restored.id).not.toBe(source.id);
+    expect(reopened.getSecret(restored.id)).toEqual({ apiKey: input.apiKey });
+    expect(reopened.listProviders().filter(provider => provider.kind === 'opencode-go')).toHaveLength(1);
+  });
+
+  it('seeds unconfigured API sources, no subscriptions or models, and twelve disabled tool bindings', async () => {
     const { store, dir } = await setup();
-    expect(store.listProviders()).toHaveLength(8);
-    expect(store.listProviders().map(provider => provider.presetId)).toEqual(['openai', 'anthropic', 'deepseek', 'volcengine-agent', 'volcengine-token', 'qwen-token', 'codex-subscription', 'grok-build']);
+    expect(store.listProviders()).toHaveLength(6);
+    expect(store.listProviders().map(provider => provider.presetId)).toEqual(['openai', 'anthropic', 'deepseek', 'volcengine-agent', 'volcengine-token', 'qwen-token']);
     expect(store.listProviders().every(p => !p.hasSecret && p.authStatus === 'missing')).toBe(true);
     expect(store.listModels()).toEqual([]);
     expect(store.listBindings()).toHaveLength(12);
@@ -532,7 +554,7 @@ describe('real SQLite storage', () => {
 
   it('migrates a missing VS Code scope once without writing external client files, changing secrets or resetting later opt-out', async () => {
     const { store, dir, codec } = await setup();
-    const source = store.listProviders().find(provider => provider.kind === 'codex')!;
+    const source = store.saveProvider({ name: 'Codex', kind: 'codex', baseUrl: 'https://chatgpt.com/backend-api/codex', enabled: true });
     const secret = { accessToken: 'SYNTHETIC_MIGRATION_ACCESS', refreshToken: 'SYNTHETIC_MIGRATION_REFRESH' }; store.setSecret(source.id, secret);
     const oldBindings = store.listBindings(), oldSources = store.listProviders(); store.close();
     const SQL = await initSqlJs({ locateFile: file => join(process.cwd(), 'node_modules/sql.js/dist', file) });

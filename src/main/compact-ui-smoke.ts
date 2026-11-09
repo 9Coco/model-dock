@@ -200,7 +200,7 @@ export async function verifyCompactUi(window: BrowserWindow, store: Store, outpu
   for (const provider of store.listProviders().filter(provider => provider.kind === 'codex' || provider.kind === 'grok')) store.deleteProvider(provider.id);
   for (const account of await accounts()) if (account.kind === 'copilot') await evaluate(`window.modelDock.copilotLogoutAccount(${JSON.stringify(account.providerId)})`);
   await click('[data-page="settings"]'); await click('[data-theme-choice="dark"]'); await click('[data-page="auth"]');
-  await waitFor('document.querySelectorAll("[data-auth-kind]").length===5&&document.querySelectorAll("[data-auth-account]").length===0', 'five empty compact account groups');
+  await waitFor('!!document.querySelector("[data-action=add-subscription-provider]")&&document.querySelectorAll("[data-auth-kind]").length===0', 'empty authorization center offers the subscription picker');
   window.setSize(1320, 880);
   const pageColors: unknown[] = [await capture('auth-empty-dark-1320', true)];
   const fixtureIds: string[] = [];
@@ -215,7 +215,9 @@ export async function verifyCompactUi(window: BrowserWindow, store: Store, outpu
   }
   await click('[data-action="reload-auth-accounts"]');
   await waitFor(`(async()=>{const accounts=await window.modelDock.authAccounts();return ${JSON.stringify(fixtureIds)}.every(id=>accounts.find(account=>account.providerId===id)?.usage.status==='ready')})()`, 'synthetic OAuth quota auto-query');
-  await click('[data-action="copilot-login"]');
+  await click('[data-action="add-subscription-provider"]');
+  await click('[data-preset-id="copilot-subscription"]');
+  await click('[role="dialog"] [data-action="copilot-login"]');
   const copilotSelector = '[data-auth-account="copilot:424242"]';
   await waitFor(`(async()=>{const accounts=await window.modelDock.authAccounts();return accounts.find(account=>account.kind==='copilot')?.usage.status==='ready'&&!!document.querySelector(${JSON.stringify(copilotSelector)})})()`, 'synthetic Copilot device login and quota');
   if (await evaluate<boolean>('!!document.querySelector("[role=dialog]")')) await click('[aria-label="关闭对话框"]');
@@ -246,7 +248,7 @@ export async function verifyCompactUi(window: BrowserWindow, store: Store, outpu
           progressBars:document.querySelectorAll('[data-auth-account] progress').length,
           remainingPercents:[...document.querySelectorAll('[data-auth-account] [data-remaining-percent]')].map(element=>element.dataset.remainingPercent),...colors};
       })()`);
-      assert.equal(layout.horizontalOverflow, false); assert.equal(layout.groups.length, 5); assert.equal(layout.progressBars, 4);
+      assert.equal(layout.horizontalOverflow, false); assert.equal(layout.groups.length, 3); assert.equal(layout.progressBars, 4);
       assert.deepEqual([...layout.remainingPercents].sort(), ['58', '64', '78', '82']);
       for (const group of layout.groups) {
         assert.equal(group.rows, ['copilot', 'codex', 'grok'].includes(group.kind) ? 1 : 0); assert.ok(group.height <= (group.kind === 'codex' ? 185 : 155), `Account group must remain compact: ${group.kind} ${group.height}px`);

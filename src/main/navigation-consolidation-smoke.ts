@@ -197,7 +197,34 @@ export async function verifyNavigationConsolidation(window: BrowserWindow, store
     await evaluate(`document.querySelector('[data-connection-principles]').scrollIntoView({block:'start'})`); await capture('principles-dark');
     assert.ok(apiProvider.id);
     assert.deepEqual({ providers: store.listProviders(), models: store.listModels(), bindings: store.listBindings(), exposure: store.gatewayExposure(), secrets: store.listProviders().map(provider => [provider.id, store.getSecret(provider.id)]) }, original, 'Navigation, copying and reversible publish checks preserve providers, models, credentials and tool bindings');
-    writeFileSync(join(outputDir, 'navigation-consolidation-validation.json'), JSON.stringify({ ok: true, sidebarApiSubscriptionGroups: true, legacySubscriptionNamesStandardizedForDisplay: true, observedAuthTitles, numberedLegacyNamesRetainTheirSuffix: true, customAndApiNamesPreserved: true, selectedProviderHeaderAndDescriptionMatchSidebar: true, authGroupAndPresetNamesConsistent: true, rawProviderNamesAndRoutingIdsUnchanged: true, subscriptionAdditionOnlyInAuthCenter: true, explicitCopilotClientImportAvailable: true, syntheticCopilotClientImportSucceeded: true, clientImportSelectionAndProvenanceVerified: true, clientSourceConfigurationUnchanged: true, serviceInterfaceAndLogsConsolidated: true, subscriptionLocalUrlKeyAliasesCopied: true, localCatalogIncludesPublishedAliases: true, unpublishedAliasStatusMatchesCatalog: true, curlUsesNativeProtocolAndKeyPlaceholder: true, upstreamDetailsOnlyInPrinciples: true, credentialsAndToolBindingsPreserved: true, noRealAccountImportLoginOrRelayStartup: true, screenshots }, null, 2));
+    await click('.sidebar [data-page="auth"]');
+    for (const source of store.listProviders().filter(provider => provider.kind === 'grok')) {
+      await click('[data-auth-account="' + source.id + '"] [data-action="account-menu"]');
+      await click('[data-auth-account-menu="' + source.id + '"] [data-action="account-delete"]');
+      await click('[role="dialog"] .modal-footer .primary');
+      await waitFor(`!document.querySelector('[role="dialog"]') && !document.querySelector('.sidebar [data-source-id="${source.id}"]')`, 'confirmed removal clears the selected source');
+      assert.equal(store.getProvider(source.id), undefined);
+    }
+    await waitFor(`!document.querySelector('[data-auth-kind="grok"]')`, 'the empty Grok group disappears');
+    for (const preset of ['grok-build', 'opencode-go']) {
+      await click('[data-action="add-subscription-provider"]');
+      await click('[data-preset-id="' + preset + '"]');
+      if (preset === 'opencode-go') {
+        await capture('opencode-go-picker');
+        await evaluate(`(()=>{const input=document.querySelector('[data-field="opencode-go-key"]');if(input.type!=='password')throw new Error('Unmasked key field');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'synthetic-navigation-go-key');input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+      }
+      await click('[role="dialog"] button[type="submit"]');
+      await waitFor('!document.querySelector(\'[role="dialog"]\') && !!document.querySelector(\'[data-subscription-connection]\')', 'new subscription opens');
+      const source = store.listProviders().find(provider => provider.presetId === preset); assert.ok(source);
+      await click('.sidebar [data-page="auth"]');
+      await waitFor('!!document.querySelector(\'[data-auth-kind="' + source.kind + '"]\')', 'added source appears in authorization center');
+      if (preset === 'opencode-go') {
+        await click('[data-auth-source="' + source.id + '"] [data-action="remove-local-source"]');
+        await click('[data-action="confirm-delete"]');
+        await waitFor('!document.querySelector(\'[data-auth-kind="opencode-go"]\') && !document.querySelector(\'.sidebar [data-source-id="' + source.id + '"]\')', 'OpenCode Go removal clears both views');
+      } else assert.notEqual(source.id, grok.id);
+    }
+    writeFileSync(join(outputDir, 'navigation-consolidation-validation.json'), JSON.stringify({ ok: true, subscriptionRemovalAndReaddition: true, opencodeGoPickerAndRemoval: true, sidebarApiSubscriptionGroups: true, legacySubscriptionNamesStandardizedForDisplay: true, observedAuthTitles, numberedLegacyNamesRetainTheirSuffix: true, customAndApiNamesPreserved: true, selectedProviderHeaderAndDescriptionMatchSidebar: true, authGroupAndPresetNamesConsistent: true, rawProviderNamesAndRoutingIdsUnchanged: true, subscriptionAdditionOnlyInAuthCenter: true, explicitCopilotClientImportAvailable: true, syntheticCopilotClientImportSucceeded: true, clientImportSelectionAndProvenanceVerified: true, clientSourceConfigurationUnchanged: true, serviceInterfaceAndLogsConsolidated: true, subscriptionLocalUrlKeyAliasesCopied: true, localCatalogIncludesPublishedAliases: true, unpublishedAliasStatusMatchesCatalog: true, curlUsesNativeProtocolAndKeyPlaceholder: true, upstreamDetailsOnlyInPrinciples: true, credentialsAndToolBindingsPreserved: true, noRealAccountImportLoginOrRelayStartup: true, screenshots }, null, 2));
   } finally {
     clipboard.clear();
     if (previousClipboard.length) await clipboard.write(previousClipboard);

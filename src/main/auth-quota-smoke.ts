@@ -52,7 +52,9 @@ export async function verifyAuthQuotas(window: BrowserWindow, store: Store, outp
   assert.equal(beforeCopilot.codex, 1); assert.equal(beforeCopilot.credits, 1); assert.equal(beforeCopilot.grok, 1);
   process.env.MODELDOCK_SMOKE_COPILOT_AUTH_FLOW = 'http400-polling';
   delete process.env.MODELDOCK_SMOKE_COPILOT_AUTH_PENDING;
-  await click('[data-action="copilot-login"]');
+  await click('[data-action="add-subscription-provider"]');
+  await click('[data-preset-id="copilot-subscription"]');
+  await click('[role="dialog"] [data-action="copilot-login"]');
   const waitingReadbacks: unknown[] = [];
   for (const kind of ['pending', 'slow-down'] as const) {
     await waitForPollingResponse(kind);

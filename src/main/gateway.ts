@@ -3,6 +3,7 @@ import type { Socket } from 'node:net';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { GatewayError, ResponsesCollector, SseFrames, isObject, sseData, type Json } from './gateway-sse';
 import { copilotCodexEvents, copilotCodexJson } from './copilot-codex-responses';
+import { prepareUpstream } from './oauth';
 import { Store, validateUpstreamUrl } from './store';
 import { isCopilotUpstream } from './copilot-provider';
 import { isTraeRelayProvider, traeRelayWireModel } from '../shared/trae-relay-models';
@@ -462,6 +463,11 @@ export class Gateway {
       validateUpstreamUrl(prepared.url, this.state.port);
       if (provider.kind === 'copilot' && !isCopilotUpstream(prepared.url, path.replace(/^\/v1/, ''))) throw new GatewayError(502, 'Copilot 请求只能发送到官方模型服务。');
       for (const [name, value] of Object.entries(prepared.headers)) if (upstreamHeaderNames.has(name.toLowerCase()) && !/[\r\n]/.test(value)) headers.set(name, value);
+      if (provider.kind === 'opencode-go') {
+        const session = request.headers['x-opencode-session'] ?? request.headers['session_id'] ?? request.headers['x-claude-code-session-id'] ?? request.headers['x-session-id'];
+        if (typeof session !== 'string' || !/^[A-Za-z0-9._:-]{1,256}$/.test(session)) throw new GatewayError(400, 'OpenCode Go 需要会话 ID，请由客户端传入稳定的 x-opencode-session。');
+        headers.set('x-opencode-session', session);
+      }
       headers.set('content-type', 'application/json');
       upstream = await (this.options.fetch ?? fetch)(prepared.url, { method: 'POST', headers, body: JSON.stringify(prepared.body), signal: controller.signal, redirect: 'manual' });
       }
@@ -624,6 +630,7 @@ export class Gateway {
     }
   }
   private prepareApiKey(provider: Provider, secret: ProviderSecret, path: string, body: Json): PreparedRequest {
+    if (provider.kind === 'opencode-go') return prepareUpstream(provider, secret, path, body);
     if (provider.kind !== 'openai-compatible' || !secret.apiKey) throw new GatewayError(503, '此供应商需要完成订阅 OAuth 登录。');
     return { url: `${provider.baseUrl.replace(/\/+$/, '')}/${path.replace(/^\/v1\//, '')}`, headers: { authorization: `Bearer ${secret.apiKey}` }, body };
   }

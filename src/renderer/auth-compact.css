@@ -10,6 +10,7 @@
 .auth-panel.auth-compact .tool-logo-mark { width: 18px; height: 18px; }
 .auth-brand-xai { display: inline-flex; align-items: center; justify-content: center; min-width: 23px; height: 20px; color: var(--ink); font-size: 12px; font-weight: 700; letter-spacing: -.6px; }
 .auth-panel.auth-compact .count-tag { min-width: 17px; height: 18px; padding: 0 4px; background: var(--surface); color: var(--muted); border: 1px solid var(--line); border-radius: 4px; font-size: 12px; line-height: 16px; }
+.auth-panel.auth-compact .account-row.auth-source-row { grid-template-columns: minmax(0, 1fr) auto; }
 .auth-panel.auth-compact .account-row { display: grid; grid-template-columns: minmax(145px, 200px) minmax(0, 1fr) 110px; gap: 8px 14px; align-items: center; min-height: 53px; padding: 8px 10px; border-color: var(--line); }
 .auth-panel.auth-compact .account-identity { display: flex; align-items: center; min-width: 0; gap: 7px; }
 .auth-panel.auth-compact .account-avatar { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; min-width: 32px; flex: 0 0 32px; overflow: hidden; border: 1px solid var(--line); border-radius: 50%; background: var(--surface-soft); color: var(--ink); font-size: 14px; }

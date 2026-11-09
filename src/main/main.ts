@@ -15,6 +15,7 @@ import { getAppIcon } from './app-icon';
 import { dirname, join, relative, resolve } from 'node:path';
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { Store } from './store';
+import { providerCategory } from '../shared/presets';
 import { Gateway } from './gateway';
 import { TraeApi, TraeApiError } from './trae-api';
 import { parseTraeQuota } from './trae-relay-usage';
@@ -868,13 +869,24 @@ function registerIpc() {
     for (const id of [result.keptProviderId, ...result.removedProviderIds]) catalog.invalidate(id);
     return result;
   });
-  handle('deleteProvider', async (id: string) => {
+  handle('deleteProvider', async (id: string, scope?: 'local-subscription') => {
+    const provider = store.getProvider(id);
+    if (!provider || scope !== undefined && (scope !== 'local-subscription' || providerCategory(provider) !== 'subscription')) throw new Error('订阅来源不存在或删除范围无效。');
     assertEditable(); providerRemovalPending = true;
     try {
       catalog.invalidate(id); gateway.cancelProvider(id); accounts.cancelProviderOperations(id); copilotProviders.cancel(id);
       traeNativeAccounts.providerRemoved(id); centralNativeAccounts.providerRemoved(id);
       await ideAccounts.providerRemoved(id);
-      await removeProviderAndSync(store, id, synchronizeTool);
+      if (scope === 'local-subscription') {
+        const checkpoint = store.beginProviderRemoval(id);
+        try {
+          for (const tool of checkpoint.affectedToolIds) {
+            undoManager.clear(tool);
+            beforeToolSelections.delete(tool);
+          }
+        } catch (error) { store.restoreProviderRemoval(checkpoint); throw error; }
+        store.finishProviderRemoval(checkpoint);
+      } else await removeProviderAndSync(store, id, synchronizeTool);
     } finally { catalog.invalidate(id); providerRemovalPending = false; }
   });
   handle('saveModel', (input: ModelInput) => { assertEditable(); return store.saveModel(input); });
