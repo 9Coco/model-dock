@@ -1,5 +1,13 @@
 # ModelDock 验证记录
 
+## 2026-11-09 / 0.3.88 · TRAE CN 批量模型目录
+
+- 修复旧 GET `get_detail_param` 与 `20260212` 版本码仅取得少量当前模型调用配置的问题。采用 CN POST `https://api5-normal.mchost.guru/api/ide/v1/batch_get_detail_param`、`functions: ["chat_v3"]` 及抓包报告对应的 `3.4.4 / 20260924` 版本头，补充中性目录上下文。协议依据为 [NextAgentX #173 的原始抓包说明](https://github.com/NextAgentX/qoder-trae-workbuddy-switch/issues/173)，实现为现有主进程 TypeScript，不引入外置反代、进程或监听端口。
+- 严格读取对应的 `function_configs[].config_info_list`，拒绝重复/错误函数分组、旧平铺响应和 HTTP 200 中的非零 `error_code`。配置开关关闭、自定义模型与内部辅助功能不作为订阅发现项。保持精确配置名、原生 `model_detail_list[].model_name`、账号及 CN/SOLO 清单边界，不由展示名编造路由，不用模型名称推断账号权限。
+- 5 个相关测试文件共 88 项全部通过，覆盖 18 个当前条目具有完整下发路由时全部可添加、3 个新增模型的精确原生推理映射、17 个显式可选择条目、目录存在但上游 403、历史路由保留、流式及时性/取消与 Chat/Responses/JetBrains 网关链路。均为合成账号与本机模拟上游；不是 18 个真实模型生成验收。结果 `work/trae-catalog-final-focused.json`。
+- 完整 `npm test -- --maxWorkers=2` 实际执行：2672 项中 2649 通过、17 失败、6 跳过；失败全部位于未修改的 Linux 单实例测试。本轮独立抽象 Unix 套接字探测同样在 `listen` 返回 `EPERM`，因此不能记为完整原生测试通过。完整报告 `work/trae-catalog-full-tests.json`。类型检查、生产构建和生产入口校验通过；main SHA256 `4cdbd5399a6083b73a7a689c8337024cbb27a8e88d975b22a20adb24cf151d03`。
+- 当前仅连接云端 Linux 工作区，原 Windows 电脑不可用；未制作或替换 Windows 包，没有读取真实客户端凭据或发送真实模型请求。目录请求不是完整复制抓包的全部设备头：设备 ID 和平台字段仍沿用原适配器，真实客户端版本、账号可用模型与 Kimi 锁定语义需在本机继续验证。没有把目录出现或截图可见当作所有账号均有调用权限，也未宣称 17/18 个真实模型已恢复。
+
 ## 2026-11-08 / 0.3.87 · 移除独立终端功能
 
 - 删除设置页的终端区块、终端选项类型/默认值、平台启动逻辑、preload/IPC 接口和诊断操作入口。实际 CLI 工具接入与模型的工具调用能力保留。旧版 `app.settings` 的 `terminal` 字段仅在读取时忽略，不在启动时重写；下次显式保存时剔除旧字段，其他设置和启动项所有权记录继续保留。

@@ -5,8 +5,10 @@ import type { TraeClientCredentials } from '../src/main/trae-client-import';
 const credential: TraeClientCredentials = { token: 'SYNTHETIC_TRAE_ACCESS', userId: 'fixture-user', host: 'https://api.trae.cn' };
 // Native function-scoped descriptor and SSE shapes from the fixed primary
 // raw_client / test_traecode_raw_client / test_ide_native_tool_deltas fixtures.
-const directory = { code: 0, config_info_list: [{ config_name: 'glm-5.3', usage: 'chat_completion', config_source: 1,
-  display_config: { display_name: 'GLM 5.3' }, model_detail_list: [{ model_name: 'glm-5__max' }, { model_name: 'glm-5__dev' }] }] };
+const configRows = [{ config_name: 'glm-5.3', usage: 'chat_completion', config_source: 1,
+  display_config: { display_name: 'GLM 5.3' }, model_detail_list: [{ model_name: 'glm-5__max' }, { model_name: 'glm-5__dev' }] }];
+const batch = (rows: unknown[]) => ({ code: 0, function_configs: [{ function: 'chat_v3', config_info_list: rows }] });
+const directory = batch(configRows);
 const catalog = () => Response.json(directory);
 const frame = (event: string, data: unknown) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 const finished = frame('done', { finish_reason: 'stop' });
@@ -21,16 +23,45 @@ describe('direct TraeCode CN native Raw v2 protocol', () => {
     const models = await api.models(credential);
     expect(models).toMatchObject({ object: 'list', data: [{ id: 'glm-5.3', object: 'model', owned_by: 'trae', name: 'GLM 5.3' }],
       modeldock_history: { source: 'trae-client', currentVerified: false } });
-    const [url, init] = fetch.mock.calls[0]; expect(String(url)).toBe('https://trae-api-cn.mchost.guru/api/ide/v1/get_detail_param?function=chat_v3&need_prompt=false&poly_prompt=true');
-    expect(init?.method).toBe('GET'); expect(init?.body).toBeUndefined();
+    const [url, init] = fetch.mock.calls[0]; expect(String(url)).toBe('https://api5-normal.mchost.guru/api/ide/v1/batch_get_detail_param');
+    expect(init?.method).toBe('POST'); expect(JSON.parse(String(init?.body))).toEqual({ functions: ['chat_v3'] });
+    const headers = new Headers(init?.headers);
+    expect(headers.get('x-ide-token')).toBe(credential.token);
+    expect(headers.get('x-ide-version')).toBe('3.4.4');
+    expect(headers.get('x-ide-version-code')).toBe('20260924');
+    expect(headers.get('x-app-version-code')).toBe('20260924');
+    expect(headers.get('package-type')).toBe('stable_cn');
+    expect(headers.get('x-bridge-transport')).toBe('aha');
+    expect(headers.get('x-lgw-req-sdk-type')).toBe('3');
     expect(init?.redirect).toBe('error'); expect(new Headers(init?.headers).get('x-uid')).toBe(credential.userId);
     await expect(api.chat(credential, { ...body, model: 'imaginary-model' })).rejects.toMatchObject({ code: 'model' }); expect(fetch).toHaveBeenCalledTimes(1);
   });
   it('keeps only usable chat configs and refuses duplicate native identifiers', async () => {
     const invalid = [{ config_name: 'unknown-provider' }, { config_name: 'fim', usage: 'code_completion', model_name: 'fim' }, { config_name: 'other-function', raw_chat_function: 'solo_agent', model_name: 'other' }];
-    const api = new TraeApi({ fetch: fetchMock(() => Response.json({ config_info_list: [...directory.config_info_list, ...invalid] })) });
+    const api = new TraeApi({ fetch: fetchMock(() => Response.json(batch([...configRows, ...invalid]))) });
     expect((await api.models(credential)).data).toHaveLength(1);
-    await expect(new TraeApi({ fetch: fetchMock(() => Response.json({ config_info_list: [...directory.config_info_list, ...directory.config_info_list] })) }).models(credential)).rejects.toMatchObject({ code: 'response' });
+    await expect(new TraeApi({ fetch: fetchMock(() => Response.json(batch([...configRows, ...configRows]))) }).models(credential)).rejects.toMatchObject({ code: 'response' });
+  });
+  it.each([
+    { function_configs: [] },
+    { function_configs: 'SYNTHETIC_PRIVATE_INVALID_GROUPS' },
+    { function_configs: [{ function: 'solo_agent', config_info_list: configRows }] },
+    { function_configs: [{ function: 'chat_v3', config_info_list: configRows }, { function: 'chat_v3', config_info_list: configRows }] },
+    { function_configs: [{ function: 'chat_v3', config_info_list: null }] },
+    { config_info_list: configRows },
+  ])('rejects malformed or incorrectly scoped batch directories instead of publishing a partial legacy list: %j', async response => {
+    const fetch = fetchMock(() => Response.json(response));
+    const error = await new TraeApi({ fetch }).models(credential).catch(error => error);
+    expect(error).toMatchObject({ code: 'response' });
+    expect(String(error)).not.toMatch(/SYNTHETIC_PRIVATE|SYNTHETIC_TRAE_ACCESS/);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+  it.each([2001, 4001])('rejects native batch error_code %i even if HTTP succeeds and a model list is present', async error_code => {
+    const fetch = fetchMock(() => Response.json({ ...directory, error_code, error_message: 'SYNTHETIC_PRIVATE_NATIVE_ERROR' }));
+    const error = await new TraeApi({ fetch }).models(credential).catch(error => error);
+    expect(error).toMatchObject({ code: 'upstream' });
+    expect(String(error)).not.toMatch(/SYNTHETIC_PRIVATE|SYNTHETIC_TRAE_ACCESS/);
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
   it('preserves native function histories, correlated tool results and object schemas in the current Raw v2 body', async () => {
     const fetch = fetchMock(url => new URL(url).pathname.endsWith('get_detail_param') ? catalog() : sse(frame('text_delta', { text: '文件内容已收到' }) + finished));

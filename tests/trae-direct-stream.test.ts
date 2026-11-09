@@ -30,8 +30,13 @@ async function fixture(onRaw?: (request: RawRequest) => void) {
   const requests: RawRequest[] = [], routes: string[] = [], rawStarted = deferred<RawRequest>();
   const api = new TraeApi({ timeoutMs: 5000, fetch: (async (input, init) => {
     const url = new URL(String(input)); routes.push(url.pathname);
-    expect(url.origin).toBe('https://trae-api-cn.mchost.guru'); expect(init?.redirect).toBe('error');
-    if (url.pathname === '/api/ide/v1/get_detail_param') return Response.json({ config_info_list: [{ config_name: model.upstreamId, usage: 'chat_completion', model_detail_list: [{ model_name: model.upstreamId + '__dev' }] }] });
+    expect(init?.redirect).toBe('error');
+    if (url.pathname === '/api/ide/v1/batch_get_detail_param') {
+      expect(url.origin).toBe('https://api5-normal.mchost.guru');
+      expect(init?.method).toBe('POST'); expect(JSON.parse(String(init?.body))).toEqual({ functions: ['chat_v3'] });
+      return Response.json({ function_configs: [{ function: 'chat_v3', config_info_list: [{ config_name: model.upstreamId, usage: 'chat_completion', model_detail_list: [{ model_name: model.upstreamId + '__dev' }] }] }] });
+    }
+    expect(url.origin).toBe('https://trae-api-cn.mchost.guru');
     if (url.pathname !== '/api/ide/v2/llm_raw_chat') throw new Error('Unexpected synthetic upstream route');
     let request!: RawRequest;
     const body = new ReadableStream<Uint8Array>({ start(stream) { request = { body: JSON.parse(String(init?.body)), signal: init!.signal!, stream, closed: false, canceled: deferred<void>() }; }, cancel() { request.canceled.resolve(); } });
@@ -81,7 +86,7 @@ describe('TRAE TypeScript adapter through the existing loopback gateway', () => 
       expect(first).toContain('FIRST🙂'); expect(first).not.toContain(route.terminal); expect(upstream.closed).toBe(false);
       finish(upstream); const all = first + await rest(reader);
       expect(all).toContain('SECOND'); expect(all).toContain(route.terminal); expect(all).toContain('local-trae-alias');
-      expect(f.requests).toHaveLength(1); expect(f.routes).toEqual(['/api/ide/v1/get_detail_param', '/api/ide/v2/llm_raw_chat']);
+      expect(f.requests).toHaveLength(1); expect(f.routes).toEqual(['/api/ide/v1/batch_get_detail_param', '/api/ide/v2/llm_raw_chat']);
       expect(f.prepareRequest).not.toHaveBeenCalled(); expect(f.fallbackFetch).not.toHaveBeenCalled();
       expect(JSON.stringify(f.store.logs())).not.toMatch(/SYNTHETIC_PRIVATE_PROMPT|SYNTHETIC_TRAE_PRIVATE_TOKEN|FIRST|SECOND/);
     } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }

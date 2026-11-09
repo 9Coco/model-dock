@@ -6,12 +6,15 @@ import { readTraeClientModelCatalog, type TraeClientModelCatalog, type TraeClien
 
 /** TraeCode CN CustomModel / ChatMessageData protocol, fixed reference:
  * Trae2api-cn bb7b659 raw_client.build_traecode_chat_body/headers and installed
- * Trae CN3.4.15 ai-modules-chat LLMRawChatV2/GetConfigDetail. This is the current
- * llm_raw_chat contract, not legacy Work Extra/llm_utils_chat or Remote sessions.
+ * Trae CN3.4.15 ai-modules-chat LLMRawChatV2. The function-scoped batch
+ * directory follows the CN capture in NextAgentX/qoder-trae-workbuddy-switch
+ * #173 (2026-11-06): batch_get_detail_param, 3.4.4 / 20260924.
+ * Inference uses llm_raw_chat, not legacy Work Extra/llm_utils_chat or Remote sessions.
  * Every request is independent and carries the caller's complete native history.
  * Live account/model acceptance remains separate from mock protocol verification.
  */
 const GATEWAY = 'https://trae-api-cn.mchost.guru';
+const CATALOG = 'https://api5-normal.mchost.guru/api/ide/v1/batch_get_detail_param';
 const ACCOUNT = 'https://api.trae.cn';
 const FUNCTION = 'chat_v3';
 const MAX_JSON = 4 * 1024 * 1024, MAX_EVENT = 1024 * 1024, MAX_OUTPUT = 32 * 1024 * 1024;
@@ -67,7 +70,7 @@ function headers(value: TraeClientCredentials, accept = 'application/json'): Rec
   return { 'Content-Type': 'application/json', Accept: accept, Authorization: 'Cloud-IDE-JWT ' + value.token,
     'X-Cloudide-Token': value.token, 'X-Ide-Token': value.token, 'X-Uid': value.userId,
     'X-App-Id': '6eefa01c-1036-4c7e-9ca5-d891f63bfcd8', 'X-App-Version': 'default',
-    'X-Ide-Version': '3.4.4', 'X-Ide-Version-Code': '20260212', 'X-App-Version-Code': '20260212',
+    'X-Ide-Version': '3.4.4', 'X-Ide-Version-Code': '20260924', 'X-App-Version-Code': '20260924',
     'X-Ide-Version-Type': 'stable', 'X-Plugin-Channel': 'desktop', 'X-App-Function': FUNCTION, 'X-Ide-Function': FUNCTION,
     'X-Device-Id': device, 'X-Machine-Id': device, 'X-System-Type': 'Windows', 'X-Device-Type': 'windows',
     'X-Request-Id': randomUUID(), 'request-traffic-type': 'prod' };
@@ -80,9 +83,22 @@ async function readJson(response: Response, signal: AbortSignal): Promise<Object
   try {
     while (true) { const item = await reader.read(); if (signal.aborted) throw fail('cancelled'); if (item.done) break; size += item.value.length; if (size > MAX_JSON) throw fail('limit'); chunks.push(item.value); }
     const parsed = object(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks))));
-    if (!parsed || parsed.code !== undefined && parsed.code !== 0) throw fail('upstream'); return parsed;
+    if (!parsed || parsed.code !== undefined && parsed.code !== 0 || parsed.error_code !== undefined && parsed.error_code !== 0) throw fail('upstream'); return parsed;
   } catch (error) { throw error instanceof TraeApiError ? error : fail(signal.aborted ? 'cancelled' : 'response'); }
   finally { signal.removeEventListener('abort', abort); await reader.cancel().catch(() => {}); }
+}
+/** Only the requested Chat group is a route catalog. A successful-looking
+ * legacy/utility response must not silently reduce the current picker. The
+ * single unlabeled group is unambiguous for this one-function request. */
+function chatConfigurations(raw: ObjectValue): unknown[] {
+  if (!Array.isArray(raw.function_configs) || !raw.function_configs.length || raw.function_configs.length > 32) throw fail('response');
+  const groups = raw.function_configs.map(object);
+  if (groups.some(group => !group || group.function !== undefined && typeof group.function !== 'string')) throw fail('response');
+  const matching = groups.filter(group => group?.function === FUNCTION);
+  if (matching.length > 1) throw fail('response');
+  const group = matching[0] ?? (groups.length === 1 && groups[0]?.function === undefined ? groups[0] : undefined);
+  if (!group || !Array.isArray(group.config_info_list) || group.config_info_list.length > 1000) throw fail('response');
+  return group.config_info_list;
 }
 function content(value: unknown): ObjectValue[] {
   if (value === null || value === undefined) return [];
@@ -270,20 +286,24 @@ export class TraeApi {
   async models(value: TraeClientCredentials, signal?: AbortSignal, clientSource?: TraeClientModelCatalog['client']): Promise<TraeModelsResult> {
     credentials(value); const life = lifetime(signal, Math.min(this.timeout, 30000));
     try {
-      // Current official GetConfigDetail sends query parameters with GET; null
-      // optional filters are omitted by the client's HTTP serializer.
-      const query = new URLSearchParams({ function: FUNCTION, need_prompt: 'false', poly_prompt: 'true' });
-      const response = await this.send(GATEWAY + '/api/ide/v1/get_detail_param?' + query, value, undefined, life, 'application/json', {}, 'GET');
-      const raw = await readJson(response, life.signal), list = raw.config_info_list ?? object(raw.data)?.config_info_list;
-      if (!Array.isArray(list) || list.length > 1000) throw fail('response');
+      // The legacy GET plus stale version code returns an incomplete model
+      // set even when the current client can use the missing models. Fetch the
+      // real provider routes from the current CN batch contract instead.
+      const response = await this.send(CATALOG, value, { functions: [FUNCTION] }, life, 'application/json', {
+        'User-Agent': 'TraeClient/TTNet', 'Package-Type': 'stable_cn',
+        'X-Agent-Host-Type': '0', 'X-Bridge-Transport': 'aha', 'X-Lgw-Req-Sdk-Type': '3',
+      });
+      const list = chatConfigurations(await readJson(response, life.signal));
       const routes = new Map<string, Route>(), publicRows = new Map<string, ObjectValue>();
       for (const item of list) {
-        const row = object(item); if (!row || row.usage !== undefined && row.usage !== '' && row.usage !== 'chat_completion' || row.custom_models) continue;
+        const row = object(item); if (!row || row.usage !== undefined && row.usage !== '' && row.usage !== 'chat_completion'
+          || row.custom_models || object(row.display_config)?.is_custom_model === true || row.config_switch === false) continue;
         if (row.raw_chat_function !== undefined && row.raw_chat_function !== FUNCTION) continue;
         const id = name(row.config_name ?? row.name), details = Array.isArray(row.model_detail_list) ? row.model_detail_list.map(object).filter((item): item is ObjectValue => !!item && !!name(item.model_name)) : [];
         const detail = details.find(item => String(item.model_name).endsWith('__dev')) ?? details[0], providerId = name(detail?.model_name ?? row.model_name);
         const configSource = row.config_source ?? 1;
-        if (!id || !providerId || typeof configSource !== 'number' || !Number.isSafeInteger(configSource) || configSource < 1 || configSource > 100) continue;
+        if (!id || !providerId || ['summary', 'fast_apply', 'title_generation', 'input_optimization'].includes(id)
+          || typeof configSource !== 'number' || !Number.isSafeInteger(configSource) || configSource < 1 || configSource > 100) continue;
         if (routes.has(id)) throw fail('response');
         const display = text(row.display_name ?? object(row.display_config)?.display_name, 512);
         routes.set(id, { model: { id, object: 'model', owned_by: 'trae', ...(display ? { name: display } : {}) }, providerId, configSource });
@@ -297,9 +317,9 @@ export class TraeApi {
       if (life.signal.aborted) throw fail('cancelled');
       const data: TraeApiModel[] = [], currentIds = new Set(client?.models.map(model => model.id));
       let unsupported = 0;
-      // The current native picker and the legacy GetConfigDetail route catalog
-      // are different contracts. Show the complete verified client snapshot,
-      // but never invent a providerId or callable route for a missing config.
+      // Client visibility and callable provider IDs are separate contracts.
+      // Merge the current snapshot with the batch routes, retaining native IDs
+      // instead of treating a name as a provider ID or an entitlement check.
       for (const model of client?.models ?? []) {
         const route = publicRows.has(model.id) ? routes.get(model.id) : undefined;
         if (!route) unsupported++;
