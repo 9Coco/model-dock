@@ -167,7 +167,7 @@ class ScriptTests(unittest.TestCase):
         self.assertIn('SOCKS5', result.stdout)
         self.assertIn('TCP', result.stdout)
         self.assertIn('UDP', result.stdout)
-        self.assertIn('ModelDock 首页的“网络接管”', result.stdout)
+        self.assertIn('ModelDock 侧栏的“网络接管”', result.stdout)
         self.assertIn('“全局流量”', result.stdout)
 
     def run_wake_lifecycle(self, *, existing, command='start', wake=1, outcome='success'):

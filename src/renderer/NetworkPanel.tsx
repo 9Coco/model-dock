@@ -45,12 +45,11 @@ export function NetworkPreferences({ api, snapshot, onChanged, notify }: Network
     {snapshot.platform === 'win32' && <div className="settings-row"><div className="settings-row-copy"><strong>全局模式解析</strong><small>快速解析保留虚拟地址映射；兼容解析经同一代理使用 DoH。保存后，已连接会话会先断开再重连。</small></div><select aria-label="全局模式解析" value={snapshot.settings.dnsMode} disabled={!!busy} onChange={e => void save({ dnsMode: e.target.value as 'fast' | 'compatible' })}><option value="fast">快速解析</option><option value="compatible">兼容解析</option></select></div>}
   </div></section>;
 }
-export function NetworkControls({ api, snapshot, onChanged, notify }: NetworkControlProps) {
+function NetworkControls({ api, snapshot, onChanged, notify }: Required<NetworkControlProps>) {
   const [address, setAddress] = useState('');
   const [candidates, setCandidates] = useState<string[]>([]);
   const { busy, action } = useNetworkAction(notify);
   useEffect(() => setAddress(snapshot?.settings.address ?? ''), [snapshot?.settings.address]);
-  if (!snapshot || !api) return <section className="service-network-card" aria-busy={!!api}><div className="gateway-top"><h2>网络接管</h2><span role="status">{api ? '正在读取状态…' : '等待桌面连接'}</span></div></section>;
   const connecting = snapshot.state === 'connecting' || snapshot.state === 'disconnecting';
   const dirty = address !== snapshot.settings.address;
   const global = snapshot.settings.mode === 'global';
@@ -80,18 +79,17 @@ export function NetworkControls({ api, snapshot, onChanged, notify }: NetworkCon
   </section>;
 }
 
-export function NetworkTools({ api, snapshot, notify }: NetworkProps) {
+function NetworkTools({ api, snapshot, notify }: Required<NetworkProps>) {
   const { busy, action } = useNetworkAction(notify);
   const [site, setSite] = useState<NetworkSite>('ChatGPT');
   const [checks, setChecks] = useState<NetworkCheck | null>(null);
   const [range, setRange] = useState<'minute' | 'day'>('minute');
   useEffect(() => setChecks(null), [snapshot?.settings.mode, snapshot?.settings.address, snapshot?.state]);
-  if (!snapshot || !api) return <p className="settings-note">正在读取网络状态…</p>;
   const connected = snapshot.state === 'connected';
   const connecting = snapshot.state === 'connecting' || snapshot.state === 'disconnecting';
   const latest = snapshot.history.at(-1);
   const samples = snapshot.history.filter(s => s.time >= Date.now() - (range === 'minute' ? 60_000 : 86_400_000)).sort((a, b) => a.time - b.time);
-  return <section className="network-tools">
+  return <>
     <div className="panel"><div className="section-heading"><h2>网络流量</h2><select aria-label="流量时间范围" value={range} onChange={e => setRange(e.target.value as 'minute' | 'day')}><option value="minute">最近 60 秒</option><option value="day">最近 24 小时</option></select></div>
       <div className="network-metrics"><div><small>↑ 上传</small><strong>{networkBytes(connected ? latest?.uploadRate ?? 0 : 0)}/s</strong><span>本次 {networkBytes(snapshot.status.uploadBytes)}</span></div><div><small>↓ 下载</small><strong>{networkBytes(connected ? latest?.downloadRate ?? 0 : 0)}/s</strong><span>本次 {networkBytes(snapshot.status.downloadBytes)}</span></div><div><small>活动连接</small><strong>{snapshot.status.connections}</strong><span>只统计经过此网络会话的字节</span></div></div>
       <NetworkChart samples={samples} /><p className="network-hint">蓝色下载 · 绿色上传。24 小时历史按分钟采样，不是模型 Token 用量或运营商计费。</p>
@@ -101,5 +99,15 @@ export function NetworkTools({ api, snapshot, notify }: NetworkProps) {
       {checks && <div className="network-checks">{(['system', 'proxy'] as const).map(path => { const result = checks[path]; return <div key={path}><strong>{path === 'system' ? '系统网络' : '代理出口'}</strong><span>{result ? result.browser_verification ? '需浏览器验证' : result.ok ? '检测通过' : '自动检测未确认' : '请先连接代理'}</span>{result && <small>{result.detail} · {result.elapsed_ms} ms{result.status_code ? ` · HTTP ${result.status_code}` : ''}</small>}</div>; })}</div>}
     </div>
     <div className="panel"><div className="section-heading"><div><h2>手机热点代理</h2><p>导出 FlowBridge Termux 安装器，在手机 Termux 手动执行；默认端口 38473，支持 HTTP、SOCKS5 与 UDP。</p></div><button className="button secondary" onClick={() => void action('export', async () => { const path = await api.exportPhoneProxy(); if (path) notify('手机脚本已导出，请在手机 Termux 中执行。', 'success'); })}>导出手机脚本</button></div><p className="network-hint">手机 VPN 须允许 Termux 联网。仅导出文件，不会连接手机或修改其配置。</p></div>
-  </section>;
+  </>;
+}
+
+export function NetworkWorkspace({ api, snapshot, onChanged, notify, error }: NetworkControlProps & { error: string }) {
+  return <div className="network-workspace" data-network-workspace>
+    {error && <p className="bridge-banner" role="alert">{error}</p>}
+    {snapshot && api ? <div className="network-tools">
+      <NetworkControls api={api} snapshot={snapshot} onChanged={onChanged} notify={notify} />
+      <NetworkTools api={api} snapshot={snapshot} notify={notify} />
+    </div> : !error && <p className="settings-note" role="status">{api ? '正在读取网络状态…' : '等待桌面连接'}</p>}
+  </div>;
 }

@@ -32,13 +32,13 @@
       "source": "termux/README.md",
       "path": "termux/README.md",
       "upstreamSha256": "e49cc32aa3f09f908fba65abde2c54cc5d925fb5fdf30b7e4127f45c6af1b05d",
-      "sha256": "6bfa96d8b0d9b641c6728f0e089a6f7217635adb55e1d4fdf919b59dd865d4e3"
+      "sha256": "32598fe44180aa35b059506f6a8f9d255b6d680bea2bc208e844849b33cf1d09"
     },
     {
       "source": "termux/termux-hotspot-proxy.sh",
       "path": "termux/termux-hotspot-proxy.sh",
       "upstreamSha256": "26dc871c4dd55362cf5a361f9bb49e6f0d2b394e1e7c019f74129fcf70cb4853",
-      "sha256": "6637e77350590093c4bfc75bc9431c08fabb44e343b7b32b6fe469f850f17aa3"
+      "sha256": "eae845a4b120fc8d1bd087a760a595773333c24e8c2006c8d2a4549d727c1bd5"
     },
     {
       "source": "tools/fetch_tun_core.py",
@@ -284,13 +284,13 @@
       "source": "termux/src/install-suffix.sh",
       "path": "termux/src/install-suffix.sh",
       "upstreamSha256": "a3c4b0ecafd021a8af060bae2f39bcff785da29a2071497d99915f35d0055598",
-      "sha256": "3694230dd0226e3f610a19a74126a0b4e37d8e9265d2dec4dc1cb42374bc66b1"
+      "sha256": "dfe2cafc50f63128f41e9a428e2830fec3890d8cbb418e41ffa01cfe23b65c19"
     },
     {
       "source": "termux/src/address.py",
       "path": "termux/src/address.py",
       "upstreamSha256": "380f6e94288c6ed8556953dd5f3edf1557c2b2c79cfb4982b6222c922a44e811",
-      "sha256": "581aa7a05564a6c79c2e1445aab40ebd8f9f2b42da92815536d6b9b743b83227"
+      "sha256": "7109642afbafc1aa61d854206fe4aa743cf57486e3827860e1b0a638e607e6e7"
     },
     {
       "source": "termux/src/monitor.py",
@@ -302,7 +302,7 @@
       "source": "termux/src/proxy.sh",
       "path": "termux/src/proxy.sh",
       "upstreamSha256": "2e23ce2977334c12ec44f6cd97f4f3875f686903ff8979066bf1887461288ef1",
-      "sha256": "d33fe93defe3b6b0225e842801e59c6af083638dcf75a7664498296bff1a387a"
+      "sha256": "059af619f609a5730b320f7a12888037cbe089176b4016b2cc587ce257db679a"
     },
     {
       "source": "tools/build_termux.py",
@@ -314,7 +314,7 @@
       "source": "tools/test_termux_proxy.py",
       "path": "tools/test_termux_proxy.py",
       "upstreamSha256": "adca25eec36c7a5350d0c18ed6192c829dedde6a727fd1d8d3577c3ecb89e58c",
-      "sha256": "e142ff4c94f4eae1db2607207cf7daf441d3c8c40d7c9dbfc19e95eb4b880110"
+      "sha256": "438e88ab816ef1962afafc6c5943745fcd6f54a35f9792e04d57f5fb00164567"
     },
     {
       "source": "tools/test_tun_namespace.py",
