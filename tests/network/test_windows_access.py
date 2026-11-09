@@ -1,0 +1,139 @@
+"""The reusable grant is tested without installing a task or changing any routes."""
+from contextlib import ExitStack
+import hashlib
+import io
+import json
+from pathlib import Path
+import sys
+import threading
+import time
+import unittest
+import uuid
+from unittest.mock import Mock, patch
+
+ROOT = Path(__file__).resolve().parents[2] / 'resources/flowbridge'
+sys.path.insert(0, str(ROOT))
+from windows import network_access as access, network_worker as worker, network_pipe
+
+SID = 'S-1-5-21-1-2-3-1001'
+
+
+class AccessTests(unittest.TestCase):
+    def setUp(self):
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        def replace(name, **kwargs):
+            return self.stack.enter_context(patch.object(access, name, **kwargs))
+        replace('user_sid', return_value=SID)
+        self.state = replace('task_state', return_value='missing')
+        self.install = replace('install')
+        self.run_task = replace('run', return_value=Mock(returncode=0))
+        self.pipe = replace('open_client', side_effect=lambda sid: Mock())
+
+    def test_first_manual_grant_is_reused_after_disconnect_and_new_app_process(self):
+        self.install.side_effect = lambda *_: setattr(self.state, 'return_value', 'ready')
+        client = access.NetworkAccess(Mock())
+        client.open(True)
+        client.release()
+        client.open(True)
+        client.release()
+        access.NetworkAccess(Mock()).open(False)
+        self.install.assert_called_once_with(SID, access.PAYLOAD_SHA256)
+        self.assertEqual(self.run_task.call_count, 3)
+        self.assertEqual(self.run_task.call_args.args[0][-1], 'ModelDock.Network.' + SID)
+
+    def test_cancellation_and_unattended_connect_never_start_a_task(self):
+        client = access.NetworkAccess(Mock())
+        self.install.side_effect = RuntimeError('已取消')
+        with self.assertRaisesRegex(RuntimeError, '取消'):
+            client.open(True)
+        with self.assertRaises(access.AuthorizationRequired):
+            client.open(False)
+        self.install.assert_called_once()
+        self.run_task.assert_not_called()
+        self.pipe.assert_not_called()
+
+    def test_disabled_or_foreign_task_is_never_replaced(self):
+        for state in ('disabled', 'conflict'):
+            self.state.return_value = state
+            with self.assertRaises(RuntimeError):
+                access.NetworkAccess(Mock()).open(True)
+        self.install.assert_not_called()
+        self.run_task.assert_not_called()
+
+    def test_payload_manifest_is_pinned(self):
+        self.assertEqual(hashlib.sha256((ROOT / 'windows/install-network.ps1').read_bytes()).hexdigest(),
+                         access.INSTALLER_SHA256)
+        manifest = (ROOT / 'windows/network-payload.json').read_bytes()
+        self.assertEqual(hashlib.sha256(manifest).hexdigest(), access.PAYLOAD_SHA256)
+        for name, expected in json.loads(manifest).items():
+            if name.startswith(('vendor/', 'python/')): continue  # also verified in each packaged Windows app
+            self.assertEqual(hashlib.sha256((ROOT / name).read_bytes()).hexdigest(), expected, name)
+
+
+class WorkerTests(unittest.TestCase):
+    def exchange(self, requests, controller):
+        stream = Mock()
+        stream.readline = io.BytesIO(b''.join(json.dumps(r).encode() + b'\n' for r in requests)).readline
+        with patch.object(worker, 'TunController', return_value=controller) as factory:
+            worker.serve(stream, Path('protected-fixture'))
+        return [json.loads(call.args[0]) for call in stream.write.call_args_list], factory
+
+    def test_rejects_command_and_path_injection_and_restores_on_eof(self):
+        start = {'method': 'start', 'address': 'socks5://127.0.0.1:1080', 'dnsMode': 'fast'}
+        controller = Mock(info={'proxy_port': 54321})
+        replies, factory = self.exchange([{'method': 'exec'}, {**start, 'state_dir': 'other'}, start], controller)
+        self.assertEqual([set(r) for r in replies], [{'error'}, {'error'}, {'result'}])
+        self.assertEqual(replies[-1]['result'], 54321)
+        self.assertEqual(factory.call_count, 1)
+        self.assertEqual(factory.call_args.kwargs['state_dir'], Path('protected-fixture'))
+        controller.start.assert_called_once()
+        controller.close.assert_called_once()
+
+    def test_cleanup_failure_can_be_retried_on_the_same_session(self):
+        controller = Mock(info={'proxy_port': 54321}, cleanup_confirmed=True)
+        controller.close.side_effect = [RuntimeError('route in use'), None]
+        replies, _ = self.exchange([{'method': 'start', 'address': '127.0.0.1:1080', 'dnsMode': 'fast'},
+                                    {'method': 'stop'}, {'method': 'stop'}], controller)
+        self.assertEqual(replies[-2:], [{'error': 'route in use'}, {'result': True}])
+        self.assertEqual(controller.close.call_count, 2)
+
+
+@unittest.skipUnless(sys.platform == 'win32', 'Windows native pipe')
+class NativePipeTests(unittest.TestCase):
+    def test_native_transport_and_rejection_of_a_user_owned_worker(self):
+        # The synthetic server is owned by the test user. Only the positive transport
+        # check substitutes peer identity. Production always requires LocalSystem ownership.
+        name = '\\\\.\\pipe\\ModelDock.Test.' + uuid.uuid4().hex
+        def open_test_pipe():
+            for _ in range(100):
+                try: return network_pipe.open_client(SID)
+                except FileNotFoundError: time.sleep(.02)
+            self.fail('pipe did not appear')
+        with patch.object(network_pipe, 'pipe_name', return_value=name):
+            for trusted in (True, False):
+                received = []
+                failures = []
+                def server():
+                    try:
+                        with network_pipe._accept(name, 'D:P(A;;GA;;;OW)(A;;GA;;;SY)') as stream:
+                            if trusted:
+                                received.append(stream.readline(128))
+                                stream.write(b'ack\n')
+                    except BrokenPipeError as error:
+                        if trusted: failures.append(error)
+                    except Exception as error:
+                        failures.append(error)
+                thread = threading.Thread(target=server, daemon=True)
+                thread.start()
+                if trusted:
+                    with patch.object(network_pipe, '_owner_is_system', return_value=True), open_test_pipe() as client:
+                        client.write(b'hello\n')
+                        self.assertEqual(client.readline(128), b'ack\n')
+                    self.assertEqual(received, [b'hello\n'])
+                else:
+                    with self.assertRaisesRegex(PermissionError, '系统身份'):
+                        open_test_pipe()
+                thread.join(4)
+                self.assertFalse(thread.is_alive())
+                self.assertEqual(failures, [])

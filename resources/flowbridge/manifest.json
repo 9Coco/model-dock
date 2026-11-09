@@ -337,8 +337,8 @@
       "source": "https://github.com/9Coco/model-dock/blob/7ea8d51e40b18b23c85eab905b7b6b421632b218/resources/flowbridge/bridge.py",
       "path": "resources/flowbridge/bridge.py",
       "upstreamSha256": "1ea86b5d63bc6189e04ef790e38de0f85b6794c2ff830539eb36caca8f738cf8",
-      "sha256": "c38c8a0b68f7ccb2e304f8ebb26e49d6d8df04fe9d55885f2377d972182e8f34",
-      "changes": "Escape non-ASCII protocol output, expose read-only Windows proxy discovery, and restore on EOF only after session control requests."
+      "sha256": "e2498c9946cfcf4eec9b6b5f98cea035a80da5e78ac7a75e738bec6995089e17",
+      "changes": "Escape non-ASCII protocol output, expose read-only Windows proxy discovery, and restore on EOF only after session control requests. Delegate Windows global sessions to the protected demand-start task and preserve legacy recovery."
     },
     {
       "source": "https://github.com/9Coco/model-dock/blob/7ea8d51e40b18b23c85eab905b7b6b421632b218/resources/flowbridge/tools/fetch_python.py",
@@ -359,6 +359,36 @@
       "path": "resources/flowbridge/windows/local_proxy.py",
       "sha256": "728a46235f846131991bce6b9efdb1d3390aec91c73fff2c932dc284e8668d21",
       "changes": "Discover and probe local Windows proxy listeners for explicit upstream selection."
+    },
+    {
+      "source": "ModelDock Windows network integration",
+      "path": "resources/flowbridge/windows/install-network.ps1",
+      "sha256": "80222067c5547c43750f263434e3458c2c935e14e7a2b71918f48dab4cedaa59",
+      "changes": "Install checksum-pinned network components and an account-scoped on-demand Windows task."
+    },
+    {
+      "source": "ModelDock Windows network integration",
+      "path": "resources/flowbridge/windows/network-payload.json",
+      "sha256": "f24621227afa878442356ac5dd274c78689e82e8556b6f59ee03b2ee035bd12d",
+      "changes": "Pin the protected Windows TUN worker, official embedded runtime and core files."
+    },
+    {
+      "source": "ModelDock Windows network integration",
+      "path": "resources/flowbridge/windows/network_access.py",
+      "sha256": "7267589659e0b95616da755d98ef926e4a6f690e4ee8864be934aa6d61659be8",
+      "changes": "Request first-use consent and reuse the protected network task in subsequent desktop sessions."
+    },
+    {
+      "source": "ModelDock Windows network integration",
+      "path": "resources/flowbridge/windows/network_pipe.py",
+      "sha256": "2f3858f32eacaddd64a32d1cf7f556068556f78952b8fa34c26bf478aaeb3895",
+      "changes": "Restrict the local TUN control pipe to the authorized SID and verify the system owner."
+    },
+    {
+      "source": "ModelDock Windows network integration",
+      "path": "resources/flowbridge/windows/network_worker.py",
+      "sha256": "667ac705226a84b69e287f58bc918073e449dd8a8d8e9751afa3377bff72656e",
+      "changes": "Run only validated TUN start, status, stop and recovery operations from the protected package."
     }
   ]
 }

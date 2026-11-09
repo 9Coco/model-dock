@@ -19,6 +19,7 @@ sys.path[:0] = [str(ROOT), str(ROOT / 'linux')]
 from linux.relay import ProxyRelay, Endpoint, parse_proxy_address
 from linux import connectivity
 if sys.platform == 'win32':
+    from windows.network_access import NetworkAccess, TaskTunController
     from windows.system_proxy import DesktopProxyManager
     from windows.tun_client import TunController
     from windows.proxy import parse_global_address, probe_global_proxy
@@ -59,6 +60,7 @@ class NetworkSession:
         self.last_stats = {}
         self.cancelled = threading.Event()
         self.check_cancel = connectivity.CheckCancellation()
+        self.access = NetworkAccess(lambda message: emit({'event': 'progress', 'message': message})) if sys.platform == 'win32' else None
     def ensure_guardian(self):
         if self.guard is not None and self.guard.poll() is None: return
         self.guard = subprocess.Popen([sys.executable, '-I', '-B', str(ROOT / 'bridge.py'),
@@ -83,8 +85,23 @@ class NetworkSession:
         marker = self.directory / 'global-lease.json'
         if not marker.exists() or self.controller is not None: return
         if sys.platform == 'win32':
+            record = json.loads(marker.read_text('utf-8'))
+            if record == {'version': 2}:
+                if self.access.call('stop') is not True:
+                    raise RuntimeError('尚未确认上次网络会话已恢复。')
+                marker.unlink()
+                return
+            if record != {'version': 1}:
+                raise RuntimeError('无法识别全局会话的恢复记录。')
             from windows import native
-            if not native.is_admin(): raise RuntimeError('恢复上次全局会话需要管理员权限。')
+            if not native.is_admin():
+                # Older versions wrote the weak-host journal before launching the core.
+                # Never pass this user-writable journal to the privileged task.
+                state = native.tun_state()
+                if state['up'] or state['routes'] or (self.directory / 'tun-recovery.json').exists():
+                    raise RuntimeError('旧版本留下了网络恢复记录。请以管理员身份打开一次 ModelDock，点击断开 / 恢复。')
+                marker.unlink()
+                return
             mutex = native.SessionMutex()
             try:
                 state = native.tun_state()
@@ -102,7 +119,10 @@ class NetworkSession:
         marker.unlink()
     def disconnect(self):
         self.check_cancel.cancel()
-        if self.controller is not None: self.last_stats = self.controller.snapshot()
+        if self.controller is not None:
+            # A lost metrics pipe must not block the separate stop/recovery command.
+            try: self.last_stats = self.controller.snapshot()
+            except (RuntimeError, OSError): pass
         elif self.relay is not None: self.last_stats = self.relay.snapshot()
         self.last_stats = {k:v for k,v in self.last_stats.items() if k in ('upload_bytes','download_bytes','errors','total_connections')}
         # Restore desktop settings before removing the listener. Keep ownership
@@ -118,9 +138,11 @@ class NetworkSession:
         if self.relay is not None:
             self.relay.stop()
             self.relay = None
+        if self.access is not None:
+            self.access.release()
         self.port = self.mode = None
         return self.snapshot()
-    def connect(self, settings):
+    def connect(self, settings, allow_install=False):
         self.disconnect()
         if self.cancelled.is_set(): raise RuntimeError('连接已取消。')
         self.check_cancel = connectivity.CheckCancellation()
@@ -135,12 +157,15 @@ class NetworkSession:
             self.last_stats = {}
             self.mode = mode
             if mode == 'global':
-                options = {'dns_mode':settings['dnsMode'], 'state_dir':self.directory,
-                    'progress':lambda message:emit({'event':'progress','message':message})} if sys.platform == 'win32' else {}
-                self.controller = TunController(endpoint, **options)
+                if self.access is not None:
+                    self.access.open(allow_install)
+                    if self.cancelled.is_set(): raise RuntimeError('连接已取消。')
+                    self.controller = TaskTunController(self.access, endpoint, settings['dnsMode'])
+                else:
+                    self.controller = TunController(endpoint)
                 marker = self.directory / 'global-lease.json'
                 with marker.open('x') as stream:
-                    json.dump({'version':1},stream); stream.flush(); os.fsync(stream.fileno())
+                    json.dump({'version':2 if self.access is not None else 1},stream); stream.flush(); os.fsync(stream.fileno())
                 self.controller.start()
                 self.port = self.controller.info['proxy_port']
             else:
@@ -203,7 +228,7 @@ def main():
                 if method in ('connect', 'disconnect'):
                     cleanup_on_exit = True
                 if method=='connect':
-                    result = network.connect(request['settings'])
+                    result = network.connect(request['settings'], request.get('allowInstall') is True)
                 elif method=='disconnect': result = network.disconnect()
                 elif method=='snapshot': result = network.snapshot()
                 elif method=='localProxies' and sys.platform == 'win32':
@@ -214,7 +239,7 @@ def main():
                 emit({'id':request['id'],'ok':True,'result':result})
             except Exception as error:
                 message = str(error)[:500] if isinstance(error,(ValueError,RuntimeError,OSError)) else '网络操作失败，请检查配置与权限。'
-                emit({'id':request['id'],'ok':False,'message':message})
+                emit({'id':request['id'],'ok':False,'message':message,'code':getattr(error, 'code', None)})
     finally:
         if cleanup_on_exit:
             try: network.disconnect()
