@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { ModelDockApi } from '../shared/types';
+import type { SiteLatency } from '../shared/flowbridge-types';
 const call = (method: string, ...args: unknown[]) => ipcRenderer.invoke('modeldock:' + method, ...args);
 const relayImportCall = async (method: 'relayClientImportCandidates' | 'importRelayClientAccount' | 'jetBrainsIdeImportCandidates' | 'importJetBrainsIdeAccount' | 'beginJetBrainsIdeImport', ...args: unknown[]) => {
   try { return await call(method, ...args); }
@@ -17,6 +18,15 @@ const api: ModelDockApi = {
   connectNetwork: upstream => call('connectNetwork', upstream), disconnectNetwork: () => call('disconnectNetwork'),
   checkNetworkSite: site => call('checkNetworkSite', site), networkHotspotCandidates: () => call('networkHotspotCandidates'),
   measureNetworkSpeed: (address, metric) => call('measureNetworkSpeed', address, metric),
+  measureNetworkSites: async (address, onResult) => {
+    const id = crypto.randomUUID();
+    const report = (_event: Electron.IpcRendererEvent, runId: string, result: SiteLatency) => {
+      if (runId === id) onResult(result);
+    };
+    ipcRenderer.on('modeldock:site-latency-result', report);
+    try { await call('measureNetworkSites', address, id); }
+    finally { ipcRenderer.removeListener('modeldock:site-latency-result', report); }
+  },
   networkLocalProxies: () => call('networkLocalProxies'),
   exportPhoneProxy: () => call('exportPhoneProxy'), showNetworkMini: () => call('showNetworkMini'), openNetworkSite: site => call('openNetworkSite', site),
   setJetBrainsPlugin: (tool, plugin) => call('setJetBrainsPlugin', tool, plugin),

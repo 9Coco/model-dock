@@ -31,6 +31,7 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 SITES = {
     "Google": "https://www.google.com/",
     "YouTube": "https://www.youtube.com/",
+    "X": "https://x.com/",
     "GitHub": "https://github.com/",
     "ChatGPT": "https://chatgpt.com/",
     "Cloudflare": "https://www.cloudflare.com/",

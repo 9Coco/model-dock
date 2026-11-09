@@ -3,7 +3,7 @@ import { hotspotCandidates } from './flowbridge';
 import { ModelDockRuntime } from './modeldock-runtime';
 import { FlowBridgeEngine } from './flowbridge-engine';
 import { NetworkMini } from './network-mini';
-import { NETWORK_SITES, type NetworkSite } from '../shared/flowbridge-types';
+import { NETWORK_SITES, NETWORK_SITE_URLS, type NetworkSite, type SiteLatency } from '../shared/flowbridge-types';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
@@ -76,7 +76,7 @@ import { jetBrainsWindowsSmokeOptions, verifyJetBrainsWindowsProfiles } from './
 import { verifyAggregateModes } from './aggregate-modes-smoke';
 import { restoreToolBinding } from './tool-restore-binding';
 import { importOpenCodeGo } from './opencode-go-import';
-import { measureProxySpeed } from './proxy-speed-test';
+import { measureProxySpeed, measureSiteLatency } from './proxy-speed-test';
 import type { ProxySpeedMetric } from '../shared/flowbridge-types';
 import { ApplicationNetworkSession } from './network-proxy';
 import { inspectAuthNetwork } from './network-diagnostic';
@@ -811,24 +811,44 @@ function registerIpc() {
   handle('disconnectNetwork', () => network.disconnect());
   let measuringSpeed = false;
   let speedProxy = '';
-  handle('measureNetworkSpeed', async (address: string, metric: ProxySpeedMetric) => {
-    const selected = network.snapshot().settings.address;
-    if (!selected || selected !== address || !['latency', 'download', 'upload'].includes(metric)) throw new Error('请先应用要测试的代理地址。');
+  async function withSpeedProbe<T>(address: string, run: (probe: Electron.Session) => Promise<T>): Promise<T> {
+    if (!address || address !== network.snapshot().settings.address) throw new Error('请先应用要测试的代理地址。');
     if (measuringSpeed) throw new Error('代理测速正在进行。');
     measuringSpeed = true;
     try {
-      if (__MODELDOCK_SMOKE_BUILD__ && process.env.MODELDOCK_SMOKE_NETWORK_ONLY === '1') return { latency: 42, download: 80, upload: 20 }[metric];
       const probe = session.fromPartition('modeldock-speed-test', { cache: false });
-      if (speedProxy !== selected) {
+      if (speedProxy !== address) {
         await probe.closeAllConnections();
-        await probe.setProxy({ mode: 'fixed_servers', proxyRules: selected });
-        speedProxy = selected;
+        await probe.setProxy({ mode: 'fixed_servers', proxyRules: address });
+        speedProxy = address;
       }
-      return await measureProxySpeed(metric, (input, init) => probe.fetch(input, init));
+      return await run(probe);
     } catch (error) {
       if (error instanceof Error && error.message.startsWith('测速')) throw error;
       throw new Error('通过上游代理访问测速节点失败或超时，请检查代理地址和连接。');
     } finally { measuringSpeed = false; }
+  }
+  handle('measureNetworkSpeed', (address: string, metric: ProxySpeedMetric) => {
+    if (!['latency', 'download', 'upload'].includes(metric)) throw new Error('未知测速项目。');
+    return withSpeedProbe(address, async probe => {
+      if (__MODELDOCK_SMOKE_BUILD__ && process.env.MODELDOCK_SMOKE_NETWORK_ONLY === '1') return { latency: 42, download: 80, upload: 20 }[metric];
+      return measureProxySpeed(metric, (url, init) => probe.fetch(url, init));
+    });
+  });
+  handle('measureNetworkSites', (address: string, id: string) => {
+    if (typeof id !== 'string' || !/^[0-9a-f-]{36}$/i.test(id)) throw new Error('测速请求无效。');
+    const target = window?.webContents;
+    return withSpeedProbe(address, async probe => {
+      await Promise.all(NETWORK_SITES.map(async (site, index) => {
+        let result: SiteLatency;
+        if (__MODELDOCK_SMOKE_BUILD__ && process.env.MODELDOCK_SMOKE_NETWORK_ONLY === '1') {
+          result = site === 'X' ? { site, state: 'timeout' } : { site, state: 'response', ms: 42 + index, httpStatus: site === 'ChatGPT' ? 403 : 200 };
+        } else {
+          result = await measureSiteLatency(site, (url, init) => probe.fetch(url, init));
+        }
+        if (target && !target.isDestroyed()) target.send('modeldock:site-latency-result', id, result);
+      }));
+    });
   });
   handle('checkNetworkSite', site => network.check(site));
   handle('networkHotspotCandidates', () => hotspotCandidates());
@@ -836,8 +856,7 @@ function registerIpc() {
   handle('showNetworkMini', () => networkMini.show());
   handle('openNetworkSite', async (site: NetworkSite) => {
     if (!NETWORK_SITES.includes(site)) throw new Error('未知网站。');
-    const urls = { Google: 'https://www.google.com/', YouTube: 'https://www.youtube.com/', GitHub: 'https://github.com/', ChatGPT: 'https://chatgpt.com/', Cloudflare: 'https://www.cloudflare.com/' };
-    await shell.openExternal(urls[site]);
+    await shell.openExternal(NETWORK_SITE_URLS[site]);
   });
   handle('exportPhoneProxy', async () => {
     const selected = await dialog.showSaveDialog(window!, { title: '导出手机 Termux 代理', defaultPath: 'termux-hotspot-proxy.sh', filters: [{ name: 'Shell 脚本', extensions: ['sh'] }] });

@@ -7,6 +7,8 @@ Keep the original copyright and license notices when redistributing them.
 
 ## Artwork
 
+The Google, YouTube, X, GitHub and Cloudflare site icons come from [Simple Icons 13.21.0](https://github.com/simple-icons/simple-icons/tree/13.21.0/icons), distributed under [CC0 1.0](https://github.com/simple-icons/simple-icons/blob/13.21.0/LICENSE.md). The ChatGPT tile reuses the bundled OpenAI mark credited in the tool icon notices.
+
 | Material | Source | License and local records |
 | --- | --- | --- |
 | Material Symbols Rounded | [Google material-design-icons](https://github.com/google/material-design-icons), revision `737e3324305806514d7909874fa1818ae1808232` | Apache-2.0; [license](src/renderer/assets/material-symbols/LICENSE-Apache-2.0.txt), [notice](src/renderer/assets/material-symbols/NOTICE.md), [manifest](src/renderer/assets/material-symbols/manifest.json) |
