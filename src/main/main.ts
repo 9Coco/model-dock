@@ -1,3 +1,8 @@
+import { verifyNetworkUi } from './network-smoke';
+import { FlowBridgeManager, hotspotCandidates } from './flowbridge';
+import { FlowBridgeEngine } from './flowbridge-engine';
+import { NetworkMini } from './network-mini';
+import { NETWORK_SITES, type NetworkSite } from '../shared/flowbridge-types';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
@@ -115,6 +120,10 @@ let copilotProviders: CopilotProviderManager;
 let mcp: McpManager;
 let skills: SkillManager;
 let preferences: SettingsManager;
+let network: FlowBridgeManager;
+let networkMini: NetworkMini;
+let shutdownRunning = false;
+let shutdownComplete = false;
 let catalog: ModelCatalog;
 let connectionTester: ConnectionTester;
 let presentation: WindowPresentation | null = null;
@@ -129,6 +138,7 @@ const authDiagnosticTraces = new Map<string, string>();
 const pollingDiagnosticStates = new Map<string, string>();
 let exitDiagnosticRecorded = false;
 let startupStage: DiagnosticContext['stage'] = 'startup';
+function networkResourceRoot() { return app.isPackaged ? join(process.resourcesPath, 'flowbridge') : join(__dirname, '../resources/flowbridge'); }
 function recordDiagnostic(level: DiagnosticLevel, event: DiagnosticEvent, context: DiagnosticContext = {}): void {
   try { diagnostics?.write(level, event, undefined, { ...diagnosticScope.getStore(), ...context }); }
   catch { /* 日志故障不得改变原操作或重复生成日志。 */ }
@@ -265,6 +275,7 @@ async function createWindow(forceShow = false) {
         const result = await window!.webContents.executeJavaScript(`({title:document.title, text:document.body.innerText, bridge:!!window.modelDock})`);
         writeFileSync(join(outputDir, 'electron-smoke.json'), JSON.stringify({ ...result, dataDir, windowSize: window!.getSize(), contentSize: window!.getContentSize() }, null, 2));
         writeFileSync(join(outputDir, 'electron-smoke.png'), await captureUi());
+        if (process.env.MODELDOCK_SMOKE_NETWORK_ONLY === '1') { await verifyNetworkUi(window!, store, outputDir, captureUi); quitting = true; app.quit(); return; }
         if (!modelHistoryOnly && process.env.MODELDOCK_SMOKE_JETBRAINS_IDE_ONLY !== '1' && process.env.MODELDOCK_SMOKE_PROVIDER_MANAGEMENT_ONLY !== '1' && process.env.MODELDOCK_SMOKE_RELAY_QUOTA_ONLY !== '1' && process.env.MODELDOCK_SMOKE_RELAY_CLIENT_IMPORT_ONLY !== '1' && process.env.MODELDOCK_SMOKE_SIDEBAR_LAYOUT_ONLY !== '1' && process.env.MODELDOCK_SMOKE_NAVIGATION_CONSOLIDATION_ONLY !== '1' && process.env.MODELDOCK_SMOKE_RELAY_SUBSCRIPTIONS_ONLY !== '1' && process.env.MODELDOCK_SMOKE_JETBRAINS_PLUGIN_ONLY !== '1' && process.env.MODELDOCK_SMOKE_CONTEXT_MENU_ONLY !== '1') await verifyToolIcons(window!, outputDir, captureUi);
         if (modelHistoryOnly) {
           await verifyHistoryModels(window!, store, outputDir, captureUi);
@@ -777,6 +788,24 @@ function registerIpc() {
   });
   handle('snapshot', () => ({ providers: store.listProviders(), models: store.listModels(), bindings: store.listBindings(),
     gateway: gateway.status(), gatewayExposure: store.gatewayExposure(), logs: store.logs(100), dataDir, version: app.getVersion() }));
+  handle('networkSnapshot', () => network.snapshot());
+  handle('saveNetworkSettings', patch => network.save(patch));
+  handle('connectNetwork', () => network.connect());
+  handle('disconnectNetwork', () => network.disconnect());
+  handle('checkNetworkSite', site => network.check(site));
+  handle('networkHotspotCandidates', () => hotspotCandidates());
+  handle('showNetworkMini', () => networkMini.show());
+  handle('openNetworkSite', async (site: NetworkSite) => {
+    if (!NETWORK_SITES.includes(site)) throw new Error('未知网站。');
+    const urls = { Google: 'https://www.google.com/', YouTube: 'https://www.youtube.com/', GitHub: 'https://github.com/', ChatGPT: 'https://chatgpt.com/', Cloudflare: 'https://www.cloudflare.com/' };
+    await shell.openExternal(urls[site]);
+  });
+  handle('exportPhoneProxy', async () => {
+    const selected = await dialog.showSaveDialog(window!, { title: '导出手机 Termux 代理', defaultPath: 'termux-hotspot-proxy.sh', filters: [{ name: 'Shell 脚本', extensions: ['sh'] }] });
+    if (selected.canceled || !selected.filePath) return null;
+    writeFileSync(selected.filePath, readFileSync(join(networkResourceRoot(), 'termux/termux-hotspot-proxy.sh')), { mode: 0o600 });
+    return selected.filePath;
+  });
   handle('getSettings', () => preferences.get());
   handle('probeAuthNetwork', () => inspectAuthNetwork(session.defaultSession, preferences.get().settings.proxyUrl,
     __MODELDOCK_SMOKE_BUILD__ && process.env.MODELDOCK_SMOKE_AUTH_MOCK === '1'
@@ -1149,6 +1178,12 @@ function initializeApplication() {
     }
     nativeTheme.themeSource = preferences.get().settings.theme;
     nativeTheme.on('updated', () => { if (window && !window.isDestroyed()) window.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#19191c' : '#f8f9fb'); });
+    network = new FlowBridgeManager(store, { platform: process.platform, dataDir: join(dataDir, 'network'), gatewayPort: () => preferences.get().settings.gatewayPort,
+      engine: (progress, exit) => {
+        if (__MODELDOCK_SMOKE_BUILD__) throw new Error('隔离 UI 验证不允许操作系统网络。');
+        return new FlowBridgeEngine(networkResourceRoot(), join(dataDir, 'network'), progress, exit);
+      } });
+    networkMini = new NetworkMini(network, store, revealWindow, __dirname, __MODELDOCK_RUNTIME_MODE__ === 'development' ? devUrl : undefined);
     startupStage = 'proxy';
     await applyNetworkProxy(session.defaultSession, preferences.get().settings.proxyUrl);
     startupStage = 'managers';
@@ -1208,6 +1243,8 @@ function initializeApplication() {
       tray.setToolTip('ModelDock · 模型坞');
       tray.setContextMenu(Menu.buildFromTemplate([
         { label: '打开 ModelDock', click: revealWindow },
+        { label: '网速小窗', click: () => { void networkMini.show(); } },
+        { label: '断开网络代理', click: () => { void network.disconnect().catch(error => dialog.showErrorBox('网络恢复未完成', error.message)); } },
         { label: '停止本地网关', click: () => { void gateway.stop(); } },
         { type: 'separator' }, { label: '退出', click: () => { quitting = true; app.quit(); } },
       ]));
@@ -1215,6 +1252,10 @@ function initializeApplication() {
     }
     startupStage = 'window';
     await createWindow();
+    if (!__MODELDOCK_SMOKE_BUILD__) {
+      if (network.snapshot().settings.showMiniOnStart) await networkMini.show();
+      void network.autoConnect();
+    }
     recordDiagnostic('info', 'app.ready', { version: app.getVersion(), stage: 'window', port: gateway.status().port, autoStart: serviceSettings.autoStartGateway });
   }).catch(error => {
     recordDiagnostic('error', 'app.start_failed', { ...describeError(error), stage: startupStage, outcome: 'failure' });
@@ -1223,10 +1264,23 @@ function initializeApplication() {
     quitting = true; app.quit();
   });
   app.on('before-quit', event => {
-    if (!exitDiagnosticRecorded) { exitDiagnosticRecorded = true; recordDiagnostic('info', 'app.exit', { stage: 'shutdown' }); }
-    if (!quitting) { event.preventDefault(); quitting = true; }
-    if (gateway) { event.preventDefault(); const current = gateway; gateway = undefined as unknown as Gateway;
-      accounts?.dispose(); copilotProviders?.dispose(); copilotAccounts?.dispose(); oauth?.dispose(); traeNativeAccounts?.dispose(); centralNativeAccounts?.dispose(); void Promise.allSettled([current.stop(), ideAccounts?.dispose()]).then(() => { store?.close(); tray?.destroy(); app.quit(); }); }
+    if (shutdownComplete) return;
+    event.preventDefault();
+    if (shutdownRunning) return;
+    shutdownRunning = true; quitting = true;
+    void (async () => {
+      // Keep the window, store and gateway alive if OS cleanup needs a retry.
+      try { await network?.shutdown(); }
+      catch (error) {
+        shutdownRunning = false; quitting = false; revealWindow();
+        dialog.showErrorBox('网络恢复未完成', error instanceof Error ? error.message : '请重试断开后退出。');
+        return;
+      }
+      if (!exitDiagnosticRecorded) { exitDiagnosticRecorded = true; recordDiagnostic('info', 'app.exit', { stage: 'shutdown' }); }
+      accounts?.dispose(); copilotProviders?.dispose(); copilotAccounts?.dispose(); oauth?.dispose(); traeNativeAccounts?.dispose(); centralNativeAccounts?.dispose();
+      await Promise.allSettled([gateway?.stop(), ideAccounts?.dispose()]);
+      networkMini?.close(); store?.close(); tray?.destroy(); shutdownComplete = true; app.quit();
+    })();
   });
   app.on('activate', () => { if (window) revealWindow(); else if (store) void createWindow(true); });
   app.on('window-all-closed', () => { if (!tray) app.quit(); });

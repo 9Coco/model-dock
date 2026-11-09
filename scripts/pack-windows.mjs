@@ -67,6 +67,7 @@ async function main() {
   const npmCli = process.env.npm_execpath;
   if (!npmCli || !existsSync(npmCli)) throw new Error('请使用 npm run pack:win 启动此脚本。');
 
+  runNode(join(root, 'scripts', 'prepare-network.mjs'), ['win32']);
   console.log('开始构建最新源码…');
   runNode(npmCli, ['run', 'build']);
   runNode(join(root, 'scripts', 'verify-production-build.mjs'));

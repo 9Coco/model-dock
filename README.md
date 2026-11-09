@@ -4,7 +4,7 @@
 
 ModelDock 是跨平台本地模型管理台：全局维护模型来源与别名，为各工具选择供应商，按工具能力直连上游或使用本机统一接口。界面使用 Electron、React、TypeScript、Vite；Node.js 后台和 SQLite 数据存储独立于界面。
 
-自有代码及原创应用标记采用 [MIT 许可](LICENSE)，第三方图标和依赖保留各自的 Apache-2.0、CC-BY-4.0、MIT 或其他许可，详见 [第三方声明](THIRD_PARTY_NOTICES.md)。欢迎按 [贡献指南](CONTRIBUTING.md) 提交修复；敏感问题请遵循 [安全报告流程](SECURITY.md)。
+0.4.0 起包含 FlowBridge 的组合发行版采用 [GPL-3.0-or-later](LICENSE)；原 ModelDock 代码及原创应用标记保留 [MIT 授权](LICENSE-MIT)，第三方图标和依赖保留各自的 Apache-2.0、CC-BY-4.0、MIT 或其他许可，详见 [第三方声明](THIRD_PARTY_NOTICES.md)。欢迎按 [贡献指南](CONTRIBUTING.md) 提交修复；敏感问题请遵循 [安全报告流程](SECURITY.md)。
 
 ## 0.3.91 · 修复 TRAE 原生函数工具请求
 
@@ -567,3 +567,34 @@ Linux 正式入口启动、Wayland 可见窗口及隔离模拟上游验证已通
 日志保存在本地资料目录的 `logs/diagnostics.jsonl`，每次启动带独立会话 ID，同一次操作带关联 ID。重启后历史仍可查看；每份日志最多 2 MiB，包含当前文件共保留 5 份，最多约 10 MiB。复制和导出仅包含当前筛选的最近记录；需要更长历史时可打开日志目录查看轮转文件。
 
 只保存固定事件和诊断元数据：状态码、耗时、网络错误码、协议、响应状态和计数等。不保存 API Key、OAuth Token、设备验证码、请求头、提示词、回答、上游错误正文或原始异常文本。地址参数与未知路径会移除。日志故障不会中断模型服务，日志面板会提示资料目录权限或磁盘问题。
+
+
+## 网络 · FlowBridge（0.4.0）
+
+左侧“网络”统一管理上游代理、HTTP 桌面代理、全局 TCP/UDP/DNS、热点地址候选、网站双路径检测、网速小窗和 24 小时字节历史。设置页管理自动连接、小窗启动和 Windows 解析方式；登录启动、主题、关闭到托盘继续使用 ModelDock 原设置。托盘提供网络断开；退出先恢复系统网络，清理失败保留应用供重试。
+
+默认不连接、不改系统代理。先填写 `http://手机IP:38473` 或全局模式的 `socks5://手机IP:38473` 并保存，再点击连接。已连接时切换模式会先恢复原会话，再启动新会话。全局模式要求标准 SOCKS5 UDP ASSOCIATE 及真实 DNS 往返，普通 HTTP 代理不具有任意 UDP 能力。Linux 全局上游必须是远端数值 IP；Windows 可使用经过防循环身份检查的本机 SOCKS5。网关回环端口不能作为网络上游。
+
+Linux 全局模式安装同版本 `modeldock-network` 权限包；仅在首次连接时启用当前用户的固定 systemd/Polkit 服务。AppImage 也需要这个系统包，不能提权运行用户目录脚本。Windows x64 包附带 CPython、sing-box 和官方签名 Wintun；全局模式要求以管理员身份运行，普通用户可用 HTTP 模式。原 ModelDock 登录启动不会自动取得管理员权限，因此 Windows 登录后的全局自动连接仍需目标系统原生验收。
+
+“导出手机脚本”仅保存 Termux 安装器，手机端由用户执行；不连接或控制手机。原 ModelDock 数据目录、账号、模型、绑定、MCP、Skills 和历史表不迁移、不清空。独立 FlowBridge 的旧数据与自启动不自动接管，使用整合版前应退出旧版的网络会话。
+
+构建和验证：
+
+```sh
+npm ci
+npm run build
+npm test
+npm run test:network
+npm run verify:production
+npm run network:verify
+npm run network:prepare -- linux
+npm run network:helper
+npm run dist:linux
+# Windows x64 原生构建：npm run pack:win
+# Linux 云端的独立 Electron QA（需要已授权的显示）：
+CI=true MODELDOCK_SMOKE_NETWORK_ONLY=1 node scripts/smoke-electron.mjs work/network-qa --no-build --ci-no-sandbox --x11
+npm run source:archive
+```
+
+[整合与许可证说明、验收边界](docs/flowbridge-integration.md)。全局不覆盖 ICMP、独立网络空间、第三方 VPN 等全部场景；系统路径与代理出口检测必须分别解读。小窗是独立悬浮窗，不是 Explorer 内嵌任务栏工具栏。

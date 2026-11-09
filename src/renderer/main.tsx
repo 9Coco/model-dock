@@ -1,3 +1,4 @@
+import { NetworkMini } from './NetworkMini';
 import { installRendererDiagnostics } from './renderer-diagnostics';
 import React from 'react';
 import { createRoot } from 'react-dom/client';
@@ -10,6 +11,7 @@ import { applyTheme } from './theme';
 import type { SettingsSnapshot } from '../shared/settings-types';
 
 async function start() {
+  if (window.location.hash === '#network-mini') { createRoot(document.getElementById('root')!).render(<NetworkMini />); return; }
   let settings: SettingsSnapshot | undefined;
   try { settings = await window.modelDock?.getSettings?.(); } catch { /* Settings page can retry; the rest of the app remains usable. */ }
   applyTheme(settings?.settings.theme ?? 'light');

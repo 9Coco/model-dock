@@ -1,0 +1,13 @@
+[Unit]
+Description=FlowBridge authorized access service for user %i
+Requires=modeldock-network-access@%i.socket
+After=modeldock-network-access@%i.socket
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/libexec/modeldock-network-accessd --daemon %i
+KillMode=mixed
+TimeoutStopSec=30s
+Restart=on-failure
+RestartSec=1s

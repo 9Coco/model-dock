@@ -1,3 +1,4 @@
+import { NetworkPreferences } from './NetworkPanel';
 import { useEffect, useRef, useState } from 'react';
 import { Activity, FolderOpen, Monitor, Moon, RefreshCw, Sun } from './MaterialIcon';
 import type { Model, ModelDockApi, Provider } from '../shared/types';
@@ -69,6 +70,7 @@ export function SettingsPanel({ api, snapshot, onSave, notify, dataDir, version,
       <div className="settings-row"><div className="settings-row-copy"><strong>数据目录</strong><small className="settings-meta"><code>{dataDir || '正在读取目录'}</code></small></div><div className="settings-control"><button className="button small secondary" disabled={!api || !!busy || !dataDir} onClick={() => void action('data-dir', () => api!.openDataDir())}><FolderOpen size={15} />打开目录</button></div></div>
       <div className="settings-row"><div className="settings-row-copy"><strong>ModelDock</strong><small>{version ? `v${version}` : '开发版'} · 设置保存在本机 SQLite 中</small></div><span className="settings-note">自动保存</span></div>
     </div></section>
+    <NetworkPreferences api={api} notify={notify} />
     <ConnectionPrinciples providers={providers} models={models} />
     {busy && <div className="settings-note" role="status"><RefreshCw size={13} className="spin" />{busy === 'probe-auth-network' ? '正在检测应用网络…' : '正在应用设置…'}</div>}
   </section>;

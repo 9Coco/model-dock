@@ -1,3 +1,4 @@
+import type { FlowBridgeApi } from './flowbridge-types';
 import type { AuthAccount, CopilotImportCandidate, JetBrainsIdeImportResult, RelayAccountKind, RelayClientImportPreview, SubscriptionKind } from './auth-types';
 import type { McpServer, McpServerInput, McpImportResult, McpConfigPreview, McpApplyResult } from './mcp-types';
 import type { ManagedSkill, SkillSnapshot, SkillRepositoryInput, SkillImportResult, SkillFilePreview, SkillRemovePreview } from './skill-types';
@@ -224,7 +225,7 @@ export interface AuthProgress {
   category?: AuthFailureCategory;
 }
 export type { DiagnosticEntry, DiagnosticQuery, DiagnosticSnapshot } from './diagnostic-types';
-export interface ModelDockApi {
+export interface ModelDockApi extends FlowBridgeApi {
   jetBrainsStatus(tool: import('./jetbrains').JetBrainsToolId, refresh?: boolean): Promise<import('./jetbrains').JetBrainsStatus>;
   /** Only a fixed failure kind/name can be reported; never arbitrary log text. */
   reportRendererError(input: { kind: 'error' | 'unhandled-rejection'; errorName?: string }): Promise<void>;

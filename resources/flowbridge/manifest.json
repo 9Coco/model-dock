@@ -1,0 +1,335 @@
+{
+  "source": "https://github.com/9Coco/flowbridge",
+  "revision": "f80139e040ca51cd0e7036659b350e692b9c495c",
+  "license": "GPL-3.0-or-later",
+  "changes": "Isolated ModelDock system paths/interface names; recomputed Windows Wintun interface GUID; independent recovery state directories without selecting test backends; ModelDock self-loop rejection; fixed script entry for embedded Python signal delivery; tests pin KDE or inject POSIX cache paths only for mock Windows cores. Original Qt GUI/storage/autostart are not imported. Namespace harness expects the ModelDock root-helper runtime path.",
+  "files": [
+    {
+      "source": "LICENSE",
+      "path": "LICENSE",
+      "upstreamSha256": "c99ff6daed10878c85cf6a4f08d13889c856fb72de266f4fa592afbb1e476c4f",
+      "sha256": "c99ff6daed10878c85cf6a4f08d13889c856fb72de266f4fa592afbb1e476c4f"
+    },
+    {
+      "source": "linux/NOTICE-sing-box.md",
+      "path": "linux/NOTICE-sing-box.md",
+      "upstreamSha256": "40a3c0ef6ab7d555b64c3f9abe9fafd7bcbd56582593521581e896e15b742564",
+      "sha256": "40a3c0ef6ab7d555b64c3f9abe9fafd7bcbd56582593521581e896e15b742564"
+    },
+    {
+      "source": "linux/THIRD-PARTY-LICENSE-sing-box.txt",
+      "path": "linux/THIRD-PARTY-LICENSE-sing-box.txt",
+      "upstreamSha256": "650d5e3b99a446fb38e820fa87a49562e0c79eab868fff58618ac487a58e554c",
+      "sha256": "650d5e3b99a446fb38e820fa87a49562e0c79eab868fff58618ac487a58e554c"
+    },
+    {
+      "source": "windows/THIRD-PARTY-NOTICES.md",
+      "path": "windows/THIRD-PARTY-NOTICES.md",
+      "upstreamSha256": "78faab1de4ddaf6dd652a914c024034425bfc19b2723b0abee681cb3ec4cbc91",
+      "sha256": "78faab1de4ddaf6dd652a914c024034425bfc19b2723b0abee681cb3ec4cbc91"
+    },
+    {
+      "source": "termux/README.md",
+      "path": "termux/README.md",
+      "upstreamSha256": "e49cc32aa3f09f908fba65abde2c54cc5d925fb5fdf30b7e4127f45c6af1b05d",
+      "sha256": "e49cc32aa3f09f908fba65abde2c54cc5d925fb5fdf30b7e4127f45c6af1b05d"
+    },
+    {
+      "source": "termux/termux-hotspot-proxy.sh",
+      "path": "termux/termux-hotspot-proxy.sh",
+      "upstreamSha256": "26dc871c4dd55362cf5a361f9bb49e6f0d2b394e1e7c019f74129fcf70cb4853",
+      "sha256": "26dc871c4dd55362cf5a361f9bb49e6f0d2b394e1e7c019f74129fcf70cb4853"
+    },
+    {
+      "source": "tools/fetch_tun_core.py",
+      "path": "tools/fetch_tun_core.py",
+      "upstreamSha256": "f18b2258e65d36021726e60e1a62346d0d535a22857e7eb242ed268538311b45",
+      "sha256": "f18b2258e65d36021726e60e1a62346d0d535a22857e7eb242ed268538311b45"
+    },
+    {
+      "source": "tools/fetch_windows_core.py",
+      "path": "tools/fetch_windows_core.py",
+      "upstreamSha256": "c799fdb4b567a60f1a0e6cdb2f0897ac6cdf1f7e8884e9adb0d10072562194aa",
+      "sha256": "c799fdb4b567a60f1a0e6cdb2f0897ac6cdf1f7e8884e9adb0d10072562194aa"
+    },
+    {
+      "source": "tools/tun-core.json",
+      "path": "tools/tun-core.json",
+      "upstreamSha256": "79cff3357397148355150e136e767ebe942ddaa20ae4f83c8e1f3550c0a0c1a9",
+      "sha256": "79cff3357397148355150e136e767ebe942ddaa20ae4f83c8e1f3550c0a0c1a9"
+    },
+    {
+      "source": "tools/windows-core.json",
+      "path": "tools/windows-core.json",
+      "upstreamSha256": "c5c45967733d48ec102348a81ad8d5c42bdc4d0efd654312908986af724c9173",
+      "sha256": "c5c45967733d48ec102348a81ad8d5c42bdc4d0efd654312908986af724c9173"
+    },
+    {
+      "source": "linux/relay.py",
+      "path": "linux/relay.py",
+      "upstreamSha256": "157751e66b1108a9037c001175799522d579776fc134aa44a82f7037b28f1246",
+      "sha256": "157751e66b1108a9037c001175799522d579776fc134aa44a82f7037b28f1246"
+    },
+    {
+      "source": "linux/system_proxy.py",
+      "path": "linux/system_proxy.py",
+      "upstreamSha256": "97f812f438cf6cab37cc7e26012805f89cb796425ae64d957736a5a012b87960",
+      "sha256": "a0b48d839f41e975c4c6e6e9c1a2c6941ecd794dc7004cac616b2243a1c316bd"
+    },
+    {
+      "source": "linux/connectivity.py",
+      "path": "linux/connectivity.py",
+      "upstreamSha256": "e019d9618fc6510f7c0af93f918f79ab2efeb7f092da3dd63e83da7302f8feca",
+      "sha256": "e019d9618fc6510f7c0af93f918f79ab2efeb7f092da3dd63e83da7302f8feca"
+    },
+    {
+      "source": "linux/tun_client.py",
+      "path": "linux/tun_client.py",
+      "upstreamSha256": "cc98e1ca0fca1bcc082b46ec46ba0116e13f0b65028fdb50713fd78407fbb059",
+      "sha256": "134c19485fcb4b16af1396932d7a327df7fe6ad216fe285c277b51be067c9f77"
+    },
+    {
+      "source": "linux/tun_helper.py",
+      "path": "linux/tun_helper.py",
+      "upstreamSha256": "eefd220d0d42f2e633616dbd2a87786e9a0b164426f5af6572b30aff25421b0c",
+      "sha256": "50bf40f5deba614110b80bcd9675fc7bb520f4ec0c2cc9e2892d881d123a9b88"
+    },
+    {
+      "source": "linux/tun_config.py",
+      "path": "linux/tun_config.py",
+      "upstreamSha256": "6f4c30486d8fada751a2a90ca0ad568c159f82e85caf168c2a4555d8adf237fa",
+      "sha256": "7144df56f88b9f818ae904d4bf1acc216f245f0314933b970c4a7106aa4a5a6e"
+    },
+    {
+      "source": "linux/tun_access.py",
+      "path": "linux/tun_access.py",
+      "upstreamSha256": "436a45a33d10eaf78f25adc88267d89372e702edf03e84e88c0d9ad1f9f3c3f7",
+      "sha256": "a2176ab5cdfca35fc7eb2d5ae67c2c519e66873230d7803970fd53296b066006"
+    },
+    {
+      "source": "linux/tun_setup.py",
+      "path": "linux/tun_setup.py",
+      "upstreamSha256": "be9b01a5a685ad9f499192c49cc76cdc28a3fe66cf842b6d5e5e77f54b6dc377",
+      "sha256": "304ebd28033a809322a8c1ea065df95845ac1f36891821daf38e19822b551b8c"
+    },
+    {
+      "source": "linux/guardian.py",
+      "path": "linux/guardian.py",
+      "upstreamSha256": "9022f0543dd4618160ad7cd5c8fc55af0bbedcc7940df87fb4f52cfef60624a9",
+      "sha256": "9022f0543dd4618160ad7cd5c8fc55af0bbedcc7940df87fb4f52cfef60624a9"
+    },
+    {
+      "source": "windows/native.py",
+      "path": "windows/native.py",
+      "upstreamSha256": "7d86b2393a039755052ed87ea84c3050399ce39df4b021b2ac1cdf40251c5fff",
+      "sha256": "9ce42231e1f7a5f2c2b3958ef73e2795a2c385cbe26f785d6f0115db7e673870"
+    },
+    {
+      "source": "windows/network_snapshot.py",
+      "path": "windows/network_snapshot.py",
+      "upstreamSha256": "cc00e118bc4219fd5b5682f34e5c1fd80bbd09ad131a18939689affa9b9ab5ce",
+      "sha256": "45fc3489bb8271ccae645b0278873b0df2aadc0e76cd07788c993940e1d0ef28"
+    },
+    {
+      "source": "windows/proxy.py",
+      "path": "windows/proxy.py",
+      "upstreamSha256": "b72898a9c2f544a2ae12eacd778d2cbaeebb3b1338f2d059c5e72e8070a4f16a",
+      "sha256": "b72898a9c2f544a2ae12eacd778d2cbaeebb3b1338f2d059c5e72e8070a4f16a"
+    },
+    {
+      "source": "windows/system_proxy.py",
+      "path": "windows/system_proxy.py",
+      "upstreamSha256": "203b2f92b87eeea4d22833d52c83f6aafabffba7830eacf7e07d92de2e72bbbd",
+      "sha256": "dd02b7923b66882951ed3af154cf03dbf67fbfe9da7e5ba8ef5f7ba68e70b8f7"
+    },
+    {
+      "source": "windows/tun_client.py",
+      "path": "windows/tun_client.py",
+      "upstreamSha256": "06a8a9f461bc88c710cf7adf952998ed6af0530731de0f8f0e86cc8a380b0c12",
+      "sha256": "e5e8183761ee99b048281196dc1b4d05dcf4f371bdace12a298f41c2b8d6ec46"
+    },
+    {
+      "source": "windows/tun_config.py",
+      "path": "windows/tun_config.py",
+      "upstreamSha256": "4032ed8698399d9120110be3beb8cea8f1d4f46faef41027840d065fdab88b4b",
+      "sha256": "9b73c09ecc2e4ffd9a85106fa8a4dcb174007b819d74d6fceccf1018ab215409"
+    },
+    {
+      "source": "windows/guardian.py",
+      "path": "windows/guardian.py",
+      "upstreamSha256": "e26b063b0e968cd8010576b3ed8ea2c398fb83e517d7bc58c0890ef2ff3d3ebd",
+      "sha256": "e26b063b0e968cd8010576b3ed8ea2c398fb83e517d7bc58c0890ef2ff3d3ebd"
+    },
+    {
+      "source": "linux/flowbridge-proxy-access@.service",
+      "path": "linux/modeldock-network-access@.service",
+      "upstreamSha256": "6434d251336e7946f87e5f38766385168c96a6ecc5e7301d4586b8f86581e6e0",
+      "sha256": "87cdbab2a93d647d88293ddc4b913dffa2fb0aaceb340fbc5366baff1acbfa71"
+    },
+    {
+      "source": "linux/flowbridge-proxy-access@.socket",
+      "path": "linux/modeldock-network-access@.socket",
+      "upstreamSha256": "898b4d4393c9650b32f828487c6fa4c0c19c1cc9bff8ca505d2b9aabc7993184",
+      "sha256": "96eb0c49dbc481921d12bde02983efd6321326d1deb0485b0db0ae57012c3d00"
+    },
+    {
+      "source": "linux/flowbridge-proxy-tun.policy",
+      "path": "linux/modeldock-network-tun.policy",
+      "upstreamSha256": "283597361a903795f2aa3e4c6d4966962523e4305dd5179d54e4ffb0fbd74873",
+      "sha256": "085e21f4c0614e451fb80bf5792813fe719d887188a31562f1714f583dac53d1"
+    },
+    {
+      "source": "linux/flowbridge-proxy-setup.policy",
+      "path": "linux/modeldock-network-setup.policy",
+      "upstreamSha256": "d592c386c26993c3f6010092f2cc9e9724c8f78a366bcec04b29dae8e4d6e50b",
+      "sha256": "582a0b76503070d9050e465ea517458ae8857b9a3053ac04383b18b5abb740e5"
+    },
+    {
+      "source": "linux/test_relay.py",
+      "path": "linux/test_relay.py",
+      "upstreamSha256": "e89fb1ecbdc7a01e0b614cfcd124d680644b19bf0a67f23884d0607ad2ba0ebd",
+      "sha256": "e89fb1ecbdc7a01e0b614cfcd124d680644b19bf0a67f23884d0607ad2ba0ebd"
+    },
+    {
+      "source": "linux/test_system_proxy.py",
+      "path": "linux/test_system_proxy.py",
+      "upstreamSha256": "5d0bfe840189f6f069259defc74146449e79664b34a6c25375438b7f19635bdf",
+      "sha256": "5d0bfe840189f6f069259defc74146449e79664b34a6c25375438b7f19635bdf"
+    },
+    {
+      "source": "linux/test_connectivity.py",
+      "path": "linux/test_connectivity.py",
+      "upstreamSha256": "8ff5ded5a64e8f2fb67e802abdb043647cec516296c6b184ff0ba1f17ba3850d",
+      "sha256": "8ff5ded5a64e8f2fb67e802abdb043647cec516296c6b184ff0ba1f17ba3850d"
+    },
+    {
+      "source": "linux/test_tun_client.py",
+      "path": "linux/test_tun_client.py",
+      "upstreamSha256": "c19c444c3902ebe8f1c830cdd6a5388fe013fff5fecd0a4ccdfa7992e17ed151",
+      "sha256": "0caec6f1bc0d28c153ec49d1ca817753961b41a8c2886fe51004953598b83619"
+    },
+    {
+      "source": "linux/test_tun_helper.py",
+      "path": "linux/test_tun_helper.py",
+      "upstreamSha256": "46c7ed020ccb17d77362877b5d999d3a5dea7c642086fffc799c63868a5812a6",
+      "sha256": "19104bfc088030b55376fc5fb67444c4d61e611613e88c861b8d7b199f4de31f"
+    },
+    {
+      "source": "linux/test_tun_config.py",
+      "path": "linux/test_tun_config.py",
+      "upstreamSha256": "9d63931c295f73852906d7cb5bdbfd0b39a19f46d0a079da208e81b3419dcf2e",
+      "sha256": "20ca840f717ebf1ee6b8e7f788401c61b880618f6612491f0676bd7b01a37843"
+    },
+    {
+      "source": "linux/test_tun_access.py",
+      "path": "linux/test_tun_access.py",
+      "upstreamSha256": "4b99b7b023b72cc91ceafc236587792431fd544b69e527db593f60ff97ac0a8f",
+      "sha256": "626570fe5dac880dd32810db0e0b1c9278e0d1f424c2e782340641987eb7f913"
+    },
+    {
+      "source": "linux/test_guardian.py",
+      "path": "linux/test_guardian.py",
+      "upstreamSha256": "164a9adb8cbf03a45d3779967c63a8fc02106df2ff4a811f4fa627350d06b0a3",
+      "sha256": "ac62bb6d4d9cace56d983e82aacbb81f30e32645a02aa84cf4d5aae85e41992a"
+    },
+    {
+      "source": "linux/test_reusable_tun_client.py",
+      "path": "linux/test_reusable_tun_client.py",
+      "upstreamSha256": "cd81d1999e39885a259b2bc005395ca9bf79f85e1e00bda7a52ed3ed5495d335",
+      "sha256": "5453f64b3b0ac822346b27c395d498503dee3f100009eed06adb17a4b2734a06"
+    },
+    {
+      "source": "windows/test_native.py",
+      "path": "windows/test_native.py",
+      "upstreamSha256": "264b3e5ffc66b462d5d29c4365b61828c820f693f5b8e32dd572e9cad18b9880",
+      "sha256": "12875d999fce69c45323862111c980e70ee24fb29fb024b000d66998cb19b102"
+    },
+    {
+      "source": "windows/test_network_snapshot.py",
+      "path": "windows/test_network_snapshot.py",
+      "upstreamSha256": "e03c70d208d4646ee1d7b1a6aed07759cbc0c1cc43f6c0c7377a52fde00be38b",
+      "sha256": "1caa0de4560f47826684900b8469020c2ba89ed395c765921a77490158904acb"
+    },
+    {
+      "source": "windows/test_proxy.py",
+      "path": "windows/test_proxy.py",
+      "upstreamSha256": "aec2e67438cbddae87df6d76f074e61ffefaafeee7985fba20e67e18682440df",
+      "sha256": "aec2e67438cbddae87df6d76f074e61ffefaafeee7985fba20e67e18682440df"
+    },
+    {
+      "source": "windows/test_tun_client.py",
+      "path": "windows/test_tun_client.py",
+      "upstreamSha256": "fabf0537b052c57415a84984dba0b266850b68cc14e8d5f817a07d80f5e74be1",
+      "sha256": "c59f92e96931b8045e964677c57fd4a36b1da78c3acd8f9f3357a43b5dbff4a3"
+    },
+    {
+      "source": "windows/test_tun_config.py",
+      "path": "windows/test_tun_config.py",
+      "upstreamSha256": "2e296e74ab4dc42522729cd8da23e5f8af47a525224c427eac42cf97992840df",
+      "sha256": "2e296e74ab4dc42522729cd8da23e5f8af47a525224c427eac42cf97992840df"
+    },
+    {
+      "source": "windows/test_dns_transport.py",
+      "path": "windows/test_dns_transport.py",
+      "upstreamSha256": "875001a0e4c14c93e3987e02aa92e4d6e587ac3a9a38453bffe8a1c4eed95652",
+      "sha256": "875001a0e4c14c93e3987e02aa92e4d6e587ac3a9a38453bffe8a1c4eed95652"
+    },
+    {
+      "source": "termux/src/install-prefix.sh",
+      "path": "termux/src/install-prefix.sh",
+      "upstreamSha256": "af3df18fa8401a0a4cb0ba14117d522a9df75f8214ea0eabbe9ebe5e63a75db1",
+      "sha256": "af3df18fa8401a0a4cb0ba14117d522a9df75f8214ea0eabbe9ebe5e63a75db1"
+    },
+    {
+      "source": "termux/src/install-suffix.sh",
+      "path": "termux/src/install-suffix.sh",
+      "upstreamSha256": "a3c4b0ecafd021a8af060bae2f39bcff785da29a2071497d99915f35d0055598",
+      "sha256": "a3c4b0ecafd021a8af060bae2f39bcff785da29a2071497d99915f35d0055598"
+    },
+    {
+      "source": "termux/src/address.py",
+      "path": "termux/src/address.py",
+      "upstreamSha256": "380f6e94288c6ed8556953dd5f3edf1557c2b2c79cfb4982b6222c922a44e811",
+      "sha256": "380f6e94288c6ed8556953dd5f3edf1557c2b2c79cfb4982b6222c922a44e811"
+    },
+    {
+      "source": "termux/src/monitor.py",
+      "path": "termux/src/monitor.py",
+      "upstreamSha256": "999f6a97760e4a3a3884049cf9d9437a3f45828d09966a19c6bd85f7905a96c5",
+      "sha256": "999f6a97760e4a3a3884049cf9d9437a3f45828d09966a19c6bd85f7905a96c5"
+    },
+    {
+      "source": "termux/src/proxy.sh",
+      "path": "termux/src/proxy.sh",
+      "upstreamSha256": "2e23ce2977334c12ec44f6cd97f4f3875f686903ff8979066bf1887461288ef1",
+      "sha256": "2e23ce2977334c12ec44f6cd97f4f3875f686903ff8979066bf1887461288ef1"
+    },
+    {
+      "source": "tools/build_termux.py",
+      "path": "tools/build_termux.py",
+      "upstreamSha256": "3602385b26d95af1ca41d99c8ced52f59bac5c218a2a5a8b31dfc37d4d4b4f99",
+      "sha256": "3602385b26d95af1ca41d99c8ced52f59bac5c218a2a5a8b31dfc37d4d4b4f99"
+    },
+    {
+      "source": "tools/test_termux_proxy.py",
+      "path": "tools/test_termux_proxy.py",
+      "upstreamSha256": "adca25eec36c7a5350d0c18ed6192c829dedde6a727fd1d8d3577c3ecb89e58c",
+      "sha256": "adca25eec36c7a5350d0c18ed6192c829dedde6a727fd1d8d3577c3ecb89e58c"
+    },
+    {
+      "source": "tools/test_tun_namespace.py",
+      "path": "tools/test_tun_namespace.py",
+      "upstreamSha256": "9b1b959c025efbc9a4c7a5e47bbef9a5b33bb064de881fdad978ff2354159786",
+      "sha256": "f58d0bd8a4608df9d64f77059b76f4fbaca6bde409c74817ac555acf4023c4d1"
+    }
+  ],
+  "integrationSources": [
+    {
+      "source": "tools/build_linux.py",
+      "path": "scripts/build-network-helper.py",
+      "upstreamSha256": "730406c31e78f3d8383e0addc14a96a8fff24cf2376df5f5f043d4661d0015ee",
+      "sha256": "c318a1a4883cac3cc17f89a4daf1d8bfe9f40db472316305291d536d856d94f7",
+      "changes": "Adapted package assembly to root-owned network-only helper; no Qt app or desktop/startup registration."
+    }
+  ]
+}

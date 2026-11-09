@@ -26,7 +26,7 @@ remaining verification boundary. Use meaningful mock-upstream regressions for
 authorization, routing, cancellation and configuration preservation. Mark an
 incompatible schema or adapter change explicitly and explain migration behavior.
 
-Submit original contributions under ModelDock's MIT license. You must have the
+Submit contributions to the integrated distribution under GPL-3.0-or-later. Existing ModelDock portions retain their MIT grant in LICENSE-MIT. You must have the
 right to contribute them; clearly identify any third-party portions and keep
 their separate license and attribution instead of relabeling them as MIT.
 

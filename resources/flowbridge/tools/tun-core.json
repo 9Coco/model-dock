@@ -1,0 +1,15 @@
+{
+  "version": "1.14.4",
+  "upstream": "https://github.com/SagerNet/sing-box",
+  "source_url": "https://github.com/SagerNet/sing-box/archive/refs/tags/v1.14.4.tar.gz",
+  "assets": {
+    "amd64": {
+      "url": "https://github.com/SagerNet/sing-box/releases/download/v1.14.4/sing-box-1.14.4-linux-amd64.tar.gz",
+      "sha256": "699a1b510aa4396b2176d32d1181920399ebf1e267835da6f3b598d0f7c24968"
+    },
+    "arm64": {
+      "url": "https://github.com/SagerNet/sing-box/releases/download/v1.14.4/sing-box-1.14.4-linux-arm64.tar.gz",
+      "sha256": "436441f76ee2f7fe21b5b2d426d3cb261a480455a704865789ad533e4273ec26"
+    }
+  }
+}

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN" "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>FlowBridge</vendor>
+  <action id="local.modeldock.network.setup">
+    <description>Authorize FlowBridge for this user</description>
+    <description xml:lang="zh_CN">为当前用户启用流桥网络管理</description>
+    <message>Authentication is required to authorize FlowBridge's restricted network helper for this user.</message>
+    <message xml:lang="zh_CN">首次启用流桥网络管理需要管理员认证。授权后，此用户重新启动程序或切换全局模式时无需重复认证。</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/modeldock-network-setup</annotate>
+  </action>
+</policyconfig>
