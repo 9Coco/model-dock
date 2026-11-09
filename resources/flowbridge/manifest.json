@@ -68,7 +68,8 @@
       "source": "linux/relay.py",
       "path": "linux/relay.py",
       "upstreamSha256": "157751e66b1108a9037c001175799522d579776fc134aa44a82f7037b28f1246",
-      "sha256": "157751e66b1108a9037c001175799522d579776fc134aa44a82f7037b28f1246"
+      "sha256": "3f4b4a64efa4fb69bc582c4d6c5662bc4fd910fc3e07b30bc782366d9e1de746",
+      "changes": "Use exclusive address binding on Windows so another listener cannot share the active HTTP relay port."
     },
     {
       "source": "linux/system_proxy.py",
@@ -330,6 +331,20 @@
     }
   ],
   "integrationSources": [
+    {
+      "source": "https://github.com/9Coco/model-dock/blob/7ea8d51e40b18b23c85eab905b7b6b421632b218/resources/flowbridge/bridge.py",
+      "path": "resources/flowbridge/bridge.py",
+      "upstreamSha256": "1ea86b5d63bc6189e04ef790e38de0f85b6794c2ff830539eb36caca8f738cf8",
+      "sha256": "49577958a0b30f5f5af5bc8989e4ad9840686e0d4e1e38128993ca93de377a9f",
+      "changes": "Escape non-ASCII characters on the network protocol pipe."
+    },
+    {
+      "source": "https://github.com/9Coco/model-dock/blob/7ea8d51e40b18b23c85eab905b7b6b421632b218/resources/flowbridge/tools/fetch_python.py",
+      "path": "resources/flowbridge/tools/fetch_python.py",
+      "upstreamSha256": "524ab4d8dd61c91b629646af49da2476687852d99f164b47611ba30d095783ac",
+      "sha256": "5730126b982f3553180789fd212b23a48774eb710208c253644f2cbd18d44a8d",
+      "changes": "Reuse the Windows core preparer's atomic writes and avoid rewriting a verified runtime in use."
+    },
     {
       "source": "tools/build_linux.py",
       "path": "scripts/build-network-helper.py",

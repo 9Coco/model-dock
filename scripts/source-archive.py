@@ -3,7 +3,7 @@
 from pathlib import Path
 import hashlib,json,subprocess,zipfile
 root=Path(__file__).resolve().parent.parent
-version=json.loads((root/'package.json').read_text())['version']
+version=json.loads((root/'package.json').read_text(encoding='utf-8'))['version']
 paths=subprocess.check_output(['git','ls-files','--cached','--others','--exclude-standard','-z'],cwd=root).decode().split('\0')
 output=root/'release'/f'ModelDock-source-{version}.zip';output.parent.mkdir(exist_ok=True)
 with zipfile.ZipFile(output,'w',compression=zipfile.ZIP_DEFLATED) as bundle:

@@ -167,7 +167,9 @@ class ProxyRelay:
             family = socket.AF_INET6 if ":" in self.listen_host else socket.AF_INET
             listener = socket.socket(family, socket.SOCK_STREAM)
             try:
-                listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                # On Windows SO_REUSEADDR allows a second listener on the live proxy port.
+                bind_option = getattr(socket, "SO_EXCLUSIVEADDRUSE", socket.SO_REUSEADDR)
+                listener.setsockopt(socket.SOL_SOCKET, bind_option, 1)
                 listener.bind((self.listen_host, self.listen_port))
                 listener.listen(self.max_connections)
                 listener.settimeout(0.25)

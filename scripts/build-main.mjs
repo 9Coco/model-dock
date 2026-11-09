@@ -20,7 +20,6 @@ await build({ absWorkingDir: root, entryPoints: { [entry]: 'src/main/main.ts', p
 writeFileSync(join(runtimeRoot, 'dist-electron/runtime-build.json'), JSON.stringify({ version: 1, mode, entry: `${entry}.cjs`,
   sha256: createHash('sha256').update(readFileSync(join(runtimeRoot, 'dist-electron', `${entry}.cjs`))).digest('hex') }, null, 2));
 if (mode !== 'production') {
-  cpSync(join(root, 'resources/flowbridge'), join(runtimeRoot, 'resources/flowbridge'), { recursive: true, filter: name => !/[/\\](?:vendor|__pycache__|build|dist)(?:[/\\]|$)/.test(name) });
   mkdirSync(runtimeRoot, { recursive: true });
   const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
   writeFileSync(join(runtimeRoot, 'package.json'), JSON.stringify({ ...manifest, name: `model-dock-${mode}`, main: `dist-electron/${entry}.cjs`, modeldockRuntimeMode: mode }, null, 2));

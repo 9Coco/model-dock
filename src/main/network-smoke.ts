@@ -4,7 +4,7 @@ import { writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { BrowserWindow } from 'electron';
+import { BrowserWindow, screen } from 'electron';
 import type { FlowBridgeSnapshot, NetworkEngineStatus } from '../shared/flowbridge-types';
 import type { Store } from './store';
 import type { NetworkEngine } from './flowbridge-engine';
@@ -221,6 +221,11 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
     });
   })()`;
   assert.equal(await mini.webContents.executeJavaScript(miniLayout), true, 'Collapsed mini monitor must show both rates and all buttons');
+  const area = screen.getDisplayMatching(mini.getBounds()).workArea;
+  if (process.platform === 'win32') {
+    const { width, height } = mini.getBounds();
+    mini.setPosition(area.x + area.width - width, area.y + area.height - height);
+  }
   await mini.webContents.executeJavaScript(`document.querySelector('[aria-label="展开曲线"]').click()`);
   let miniCapture;
   for (let attempt = 0; attempt < 40; attempt++) {
@@ -233,6 +238,11 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
     await delay(100);
   }
   assert.ok(miniCapture, 'Expanded mini monitor must show a painted frame');
+  if (process.platform === 'win32') {
+    const { x, y, width, height } = mini.getBounds();
+    assert.ok(x >= area.x && y >= area.y && x + width <= area.x + area.width + 1 && y + height <= area.y + area.height + 1,
+      'Expanding the mini monitor at the screen edge must keep its controls inside the work area');
+  }
   assert.equal(await mini.webContents.executeJavaScript(miniLayout), true, 'Expanded mini monitor must show both rates and all buttons');
   writeFileSync(join(output, 'network-mini.png'), miniCapture.toPNG());
   screenshots.push('network-mini.png');
