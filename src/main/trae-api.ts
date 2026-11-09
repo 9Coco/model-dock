@@ -54,14 +54,34 @@ export interface TraeApiModel {
   reasoning_efforts?: string[];
   default_reasoning_effort?: string;
 }
-interface ReasoningConfig { field: 'reasoning_effort' | 'reasoning_effort_level'; options: string[]; defaultLevel?: string }
+interface ReasoningConfig {
+  field: 'reasoning_effort' | 'reasoning_effort_level';
+  options: string[];
+  defaultLevel?: string;
+  pickerLabels?: ReadonlyMap<string, string>;
+}
 interface Route { model: TraeApiModel; providerId: string; configSource: number; reasoning?: ReasoningConfig }
 
 const legacyReasoningEfforts = new Set(['none', 'low', 'medium', 'high', 'xhigh', 'max']);
+// ModelDock's client-facing picker uses standard effort names. Only translate
+// the known TRAE CN two/three-tier profile; other native enums remain exact.
+const cnPickerLabels = new Map([['light', 'low'], ['high', 'high'], ['extra_high', 'max']]);
+const previousThreeTierLabels = new Map([['medium', 'high'], ['xhigh', 'max']]);
+
+function nativeReasoningEffort(config: ReasoningConfig | undefined, level: string): string {
+  if (config ? config.options.includes(level) : legacyReasoningEfforts.has(level)) return level;
+  const labels = config?.pickerLabels;
+  if (config && labels) {
+    // Existing Qwen presets call the middle and top tiers medium and xhigh.
+    const label = config.options.includes('extra_high') ? previousThreeTierLabels.get(level) ?? level : level;
+    const native = config.options.find(option => labels.get(option) === label);
+    if (native) return native;
+  }
+  throw fail('capability', undefined, 'reasoning_effort');
+}
+
 function reasoningConfig(row: ObjectValue): ReasoningConfig | undefined {
-  // TRAE CN 3.4.16 ai-modules-chat modules 94050/35960 use the model's
-  // declared levels verbatim. New and legacy directories use different fields;
-  // xhigh/max are not aliases for extra_high/ultra.
+  // Native Raw v2 receives the exact declared spelling in its native field.
   if (row.reasoning_effort_config !== undefined) {
     let config = object(row.reasoning_effort_config);
     if (typeof row.reasoning_effort_config === 'string' && row.reasoning_effort_config.length <= 16384) {
@@ -73,7 +93,8 @@ function reasoningConfig(row: ObjectValue): ReasoningConfig | undefined {
     const options = raw.map(value => typeof value === 'string' ? value.trim() : '');
     const defaultLevel = typeof config.default_level === 'string' ? config.default_level.trim() : '';
     if (options.some(value => !name(value)) || new Set(options).size !== options.length || !options.includes(defaultLevel)) return disabled;
-    return { field: 'reasoning_effort_level', options, defaultLevel };
+    const cnPicker = options.includes('light') && options.includes('high') && options.every(option => cnPickerLabels.has(option));
+    return { field: 'reasoning_effort_level', options, defaultLevel, ...(cnPicker ? { pickerLabels: cnPickerLabels } : {}) };
   }
   if (row.reasoning_effort_options !== undefined) {
     const options = Array.isArray(row.reasoning_effort_options)
@@ -357,7 +378,8 @@ export class TraeApi {
         const display = text(row.display_name ?? object(row.display_config)?.display_name, 512);
         const reasoning = reasoningConfig(row);
         routes.set(id, { model: { id, object: 'model', owned_by: 'trae', ...(display ? { name: display } : {}),
-          ...(reasoning ? { reasoning_efforts: reasoning.options, ...(reasoning.defaultLevel ? { default_reasoning_effort: reasoning.defaultLevel } : {}) } : {}) }, providerId, configSource: 1, ...(reasoning ? { reasoning } : {}) });
+          ...(reasoning ? { reasoning_efforts: reasoning.options.map(level => reasoning.pickerLabels?.get(level) ?? level),
+            ...(reasoning.defaultLevel ? { default_reasoning_effort: reasoning.pickerLabels?.get(reasoning.defaultLevel) ?? reasoning.defaultLevel } : {}) } : {}) }, providerId, configSource: 1, ...(reasoning ? { reasoning } : {}) });
         access.set(id, directoryAccess(row.display_contact_config));
         if (row.is_invisible_to_user === true) hidden.add(id);
       }
@@ -440,7 +462,8 @@ export class TraeApi {
     const nativeMessages = messages(body.messages), nativeTools = tools(body.tools), allowed = new Set(nativeTools?.map(tool => String(object(tool.function)?.name)) ?? []);
     for (const field of ['response_format', 'audio', 'modalities', 'functions', 'function_call', 'max_tokens', 'max_completion_tokens', 'temperature', 'top_p', 'stop', 'seed', 'presence_penalty', 'frequency_penalty']) if (body[field] !== undefined) throw fail('capability', undefined, field);
     if (body.n !== undefined && body.n !== 1) throw fail('capability');
-    if (body.reasoning_effort !== undefined && !name(body.reasoning_effort)) throw fail('capability', undefined, 'reasoning_effort');
+    const requestedEffort = name(body.reasoning_effort);
+    if (body.reasoning_effort !== undefined && !requestedEffort) throw fail('capability', undefined, 'reasoning_effort');
     if (body.tool_choice !== undefined && !['auto', 'none', 'required'].includes(String(body.tool_choice))) {
       const choice = object(body.tool_choice), fn = object(choice?.function); if (choice?.type !== 'function' || !allowed.has(String(fn?.name))) throw fail('capability');
     }
@@ -454,9 +477,7 @@ export class TraeApi {
     if (!directory || this.now() - directory.at > 300000) { await this.models(value, signal, client); directory = this.directories.get(key); }
     const reason = directory?.blocked.get(model); if (reason) throw fail(reason, reason === 'account-access' ? 403 : 503);
     const route = directory?.routes.get(model); if (!route) throw fail('model');
-    const effort = body.reasoning_effort;
-    if (effort !== undefined && !(route.reasoning ? route.reasoning.options.includes(String(effort))
-      : legacyReasoningEfforts.has(String(effort)))) throw fail('capability', undefined, 'reasoning_effort');
+    const effort = requestedEffort === undefined ? undefined : nativeReasoningEffort(route.reasoning, requestedEffort);
     const sid = randomUUID(), payload: ObjectValue = { config_name: route.model.id, model_name: route.providerId, config_source: route.configSource,
       conversation_id: sid, session_id: sid, stream: true, raw_chat_function: FUNCTION, messages: nativeMessages,
       ...(effort !== undefined ? { [route.reasoning?.field ?? 'reasoning_effort']: effort } : {}),

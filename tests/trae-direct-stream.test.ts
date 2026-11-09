@@ -16,7 +16,7 @@ const credentials: TraeClientCredentials = { host: 'https://api.trae.cn', userId
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
 async function within<T>(promise: Promise<T>, milliseconds = 2000): Promise<T> { let timer: ReturnType<typeof setTimeout> | undefined; try { return await Promise.race([promise, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Incremental mock pipeline timed out')), milliseconds); })]); } finally { clearTimeout(timer); } }
 interface RawRequest { body: Record<string, unknown>; signal: AbortSignal; stream: ReadableStreamDefaultController<Uint8Array>; closed: boolean; canceled: ReturnType<typeof deferred<void>> }
-async function fixture(onRaw?: (request: RawRequest) => void) {
+async function fixture(onRaw?: (request: RawRequest) => void, reasoning?: { support_thinking: boolean; options: string[]; default_level: string }) {
   const directory = mkdtempSync(join(tmpdir(), 'modeldock-trae-direct-stream-')), store = await Store.create(directory);
   cleanups.push(() => { store.close(); rmSync(directory, { recursive: true, force: true }); });
   const imported = await store.saveRelayClientImport({ kind: 'openai-compatible', presetId: 'trae-cn-relay', name: 'Synthetic TRAE native account', baseUrl: 'http://127.0.0.1:18080/v1', apiKey: 'SYNTHETIC_OLD_RELAY_KEY', enabled: true }, { nativeClient: { version: 1, client: 'trae-cn', credentials } });
@@ -31,7 +31,7 @@ async function fixture(onRaw?: (request: RawRequest) => void) {
   const api = new TraeApi({ timeoutMs: 5000, fetch: (async (input, init) => {
     const url = new URL(String(input)); routes.push(url.pathname);
     expect(url.origin).toBe('https://trae-api-cn.mchost.guru'); expect(init?.redirect).toBe('error');
-    if (url.pathname === '/api/ide/v1/get_detail_param') return Response.json({ config_info_list: [{ config_name: model.upstreamId, usage: 'chat_completion', model_detail_list: [{ model_name: model.upstreamId + '__dev' }] }] });
+    if (url.pathname === '/api/ide/v1/get_detail_param') return Response.json({ config_info_list: [{ config_name: model.upstreamId, usage: 'chat_completion', reasoning_effort_config: reasoning, model_detail_list: [{ model_name: model.upstreamId + '__dev' }] }] });
     if (url.pathname !== '/api/ide/v2/llm_raw_chat') throw new Error('Unexpected synthetic upstream route');
     let request!: RawRequest;
     const body = new ReadableStream<Uint8Array>({ start(stream) { request = { body: JSON.parse(String(init?.body)), signal: init!.signal!, stream, closed: false, canceled: deferred<void>() }; }, cancel() { request.canceled.resolve(); } });
@@ -67,6 +67,20 @@ async function rest(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<st
 function finish(request: RawRequest, answer = 'SECOND') { request.stream.enqueue(rawEvent('text_delta', { text: answer })); request.stream.enqueue(rawEvent('token_usage', { input_token: 3, output_token: 5 })); request.stream.enqueue(rawEvent('done', { finish_reason: 'stop' })); request.stream.close(); request.closed = true; }
 
 describe('TRAE TypeScript adapter through the existing loopback gateway', () => {
+  it('accepts the existing VS Code maximum setting and 128 tools for the GLM FlashX native effort profile', async () => {
+    const f = await fixture(request => finish(request, 'fixture-answer'), { support_thinking: true, options: ['light', 'high', 'extra_high'], default_level: 'high' });
+    const tools = Array.from({ length: 128 }, (_, i) => ({ type: 'function', function: { name: 'tool_' + i, parameters: { type: 'object' } } }));
+    const response = await f.post('/tool/vscode/v1/chat/completions', {
+      messages: [{ role: 'user', content: 'hello' }], stream: true, reasoning_effort: 'max', tools, tool_choice: 'auto',
+    });
+    expect(response.status).toBe(200);
+    const events = await response.text();
+    expect(events).toContain('fixture-answer'); expect(events).toContain('data: [DONE]');
+    expect(f.requests).toHaveLength(1);
+    expect(f.requests[0].body.reasoning_effort_level).toBe('extra_high');
+    expect(f.requests[0].body).not.toHaveProperty('reasoning_effort');
+    expect(f.requests[0].body.tools).toHaveLength(128);
+  });
   it.each([true, false])('rejects unsupported Messages token budgets before inference (stream=%s)', async stream => {
     const f = await fixture();
     const response = await f.post('/tool/claude-code/v1/messages', { messages: [{ role: 'user', content: 'SYNTHETIC_PRIVATE_PROMPT' }], max_tokens: 32, stream });

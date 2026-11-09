@@ -81,6 +81,33 @@ describe('direct TraeCode CN native Raw v2 protocol', () => {
     const sent = JSON.parse(String(fetch.mock.calls[1][1]?.body));
     expect(sent.reasoning_effort).toBe(reasoning_effort); expect(sent).not.toHaveProperty('reasoning_effort_level');
   });
+  it.each([
+    { options: ['light', 'high', 'extra_high'], default_level: 'extra_high', levels: ['low', 'high', 'max'], preferred: 'max' },
+    { options: ['light', 'high'], default_level: 'high', levels: ['low', 'high'], preferred: 'high' },
+  ])('round trips every advertised picker level through its model-specific CN declaration $options', async ({ options, default_level, levels, preferred }) => {
+    const config = { support_thinking: true, options, default_level };
+    const fetch = fetchMock(url => new URL(url).pathname.endsWith('get_detail_param')
+      ? Response.json({ config_info_list: [{ ...directory.config_info_list[0], reasoning_effort_config: config }] })
+      : sse(frame('text_delta', { text: 'OK' }) + finished));
+    const api = new TraeApi({ fetch });
+    expect((await api.models(credential)).data[0]).toMatchObject({ reasoning_efforts: levels, default_reasoning_effort: preferred });
+    for (const [index, reasoning_effort] of levels.entries()) {
+      await api.chat(credential, { ...body, reasoning_effort });
+      const sent = JSON.parse(String(fetch.mock.calls.at(-1)![1]?.body));
+      expect(sent.reasoning_effort_level).toBe(options[index]);
+      expect(sent).not.toHaveProperty('reasoning_effort');
+    }
+    if (levels.includes('max')) {
+      for (const [input, expected] of [['medium', 'high'], ['xhigh', 'extra_high'], ['extra_high', 'extra_high']]) {
+        await api.chat(credential, { ...body, reasoning_effort: input });
+        expect(JSON.parse(String(fetch.mock.calls.at(-1)![1]?.body)).reasoning_effort_level).toBe(expected);
+      }
+    } else {
+      const calls = fetch.mock.calls.length;
+      await expect(api.chat(credential, { ...body, reasoning_effort: 'max' })).rejects.toMatchObject({ code: 'capability' });
+      expect(fetch).toHaveBeenCalledTimes(calls);
+    }
+  });
   it.each(['object', 'json-string'])('uses exact modern reasoning levels and the current native field from a %s declaration', async format => {
     const config = { support_thinking: true, options: ['low', 'high', 'ultra'], default_level: 'high' };
     const fetch = fetchMock(url => new URL(url).pathname.endsWith('get_detail_param')
