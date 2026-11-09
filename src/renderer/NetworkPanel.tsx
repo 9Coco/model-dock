@@ -127,7 +127,7 @@ function NetworkControls({ api, snapshot, onChanged, notify }: Required<NetworkC
         {candidates.map(value => <button className="button small secondary" key={value} onClick={() => void chooseCandidate(value)}>{windows ? `应用 ${value}` : value}</button>)}
       </div>}
       {dirty && windows && <button className="text-button" onClick={() => { setAddress(snapshot.settings.address); setMode(snapshot.settings.mode); }}>还原输入</button>}
-      <p className="network-hint" role="status">{dirty && !windows ? '地址尚未保存。请先保存，再连接或切换模式。' : snapshot.message || (global ? snapshot.platform === 'linux' ? 'Linux deb 版包含全局模式。首次连接需系统授权，上游请填写远端 IP。' : 'Windows 全局模式需要以管理员身份运行。' : windows ? '填写或应用代理地址后，点击连接。' : '保存上游地址，然后点击连接。')}</p>
+      <p className="network-hint" role="status">{dirty && !windows ? '地址尚未保存。请先保存，再连接或切换模式。' : snapshot.message || (global ? snapshot.platform === 'linux' ? 'Linux deb 版包含全局模式。首次连接需系统授权，上游请填写远端 IP。' : '首次连接时请确认 Windows 授权。以后重连或重启电脑，直接点连接即可。' : windows ? '填写或应用代理地址后，点击连接。' : '保存上游地址，然后点击连接。')}</p>
     </div>
   </section>;
 }

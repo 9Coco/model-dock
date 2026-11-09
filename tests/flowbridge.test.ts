@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FlowBridgeManager, validateNetworkSettings } from '../src/main/flowbridge';
-import { FlowBridgeEngine, type NetworkEngine } from '../src/main/flowbridge-engine';
+import { FlowBridgeEngine, NetworkAuthorizationRequired, type NetworkEngine } from '../src/main/flowbridge-engine';
 import { DEFAULT_FLOWBRIDGE, type NetworkEngineStatus } from '../src/shared/flowbridge-types';
 import { Store } from '../src/main/store';
 const folders: string[] = [];
@@ -24,6 +24,24 @@ function fixture() {
   return { manager, memory, values, calls, failStop(value = true) { stopFails = value; }, failConnect() { connectFails = true; }, crash() { failExit(); }, hold() { release = () => {}; }, release() { release?.(); } };
 }
 describe('FlowBridge integration', () => {
+  it('requires a manual Windows global connection for the initial UAC, and releases the lease after a missing grant', async () => {
+    const { memory, values } = fixture();
+    const permissions: unknown[] = [];
+    const manager = new FlowBridgeManager(memory, { platform: 'win32', dataDir: temporary(), gatewayPort: () => 18181,
+      engine: () => ({ async request<T>(method: string, args?: Record<string, unknown>) {
+        if (method !== 'connect') return stopped() as T;
+        permissions.push(args?.allowInstall);
+        if (!args?.allowInstall) throw new NetworkAuthorizationRequired('需要手动授权。');
+        return { ...stopped(), running: true, cleanupConfirmed: false, localPort: 30000 } as T;
+      }, async close() {} }) });
+    await manager.save({ address: 'socks5://127.0.0.1:1080', mode: 'global', autoConnect: true });
+    await manager.autoConnect();
+    expect(manager.snapshot().message).toBe('需要手动授权。');
+    expect(values.get('network.flowbridge.lease')).toBe(false);
+    await manager.connect();
+    expect(permissions).toEqual([false, true]);
+    await manager.shutdown();
+  });
   it('is inert by default and shutdown does not launch a helper or write legacy settings', async () => {
     const f = fixture(); expect(f.manager.snapshot().settings).toEqual(DEFAULT_FLOWBRIDGE);
     await f.manager.autoConnect(); await f.manager.shutdown(); expect(f.calls).toEqual([]); expect(f.values.size).toBe(0);

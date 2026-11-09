@@ -1,6 +1,6 @@
 {
   "name": "model-dock",
-  "version": "0.4.8",
+  "version": "0.4.9",
   "description": "ModelDock — 配置一次，让模型连接你的工具。",
   "license": "GPL-3.0-or-later",
   "author": {
@@ -132,6 +132,8 @@
           "linux/*.md",
           "linux/THIRD-PARTY-LICENSE-sing-box.txt",
           "windows/*.py",
+          "windows/install-network.ps1",
+          "windows/network-payload.json",
           "windows/THIRD-PARTY-NOTICES.md",
           "termux/**/*",
           "!**/test_*.py",

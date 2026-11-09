@@ -101,13 +101,18 @@ function verifyPackage(directory) {
   const networkSource = join(root, 'resources/flowbridge');
   const networkOutput = join(resources, 'flowbridge');
   const verifyNetworkFile = name => verifyCopiedFile(join(networkSource, name), join(networkOutput, name));
-  for (const name of ['bridge.py', 'signal_core.py', 'manifest.json', 'LICENSE',
+  for (const name of ['bridge.py', 'signal_core.py', 'manifest.json', 'LICENSE', 'windows/install-network.ps1', 'windows/network-payload.json',
     'termux/termux-hotspot-proxy.sh', 'windows/THIRD-PARTY-NOTICES.md',
     'linux/relay.py', 'linux/connectivity.py', 'linux/tun_client.py']) verifyNetworkFile(name);
   for (const name of readdirSync(join(networkSource, 'windows'))) {
     if (name.endsWith('.py') && !name.startsWith('test_')) verifyNetworkFile(join('windows', name));
   }
   assertOrdinaryFile(join(networkOutput, 'python/python.exe'));
+  const payload = readOrdinaryFile(join(networkOutput, 'windows/network-payload.json'));
+  assert(readOrdinaryFile(join(networkOutput, 'windows/network_access.py')).toString('utf8').includes("PAYLOAD_SHA256 = '" + digest(payload) + "'"), 'Network task payload manifest differs from the pinned version.');
+  for (const [name, hash] of Object.entries(JSON.parse(payload))) {
+    assert(digest(readOrdinaryFile(join(networkOutput, name))) === hash, 'Network task payload checksum mismatch: ' + name);
+  }
   for (const name of readdirSync(join(networkSource, 'python'))) verifyNetworkFile(join('python', name));
   const core = JSON.parse(readOrdinaryFile(join(networkSource, 'tools/windows-core.json')).toString('utf8'));
   for (const name of ['sing-box.exe', 'wintun.dll', 'LICENSE-wintun.txt', 'verified.json']) {

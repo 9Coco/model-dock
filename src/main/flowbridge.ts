@@ -6,7 +6,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { DEFAULT_FLOWBRIDGE, NETWORK_SITES, type FlowBridgeSettings, type FlowBridgeSnapshot, type NetworkEngineStatus, type NetworkSample, type NetworkSite, type NetworkCheck } from '../shared/flowbridge-types';
 import type { SettingsStore } from './settings';
-import { NetworkEngineUnavailableError, type NetworkEngine } from './flowbridge-engine';
+import { NetworkAuthorizationRequired, NetworkEngineUnavailableError, type NetworkEngine } from './flowbridge-engine';
 const KEY = 'network.flowbridge.v1', LEASE = 'network.flowbridge.lease';
 const idleStatus = (): NetworkEngineStatus => ({ running: false, cleanupConfirmed: true, localPort: null, uploadBytes: 0, downloadBytes: 0, connections: 0, message: '' });
 const plain = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
@@ -112,11 +112,14 @@ export class FlowBridgeManager {
     });
   }
   connect(upstream?: Pick<FlowBridgeSettings, 'address' | 'mode'>): Promise<FlowBridgeSnapshot> {
+    return this.queueConnection(upstream, true);
+  }
+  private queueConnection(upstream: Pick<FlowBridgeSettings, 'address' | 'mode'> | undefined, allowInstall: boolean) {
     if (this.busy || this.closing) return Promise.reject(new Error('网络操作仍在进行。'));
     this.busy = true; this.cancel = false;
-    return this.enqueue(async () => { try { await this.start(upstream); return this.snapshot(); } finally { this.busy = false; } });
+    return this.enqueue(async () => { try { await this.start(upstream, allowInstall); return this.snapshot(); } finally { this.busy = false; } });
   }
-  private async start(upstream?: Pick<FlowBridgeSettings, 'address' | 'mode'>) {
+  private async start(upstream?: Pick<FlowBridgeSettings, 'address' | 'mode'>, allowInstall = true) {
     if (this.state === 'connected') {
       if (upstream !== undefined) throw new Error('请先断开当前连接再连接新地址。');
       return;
@@ -131,7 +134,7 @@ export class FlowBridgeManager {
     this.state = 'connecting'; this.message = '正在连接代理…'; this.previous = undefined;
     this.store.setManagedState(LEASE, true); this.active = true;
     try {
-      this.current = status(await this.getEngine().request<NetworkEngineStatus>('connect', { settings: this.settings }));
+      this.current = status(await this.getEngine().request<NetworkEngineStatus>('connect', { settings: this.settings, allowInstall: allowInstall && this.options.platform === 'win32' && this.settings.mode === 'global' }));
       if (!this.current.running || this.cancel) { await this.stop(); if (this.cancel) return; throw new Error('未确认网络连接就绪。'); }
       if (this.settings.mode === 'http' && this.current.localPort === null) throw new Error('未确认 HTTP 代理监听端口。');
       await this.options.setHttpRelay?.(this.settings.mode === 'http' ? this.current.localPort : null);
@@ -147,7 +150,7 @@ export class FlowBridgeManager {
         this.store.setManagedState(LEASE, false); this.active = false; this.current = idleStatus(); this.engine = undefined;
       } else { try { await this.stop(); } catch { /* state remains uncertain */ } }
       this.state = 'error'; this.message = error instanceof Error ? error.message : '网络连接失败。';
-      throw new Error(this.message);
+      throw error instanceof Error ? error : new Error(this.message);
     }
   }
   disconnect(): Promise<FlowBridgeSnapshot> {
@@ -208,7 +211,8 @@ export class FlowBridgeManager {
     if (!this.settings.autoConnect || this.active) return;
     const deadline = this.now() + 120_000;
     do {
-      try { await this.connect(); return; } catch { if (this.active || this.cancel || this.closing) return; }
+      try { await this.queueConnection(undefined, false); return; }
+      catch (error) { if (this.active || this.cancel || this.closing || error instanceof NetworkAuthorizationRequired) return; }
       if (this.now() >= deadline) return;
       this.message = '上游尚未就绪，等待自动重试（最多两分钟）…';
       await new Promise<void>(resolve => setTimeout(resolve, 3000));

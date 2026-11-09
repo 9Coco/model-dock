@@ -3,6 +3,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 export class NetworkEngineUnavailableError extends Error {}
+export class NetworkAuthorizationRequired extends Error {}
 export interface NetworkEngine {
   request<T>(method: string, args?: Record<string, unknown>): Promise<T>;
   close(): Promise<void>;
@@ -46,7 +47,10 @@ export class FlowBridgeEngine implements NetworkEngine {
           if (!pending) continue;
           clearTimeout(pending.timer); this.pending.delete(value.id);
           if (value.ok === true) pending.resolve(value.result);
-          else pending.reject(new Error(typeof value.message === 'string' ? value.message.slice(0, 500) : '网络操作失败。'));
+          else {
+            const message = typeof value.message === 'string' ? value.message.slice(0, 500) : '网络操作失败。';
+            pending.reject(value.code === 'WINDOWS_NETWORK_AUTH_REQUIRED' ? new NetworkAuthorizationRequired(message) : new Error(message));
+          }
         } catch { child.stdin.end(); fail(); return; }
       }
     });
@@ -56,7 +60,8 @@ export class FlowBridgeEngine implements NetworkEngine {
     const child = this.start(), id = ++this.id;
     if (this.pending.size >= 16) return Promise.reject(new Error('网络操作仍在进行，请稍后重试。'));
     return new Promise<T>((resolve, reject) => {
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('网络操作超时，清理状态未知；请重试断开。')); }, method === 'connect' ? 150_000 : 65_000);
+      const connectTimeout = args.allowInstall === true ? 300_000 : 150_000;
+      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('网络操作超时，清理状态未知；请重试断开。')); }, method === 'connect' ? connectTimeout : 65_000);
       this.pending.set(id, { resolve, reject, timer });
       child.stdin.write(JSON.stringify({ id, method, ...args }) + '\n');
     });

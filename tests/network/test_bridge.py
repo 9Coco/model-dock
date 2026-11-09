@@ -69,6 +69,36 @@ class BridgeTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'取消'):
                 self.session.connect({'address':'http://192.0.2.1:38473','mode':'http','dnsMode':'fast'})
         self.session.desktop.apply.assert_not_called()
+    @unittest.skipUnless(sys.platform == 'win32', 'Windows protected task')
+    def test_task_authorization_precedes_lease_and_governs_global_recovery(self):
+        settings = {'mode': 'global', 'address': 'socks5://127.0.0.1:1080', 'dnsMode': 'fast'}
+        marker = Path(self.directory.name) / 'global-lease.json'
+        self.session.access = Mock()
+        def request(method, **args):
+            self.assertEqual(json.loads(marker.read_text()), {'version': 2})
+            if method == 'start': return 12345
+            if method == 'snapshot': return {'running': True}
+            self.assertEqual(method, 'stop')
+            return True
+        self.session.access.call.side_effect = request
+        with patch.object(bridge, 'probe_global_proxy'):
+            self.session.access.open.side_effect = RuntimeError('取消授权')
+            with self.assertRaisesRegex(RuntimeError, '取消授权'):
+                self.session.connect(settings, True)
+            self.assertFalse(marker.exists())
+            self.session.access.call.assert_not_called()
+            self.session.access.open.side_effect = None
+            result = self.session.connect(settings, False)
+            self.session.access.open.assert_called_with(False)
+            self.assertTrue(result['running'])
+            self.assertEqual(result['localPort'], 12345)
+            self.assertTrue(self.session.disconnect()['cleanupConfirmed'])
+            self.assertFalse(marker.exists())
+        # A fresh bridge has no controller and can only ask the protected task to recover.
+        marker.write_text('{"version":2}')
+        self.session.disconnect()
+        self.session.access.call.assert_called_with('stop')
+        self.assertFalse(marker.exists())
     def test_successful_stop_clears_only_owned_marker(self):
         marker=Path(self.directory.name)/'global-lease.json';marker.write_text('{}')
         retained=Path(self.directory.name)/'preserved.txt';retained.write_text('unrelated')
