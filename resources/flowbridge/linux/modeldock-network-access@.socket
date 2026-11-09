@@ -1,0 +1,14 @@
+[Unit]
+Description=FlowBridge authorized control socket for user %i
+
+[Socket]
+ListenStream=/run/modeldock-network-access/%i.sock
+SocketUser=%i
+SocketMode=0600
+DirectoryMode=0755
+Accept=no
+RemoveOnStop=yes
+Service=modeldock-network-access@%i.service
+
+[Install]
+WantedBy=sockets.target

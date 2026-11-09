@@ -12,7 +12,7 @@ const entry = mode === 'smoke' ? 'main-smoke' : mode === 'development' ? 'main-d
 if (mode === 'production') for (const name of ['main-smoke.cjs', 'main-smoke.cjs.map', 'main-dev.cjs', 'main-dev.cjs.map', 'main.cjs.map', 'preload.cjs.map', 'dsh-profile-worker.cjs.map', 'central-pi-extension.mjs']) {
   const filename = join(root, 'dist-electron', name); if (existsSync(filename)) unlinkSync(filename);
 }
-await build({ absWorkingDir: root, entryPoints: { [entry]: 'src/main/main.ts', preload: 'src/main/preload.ts', 'dsh-profile-worker': 'src/main/dsh-profile-worker.ts' }, bundle: true,
+await build({ absWorkingDir: root, entryPoints: { [entry]: 'src/main/main.ts', preload: 'src/main/preload.ts', 'network-mini-preload': 'src/main/network-mini-preload.ts', 'dsh-profile-worker': 'src/main/dsh-profile-worker.ts' }, bundle: true,
   platform: 'node', format: 'cjs', target: 'node24', outdir: join(runtimeRoot, 'dist-electron'), outExtension: { '.js': '.cjs' },
   packages: 'external', external: ['electron', 'sql.js'], define: { 'import.meta.url': '__filename', '__MODELDOCK_RUNTIME_MODE__': JSON.stringify(mode), '__MODELDOCK_SMOKE_BUILD__': JSON.stringify(mode === 'smoke') },
   treeShaking: true, minifySyntax: true, sourcemap: mode !== 'production' });
@@ -20,6 +20,7 @@ await build({ absWorkingDir: root, entryPoints: { [entry]: 'src/main/main.ts', p
 writeFileSync(join(runtimeRoot, 'dist-electron/runtime-build.json'), JSON.stringify({ version: 1, mode, entry: `${entry}.cjs`,
   sha256: createHash('sha256').update(readFileSync(join(runtimeRoot, 'dist-electron', `${entry}.cjs`))).digest('hex') }, null, 2));
 if (mode !== 'production') {
+  cpSync(join(root, 'resources/flowbridge'), join(runtimeRoot, 'resources/flowbridge'), { recursive: true, filter: name => !/[/\\](?:vendor|__pycache__|build|dist)(?:[/\\]|$)/.test(name) });
   mkdirSync(runtimeRoot, { recursive: true });
   const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
   writeFileSync(join(runtimeRoot, 'package.json'), JSON.stringify({ ...manifest, name: `model-dock-${mode}`, main: `dist-electron/${entry}.cjs`, modeldockRuntimeMode: mode }, null, 2));

@@ -1,7 +1,7 @@
 # Third-party notices
 
 ModelDock's original code and its original application mark are covered by the
-[MIT license](LICENSE). This does not replace the licenses of third-party
+[MIT license](LICENSE-MIT). This does not replace the licenses of third-party
 artwork, dependencies or source portions, or grant rights to their trademarks.
 Keep the original copyright and license notices when redistributing them.
 
@@ -71,3 +71,34 @@ Electron packages additionally carry tool-icon and Material notices under
 `resources/licenses/`. A release must preserve these files and include
 ModelDock's LICENSE and this index. Do not assume a source package's MIT license
 relicenses every dependency or image in the application.
+
+
+## FlowBridge network integration (ModelDock 0.4.0)
+
+The combined application is distributed under GPL-3.0-or-later. Existing ModelDock
+portions retain their MIT permission and copyright notice in LICENSE-MIT; this
+is not a claim to relicense FlowBridge as MIT. Original app artwork remains MIT
+and other existing artwork retains the licenses listed above.
+
+FlowBridge source: https://github.com/9Coco/flowbridge at
+`f80139e040ca51cd0e7036659b350e692b9c495c` (Linux 0.4.4, Windows 0.5.5).
+The imported network engine, phone script, tests and build tools are GPL-3.0-or-later.
+Complete license: resources/flowbridge/LICENSE. Exact imported source paths,
+upstream SHA-256, modified local SHA-256 and integration adaptations are recorded
+in resources/flowbridge/manifest.json. No PyQt/Qt desktop application is bundled.
+
+sing-box 1.14.4 is an unmodified external network core, GPL-3.0; its exact archive
+checksums, corresponding source URL and license are in resources/flowbridge/tools/
+{tun-core,windows-core}.json and resources/flowbridge/linux/NOTICE-sing-box.md,
+THIRD-PARTY-LICENSE-sing-box.txt. Windows Wintun 0.14.1 is the unchanged official
+signed DLL, with LICENSE-wintun.txt retained beside it. Its pinned archive and
+source URL are in tools/windows-core.json. CPython 3.12.10 Windows x64 embeddable
+runtime comes from python.org; tools/python-runtime.json pins the archive and
+source. The runtime's original LICENSE.txt is included in flowbridge/python/.
+Do not substitute unsigned drivers or strip component notices.
+
+Distribute the matching ModelDock source archive produced by `npm run source:archive`
+alongside binaries, retain these component source links and notices, and provide
+the corresponding core/runtime sources when distributing those components. The
+repository and build scripts allow modified network/application sources to be built;
+there is no application signing or installation-key restriction on those builds.

@@ -148,6 +148,10 @@ child.on('exit', code => {
     if(existsSync(errorFile)) throw new Error(readFileSync(errorFile,'utf8'));
     const value = JSON.parse(readFileSync(resolve(output, 'electron-smoke.json'), 'utf8'));
     if (!value.bridge || !value.text.includes('ModelDock')) throw new Error('Renderer/preload bridge unavailable');
+    if (env.MODELDOCK_SMOKE_NETWORK_ONLY === '1') {
+      const result = JSON.parse(readFileSync(resolve(output, 'network-validation.json'), 'utf8'));
+      assert.ok(result.ok); console.log(JSON.stringify({exitCode:code, network:true, output})); process.exit(code || 0);
+    }
     if (env.MODELDOCK_SMOKE_MODEL_HISTORY_ONLY === '1') {
       const result = JSON.parse(readFileSync(resolve(output, 'history-models-validation.json'), 'utf8'));
       assert.ok(result.ok, 'Model history validation failed');

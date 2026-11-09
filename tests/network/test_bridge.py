@@ -1,0 +1,82 @@
+"""ModelDock-specific network adapter tests: all OS operations are injected."""
+import importlib.util
+import os
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+from unittest.mock import Mock, patch
+ROOT=Path(__file__).resolve().parents[2]/'resources/flowbridge'
+spec=importlib.util.spec_from_file_location('modeldock_bridge',ROOT/'bridge.py')
+bridge=importlib.util.module_from_spec(spec);spec.loader.exec_module(bridge)
+class BridgeTests(unittest.TestCase):
+    def setUp(self):
+        self.directory=tempfile.TemporaryDirectory(prefix='modeldock-network-bridge-')
+        self.addCleanup(self.directory.cleanup)
+        self.session=bridge.NetworkSession(Path(self.directory.name))
+        self.session.desktop=Mock(last_warning='',journal_path=Path(self.directory.name)/'proxy.json')
+        self.session.ensure_guardian=Mock()
+    @unittest.skipUnless(sys.platform.startswith('linux'),'Linux desktop fixture')
+    def test_state_directory_does_not_select_isolated_desktop_backend(self):
+        from linux.system_proxy import DesktopProxyManager
+        root=Path(self.directory.name)
+        with patch.dict(os.environ,{'XDG_CONFIG_HOME':str(root/'system')}):
+            manager=DesktopProxyManager(state_dir=root/'modeldock')
+        self.assertFalse(manager._isolated)
+        self.assertEqual(manager.kde_path,root/'system/kioslaverc')
+        self.assertEqual(manager.journal_path,root/'modeldock/system-proxy-recovery.json')
+    def test_failed_restore_preserves_listener_for_retry(self):
+        self.session.relay=Mock()
+        self.session.relay.snapshot.return_value={}
+        self.session.desktop.restore.side_effect=RuntimeError('owned settings conflict')
+        with self.assertRaisesRegex(RuntimeError,'conflict'):self.session.disconnect()
+        self.session.relay.stop.assert_not_called()
+    def test_failed_tun_stop_preserves_controller_and_lease(self):
+        self.session.controller=Mock(cleanup_confirmed=False)
+        self.session.controller.snapshot.return_value={}
+        self.session.controller.close.side_effect=RuntimeError('route still present')
+        marker=Path(self.directory.name)/'global-lease.json';marker.write_text('{}')
+        with self.assertRaisesRegex(RuntimeError,'route'):self.session.disconnect()
+        self.assertIsNotNone(self.session.controller);self.assertTrue(marker.exists())
+    def test_preflight_failure_never_changes_desktop_settings(self):
+        with patch.object(bridge.connectivity,'probe_http_proxy',side_effect=OSError('HTTP refused')):
+            with self.assertRaisesRegex(OSError,'refused'):
+                self.session.connect({'address':'http://192.0.2.1:38473','mode':'http','dnsMode':'fast'})
+        self.session.desktop.apply.assert_not_called();self.assertIsNone(self.session.relay)
+    def test_cancel_after_probe_never_applies_proxy(self):
+        with patch.object(bridge.connectivity,'probe_http_proxy',side_effect=lambda _:self.session.cancelled.set()):
+            with self.assertRaisesRegex(RuntimeError,'取消'):
+                self.session.connect({'address':'http://192.0.2.1:38473','mode':'http','dnsMode':'fast'})
+        self.session.desktop.apply.assert_not_called()
+    def test_successful_stop_clears_only_owned_marker(self):
+        marker=Path(self.directory.name)/'global-lease.json';marker.write_text('{}')
+        retained=Path(self.directory.name)/'preserved.txt';retained.write_text('unrelated')
+        self.session.controller=Mock(cleanup_confirmed=True)
+        self.session.controller.snapshot.return_value={}
+        result=self.session.disconnect()
+        self.assertTrue(result['cleanupConfirmed']);self.assertFalse(marker.exists());self.assertEqual(retained.read_text(),'unrelated')
+    def test_embedded_windows_stop_uses_fixed_script_not_cwd_module_lookup(self):
+        from windows import native
+        process=native.CoreProcess.__new__(native.CoreProcess)
+        process.process=Mock(pid=12345)
+        process.job=None
+        with patch.object(native.subprocess,'CREATE_NO_WINDOW',0,create=True), patch.object(native.subprocess,'run',return_value=Mock(returncode=0)) as run:
+            process.request_stop()
+        command=run.call_args.args[0]
+        self.assertEqual(command[1:3],['-I','-B'])
+        self.assertEqual(Path(command[3]),ROOT/'signal_core.py')
+        self.assertEqual(command[-1],'12345')
+        self.assertNotIn('-m',command)
+    def test_unknown_websites_are_not_fetch_targets(self):
+        with self.assertRaises(ValueError):self.session.check('http://127.0.0.1/private')
+    def test_website_check_after_disconnect_uses_fresh_cancellation(self):
+        self.session.disconnect()
+        previous=self.session.check_cancel
+        self.assertTrue(previous.is_set())
+        def check(url, *, cancellation):
+            self.assertIsNot(cancellation,previous)
+            self.assertFalse(cancellation.is_set())
+            return {'ok':True}
+        with patch.object(bridge.connectivity,'test_system_website',side_effect=check), patch.object(bridge,'asdict',side_effect=lambda value:value):
+            self.assertEqual(self.session.check(next(iter(bridge.connectivity.SITES))),{'system':{'ok':True},'proxy':None})
+if __name__=='__main__':unittest.main()
