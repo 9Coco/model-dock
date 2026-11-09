@@ -10,25 +10,25 @@ import type { Store } from './store';
 const IDS_KEY = 'qa-model-history-provider-ids', MODE_KEY = 'qa-model-history-mode', CALLS_KEY = 'qa-model-history-calls';
 const PRIVATE_KEY = 'SYNTHETIC_PRIVATE_MODEL_HISTORY_KEY';
 // Public names and picker shape only; this is never a live account response.
-const TRAE_PUBLIC_SCOPE = "按本机同账号 TRAE 客户端最近缓存的 Chat 模型清单显示，共 18 项。其中 15 项尚无已核实的官方直连配置，已列出但暂不支持添加。清单变化时请先在 TRAE 刷新，再重新获取；历史选项仅控制显示。";
+const TRAE_PUBLIC_SCOPE = "按本机同账号 TRAE 客户端最近缓存的 Chat 模型清单显示，共 18 项。当前账号可添加 17 项，有 1 项受账号权限限制。清单变化时请先在 TRAE 刷新，再重新获取；历史选项仅控制显示。";
 const TRAE_PUBLIC_DIRECTORY = [
   {
     "id": "Doubao-Seed-2.1-Turbo",
     "name": "Seed-2.1-Turbo",
     "visibility": "current",
-    "importable": false
+    "importable": true
   },
   {
     "id": "Doubao-Seed-2.1-Pro",
     "name": "Seed-2.1-Pro-0915",
     "visibility": "current",
-    "importable": false
+    "importable": true
   },
   {
     "id": "Doubao-Seed-Evolving",
     "name": "Seed-Evolving",
     "visibility": "current",
-    "importable": false
+    "importable": true
   },
   {
     "id": "Doubao-Seed-Code",
@@ -40,25 +40,25 @@ const TRAE_PUBLIC_DIRECTORY = [
     "id": "glm-5.3-flash",
     "name": "GLM-5.3-Flash",
     "visibility": "current",
-    "importable": false
+    "importable": true
   },
   {
     "id": "glm-5.3-flashx",
     "name": "GLM-5.3-FlashX",
     "visibility": "current",
-    "importable": false
+    "importable": true
   },
   {
     "id": "glm-5.3",
     "name": "GLM-5.3",
     "visibility": "current",
-    "importable": false
+    "importable": true
   },
   {
     "id": "deepseek-v4.1-flash",
     "name": "DeepSeek-V4.1-Flash",
     "visibility": "current",
-    "importable": false
+    "importable": true
   },
   {
     "id": "DeepSeek-V4-Pro-Official",
@@ -76,25 +76,25 @@ const TRAE_PUBLIC_DIRECTORY = [
     "id": "kimi-k3",
     "name": "Kimi-K3",
     "visibility": "current",
-    "importable": false
+    "importable": true
   },
   {
     "id": "mimo-v2.6-flash",
     "name": "MiMo-V2.6-Flash",
     "visibility": "current",
-    "importable": false
+    "importable": true
   },
   {
     "id": "mimo-v2.6-pro",
     "name": "MiMo-V2.6-Pro",
     "visibility": "current",
-    "importable": false
+    "importable": true
   },
   {
     "id": "minimax-m3.1-flash",
     "name": "MiniMax-M3.1-Flash",
     "visibility": "current",
-    "importable": false
+    "importable": true
   },
   {
     "id": "minimax-m3",
@@ -106,19 +106,19 @@ const TRAE_PUBLIC_DIRECTORY = [
     "id": "step-5-preview",
     "name": "Step-5-Preview",
     "visibility": "current",
-    "importable": false
+    "importable": true
   },
   {
     "id": "qwen3.8-flash",
     "name": "Qwen3.8-Flash",
     "visibility": "current",
-    "importable": false
+    "importable": true
   },
   {
     "id": "qwen3.8-max",
     "name": "Qwen3.8-Max",
     "visibility": "current",
-    "importable": false
+    "importable": true
   },
   {
     "id": "Doubao_1_6",
@@ -262,7 +262,7 @@ export function createHistoryModelsFixture(store: Store): { models(provider: Pro
     if (signal.aborted) throw new Error('Synthetic catalog canceled');
     store.setManagedState(CALLS_KEY, store.getManagedState(CALLS_KEY, 0) + 1);
     const mode = store.getManagedState<'verified' | 'unverified' | 'no-current' | 'limited-current' | 'public-shape'>(MODE_KEY, 'verified');
-    if (family === 'trae' && mode === 'public-shape') return new Response(JSON.stringify({ data: TRAE_PUBLIC_DIRECTORY.map(model => ({ id: model.id, name: 'name' in model ? model.name : model.id, modeldock_catalog_visibility: model.visibility, ...(model.importable ? {} : { modeldock_catalog_importable: false }) })), modeldock_history: { source: 'trae-client', currentVerified: true, message: TRAE_PUBLIC_SCOPE } }), { headers: { 'content-type': 'application/json' } });
+    if (family === 'trae' && mode === 'public-shape') return new Response(JSON.stringify({ data: TRAE_PUBLIC_DIRECTORY.map(model => ({ id: model.id, name: 'name' in model ? model.name : model.id, modeldock_catalog_visibility: model.visibility, ...(model.importable ? {} : { modeldock_catalog_importable: false, modeldock_catalog_blocked_reason: 'account-access' }) })), modeldock_history: { source: 'trae-client', currentVerified: true, message: TRAE_PUBLIC_SCOPE } }), { headers: { 'content-type': 'application/json' } });
     const entries = ['current-a', 'current-b', 'history-new', 'history-kept'].map(suffix => ({ id: id(family, suffix), name: `合成 ${suffix}`, context_length: 32768, tools: false, vision: false, supported_endpoints: ['chat_completions'], ...(family !== 'api' && !(mode === 'unverified' && suffix.startsWith('current-')) ? { modeldock_catalog_visibility: suffix.startsWith('current-') ? 'current' : 'historical' } : {}), ...(mode === 'limited-current' && suffix === 'current-b' ? { modeldock_catalog_importable: false } : {}) }));
     if (mode === 'unverified') entries.push({ id: id(family, 'visibility-unknown'), name: '合成显示状态未核实的模型', context_length: 32768, tools: false, vision: false, supported_endpoints: ['chat_completions'] });
     return new Response(JSON.stringify({ data: mode === 'no-current' ? entries.slice(2) : entries, ...(family === 'api' ? {} : { modeldock_history: { source: source(family), currentVerified: mode !== 'unverified', message: mode === 'unverified' ? '合成客户端当前清单未核实；默认仅显示已确认的当前模型。' : mode === 'limited-current' ? '合成客户端当前清单有 2 项；其中 1 项官方直连配置尚未核实，暂不可添加。' : '已按合成客户端当前清单筛选；可勾选查看历史模型。' } }) }), { headers: { 'content-type': 'application/json' } });
@@ -372,26 +372,32 @@ export async function verifyHistoryModels(window: BrowserWindow, store: Store, o
     store.setManagedState(MODE_KEY, 'public-shape'); window.setSize(980, 800); await evaluate("document.documentElement.dataset.theme='dark';document.documentElement.style.colorScheme='dark'"); await open('trae');
     await waitFor(`document.querySelectorAll('.discovery-model').length===18`, 'all eighteen client-current public model names are displayed');
     assert.equal(await evaluate<boolean>(`document.querySelector('${toggle}').checked`), false);
-    assert.equal(await evaluate<number>(`document.querySelectorAll('[data-model-unimportable]').length`), 15);
-    assert.equal(await evaluate<number>(`document.querySelectorAll('.discovery-model-select > input:not(:disabled):checked').length`), 3);
+    assert.equal(await evaluate<number>(`document.querySelectorAll('[data-model-unimportable]').length`), 1);
+    assert.equal(await evaluate<number>(`document.querySelectorAll('.discovery-model-select > input:not(:disabled):checked').length`), 17);
     assert.match(await evaluate<string>(`document.querySelector('[data-discovery-count]').textContent`), /^18 个模型/);
-    assert.match(await evaluate<string>(`document.querySelector('.discovery-footer').textContent`), /已选择 3 个待添加模型/);
-    assert.equal(await evaluate<boolean>(`(()=>{const note=document.querySelector('[data-discovery-history-message]');return note.textContent===${JSON.stringify(TRAE_PUBLIC_SCOPE)}&&note.scrollWidth<=note.clientWidth+1})()`), true, 'The complete account-cache scope and missing-route explanation wraps without overflow');
+    assert.match(await evaluate<string>(`document.querySelector('.discovery-footer').textContent`), /已选择 17 个待添加模型/);
+    assert.equal(await evaluate<boolean>(`(()=>{const note=document.querySelector('[data-discovery-history-message]');return note.textContent===${JSON.stringify(TRAE_PUBLIC_SCOPE)}&&note.scrollWidth<=note.clientWidth+1})()`), true, 'The complete account-cache scope and account-access explanation wraps without overflow');
+    const lockedKimi = '.discovery-model:has([data-model-unimportable="account-access"])';
+    assert.equal(await evaluate<string>(`document.querySelector(${JSON.stringify(lockedKimi)}+' strong').textContent`), 'kimi-k3.1-pro');
+    assert.match(await evaluate<string>(`document.querySelector(${JSON.stringify(lockedKimi)}).textContent`), /当前 TRAE 账号没有此模型的使用权限/);
+    assert.equal(await evaluate<boolean>(`document.querySelector(${JSON.stringify(lockedKimi)}+' input[type="checkbox"]').disabled`), true);
     const publicCalls = store.getManagedState(CALLS_KEY, 0); await capture('public-shape-current-top-dark-980');
+    await evaluate(`document.querySelector(${JSON.stringify(lockedKimi)}).scrollIntoView({block:'center'})`);
+    await capture('public-shape-account-restriction-dark-980');
     const lastCurrent = TRAE_PUBLIC_DIRECTORY.filter(model => model.visibility === 'current').at(-1)!;
     await evaluate(`document.querySelector(${JSON.stringify(`.discovery-model:has(input[aria-label="选择模型 ${lastCurrent.id}"])`)}).scrollIntoView({block:'center'})`); await capture('public-shape-current-last-dark-980');
     await click(toggle); await waitFor(`document.querySelectorAll('.discovery-model').length===37`, 'history reveals thirty-seven eligible subscription entries without personal BYOK');
     assert.equal(await evaluate<number>(`document.querySelectorAll('[data-model-historical]').length`), 19);
-    assert.equal(await evaluate<number>(`document.querySelectorAll('[data-model-unimportable]').length`), 15);
+    assert.equal(await evaluate<number>(`document.querySelectorAll('[data-model-unimportable]').length`), 1);
     assert.equal(await evaluate<number>(`document.querySelectorAll('.discovery-model.existing').length`), 1);
     assert.match(await evaluate<string>(`document.querySelector('[data-discovery-count]').textContent`), /^37 个模型 · 1 个已添加/);
     const publicHistoryRow = `.discovery-model:has(input[aria-label="选择模型 ${publicHistory.id}"])`;
     assert.equal(await evaluate<boolean>(`document.querySelector(${JSON.stringify(publicHistoryRow)}+' input[type="checkbox"]').disabled`), true);
     await evaluate(`document.querySelector(${JSON.stringify(publicHistoryRow)}).scrollIntoView({block:'center'})`); await capture('public-shape-history-dark-980');
     await click(toggle); await waitFor(`document.querySelectorAll('.discovery-model').length===18`, 'default current inventory is restored');
-    assert.match(await evaluate<string>(`document.querySelector('.discovery-footer').textContent`), /已选择 3 个待添加模型/);
+    assert.match(await evaluate<string>(`document.querySelector('.discovery-footer').textContent`), /已选择 17 个待添加模型/);
     assert.equal(store.getManagedState(CALLS_KEY, 0), publicCalls); assert.deepEqual(store.listModels(), publicModelsBefore); assert.deepEqual(store.listBindings(), publicBindingsBefore); await close();
     const publicView = await evaluate<string>('(async()=>JSON.stringify({snapshot:await window.modelDock.snapshot(),body:document.body.innerText,diagnostics:await window.modelDock.queryDiagnostics({limit:200})}))()'); assert.equal(publicView.includes(PRIVATE_KEY), false);
-    writeFileSync(join(outputDir, 'history-models-validation.json'), JSON.stringify({ ok: true, families: checked, defaultHistoryHidden: true, toggleDoesNotRefetch: true, hiddenHistoryNeverSubmittedOrBulkEdited: true, currentUnroutableVisibleButNotImportable: true, forgedCheckboxCannotSubmitUnroutable: true, backendRejectsUnroutableModel: true, searchSelectionSemanticsPreserved: true, existingHistoricalModelsAndBindingsPreserved: true, reopenDefaultsToCurrent: true, unknownVisibilityNotInvented: true, unknownHiddenByDefault: true, unverifiedCurrentMessageVisible: true, emptyCurrentRequiresExplicitHistory: true, genericApiNoHistoryCheckbox: true, publicTraeShape: { current: 18, historical: 19, total: 37, currentImportable: 3, currentReadOnly: 15, longScopeFits: true, historicalModelAndBindingPreserved: true }, noRealAccountsOrNetwork: true, screenshots }, null, 2));
+    writeFileSync(join(outputDir, 'history-models-validation.json'), JSON.stringify({ ok: true, families: checked, defaultHistoryHidden: true, toggleDoesNotRefetch: true, hiddenHistoryNeverSubmittedOrBulkEdited: true, currentUnroutableVisibleButNotImportable: true, forgedCheckboxCannotSubmitUnroutable: true, backendRejectsUnroutableModel: true, searchSelectionSemanticsPreserved: true, existingHistoricalModelsAndBindingsPreserved: true, reopenDefaultsToCurrent: true, unknownVisibilityNotInvented: true, unknownHiddenByDefault: true, unverifiedCurrentMessageVisible: true, emptyCurrentRequiresExplicitHistory: true, genericApiNoHistoryCheckbox: true, publicTraeShape: { current: 18, historical: 19, total: 37, currentImportable: 17, currentReadOnly: 1, longScopeFits: true, historicalModelAndBindingPreserved: true }, noRealAccountsOrNetwork: true, screenshots }, null, 2));
   } finally { store.setManagedState(MODE_KEY, 'verified'); await evaluate(`(()=>{const original=${JSON.stringify(originalTheme)};if(original.theme===undefined)delete document.documentElement.dataset.theme;else document.documentElement.dataset.theme=original.theme;document.documentElement.style.colorScheme=original.colorScheme})()`); window.setMinimumSize(minimum[0], minimum[1]); window.setSize(initialSize[0], initialSize[1]); }
 }

@@ -10,7 +10,7 @@ interface Accounts {
   modelClient(id: string): 'trae-cn' | 'trae-solo-cn';
 }
 interface Api {
-  chat(credentials: TraeClientCredentials, body: Json, signal?: AbortSignal): Promise<Response>;
+  chat(credentials: TraeClientCredentials, body: Json, signal?: AbortSignal, client?: 'trae-cn' | 'trae-solo-cn'): Promise<Response>;
   models(credentials: TraeClientCredentials, signal?: AbortSignal, client?: 'trae-cn' | 'trae-solo-cn'): Promise<unknown>;
 }
 const headers = (sse = false) => ({ 'content-type': sse ? 'text/event-stream; charset=utf-8' : 'application/json; charset=utf-8', 'cache-control': 'no-store' });
@@ -42,13 +42,13 @@ export class TraeGatewayAdapter {
     if (provider.nativeAdapter !== 'trae') return;
     if (!this.accounts.isNativeProvider(provider.id)) throw new TraeNativeAccountError('TRAE 原生账号配置已变化，请重新导入。');
     const route = path.replace(/^\/v1\//, '/');
-    const credentials = this.accounts.credentials(provider.id);
-    if (route === '/chat/completions') return this.api.chat(credentials, body, signal);
+    const credentials = this.accounts.credentials(provider.id), client = this.accounts.modelClient(provider.id);
+    if (route === '/chat/completions') return this.api.chat(credentials, body, signal, client);
     if (route !== '/responses' && route !== '/messages') return json({ error: { message: 'TRAE 原生适配器不支持此接口。' } }, 400);
     const responseMode = route === '/responses';
     const chat = responseMode ? parseResponsesChatRequest(body) : parseAnthropicRequest(body, 'chat-completions');
     const model = String(body.model ?? '');
-    const upstream = await this.api.chat(credentials, { ...chat, model }, signal);
+    const upstream = await this.api.chat(credentials, { ...chat, model }, signal, client);
     if (!upstream.ok) return upstream;
     const sse = upstream.headers.get('content-type')?.includes('text/event-stream');
     if (body.stream === true) {

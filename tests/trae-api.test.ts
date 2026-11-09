@@ -74,6 +74,21 @@ describe('direct TraeCode CN native Raw v2 protocol', () => {
     const fetch = fetchMock(url => new URL(url).pathname.endsWith('get_detail_param') ? catalog() : sse(frame('text_delta', { text: 'No tool' }) + finished));
     await expect(new TraeApi({ fetch }).chat(credential, { ...body, tools: [tool], tool_choice: 'required' })).rejects.toMatchObject({ code: 'response' });
   });
+  it('preserves repeated tokens and null text channels in native output events', async () => {
+    const raw = [
+      frame('metadata', {}), frame('timing_cost', {}),
+      frame('output', { response: '', reasoning_content: 'Think', tool_calls: null }),
+      frame('output', { response: '', reasoning_content: ' again', tool_calls: null }),
+      frame('output', { response: null, reasoning_content: ' again', tool_calls: null }),
+      frame('output', { response: 'OK', reasoning_content: null, tool_calls: null, phase: null, multimodal_contents: [] }),
+      frame('output', { response: 'OK', reasoning_content: null, tool_calls: null }),
+      frame('extra_info', {}), frame('token_usage', { input_token: 8, output_token: 5 }), finished,
+    ].join('');
+    const api = new TraeApi({ fetch: fetchMock(url => new URL(url).pathname.endsWith('get_detail_param') ? catalog() : sse(raw)) });
+    const result = await (await api.chat(credential, body)).json();
+    expect(result.choices[0]).toMatchObject({ finish_reason: 'stop', message: { content: 'OKOK', reasoning_content: 'Think again again' } });
+    expect(result.usage).toEqual({ prompt_tokens: 8, completion_tokens: 5, total_tokens: 13 });
+  });
   it('does not turn duplicate cumulative text snapshots into repeated text', async () => {
     const raw = frame('output', { response: 'Hello' }) + frame('output', { response: 'Hello' }) + frame('output', { response: 'Hello world' }) + finished;
     const api = new TraeApi({ fetch: fetchMock(url => new URL(url).pathname.endsWith('get_detail_param') ? catalog() : sse(raw)) });

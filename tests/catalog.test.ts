@@ -712,9 +712,38 @@ describe('native discovery history metadata and the complete selection directory
     expect(f.store.batches).toEqual([]);
   });
 
+  it.each([false, true])('preserves the strongest TRAE account reason for duplicate entries in either order (reversed=%s)', async reversed => {
+    const rows = [undefined, 'access-unknown', 'account-access'].map(reason => ({
+      id: 'restricted', display_name: 'Same display name', modeldock_catalog_visibility: reason === 'account-access' ? 'current' : 'historical',
+      modeldock_catalog_importable: false, modeldock_catalog_blocked_reason: reason,
+    }));
+    const f = nativeFixture('trae', { modeldock_history: { source: 'trae-client', currentVerified: true }, data: [
+      ...(reversed ? rows.reverse() : rows),
+      { id: 'open', display_name: 'Same display name', modeldock_catalog_visibility: 'current', modeldock_catalog_blocked_reason: 'account-access' },
+      { id: 'unverified', modeldock_catalog_importable: false, modeldock_catalog_blocked_reason: 'access-unknown' },
+    ] });
+    const result = await f.catalog.discover('api');
+    expect(result.models[0]).toMatchObject({ catalogVisibility: 'current', catalogImportable: false, catalogBlockedReason: 'account-access' });
+    expect(result.models[1]).not.toHaveProperty('catalogBlockedReason');
+    expect(result.models[2]).toMatchObject({ catalogImportable: false, catalogBlockedReason: 'access-unknown' });
+    expect(() => f.catalog.addSelected('api', [{ upstreamId: 'restricted' }])).toThrow('当前 TRAE 账号没有此模型的使用权限');
+    expect(() => f.catalog.addSelected('api', [{ upstreamId: 'unverified' }])).toThrow('未能确认当前 TRAE 账号是否有权');
+    expect(f.catalog.addSelected('api', [{ upstreamId: 'open' }]).added).toHaveLength(1);
+  });
+
+  it('keeps legacy wording for an unknown restriction or a non-TRAE native adapter', async () => {
+    for (const [adapter, source, reason] of [['trae', 'trae-client', 'new-code'], ['jetbrains-ide', 'jetbrains-client', 'account-access']] as const) {
+      const f = nativeFixture(adapter, { modeldock_history: { source, currentVerified: true }, data: [
+        { id: 'blocked', modeldock_catalog_importable: false, modeldock_catalog_blocked_reason: reason },
+      ] });
+      expect((await f.catalog.discover('api')).models[0]).not.toHaveProperty('catalogBlockedReason');
+      expect(() => f.catalog.addSelected('api', [{ upstreamId: 'blocked' }])).toThrow('尚未核实可用的官方调用通道');
+    }
+  });
+
   it.each(['custom', 'trae-cn-relay', 'jetbrains-central'] as const)('ignores history-shaped fields from an ordinary %s upstream', async presetId => {
     const f = fixture(vi.fn(async () => json({ modeldock_history: { source: 'trae-client', currentVerified: true }, data: [
-      { id: 'ordinary-model', modeldock_catalog_visibility: 'historical', modeldock_catalog_importable: false },
+      { id: 'ordinary-model', modeldock_catalog_visibility: 'historical', modeldock_catalog_importable: false, modeldock_catalog_blocked_reason: 'account-access' },
     ] })) as typeof fetch);
     f.store.provider.presetId = presetId;
     const result = await f.catalog.discover('api');
@@ -722,6 +751,7 @@ describe('native discovery history metadata and the complete selection directory
     expect(result).not.toHaveProperty('history');
     expect(result.models[0]).not.toHaveProperty('catalogVisibility');
     expect(result.models[0]).not.toHaveProperty('catalogImportable');
+    expect(result.models[0]).not.toHaveProperty('catalogBlockedReason');
     expect(f.catalog.addSelected('api', [{ upstreamId: 'ordinary-model' }]).added).toHaveLength(1);
   });
 

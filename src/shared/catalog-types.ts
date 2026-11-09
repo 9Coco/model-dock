@@ -2,6 +2,10 @@ import type { Model, ModelSpecs, ReasoningEffort, WireApi } from './types';
 export type ModelMetadataField = 'contextWindow' | 'tools' | 'vision' | 'reasoningEfforts' | 'defaultReasoningEffort' | keyof ModelSpecs;
 
 export type DiscoveryErrorCategory = 'missing-credentials' | 'authentication' | 'permission' | 'unsupported' | 'rate-limit' | 'network' | 'timeout' | 'invalid-response' | 'invalid-provider' | 'upstream';
+export const catalogAccessMessages = {
+  'account-access': '当前 TRAE 账号没有此模型的使用权限。',
+  'access-unknown': '未能确认当前 TRAE 账号是否有权使用此模型，请重新获取模型列表。',
+} as const;
 export interface DiscoveredModel extends ModelSpecs {
   upstreamId: string;
   displayName: string;
@@ -24,8 +28,9 @@ export interface DiscoveredModel extends ModelSpecs {
   existingModelId?: string;
   /** Display scope verified by the native client catalog; never changes routing. */
   catalogVisibility?: 'current' | 'historical';
-  /** Main-process directory metadata only. A client-visible entry without a verified route cannot be added. */
+  /** Main-process directory metadata only. Enforced again when adding the selection. */
   catalogImportable?: false;
+  catalogBlockedReason?: keyof typeof catalogAccessMessages;
 }
 export interface DiscoveryResult {
   ok: boolean;

@@ -2,6 +2,7 @@ import { isCopilotUpstream } from './copilot-provider';
 import type { Model, ModelInput, Provider, WireApi } from '../shared/types';
 import { isReasoningEffort, MODEL_SPEC_FIELDS, modelSpecs, sanitizeReasoningEfforts } from '../shared/types';
 import type { AddModelsResult, DiscoveredModel, DiscoveryErrorCategory, DiscoveryResult, ModelSelection } from '../shared/catalog-types';
+import { catalogAccessMessages } from '../shared/catalog-types';
 import { presetById } from '../shared/presets';
 import { isTraeRelayProvider } from '../shared/trae-relay-models';
 import { modelLocalAlias, suggestModelAlias } from '../shared/model-names';
@@ -352,11 +353,18 @@ export class ModelCatalog {
         const entries = rawEntries.filter(entry => !hiddenModel(entry, provider));
         for (const entry of entries) {
           const model = parseModel(entry, provider, messagesCatalog);
-          const visibility = history ? object(entry).modeldock_catalog_visibility : subscriptionCatalogVisibility(entry, provider);
-          if (model && (visibility === 'current' || visibility === 'historical')) model.catalogVisibility = visibility;
-          if (model && history && object(entry).modeldock_catalog_importable === false) model.catalogImportable = false;
-          if (model && !models.has(model.upstreamId)) models.set(model.upstreamId, model);
-          else if (model?.catalogImportable === false) models.get(model.upstreamId)!.catalogImportable = false;
+          if (!model) continue;
+          const row = object(entry), visibility = history ? row.modeldock_catalog_visibility : subscriptionCatalogVisibility(entry, provider);
+          const candidate = models.get(model.upstreamId) ?? model;
+          if (visibility === 'current' || (visibility === 'historical' && !candidate.catalogVisibility)) candidate.catalogVisibility = visibility;
+          if (history && row.modeldock_catalog_importable === false) {
+            candidate.catalogImportable = false;
+            const reason = row.modeldock_catalog_blocked_reason;
+            if (history.source === 'trae-client' && (reason === 'account-access' || reason === 'access-unknown') && candidate.catalogBlockedReason !== 'account-access') {
+              candidate.catalogBlockedReason = reason;
+            }
+          }
+          models.set(model.upstreamId, candidate);
           if (models.size > MAX_MODELS) throw new CatalogFailure('invalid-response', '模型目录条目过多，已停止读取。');
         }
         if (entries.length > 0 && models.size === 0) throw new CatalogFailure('invalid-response', '模型目录没有有效的模型 ID。');
@@ -413,7 +421,10 @@ export class ModelCatalog {
       selectedIds.add(selection.upstreamId);
       if (existing.some(model => model.providerId === providerId && model.upstreamId === selection.upstreamId)) { skipped.push(selection.upstreamId); continue; }
       const found = cached.models.get(selection.upstreamId)!;
-      if (found.catalogImportable === false) throw new Error(`「${found.upstreamId}」尚未核实可用的官方调用通道，暂不能添加。`);
+      if (found.catalogImportable === false) {
+        const reason = found.catalogBlockedReason ? catalogAccessMessages[found.catalogBlockedReason] : '尚未核实可用的官方调用通道，暂不能添加。';
+        throw new Error(`「${found.upstreamId}」${reason}`);
+      }
       const requestedAlias = selection.alias === undefined ? undefined : safeText(selection.alias, 400);
       if (requestedAlias !== undefined && (!requestedAlias || !/^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$/.test(requestedAlias))) throw new Error('模型别名只能包含字母、数字和 . _ : / -。');
       const alias = suggestModelAlias(providerId, requestedAlias || found.alias, plannedModels);

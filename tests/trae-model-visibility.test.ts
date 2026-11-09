@@ -45,3 +45,156 @@ describe('TRAE client picker visibility and independent verified routes',()=>{
   expect(fetch).toHaveBeenCalledTimes(2);
  });
 });
+
+const restrictedModel = 'kimi-k3.1-pro';
+const currentModelIds = [
+  'Doubao-Seed-2.1-Turbo', 'Doubao-Seed-2.1-Pro', 'Doubao-Seed-Evolving', 'Doubao-Seed-Code',
+  'glm-5.3-flash', 'glm-5.3-flashx', 'glm-5.3', 'deepseek-v4.1-flash', 'DeepSeek-V4-Pro-Official',
+  restrictedModel, 'kimi-k3', 'mimo-v2.6-flash', 'mimo-v2.6-pro', 'minimax-m3.1-flash',
+  'minimax-m3', 'step-5-preview', 'qwen3.8-flash', 'qwen3.8-max',
+];
+const legacyModelIds = ['Doubao-Seed-Code', 'DeepSeek-V4-Pro-Official', 'minimax-m3'];
+
+function nativeRow(id: string) {
+  const restricted = id === restrictedModel;
+  return row(id, {
+    display_contact_config: JSON.stringify({
+      access: { ...(restricted ? { enable: true } : {}), data: { identity_list: restricted ? [5, 1, 2, 3, 100] : [0, 5, 1, 2, 3, 100] } },
+    }),
+    model_detail_list: [
+      { model_name: id + '__max', encrypted_model_params: 'SYNTHETIC_PRIVATE_ROUTE' },
+      { model_name: id + '__dev', encrypted_model_params: 'SYNTHETIC_PRIVATE_ROUTE' },
+    ],
+  });
+}
+
+function nativeEndpoints(
+  payStatus: () => Response,
+  additionalRows: ReturnType<typeof row>[] = [],
+) {
+  const inference = vi.fn<(_: RequestInit) => Response>(nativeStream);
+  const pay = vi.fn((_product: string) => payStatus());
+  const directory = vi.fn((headers: Headers) => {
+    // The old revision returned routes for only three of the present-day picker entries.
+    const latest = Number(headers.get('x-ide-version-code')) >= 20261029
+      && headers.get('x-ide-version-code') === headers.get('x-app-version-code');
+    const ids = latest ? currentModelIds : legacyModelIds;
+    return Response.json({ config_info_list: [...ids.map(nativeRow), ...additionalRows] });
+  });
+  const fetch: typeof globalThis.fetch = async (input, init = {}) => {
+    const url = new URL(String(input));
+    switch (url.origin + url.pathname) {
+      case 'https://trae-api-cn.mchost.guru/api/ide/v1/get_detail_param':
+        expect(url.searchParams.get('function')).toBe('chat_v3');
+        return directory(new Headers(init.headers));
+      case 'https://api.trae.cn/trae/api/v2/pay/ide_user_pay_status':
+        return pay(JSON.parse(String(init.body)).trae_client);
+      case 'https://trae-api-cn.mchost.guru/api/ide/v2/llm_raw_chat':
+        return inference(init);
+      default:
+        throw new Error('Unexpected upstream URL');
+    }
+  };
+  return { fetch, inference, pay, directory };
+}
+
+const clientSnapshot: TraeClientModelCatalog = { client: 'trae-cn', models: currentModelIds.map(id => ({ id })) };
+
+describe('TRAE directory revision and account access', () => {
+  it('imports the 17 unlocked entries and dispatches a previously missing model using its verified route', async () => {
+    const server = nativeEndpoints(() => Response.json({ user_pay_identity: 0 }));
+    const api = new TraeApi({ fetch: server.fetch, clientModels: async () => clientSnapshot });
+    const result = await api.models(credentials, undefined, 'trae-cn');
+    expect(result.data.map(model => model.id)).toEqual(currentModelIds);
+    expect(result.data.filter(model => model.modeldock_catalog_importable !== false)).toHaveLength(17);
+    expect(result.data.find(model => model.id === restrictedModel)).toMatchObject({
+      modeldock_catalog_visibility: 'current', modeldock_catalog_importable: false, modeldock_catalog_blocked_reason: 'account-access',
+    });
+    const model = 'qwen3.8-max';
+    const response = await api.chat(credentials, { ...request, model }, undefined, 'trae-cn');
+    expect((await response.json()).choices[0].message.content).toBe('Mock response');
+    const init = server.inference.mock.calls[0][0];
+    const body = JSON.parse(String(init.body));
+    expect(body).toMatchObject({ config_source: 1, config_name: model, model_name: model + '__dev' });
+    expect(new Headers(init.headers).get('x-ide-version-code')).toBe(server.directory.mock.calls[0][0].get('x-ide-version-code'));
+    expect(JSON.stringify([result, body])).not.toMatch(/SYNTHETIC_TOKEN|SYNTHETIC_PRIVATE_ROUTE|identity_list|display_contact_config/);
+    expect(body).not.toHaveProperty('modeldock_catalog_visibility');
+    expect(server.pay.mock.calls).toEqual([['IDE']]);
+  });
+
+  it.each([
+    { status: 'the Free identity', pay: () => Response.json({ user_pay_identity: 0 }), reason: 'account-access' },
+    { status: 'a missing identity', pay: () => Response.json({}), reason: 'access-unknown' },
+    { status: 'a failed status lookup', pay: () => new Response(null, { status: 503 }), reason: 'access-unknown' },
+  ])('checks a manually entered or saved model on a cold cache with $status and no client snapshot', async ({ pay, reason }) => {
+    const server = nativeEndpoints(pay, [row('malformed-access', { display_contact_config: '{incomplete' })]);
+    const api = new TraeApi({ fetch: server.fetch, clientModels: async () => undefined });
+    await expect(api.chat(credentials, { ...request, model: restrictedModel })).rejects.toMatchObject({ code: reason });
+    await expect(api.chat(credentials, { ...request, model: 'malformed-access' })).rejects.toMatchObject({ code: 'access-unknown' });
+    expect(server.inference).not.toHaveBeenCalled();
+    expect(server.directory).toHaveBeenCalledOnce();
+    expect(server.pay).toHaveBeenCalledOnce();
+    const result = await api.models(credentials);
+    expect(result.data.find(model => model.id === restrictedModel)).toMatchObject({
+      modeldock_catalog_importable: false, modeldock_catalog_blocked_reason: reason,
+    });
+    const response = await api.chat(credentials, { ...request, model: 'kimi-k3' });
+    expect((await response.json()).choices[0].message.content).toBe('Mock response');
+  });
+
+  it('allows a qualifying identity and revalidates access when the directory expires', async () => {
+    let identity = 1, now = 0;
+    const server = nativeEndpoints(() => Response.json({ user_pay_identity: identity }));
+    const api = new TraeApi({ fetch: server.fetch, now: () => now, clientModels: async () => undefined });
+    const body = { ...request, model: restrictedModel };
+    const response = await api.chat(credentials, body, undefined, 'trae-cn');
+    expect((await response.json()).choices[0].message.content).toBe('Mock response');
+    identity = 0; now += 300_001;
+    await expect(api.chat(credentials, body, undefined, 'trae-cn')).rejects.toMatchObject({ code: 'account-access' });
+    expect(server.pay).toHaveBeenCalledTimes(2);
+    expect(server.inference).toHaveBeenCalledOnce();
+  });
+
+  it('separates product-specific cached selections and applies the stricter lock to both the alias and the upstream config', async () => {
+    const server = nativeEndpoints(() => Response.json({ user_pay_identity: 1 }));
+    const alias = 'custom-picker-name', configName = 'qwen3.8-flash';
+    const clientModels = vi.fn(async (_id: string, client?: TraeClientModelCatalog['client']) => client
+      ? { client, models: [{ id: alias, configName, ...(client === 'trae-solo-cn' ? { locked: true as const } : {}) }] } : undefined);
+    const api = new TraeApi({ fetch: server.fetch, clientModels });
+    await api.models(credentials, undefined, 'trae-cn');
+    for (const model of [alias, configName]) {
+      await expect(api.chat(credentials, { ...request, model }, undefined, 'trae-solo-cn')).rejects.toMatchObject({ code: 'account-access' });
+    }
+    expect(server.inference).not.toHaveBeenCalled();
+    await api.chat(credentials, { ...request, model: alias }, undefined, 'trae-cn');
+    expect(JSON.parse(String(server.inference.mock.calls[0][0].body))).toMatchObject({ config_name: configName, model_name: configName + '__dev' });
+    expect(clientModels.mock.calls).toEqual([[credentials.userId, 'trae-cn'], [credentials.userId, 'trae-solo-cn']]);
+    expect(server.pay.mock.calls).toEqual([['IDE'], ['Lite']]);
+  });
+
+  it('keeps an explicit client exclusion out of history and refuses its picker ID and upstream config even when the cloud advertises both', async () => {
+    const ids = ['disabled-picker', 'disabled-route'];
+    const server = nativeEndpoints(() => Response.json({ user_pay_identity: 1 }), ids.map(id => row(id)));
+    const clientModels = async () => ({ ...clientSnapshot, excludedConfigIds: ids });
+    const api = new TraeApi({ fetch: server.fetch, clientModels });
+    const result = await api.models(credentials, undefined, 'trae-cn');
+    for (const model of ids) {
+      expect(result.data.some(entry => entry.id === model)).toBe(false);
+      await expect(api.chat(credentials, { ...request, model }, undefined, 'trae-cn')).rejects.toMatchObject({ code: 'model' });
+    }
+    expect(server.inference).not.toHaveBeenCalled();
+  });
+
+  it('cannot dispatch disabled, offline, nonselectable or private configs through manual IDs', async () => {
+    const excluded = [
+      row('not-enabled', { status: false }), row('offline', { provider_offline_status: 'hard' }),
+      row('unselectable', { selectable: false }), row('byok', { config_source: 3 }),
+    ];
+    const server = nativeEndpoints(() => Response.json({ user_pay_identity: 1 }), excluded);
+    const api = new TraeApi({ fetch: server.fetch, clientModels: async () => undefined });
+    for (const { config_name: model } of excluded) {
+      await expect(api.chat(credentials, { ...request, model })).rejects.toMatchObject({ code: 'model' });
+    }
+    expect(server.inference).not.toHaveBeenCalled();
+  });
+});
