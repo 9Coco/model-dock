@@ -1,7 +1,10 @@
 """ModelDock-specific network adapter tests: all OS operations are injected."""
 import importlib.util
+import io
+import json
 import os
 from pathlib import Path
+import socket
 import sys
 import tempfile
 import unittest
@@ -31,6 +34,24 @@ class BridgeTests(unittest.TestCase):
         self.session.desktop.restore.side_effect=RuntimeError('owned settings conflict')
         with self.assertRaisesRegex(RuntimeError,'conflict'):self.session.disconnect()
         self.session.relay.stop.assert_not_called()
+    @unittest.skipUnless(sys.platform == 'win32', 'Windows socket ownership')
+    def test_active_http_relay_port_is_exclusive(self):
+        relay = bridge.ProxyRelay(bridge.Endpoint('127.0.0.1', 1))
+        port = relay.start()
+        self.addCleanup(relay.stop)
+        with socket.socket() as competing:
+            competing.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            with self.assertRaises(OSError) as refused:
+                competing.bind(('127.0.0.1', port))
+            self.assertIn(refused.exception.winerror, (10013, 10048))
+    def test_progress_and_errors_round_trip_through_a_legacy_windows_pipe(self):
+        buffer = io.BytesIO()
+        with io.TextIOWrapper(buffer, encoding='cp1252') as output, patch.object(sys, 'stdout', output):
+            event = {'event': 'progress', 'message': '正在检查网络…'}
+            error = {'id': 1, 'ok': False, 'message': '代理未就绪。'}
+            bridge.emit(event)
+            bridge.emit(error)
+            self.assertEqual([json.loads(line.decode('utf-8')) for line in buffer.getvalue().splitlines()], [event, error])
     def test_failed_tun_stop_preserves_controller_and_lease(self):
         self.session.controller=Mock(cleanup_confirmed=False)
         self.session.controller.snapshot.return_value={}

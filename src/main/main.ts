@@ -139,7 +139,12 @@ const authDiagnosticTraces = new Map<string, string>();
 const pollingDiagnosticStates = new Map<string, string>();
 let exitDiagnosticRecorded = false;
 let startupStage: DiagnosticContext['stage'] = 'startup';
-function networkResourceRoot() { return app.isPackaged ? join(process.resourcesPath, 'flowbridge') : join(__dirname, '../resources/flowbridge'); }
+function networkResourceRoot() {
+  if (app.isPackaged) return join(process.resourcesPath, 'flowbridge');
+  // Development and smoke entries live under work/<mode>-runtime/dist-electron.
+  const project = __MODELDOCK_RUNTIME_MODE__ === 'production' ? '..' : '../../..';
+  return join(__dirname, project, 'resources/flowbridge');
+}
 function recordDiagnostic(level: DiagnosticLevel, event: DiagnosticEvent, context: DiagnosticContext = {}): void {
   try { diagnostics?.write(level, event, undefined, { ...diagnosticScope.getStore(), ...context }); }
   catch { /* 日志故障不得改变原操作或重复生成日志。 */ }
@@ -238,10 +243,15 @@ async function createWindow(forceShow = false) {
   window.on('responsive', () => recordDiagnostic('info', 'renderer.recovered', { stage: 'renderer' }));
   window.webContents.on('will-navigate', (event, url) => { if (url !== window?.webContents.getURL()) event.preventDefault(); });
   window.on('close', event => {
-    if (quitting || __MODELDOCK_SMOKE_BUILD__) return;
+    if (shutdownComplete || __MODELDOCK_SMOKE_BUILD__) return;
     event.preventDefault();
+    if (quitting) return;
     if (preferences.get().settings.closeToTray && tray) window?.hide();
-    else { quitting = true; app.quit(); }
+    else {
+      // Finish handling Windows' cancelled WM_CLOSE before requesting a new quit.
+      quitting = true;
+      setImmediate(() => app.quit());
+    }
   });
   window.on('closed', () => { if (window === currentWindow) { window = null; presentation = null; } });
   if (__MODELDOCK_RUNTIME_MODE__ === 'development' && devUrl) {
@@ -1296,7 +1306,10 @@ function initializeApplication() {
       if (!exitDiagnosticRecorded) { exitDiagnosticRecorded = true; recordDiagnostic('info', 'app.exit', { stage: 'shutdown' }); }
       accounts?.dispose(); copilotProviders?.dispose(); copilotAccounts?.dispose(); oauth?.dispose(); traeNativeAccounts?.dispose(); centralNativeAccounts?.dispose();
       try { await ideAccounts?.dispose(); } catch { /* Continue closing local resources. */ }
-      networkMini?.close(); store?.close(); tray?.destroy(); shutdownComplete = true; app.quit();
+      networkMini?.close(); store?.close(); tray?.destroy();
+      shutdownComplete = true;
+      // Issue the final quit outside the cancelled before-quit callback.
+      setImmediate(() => app.quit());
     })();
   });
   app.on('activate', () => { if (window) revealWindow(); else if (store) void createWindow(true); });

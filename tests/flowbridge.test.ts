@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FlowBridgeManager, validateNetworkSettings } from '../src/main/flowbridge';
@@ -85,7 +85,7 @@ describe('FlowBridge integration', () => {
     await expect(manager.check('ChatGPT')).rejects.toThrow('缺少网络组件');
     await expect(manager.shutdown()).resolves.toBeUndefined();
   });
-  it.skipIf(process.platform !== 'linux')('runs the real stdio boundary in an isolated directory without touching OS proxy settings', async () => {
+  it.skipIf(process.platform !== 'linux' && !(process.platform === 'win32' && existsSync('resources/flowbridge/python/python.exe')))('runs the real stdio boundary in an isolated directory without touching OS proxy settings', async () => {
     const directory = temporary(); const engine = new FlowBridgeEngine(join(process.cwd(),'resources/flowbridge'), directory, () => {}, () => {});
     try { const value = await engine.request<NetworkEngineStatus>('snapshot'); expect(value).toEqual(stopped()); await expect(engine.request('not-a-network-command')).rejects.toThrow('未知'); await expect(engine.request('disconnect')).resolves.toMatchObject({cleanupConfirmed:true}); }
     finally { await engine.close(); }

@@ -33,11 +33,11 @@
     "dist:win": "node scripts/pack-windows.mjs --portable",
     "dist:linux": "npm run build && electron-builder --linux AppImage deb",
     "dist:deb": "npm run build && electron-builder --linux deb",
-    "test:network": "node scripts/test-network.mjs",
+    "test:network": "node scripts/run-python.mjs scripts/test-network.py",
     "network:prepare": "node scripts/prepare-network.mjs",
     "network:helper": "python3 scripts/build-network-helper.py",
     "network:verify": "node scripts/verify-network.mjs",
-    "source:archive": "python3 scripts/source-archive.py"
+    "source:archive": "node scripts/run-python.mjs scripts/source-archive.py"
   },
   "dependencies": {
     "@iarna/toml": "^2.2.5",

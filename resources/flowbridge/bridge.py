@@ -36,7 +36,9 @@ else:
             connectivity.probe_global_proxy(endpoint, tcp_target='www.microsoft.com')
 output_lock = threading.Lock()
 def emit(value):
-    with output_lock: print(json.dumps(value, ensure_ascii=False, allow_nan=False), flush=True)
+    # Electron reads UTF-8, while redirected Windows stdout uses the local code page.
+    with output_lock:
+        print(json.dumps(value, ensure_ascii=True, allow_nan=False), flush=True)
 
 def guardian(directory):
     manager = DesktopProxyManager(state_dir=directory)

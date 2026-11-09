@@ -82,7 +82,7 @@ function verifyPackage(directory) {
   }
   readPackedFile('dist/index.html');
 
-  for (const name of ['LICENSE', 'THIRD_PARTY_NOTICES.md']) {
+  for (const name of ['LICENSE', 'LICENSE-MIT', 'THIRD_PARTY_NOTICES.md']) {
     verifyCopiedFile(join(root, name), join(resources, 'licenses/modeldock', name));
   }
   for (const category of ['tool-icons', 'material-symbols']) {
@@ -97,6 +97,23 @@ function verifyPackage(directory) {
   }
   assert(!existsSync(join(resources, 'trae-bridge')), 'Removed client bridge is present in the package.');
   assert(!names.some(name => name.startsWith('assets/trae-bridge/')), 'Removed client bridge is present inside ASAR.');
+
+  const networkSource = join(root, 'resources/flowbridge');
+  const networkOutput = join(resources, 'flowbridge');
+  const verifyNetworkFile = name => verifyCopiedFile(join(networkSource, name), join(networkOutput, name));
+  for (const name of ['bridge.py', 'signal_core.py', 'manifest.json', 'LICENSE',
+    'termux/termux-hotspot-proxy.sh', 'windows/THIRD-PARTY-NOTICES.md',
+    'linux/relay.py', 'linux/connectivity.py', 'linux/tun_client.py']) verifyNetworkFile(name);
+  for (const name of readdirSync(join(networkSource, 'windows'))) {
+    if (name.endsWith('.py') && !name.startsWith('test_')) verifyNetworkFile(join('windows', name));
+  }
+  assertOrdinaryFile(join(networkOutput, 'python/python.exe'));
+  for (const name of readdirSync(join(networkSource, 'python'))) verifyNetworkFile(join('python', name));
+  const core = JSON.parse(readOrdinaryFile(join(networkSource, 'tools/windows-core.json')).toString('utf8'));
+  for (const name of ['sing-box.exe', 'wintun.dll', 'LICENSE-wintun.txt', 'verified.json']) {
+    verifyNetworkFile(join('vendor', `sing-box-${core.version}-windows-amd64`, name));
+  }
+  readPackedFile('dist-electron/network-mini-preload.cjs');
 
   const wasmName = 'node_modules/sql.js/dist/sql-wasm.wasm';
   assert(names.includes(wasmName) && statFile(archive, normalize(wasmName), false).unpacked === true,
