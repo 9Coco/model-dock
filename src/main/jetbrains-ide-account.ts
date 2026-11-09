@@ -7,7 +7,7 @@ import type { Provider, ProviderInput } from '../shared/types';
 import type { Store } from './store';
 import type { JetBrainsIdeCredentials, JetBrainsIdeImportCandidate, JetBrainsIdeImporter } from './jetbrains-ide-import';
 import type { JetBrainsIdeRelay } from './jetbrains-ide-relay';
-import type { JetBrainsIdeLicense } from './jetbrains-ide-api';
+import { JetBrainsIdeApiError, type JetBrainsIdeApiErrorCode, type JetBrainsIdeLicense } from './jetbrains-ide-api';
 import { relayAccountView, relayConnectionFingerprint } from './relay-client-import';
 
 export interface JetBrainsIdeApiPort {
@@ -30,7 +30,9 @@ interface Exchange { revision: string; epoch: number; controller: AbortControlle
 interface QuotaCache { version: 1; revision: string; usage: SubscriptionUsage; license?: (JetBrainsIdeLicense & { verifiedAt: string }) | null }
 interface ImportOperation { controller: AbortController; providerId?: string }
 type NativeReader = Pick<JetBrainsIdeImporter, 'listCandidates' | 'readCredentials'> & { renewCredentials?: (source: { product: JetBrainsIdeCredentials['product']; accountId: string; licenseId: string; sourceIdentity: string }) => Promise<JetBrainsIdeCredentials> };
-export class JetBrainsIdeAccountError extends Error {}
+export class JetBrainsIdeAccountError extends Error {
+  constructor(message: string, readonly status = 401, readonly code?: JetBrainsIdeApiErrorCode) { super(message); }
+}
 const text = (value: unknown, max = 160): string | undefined => typeof value === 'string' && value.trim() && value.length <= max && !/[\x00-\x1f\x7f]/.test(value) ? value.trim() : undefined;
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const PRODUCT_PRIORITY = ['intellij-idea', 'webstorm', 'rider', 'pycharm'] as const;
@@ -49,7 +51,8 @@ export class JetBrainsIdeAccounts {
   constructor(private readonly store: NativeStore, private readonly reader: NativeReader, private readonly api: JetBrainsIdeApiPort, _legacyRelay: JetBrainsIdeRelay | undefined,
     private readonly localKey: () => string, private readonly safeMessage: (error: unknown) => string | undefined = () => undefined, private readonly now = Date.now) {}
   private error(error: unknown, fallback = 'JetBrains IDE 授权暂不可用，请在 IDE 检查账号与 AI 许可证后重试。'): JetBrainsIdeAccountError {
-    return error instanceof JetBrainsIdeAccountError ? error : new JetBrainsIdeAccountError(this.safeMessage(error) ?? fallback);
+    return error instanceof JetBrainsIdeAccountError ? error : new JetBrainsIdeAccountError(this.safeMessage(error) ?? (error instanceof JetBrainsIdeApiError ? error.message : fallback),
+      error instanceof JetBrainsIdeApiError ? error.status : 401, error instanceof JetBrainsIdeApiError ? error.code : undefined);
   }
   private assertActive(signal?: AbortSignal): void {
     if (this.closed) throw new JetBrainsIdeAccountError('JetBrains IDE 账号服务已停止。');

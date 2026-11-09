@@ -1,5 +1,22 @@
 # ModelDock 验证记录
 
+## 2026-11-09 / 0.3.91 · TRAE 真实工具请求与本机代理排查
+
+- 实际单变量测试确认，同一 TRAE CN 账号的 Kimi-K3 纯文字、文字加 high 推理强度都能生成；附加对象形式的 `function.parameters` 就返回空体 HTTP 400。只将该字段编码为 JSON 字符串后，上游接受请求并返回正常 SSE。此前引用的 TraeCode helper 与真实 Raw v2 工具 schema 存在差异，0.3.90 的模拟测试没有验证到这个接口约束。
+- 修复函数 schema 字符串编码及 assistant 历史的原生 `function_call` 字段，完整保留 schema、参数文本、调用 ID 和结果关联。用相同生产 TS 适配器、只读客户端导入及合成提示完成真实 Kimi-K3 两轮验证：第一轮返回 `read_file` 调用及预期的合成路径，第二轮接收模拟工具结果并正常回答，四次目录/推理网络响应均为 HTTP 200。没有执行文件工具，未保存提示、回答或授权材料；报告为 `work/trae-live-tool-roundtrip-result.json`。该验证使用 Node 传输，不代表已操作 VS Code 窗口完成端到端验收。
+- 真实上游还会在回答前发送非对象的 `progress_notice` 排队通知。现保留通知后的流，只有真实输出和结束事件齐全才标记成功；结构化错误、截断和取消继续失败。通过本机现有 `http://127.0.0.1:20081` 代理再次验证带工具定义的 Kimi-K3 请求成功，包含排队通知后正常输出与结束。
+- Windows PAC 对 JetBrains AI 和账号域返回 DIRECT。无凭据模型目录请求经当前环境代理返回空体 451，经用户现有本机 HTTP 代理 `127.0.0.1:20081` 返回正常未授权 401；官网根路径相应返回 404。不能仅凭 451 就断定账号或许可证失效。当前应用未暴露可用调试入口，因此没有修改真实应用代理；需在设置保存上述已有代理并刷新。未完成 JetBrains 真实账号目录、额度或推理验收。
+- 四个 TRAE 专项文件 73 项全部通过。完整 Windows 回归 2728 项：2635 通过、38 失败、55 跳过；38 个失败名称与修复前 HEAD 的隔离基线完全相同，没有新增失败。结果与对照分别为 `work/trae-0.3.91-tests.json`、`work/trae-0.3.91-baseline-comparison.json`。类型检查、生产构建与去测试代码检查通过。
+- 旧 `release/win-unpacked/ModelDock.exe` 被运行中的应用锁定，而受限进程枚举返回零；首次打包因此失败。打包脚本增加独占共享锁检查，不能确认旧包可替换时使用独立输出，不停止用户应用。最终 Windows 包位于 `release/windows-0.3.91-2026-11-09T05-10-48-355Z-33800/win-unpacked`，主进程、资源/许可、SQL WASM、图标、ASAR 完整性校验全部通过。此独立路径为本次有效的新包，常规目录未同步。生产 main SHA256 `2ee3c70bc2eeb9c01fad65324ec070afa9661ee1bf833974056f41d3dba52ea0`。
+
+## 2026-11-09 / 0.3.90 · TRAE Copilot 请求与 JetBrains 网络错误
+
+- 核查本机 VS Code 内置 Copilot 0.73.0：自定义 Chat 端点的 `thinking:true` 会自动发送 `max_completion_tokens`；`thinking:false` 会移除自动输出预算，推理强度选项独立保留。TRAE 原生连接仅向 VS Code 投影这项客户端设置，并用 `modelOptions` 的空采样值抑制默认采样；保存的全局模型、外部反代和其他来源不变。需要显式重新同步 VS Code 配置并重新加载窗口。
+- 核查本机 TRAE CN 3.4.16 原生模块：Raw v2 没有输出预算与采样控制字段，继续拒绝显式的未支持参数，不把它们静默丢弃。新目录使用 `reasoning_effort_config` 原始选项及 `reasoning_effort_level`；旧目录使用原始 `reasoning_effort`，支持 `xhigh`、`max`，不虚构档位别名。兼容对象与有界 JSON 字符串形式的目录声明。现有 Gateway 回归覆盖 VS Code 请求形状、原生工具、首段流式输出、取消和截断错误。
+- 只读本机诊断确认 JetBrains AI 的目录、额度和导入请求实际返回 HTTP 451；原账号异常包装令界面误显示 HTTP 401。API、账号、目录、连接测试和网关现在保留真实状态，提示检查应用网络代理。请求已接入统一 Electron session 代理；实际 451 连接仍需可访问该服务的网络来源。本轮未更改用户账号、代理或 VS Code 配置，未完成真实模型推理验收。
+- 受影响的 9 个测试文件共 491 项全部通过；类型检查、生产构建和生产入口去测试代码检查通过。完整 Windows 回归共 2718 项：2625 通过、38 失败、55 跳过；失败明细保存在 `work/trae-jetbrains-fix-tests.json`。从修改前 HEAD `57adb62d562a811573d0fcd1c9c0a24c122db86a` 创建独立基线，复跑失败的全部 12 个文件，454 项中 401 通过、38 失败、15 跳过；失败测试全名与当前 38 项完全一致，未新增失败。对照记录为 `work/trae-baseline-57adb-comparison.json`，涉及文件链接权限、Linux 启动项 fixture 及旧 Central Pi 场景，不能记为全量通过。
+- Windows x64 `npm run pack:win` 成功，更新 `release/win-unpacked`。主进程、资源、许可、SQL WASM、图标及嵌入 ASAR 完整性检查通过；生产 main SHA256 `6a3dea87f95131da5670d0bcb0e9b80232d12f5296edcebfa2b75b0c65708ee5`。原生 VS Code 界面与真实上游接受情况需在重新同步后单独验收。
+
 ## 2026-11-09 / 0.3.89 · 模型列表过期后的批量添加
 
 - 0.3.88 本机诊断确认目录获取成功后 11 分钟首次提交，9 次添加都在主进程的 10 分钟目录有效期检查处被拒绝，未写入任何 TRAE 模型。

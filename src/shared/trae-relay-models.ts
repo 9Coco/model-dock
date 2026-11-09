@@ -21,5 +21,10 @@ export function traeRelayClientModel(tool: ToolId, model: Model, provider: Provi
   if (!isTraeRelayProvider(provider) && !provider?.nativeAdapter) return model;
   const wireApi = tool === 'codex' ? 'responses' : tool === 'claude-code' ? 'messages'
     : isJetBrainsTool(tool) || model.wireApi === 'messages' ? 'chat-completions' : model.wireApi;
-  return traeRelayWireModel(model, provider, wireApi);
+  const projected = traeRelayWireModel(model, provider, wireApi);
+  // Copilot's Custom Endpoint thinking flag also injects a token limit that
+  // TRAE Raw v2 cannot control. Keep native reasoning and its effort picker;
+  // only disable this client-specific control on the projected Chat model.
+  return tool === 'vscode' && provider?.nativeAdapter === 'trae' && projected.wireApi === 'chat-completions'
+    ? { ...projected, thinking: false } : projected;
 }

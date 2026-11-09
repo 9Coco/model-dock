@@ -32,7 +32,7 @@ describe('direct TraeCode CN native Raw v2 protocol', () => {
     expect((await api.models(credential)).data).toHaveLength(1);
     await expect(new TraeApi({ fetch: fetchMock(() => Response.json({ config_info_list: [...directory.config_info_list, ...directory.config_info_list] })) }).models(credential)).rejects.toMatchObject({ code: 'response' });
   });
-  it('preserves native function histories, correlated tool results and object schemas in the current Raw v2 body', async () => {
+  it('encodes native function histories, correlated tool results and function schemas in the current Raw v2 body', async () => {
     const fetch = fetchMock(url => new URL(url).pathname.endsWith('get_detail_param') ? catalog() : sse(frame('text_delta', { text: '文件内容已收到' }) + finished));
     const history = [{ role: 'developer', content: 'Use tools' }, { role: 'user', content: 'Read README' },
       { role: 'assistant', content: null, tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'read_file', arguments: '{"path":"README"}' } }] },
@@ -41,12 +41,88 @@ describe('direct TraeCode CN native Raw v2 protocol', () => {
     expect((await response.json()).choices[0].message.content).toBe('文件内容已收到');
     const [url, init] = fetch.mock.calls[1]; expect(url).toBe('https://trae-api-cn.mchost.guru/api/ide/v2/llm_raw_chat');
     const sent = JSON.parse(String(init?.body)); expect(sent).toMatchObject({ config_name: 'glm-5.3', model_name: 'glm-5__dev', config_source: 1, raw_chat_function: 'chat_v3', stream: true,
-      tools: [tool], tool_choice: 'auto', parallel_tool_calls: false, reasoning_effort: 'high' });
+      tools: [{ type: 'function', function: { ...tool.function, parameters: JSON.stringify(tool.function.parameters) } }], tool_choice: 'auto', parallel_tool_calls: false, reasoning_effort: 'high' });
     expect(sent.conversation_id).toBe(sent.session_id); expect(sent.session_id).toMatch(/^[a-f0-9-]{36}$/);
     expect(sent.messages[0]).toEqual({ role: 'system', content: [{ type: 'text', text: 'Use tools' }] });
-    expect(sent.messages[2].tool_calls[0]).toEqual(history[2].tool_calls?.[0]);
+    expect(sent.messages[2].tool_calls[0]).toEqual({ id: 'call_1', type: 'function', function_call: history[2].tool_calls?.[0].function });
     expect(sent.messages[3]).toEqual({ role: 'tool', content: [{ type: 'text', text: 'File contents' }], tool_call_id: 'call_1', name: 'read_file' });
     expect(new Headers(init?.headers).has('Extra')).toBe(false); expect(new Headers(init?.headers).get('Authorization')).toBe('Cloud-IDE-JWT ' + credential.token);
+  });
+  it('preserves complex Unicode schemas and exact tool argument text without mutating the caller', async () => {
+    const schema = {
+      $schema: 'https://json-schema.org/draft/2020-12/schema',
+      $defs: { entry: { type: 'object', properties: { 路径: { type: 'string', description: '目录/说明.txt\n第二行', enum: ['资料/一.txt', '资料/二.txt'] } }, required: ['路径'], additionalProperties: false } },
+      type: 'object', properties: { files: { type: 'array', items: { $ref: '#/$defs/entry' }, minItems: 1 }, mode: { anyOf: [{ const: '读取' }, { type: 'null' }] } },
+      required: ['files', 'mode'], additionalProperties: false,
+    };
+    const unicodeTool = { type: 'function', function: { name: 'read_file', description: '读取文件，保留中文与转义', parameters: schema, strict: true } };
+    const argumentsText = ' {"files":[{"路径":"资料/一.txt"}], "mode":"读取"} ';
+    const request = { ...body, tools: [unicodeTool], messages: [
+      { role: 'user', content: '读取资料' },
+      { role: 'assistant', content: null, tool_calls: [{ id: 'call_unicode', type: 'function', function: { name: 'read_file', arguments: argumentsText } }] },
+      { role: 'tool', tool_call_id: 'call_unicode', content: '文件内容：你好' },
+    ] };
+    const snapshot = structuredClone(request);
+    const fetch = fetchMock((url, init) => {
+      if (new URL(url).pathname.endsWith('get_detail_param')) return catalog();
+      const native = JSON.parse(String(init.body)), definition = native.tools[0].function;
+      expect(typeof definition.parameters).toBe('string'); expect(JSON.parse(definition.parameters)).toEqual(schema);
+      expect(definition).toMatchObject({ name: 'read_file', description: unicodeTool.function.description, strict: true });
+      expect(native.messages[1].tool_calls[0]).toEqual({ id: 'call_unicode', type: 'function', function_call: { name: 'read_file', arguments: argumentsText } });
+      expect(native.messages[2]).toMatchObject({ role: 'tool', name: 'read_file', tool_call_id: 'call_unicode', content: [{ type: 'text', text: '文件内容：你好' }] });
+      return sse(frame('text_delta', { text: 'OK' }) + finished);
+    });
+    await new TraeApi({ fetch }).chat(credential, request);
+    expect(request).toEqual(snapshot);
+  });
+  it.each(['xhigh', 'max'])('preserves the native legacy %s reasoning level instead of rejecting or renaming it', async reasoning_effort => {
+    const fetch = fetchMock(url => new URL(url).pathname.endsWith('get_detail_param') ? catalog() : sse(frame('text_delta', { text: 'OK' }) + finished));
+    await new TraeApi({ fetch }).chat(credential, { ...body, reasoning_effort });
+    const sent = JSON.parse(String(fetch.mock.calls[1][1]?.body));
+    expect(sent.reasoning_effort).toBe(reasoning_effort); expect(sent).not.toHaveProperty('reasoning_effort_level');
+  });
+  it.each(['object', 'json-string'])('uses exact modern reasoning levels and the current native field from a %s declaration', async format => {
+    const config = { support_thinking: true, options: ['low', 'high', 'ultra'], default_level: 'high' };
+    const fetch = fetchMock(url => new URL(url).pathname.endsWith('get_detail_param')
+      ? Response.json({ config_info_list: [{ ...directory.config_info_list[0], reasoning_effort_config: format === 'json-string' ? JSON.stringify(config) : config }] })
+      : sse(frame('text_delta', { text: 'OK' }) + finished));
+    const api = new TraeApi({ fetch });
+    expect((await api.models(credential)).data[0]).toMatchObject({ reasoning_efforts: config.options, default_reasoning_effort: 'high' });
+    await api.chat(credential, { ...body, reasoning_effort: 'ultra' });
+    const sent = JSON.parse(String(fetch.mock.calls[1][1]?.body));
+    expect(sent.reasoning_effort_level).toBe('ultra'); expect(sent).not.toHaveProperty('reasoning_effort');
+    await expect(api.chat(credential, { ...body, reasoning_effort: 'max' })).rejects.toMatchObject({ code: 'capability', parameter: 'reasoning_effort' });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+  it.each([
+    { support_thinking: false, options: ['high'], default_level: 'high' },
+    { support_thinking: true, options: ['high', 'high'], default_level: 'high' },
+    { support_thinking: true, options: ['high'], default_level: 'unlisted' },
+    'invalid-json',
+    JSON.stringify(['not-a-config-object']),
+  ])('does not invent usable levels from an unsupported or invalid modern config: %j', async reasoning_effort_config => {
+    const fetch = fetchMock(() => Response.json({ config_info_list: [{ ...directory.config_info_list[0], reasoning_effort_config }] }));
+    const api = new TraeApi({ fetch });
+    expect((await api.models(credential)).data[0].reasoning_efforts).toEqual([]);
+    await expect(api.chat(credential, { ...body, reasoning_effort: 'high' })).rejects.toMatchObject({ code: 'capability', parameter: 'reasoning_effort' });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+  it('honors a restrictive legacy directory instead of accepting every recognized level', async () => {
+    const fetch = fetchMock(url => new URL(url).pathname.endsWith('get_detail_param')
+      ? Response.json({ config_info_list: [{ ...directory.config_info_list[0], reasoning_effort_options: ['HIGH', 'high', 'max', 'unrecognized'], default_reasoning_effort: 'MAX' }] })
+      : sse(frame('text_delta', { text: 'OK' }) + finished));
+    const api = new TraeApi({ fetch });
+    expect((await api.models(credential)).data[0]).toMatchObject({ reasoning_efforts: ['high', 'max'], default_reasoning_effort: 'max' });
+    await api.chat(credential, { ...body, reasoning_effort: 'max' });
+    expect(JSON.parse(String(fetch.mock.calls[1][1]?.body)).reasoning_effort).toBe('max');
+    await expect(api.chat(credential, { ...body, reasoning_effort: 'xhigh' })).rejects.toMatchObject({ code: 'capability' });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+  it.each(['max_tokens', 'max_completion_tokens', 'temperature', 'top_p'])('identifies unsupported explicit %s controls without silently dropping them', async field => {
+    const fetch = fetchMock(() => catalog());
+    const error = await new TraeApi({ fetch }).chat(credential, { ...body, [field]: 1 }).catch(error => error);
+    expect(error).toMatchObject({ code: 'capability', parameter: field }); expect(error.message).toContain(field);
+    expect(error.message).not.toContain(credential.token); expect(fetch).not.toHaveBeenCalled();
   });
   it('delivers the first visible delta before the upstream finishes, across split UTF-8 and SSE frames', async () => {
     let source!: ReadableStreamDefaultController<Uint8Array>; let cancelled = false;

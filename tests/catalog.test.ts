@@ -10,6 +10,8 @@ import { buildConfig, buildCopilotDesktopPlan } from '../src/main/adapters';
 import { modelCatalogEndpoint, prepareUpstream } from '../src/main/oauth';
 import { lookupModelMetadata } from '../src/shared/model-metadata';
 import { version as appVersion } from '../package.json';
+import { JetBrainsIdeAccountError } from '../src/main/jetbrains-ide-account';
+import { JetBrainsIdeApiError } from '../src/main/jetbrains-ide-api';
 
 const provider: Provider = { id: 'api', name: 'Example', kind: 'openai-compatible', presetId: 'custom', baseUrl: 'https://api.example.test/v1', enabled: true, hasSecret: true, authStatus: 'ready', note: '' };
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } });
@@ -63,6 +65,15 @@ async function reopenAndSerializeVsCode(f: Awaited<ReturnType<typeof persistentC
 }
 
 describe('real model catalog discovery and batch selection', () => {
+  it.each([false, true])('preserves JetBrains regional HTTP 451 during native model discovery (account wrapper=%s)', async wrapped => {
+    const f = fixture(), apiError = new JetBrainsIdeApiError('region');
+    f.store.provider.nativeAdapter = 'jetbrains-ide';
+    const nativeModels = vi.fn(async () => { throw wrapped ? new JetBrainsIdeAccountError(apiError.message, apiError.status, apiError.code) : apiError; });
+    const catalog = new ModelCatalog(f.store, { prepareRequest: f.prepareRequest }, { nativeModels });
+    expect(await catalog.discover('api')).toMatchObject({ ok: false, statusCode: 451, errorCategory: 'permission', models: [], message: expect.stringContaining('应用网络代理') });
+    expect(nativeModels).toHaveBeenCalledOnce(); expect(f.prepareRequest).not.toHaveBeenCalled();
+  });
+
   it('discovers complete provider-specific Kimi defaults and saves the selected output budget rather than the native maximum', async () => {
     const f = fixture(vi.fn(async () => json({ data: [{ id: 'kimi-k3' }] })) as typeof fetch);
     f.store.provider.presetId = 'volcengine-agent'; f.store.provider.baseUrl = 'https://ark.cn-beijing.volces.com/api/plan/v3';

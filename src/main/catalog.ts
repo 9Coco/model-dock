@@ -13,6 +13,7 @@ import { anthropicEndpoint } from './anthropic-endpoint';
 import { TraeNativeAccountError } from './trae-native-account';
 import { CentralNativeAccountError } from './central-native-account';
 import { JetBrainsIdeAccountError } from './jetbrains-ide-account';
+import { JetBrainsIdeApiError } from './jetbrains-ide-api';
 
 export interface CatalogStore {
   getProvider(id: string): Provider | undefined;
@@ -411,7 +412,10 @@ export class ModelCatalog {
       return { ok: true, providerId, statusCode, message: `已读取模型目录，发现 ${discovered.length} 个模型。目录可见性不代表模型调用已验证。`, models: discovered, ...(history ? { history } : {}) };
     } catch (error) {
       // Upstream bodies and arbitrary exception text can contain credentials.
-      const failure = error instanceof CatalogFailure ? error : error instanceof TraeNativeAccountError || error instanceof CentralNativeAccountError || error instanceof JetBrainsIdeAccountError
+      const failure = error instanceof CatalogFailure ? error : error instanceof JetBrainsIdeAccountError || error instanceof JetBrainsIdeApiError
+        ? new CatalogFailure(error.status === 451 || error.status === 402 || error.status === 403 ? 'permission' : error.status === 401 ? 'authentication'
+          : error.status === 429 ? 'rate-limit' : error.status === 504 ? 'timeout' : error.code === 'network' ? 'network' : 'upstream', error.message, error.status)
+        : error instanceof TraeNativeAccountError || error instanceof CentralNativeAccountError
         ? new CatalogFailure('authentication', error.message, 401) : error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')
         ? new CatalogFailure('timeout', '获取模型目录超时，请检查网络后重试。')
         : new CatalogFailure('network', '无法读取模型目录，请检查网络、API 地址或订阅授权状态后重试。');

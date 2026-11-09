@@ -5,6 +5,8 @@ import { OAuthManager, prepareUpstream, type OAuthStore, type PreparedUpstream }
 import type { Model, Provider, ProviderSecret } from '../src/shared/types';
 import { firstConnectionModel } from '../src/shared/connection-types';
 import { anthropicBaseUrl, anthropicEndpoint } from '../src/main/anthropic-endpoint';
+import { JetBrainsIdeAccountError } from '../src/main/jetbrains-ide-account';
+import { JetBrainsIdeApiError } from '../src/main/jetbrains-ide-api';
 
 const provider: Provider = { id: 'api', name: 'Test Plan', kind: 'openai-compatible', presetId: 'custom', baseUrl: 'https://api.example.test/coding/v3', enabled: true, hasSecret: true, authStatus: 'ready', note: '' };
 const saved: Model = { id: 'saved', providerId: 'api', upstreamId: 'actual-model', alias: 'local-name', displayName: 'Model', wireApi: 'chat-completions', contextWindow: 0, tools: true, vision: false, enabled: true };
@@ -52,6 +54,15 @@ const messageStream = (events: unknown[]) => events.map(value => {
 }).join('');
 
 describe('native JetBrains connection probe output budget', () => {
+  it.each([false, true])('reports JetBrains regional HTTP 451 without blaming credentials (account wrapper=%s)', async wrapped => {
+    const f = fixture(), apiError = new JetBrainsIdeApiError('region');
+    f.store.provider.nativeAdapter = 'jetbrains-ide';
+    const nativeRequest = vi.fn(async () => { throw wrapped ? new JetBrainsIdeAccountError(apiError.message, apiError.status, apiError.code) : apiError; });
+    const tester = new ConnectionTester(f.store, { prepareRequest: f.prepareRequest }, { nativeRequest });
+    expect(await tester.test('api')).toMatchObject({ ok: false, statusCode: 451, outcome: 'permission', message: expect.stringContaining('应用网络代理') });
+    expect(nativeRequest).toHaveBeenCalledOnce(); expect(f.prepareRequest).not.toHaveBeenCalled();
+  });
+
   it.each([
     [undefined, 256], [0, 256], [-1, 256], [1.5, 256], [NaN, 256], [64, 64], [256, 256], [8192, 256],
   ])('uses a single probe with selected-model cap %s and budget %s', async (cap, budget) => {

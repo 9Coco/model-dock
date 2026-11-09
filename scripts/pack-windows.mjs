@@ -35,10 +35,18 @@ function electronArchitecture(filename) {
 function appMayBeRunning() {
   // A separate output also protects packages in the tray. Never stop the app.
   const powershell = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const executable = join(root, 'release', 'win-unpacked', 'ModelDock.exe').replaceAll("'", "''");
+  // Restricted process enumeration may return zero for a running app. Probe
+  // the executable's sharing lock before the builder touches its directory.
+  const probe = "$ErrorActionPreference='Stop'; "
+    + "if (@(Get-Process -Name 'ModelDock' -ErrorAction SilentlyContinue).Count -gt 0) { '1'; return }; "
+    + `if (Test-Path -LiteralPath '${executable}') { try { `
+    + `$file=[System.IO.File]::Open('${executable}',[System.IO.FileMode]::Open,[System.IO.FileAccess]::ReadWrite,[System.IO.FileShare]::None); $file.Dispose() `
+    + "} catch { '1'; return } }; '0'";
   try {
     const count = execFileSync(powershell, [
       '-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
-      "@(Get-Process -Name 'ModelDock' -ErrorAction SilentlyContinue).Count",
+      probe,
     ], { encoding: 'utf8', windowsHide: true, timeout: 10000 }).trim();
     return !/^0$/.test(count);
   } catch {

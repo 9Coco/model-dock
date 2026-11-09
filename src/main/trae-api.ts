@@ -7,7 +7,10 @@ import { canUseTraeClientModel, readTraeClientModelCatalog, traeModelAccess, typ
 
 /** TraeCode CN CustomModel / ChatMessageData protocol, fixed reference:
  * Trae2api-cn bb7b659 raw_client.build_traecode_chat_body/headers and installed
- * Trae CN3.4.15 ai-modules-chat LLMRawChatV2/GetConfigDetail. This is the current
+ * Trae CN3.4.16 ai-modules-chat LLMRawChatV2/GetConfigDetail. Native tool
+ * FunctionDefinition/Toolcall fields were also checked with live inference;
+ * the reference's object-shaped TraeCode helper is not the wire schema.
+ * This is the current
  * llm_raw_chat contract, not legacy Work Extra/llm_utils_chat or Remote sessions.
  * Every request is independent and carries the caller's complete native history.
  * Live account/model acceptance remains separate from mock protocol verification.
@@ -38,16 +41,47 @@ const errors: Record<TraeApiErrorCode, string> = {
   capability: '此 TRAE 连接尚未验证所请求的输入或控制能力，请使用文本和原生函数工具。',
 };
 export class TraeApiError extends Error {
-  constructor(readonly code: TraeApiErrorCode, readonly status?: number) { super(errors[code]); this.name = 'TraeApiError'; }
+  constructor(readonly code: TraeApiErrorCode, readonly status?: number, readonly parameter?: string) {
+    super(errors[code] + (parameter ? ` 不支持的参数：${parameter}。` : '')); this.name = 'TraeApiError';
+  }
 }
-const fail = (code: TraeApiErrorCode, status?: number) => new TraeApiError(code, status);
+const fail = (code: TraeApiErrorCode, status?: number, parameter?: string) => new TraeApiError(code, status, parameter);
 export interface TraeApiModel {
   id: string; object: 'model'; owned_by: 'trae'; name?: string; context_length?: number;
   modeldock_catalog_visibility?: 'current' | 'historical';
   modeldock_catalog_importable?: false;
   modeldock_catalog_blocked_reason?: BlockedReason;
+  reasoning_efforts?: string[];
+  default_reasoning_effort?: string;
 }
-interface Route { model: TraeApiModel; providerId: string; configSource: number }
+interface ReasoningConfig { field: 'reasoning_effort' | 'reasoning_effort_level'; options: string[]; defaultLevel?: string }
+interface Route { model: TraeApiModel; providerId: string; configSource: number; reasoning?: ReasoningConfig }
+
+const legacyReasoningEfforts = new Set(['none', 'low', 'medium', 'high', 'xhigh', 'max']);
+function reasoningConfig(row: ObjectValue): ReasoningConfig | undefined {
+  // TRAE CN 3.4.16 ai-modules-chat modules 94050/35960 use the model's
+  // declared levels verbatim. New and legacy directories use different fields;
+  // xhigh/max are not aliases for extra_high/ultra.
+  if (row.reasoning_effort_config !== undefined) {
+    let config = object(row.reasoning_effort_config);
+    if (typeof row.reasoning_effort_config === 'string' && row.reasoning_effort_config.length <= 16384) {
+      try { config = object(JSON.parse(row.reasoning_effort_config)); } catch { /* Invalid declarations expose no controllable levels. */ }
+    }
+    const raw = config?.options;
+    const disabled: ReasoningConfig = { field: 'reasoning_effort_level', options: [] };
+    if (config?.support_thinking !== true || !Array.isArray(raw) || !raw.length || raw.length > 32) return disabled;
+    const options = raw.map(value => typeof value === 'string' ? value.trim() : '');
+    const defaultLevel = typeof config.default_level === 'string' ? config.default_level.trim() : '';
+    if (options.some(value => !name(value)) || new Set(options).size !== options.length || !options.includes(defaultLevel)) return disabled;
+    return { field: 'reasoning_effort_level', options, defaultLevel };
+  }
+  if (row.reasoning_effort_options !== undefined) {
+    const options = Array.isArray(row.reasoning_effort_options)
+      ? [...new Set(row.reasoning_effort_options.flatMap(value => typeof value === 'string' && legacyReasoningEfforts.has(value.trim().toLowerCase()) ? [value.trim().toLowerCase()] : []))] : [];
+    const defaultLevel = typeof row.default_reasoning_effort === 'string' ? row.default_reasoning_effort.trim().toLowerCase() : '';
+    return { field: 'reasoning_effort', options, ...(options.includes(defaultLevel) ? { defaultLevel } : {}) };
+  }
+}
 type BlockedReason = 'account-access' | 'access-unknown';
 type Access = Pick<TraeClientModel, 'allowedIdentities' | 'locked'>;
 interface Directory { revision: number; at: number; routes: Map<string, Route>; blocked: Map<string, BlockedReason> }
@@ -119,7 +153,7 @@ function messages(raw: unknown): ObjectValue[] {
         const call = object(rawCall), fn = object(call?.function), id = name(call?.id), fnName = name(fn?.name);
         if (!id || !fnName || typeof fn?.arguments !== 'string' || pending.has(id)) throw fail('request');
         try { if (!object(JSON.parse(fn.arguments))) throw fail('request'); } catch { throw fail('request'); }
-        pending.set(id, fnName); return { id, type: 'function', function: { name: fnName, arguments: fn.arguments } };
+        pending.set(id, fnName); return { id, type: 'function', function_call: { name: fnName, arguments: fn.arguments } };
       });
     }
     if (role === 'tool') {
@@ -137,7 +171,9 @@ function tools(value: unknown): ObjectValue[] | undefined {
   return value.map(raw => {
     const item = object(raw), fn = object(item?.function), fnName = name(fn?.name);
     if (item?.type !== 'function' || !fn || !fnName || names.has(fnName) || fn.parameters !== undefined && !object(fn.parameters)) throw fail('capability');
-    names.add(fnName); return { type: 'function', function: { name: fnName, description: typeof fn.description === 'string' ? fn.description : '', parameters: fn.parameters ?? {}, ...(typeof fn.strict === 'boolean' ? { strict: fn.strict } : {}) } };
+    // Raw v2's protobuf/JSON adapter requires FunctionDefinition.parameters
+    // to contain JSON text. Preserve the caller's complete object schema.
+    names.add(fnName); return { type: 'function', function: { name: fnName, description: typeof fn.description === 'string' ? fn.description : '', parameters: JSON.stringify(fn.parameters ?? {}), ...(typeof fn.strict === 'boolean' ? { strict: fn.strict } : {}) } };
   });
 }
 interface Frame { event: string; data: string }
@@ -202,8 +238,13 @@ async function* translate(body: ReadableStream<Uint8Array>, model: string, allow
     if (frame.data === '[DONE]') { terminal = true; break; }
     if (!frame.data && frame.event === 'done') { terminal = true; break; }
     if (!frame.data) continue;
-    let value: ObjectValue | undefined; try { value = object(JSON.parse(frame.data)); } catch { throw fail('response'); }
-    if (!value) throw fail('response');
+    // The live queue may send a text progress_notice before any JSON output.
+    // It conveys no answer or successful completion. Keep normal error checks
+    // for object-shaped notices, and still require visible output plus done.
+    const progressNotice = eventName(frame.event) === 'progress_notice';
+    let value: ObjectValue | undefined;
+    try { value = object(JSON.parse(frame.data)); } catch { if (progressNotice) continue; throw fail('response'); }
+    if (!value) { if (progressNotice) continue; throw fail('response'); }
     const event = eventName(frame.event || String(value.event ?? value.event_type ?? value.eventType ?? value.type ?? ''));
     if (event === 'error' || value.error || value.code !== undefined && value.code !== 0) throw fail('upstream');
     if (event === 'token_usage') { finalUsage = usage(value.usage ?? value); continue; }
@@ -314,7 +355,9 @@ export class TraeApi {
         if (!id || !providerId) continue;
         if (routes.has(id)) throw fail('response');
         const display = text(row.display_name ?? object(row.display_config)?.display_name, 512);
-        routes.set(id, { model: { id, object: 'model', owned_by: 'trae', ...(display ? { name: display } : {}) }, providerId, configSource: 1 });
+        const reasoning = reasoningConfig(row);
+        routes.set(id, { model: { id, object: 'model', owned_by: 'trae', ...(display ? { name: display } : {}),
+          ...(reasoning ? { reasoning_efforts: reasoning.options, ...(reasoning.defaultLevel ? { default_reasoning_effort: reasoning.defaultLevel } : {}) } : {}) }, providerId, configSource: 1, ...(reasoning ? { reasoning } : {}) });
         access.set(id, directoryAccess(row.display_contact_config));
         if (row.is_invisible_to_user === true) hidden.add(id);
       }
@@ -395,9 +438,9 @@ export class TraeApi {
   async chat(value: TraeClientCredentials, body: ObjectValue, signal?: AbortSignal, client?: TraeClientModelCatalog['client']): Promise<Response> {
     credentials(value); const model = name(body?.model); if (!model || body.stream !== undefined && typeof body.stream !== 'boolean') throw fail('request');
     const nativeMessages = messages(body.messages), nativeTools = tools(body.tools), allowed = new Set(nativeTools?.map(tool => String(object(tool.function)?.name)) ?? []);
-    for (const field of ['response_format', 'audio', 'modalities', 'functions', 'function_call', 'max_tokens', 'max_completion_tokens', 'temperature', 'top_p', 'stop', 'seed', 'presence_penalty', 'frequency_penalty']) if (body[field] !== undefined) throw fail('capability');
+    for (const field of ['response_format', 'audio', 'modalities', 'functions', 'function_call', 'max_tokens', 'max_completion_tokens', 'temperature', 'top_p', 'stop', 'seed', 'presence_penalty', 'frequency_penalty']) if (body[field] !== undefined) throw fail('capability', undefined, field);
     if (body.n !== undefined && body.n !== 1) throw fail('capability');
-    if (body.reasoning_effort !== undefined && !['none', 'minimal', 'low', 'medium', 'high', 'extra_high', 'ultra'].includes(String(body.reasoning_effort))) throw fail('capability');
+    if (body.reasoning_effort !== undefined && !name(body.reasoning_effort)) throw fail('capability', undefined, 'reasoning_effort');
     if (body.tool_choice !== undefined && !['auto', 'none', 'required'].includes(String(body.tool_choice))) {
       const choice = object(body.tool_choice), fn = object(choice?.function); if (choice?.type !== 'function' || !allowed.has(String(fn?.name))) throw fail('capability');
     }
@@ -411,9 +454,12 @@ export class TraeApi {
     if (!directory || this.now() - directory.at > 300000) { await this.models(value, signal, client); directory = this.directories.get(key); }
     const reason = directory?.blocked.get(model); if (reason) throw fail(reason, reason === 'account-access' ? 403 : 503);
     const route = directory?.routes.get(model); if (!route) throw fail('model');
+    const effort = body.reasoning_effort;
+    if (effort !== undefined && !(route.reasoning ? route.reasoning.options.includes(String(effort))
+      : legacyReasoningEfforts.has(String(effort)))) throw fail('capability', undefined, 'reasoning_effort');
     const sid = randomUUID(), payload: ObjectValue = { config_name: route.model.id, model_name: route.providerId, config_source: route.configSource,
       conversation_id: sid, session_id: sid, stream: true, raw_chat_function: FUNCTION, messages: nativeMessages,
-      ...(body.reasoning_effort !== undefined ? { reasoning_effort: body.reasoning_effort } : {}),
+      ...(effort !== undefined ? { [route.reasoning?.field ?? 'reasoning_effort']: effort } : {}),
       ...(nativeTools?.length ? { tools: nativeTools, ...(body.tool_choice !== undefined ? { tool_choice: body.tool_choice } : {}), ...(body.parallel_tool_calls !== undefined ? { parallel_tool_calls: body.parallel_tool_calls } : {}) } : {}) };
     if (Buffer.byteLength(JSON.stringify(payload)) > MAX_JSON) throw fail('limit');
     const life = lifetime(signal, this.timeout);

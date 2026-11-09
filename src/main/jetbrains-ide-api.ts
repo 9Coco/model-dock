@@ -20,11 +20,12 @@ const REQUEST_LIMIT = 2 * 1024 * 1024;
 const DIRECTORY_TTL = 5 * 60_000;
 const CALLER = JSON.stringify({ name: 'modeldock', version });
 type JsonObject = Record<string, unknown>;
-export type JetBrainsIdeApiErrorCode = 'credentials' | 'authorization' | 'entitlement' | 'network' | 'response' | 'cancelled' | 'model' | 'request' | 'capability' | 'limit' | 'license-source';
+export type JetBrainsIdeApiErrorCode = 'credentials' | 'authorization' | 'entitlement' | 'region' | 'network' | 'response' | 'cancelled' | 'model' | 'request' | 'capability' | 'limit' | 'license-source';
 const messages: Record<JetBrainsIdeApiErrorCode, string> = {
   credentials: 'JetBrains 账号授权或许可证信息无效，请在原生客户端重新登录后重试。',
   authorization: 'JetBrains 账号授权已失效，请在原生客户端重新登录后重试。',
   entitlement: 'JetBrains 未接受当前许可证，请检查账号的 AI 会员权限。',
+  region: 'JetBrains AI 拒绝了当前网络来源（HTTP 451）。请检查 ModelDock 的应用网络代理，使用可正常访问 JetBrains AI 的网络后重试。',
   network: 'JetBrains AI 服务暂时无法连接，请稍后重试。',
   response: 'JetBrains AI 服务返回了无法识别的数据，未保存该结果。',
   cancelled: 'JetBrains AI 请求已取消或超时。',
@@ -35,7 +36,13 @@ const messages: Record<JetBrainsIdeApiErrorCode, string> = {
   'license-source': '此 JetBrains 登录方式暂未支持账号许可证目录，请从已支持的 IDE 登录来源导入。原有账号保持不变。',
 };
 export class JetBrainsIdeApiError extends Error {
-  constructor(readonly code: JetBrainsIdeApiErrorCode) { super(messages[code]); this.name = 'JetBrainsIdeApiError'; }
+  readonly status: number;
+  constructor(readonly code: JetBrainsIdeApiErrorCode, status?: number) {
+    super(messages[code]); this.name = 'JetBrainsIdeApiError';
+    this.status = status && Number.isInteger(status) && status >= 400 && status <= 599 ? status
+      : code === 'region' ? 451 : ['credentials', 'authorization'].includes(code) ? 401 : code === 'entitlement' ? 403
+        : ['request', 'model', 'capability', 'license-source'].includes(code) ? 400 : code === 'cancelled' ? 504 : code === 'limit' ? 413 : 502;
+  }
 }
 export interface JetBrainsIdeModel {
   id: string;
@@ -60,7 +67,7 @@ interface LicenseRead { controller: AbortController; promise: Promise<JetBrainsI
 const object = (value: unknown): JsonObject | undefined => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : undefined;
 const safeText = (value: unknown, max = 256): string | undefined => typeof value === 'string' && value.length > 0 && value.length <= max && !/[\x00-\x1f\x7f]/.test(value) ? value : undefined;
 const identifier = (value: unknown): string | undefined => { const text = safeText(value); return text && /^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$/.test(text) ? text : undefined; };
-const failure = (code: JetBrainsIdeApiErrorCode) => new JetBrainsIdeApiError(code);
+const failure = (code: JetBrainsIdeApiErrorCode, status?: number) => new JetBrainsIdeApiError(code, status);
 const digest = (token: string) => createHash('sha256').update(token).digest('hex');
 
 function jwt(value: unknown, now: number, expiry: 'enforce' | 'hint' = 'enforce'): { token: string; expiresAt?: number } {
@@ -339,7 +346,7 @@ export class JetBrainsIdeApi {
     // Check again for injected transports; native fetch('error') rejects 3xx.
     if (!response.ok || response.redirected || response.url && new URL(response.url).origin !== ORIGIN) {
       await response.body?.cancel().catch(() => {});
-      throw failure(response.status === 401 ? 'authorization' : response.status === 402 || response.status === 403 ? 'entitlement' : 'network');
+      throw failure(response.status === 451 ? 'region' : response.status === 401 ? 'authorization' : response.status === 402 || response.status === 403 ? 'entitlement' : 'network', response.status);
     }
     return response;
   }
