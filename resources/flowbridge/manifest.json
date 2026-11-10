@@ -32,13 +32,13 @@
       "source": "termux/README.md",
       "path": "termux/README.md",
       "upstreamSha256": "e49cc32aa3f09f908fba65abde2c54cc5d925fb5fdf30b7e4127f45c6af1b05d",
-      "sha256": "32598fe44180aa35b059506f6a8f9d255b6d680bea2bc208e844849b33cf1d09"
+      "sha256": "f60ea46378ff030d48df1db318fe98bc37941c1c15ba7a93e06fa4bbe49d2fcc"
     },
     {
       "source": "termux/termux-hotspot-proxy.sh",
       "path": "termux/termux-hotspot-proxy.sh",
       "upstreamSha256": "26dc871c4dd55362cf5a361f9bb49e6f0d2b394e1e7c019f74129fcf70cb4853",
-      "sha256": "eae845a4b120fc8d1bd087a760a595773333c24e8c2006c8d2a4549d727c1bd5"
+      "sha256": "a4cf8abbcc5d18f0a6dadaf39824b25dbe9ac2d2e14153055ad4b17e9e157782"
     },
     {
       "source": "tools/fetch_tun_core.py",
@@ -295,7 +295,7 @@
       "source": "termux/src/address.py",
       "path": "termux/src/address.py",
       "upstreamSha256": "380f6e94288c6ed8556953dd5f3edf1557c2b2c79cfb4982b6222c922a44e811",
-      "sha256": "7109642afbafc1aa61d854206fe4aa743cf57486e3827860e1b0a638e607e6e7"
+      "sha256": "3e69f049a12e20fc5cd40dbe1d0816afc273fa8e0a2256b8a50910d0a2edbd80"
     },
     {
       "source": "termux/src/monitor.py",
@@ -307,7 +307,7 @@
       "source": "termux/src/proxy.sh",
       "path": "termux/src/proxy.sh",
       "upstreamSha256": "2e23ce2977334c12ec44f6cd97f4f3875f686903ff8979066bf1887461288ef1",
-      "sha256": "059af619f609a5730b320f7a12888037cbe089176b4016b2cc587ce257db679a"
+      "sha256": "f5f29fc84d592b5ab1e5cd530e9ca5ee968919422d3c3f0023daf2937c39f734"
     },
     {
       "source": "tools/build_termux.py",
@@ -339,8 +339,8 @@
       "source": "https://github.com/9Coco/model-dock/blob/7ea8d51e40b18b23c85eab905b7b6b421632b218/resources/flowbridge/bridge.py",
       "path": "resources/flowbridge/bridge.py",
       "upstreamSha256": "1ea86b5d63bc6189e04ef790e38de0f85b6794c2ff830539eb36caca8f738cf8",
-      "sha256": "90a45fc11b26168354b8fcd58486030fd9312693d5bbdaed8798bd314d8f66e6",
-      "changes": "Escape non-ASCII protocol output, expose read-only Windows proxy discovery, and restore on EOF only after session control requests. Delegate Windows global sessions to the protected demand-start task and preserve legacy recovery. Restore stale Linux sessions via the preauthorized socket and retain pending recovery for retry. Detect standalone FlowBridge TUN conflicts on the actual Linux upstream route and retry transient startup probes once, switching targets only for target-specific failures."
+      "sha256": "bd274b62531f6bc5054763a1e4a40bfb33a3e902442889520bf16afcdc3a3d2c",
+      "changes": "Escape non-ASCII protocol output, expose read-only Windows proxy discovery, and restore on EOF only after session control requests. Delegate Windows global sessions to the protected demand-start task and preserve legacy recovery. Restore stale Linux sessions via the preauthorized socket and retain pending recovery for retry. Detect standalone FlowBridge TUN conflicts on the actual Linux upstream route and retry transient startup probes once, switching targets only for target-specific failures. Use the current recovery button label."
     },
     {
       "source": "https://github.com/9Coco/model-dock/blob/7ea8d51e40b18b23c85eab905b7b6b421632b218/resources/flowbridge/tools/fetch_python.py",

@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSyn
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { DEFAULT_FLOWBRIDGE, NETWORK_SITES, type FlowBridgeSettings, type FlowBridgeSnapshot, type NetworkEngineStatus, type NetworkSample, type NetworkSite, type NetworkCheck } from '../shared/flowbridge-types';
+import { DEFAULT_FLOWBRIDGE, NETWORK_SITES, parseNetworkEndpoint, type FlowBridgeSettings, type FlowBridgeSnapshot, type NetworkEngineStatus, type NetworkSample, type NetworkSite, type NetworkCheck } from '../shared/flowbridge-types';
 import type { SettingsStore } from './settings';
 import { NetworkAuthorizationRequired, NetworkEngineUnavailableError, type NetworkEngine } from './flowbridge-engine';
 const KEY = 'network.flowbridge.v1', LEASE = 'network.flowbridge.lease';
@@ -15,21 +15,20 @@ export function validateNetworkSettings(raw: unknown, previous: FlowBridgeSettin
   const next = { ...previous, ...raw };
   if (!['http', 'global'].includes(next.mode) || !['fast', 'compatible'].includes(next.dnsMode) || typeof next.autoConnect !== 'boolean' || typeof next.showMiniOnStart !== 'boolean') throw new Error('网络设置选项无效。');
   if (typeof next.address !== 'string' || next.address.length > 512 || /[\s\x00-\x1f\x7f\\]/.test(next.address)) throw new Error('请填写不含凭据的代理地址和端口。');
-  if (!next.address) { if (next.autoConnect) throw new Error('自动连接需要先保存代理地址。'); return next; }
+  if (!next.address) { if (next.autoConnect) throw new Error('自动连接需要代理地址。请在网络接管页填写地址并连接。'); return next; }
   const scheme = next.mode === 'global' ? 'socks5' : 'http';
   let address = next.address;
   if (next.mode !== previous.mode && !Object.hasOwn(raw, 'address')) address = address.replace(/^(?:http|socks5):\/\//, scheme + '://');
-  if (!address.includes('://')) address = scheme + '://' + address;
-  const match = /^(http|socks5):\/\/(\[[0-9a-fA-F:]+\]|[a-zA-Z0-9.-]+):([0-9]+)\/?$/.exec(address);
-  if (!match || match[1] !== scheme || Number(match[3]) < 1 || Number(match[3]) > 65535) throw new Error(`此模式需要 ${scheme}://主机:端口，不接受订阅链接或用户名密码。`);
-  const host = match[2].replace(/^\[|\]$/g, ''), port = Number(match[3]);
-  const canonical = new URL(`http://${match[2]}:${port}`).hostname.replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  const endpoint = parseNetworkEndpoint(address, next.mode);
+  if (!endpoint) throw new Error(`此模式需要 ${scheme}://主机:端口，不接受订阅链接或用户名密码。`);
+  const host = endpoint.host.replace(/^\[|\]$/g, ''), port = endpoint.port;
+  const canonical = new URL(`http://${endpoint.host}:${port}`).hostname.replace(/^\[|\]$/g, '').replace(/\.$/, '');
   const local = /^(?:127\.|localhost$|::1$)/i.test(canonical);
   if (canonical !== host.toLowerCase().replace(/\.$/, '') && !isIP(host)) throw new Error('请使用标准代理主机名或数值 IP。');
   if (local && port === gatewayPort) throw new Error('网络上游不能指向 ModelDock 模型网关。');
   if (next.mode === 'global' && (!isIP(host) || ['0.0.0.0', '::', '255.255.255.255'].includes(host) || host.includes('%') || /^(?:22[4-9]|23\d)\./.test(host) || /^ff/i.test(host))) throw new Error('全局模式需要有效的数值 IPv4/IPv6 地址。');
   if (next.mode === 'global' && platform === 'linux' && local) throw new Error('Linux 全局模式需要手机或局域网代理 IP；本机回环上游暂不支持。');
-  next.address = `${scheme}://${match[2].toLowerCase()}:${port}`;
+  next.address = endpoint.address;
   return next;
 }
 function status(value: NetworkEngineStatus): NetworkEngineStatus {
@@ -64,9 +63,9 @@ export class FlowBridgeManager {
   private checking = false;
   constructor(private store: SettingsStore, private options: FlowBridgeOptions) {
     try { this.settings = validateNetworkSettings(store.getManagedState(KEY, {}), this.settings, options.platform, options.gatewayPort()); }
-    catch { this.state = 'error'; this.message = '已保留无法读取的网络设置，请重新保存网络配置；原有模型数据未改动。'; }
+    catch { this.state = 'error'; this.message = '无法读取网络设置，请重新填写代理地址并连接。'; }
     this.active = store.getManagedState(LEASE, false);
-    if (this.active) { this.current.cleanupConfirmed = false; this.state = 'error'; this.message = '上次网络会话未确认清理，请点击断开恢复；不会自动重连。'; }
+    if (this.active) { this.current.cleanupConfirmed = false; this.state = 'error'; this.message = '上次网络会话的清理尚未确认。请点击「恢复网络」。'; }
     try {
       const file = join(options.dataDir, 'history.json');
       if (existsSync(file) && statSync(file).size <= 512 * 1024) {
@@ -84,7 +83,7 @@ export class FlowBridgeManager {
     if (this.busy || this.closing) throw new Error('请在网络切换完成后再测速。');
     if (!this.active) return address;
     if (this.state !== 'connected' || !this.current.running || this.current.localPort === null) {
-      throw new Error('请等待网络连接就绪，或断开并完成恢复后再测速。');
+      throw new Error('请等待连接就绪或完成网络恢复后再测速。');
     }
     // Connecting to the phone directly while a TUN is active can send the
     // probe back through the tunnel. Its local HTTP listener uses the same
@@ -95,11 +94,12 @@ export class FlowBridgeManager {
   private prune() { this.history = this.history.filter(v => v.time > this.now() - 86_400_000 && v.time <= this.now()); }
   snapshot(): FlowBridgeSnapshot {
     this.prune();
-    return { settings: { ...this.settings }, state: this.state, message: this.message, platform: this.options.platform, status: { ...this.current }, history: [...this.history, ...this.live].map(v => ({ ...v })) };
+    const status = { ...this.current, cleanupConfirmed: !this.active && this.current.cleanupConfirmed };
+    return { settings: { ...this.settings }, state: this.state, message: this.message, platform: this.options.platform, status, history: [...this.history, ...this.live].map(v => ({ ...v })) };
   }
   private getEngine() {
     return this.engine ??= this.options.engine(message => { this.message = message; }, () => {
-      if (this.active) { this.options.suspendHttpRelay?.(); this.current = { ...this.current, running: false, cleanupConfirmed: false }; this.state = 'error'; this.message = '网络组件意外退出，请点击断开检查恢复记录。'; }
+      if (this.active) { this.options.suspendHttpRelay?.(); this.current = { ...this.current, running: false, cleanupConfirmed: false }; this.state = 'error'; this.message = '网络组件意外退出。请点击「恢复网络」。'; }
     });
   }
   private enqueue<T>(operation: () => Promise<T>): Promise<T> {
@@ -107,11 +107,13 @@ export class FlowBridgeManager {
     this.serial = result.catch(() => {});
     return result;
   }
-  async save(patch: Partial<FlowBridgeSettings>): Promise<FlowBridgeSnapshot> {
+  async save(patch: Partial<FlowBridgeSettings>, options?: { offlineOnly: boolean }): Promise<FlowBridgeSnapshot> {
     if (this.busy || this.closing) throw new Error('网络正在切换，请完成或取消后再保存。');
+    if (options?.offlineOnly && this.active) throw new Error('网络连接状态已变化。请断开并完成恢复后再修改代理地址。');
     const next = validateNetworkSettings(patch, this.settings, this.options.platform, this.options.gatewayPort());
     const reconnect = this.state === 'connected' && ['address', 'mode', 'dnsMode'].some(k => next[k as keyof FlowBridgeSettings] !== this.settings[k as keyof FlowBridgeSettings]);
-    if (this.active && this.state !== 'connected') throw new Error('请先断开并确认恢复完成，再修改网络设置。');
+    if (reconnect && !next.address) throw new Error('请先断开当前连接，再清除上游代理地址。');
+    if (this.active && this.state !== 'connected') throw new Error('请先点击「恢复网络」，完成后再修改网络设置。');
     this.busy = true;
     return this.enqueue(async () => {
       try {
@@ -138,7 +140,7 @@ export class FlowBridgeManager {
       if (upstream !== undefined) throw new Error('请先断开当前连接再连接新地址。');
       return;
     }
-    if (this.active) throw new Error('上次网络清理未确认，请先断开恢复。');
+    if (this.active) throw new Error('上次网络清理尚未确认。请点击「恢复网络」。');
     if (!['linux', 'win32'].includes(this.options.platform)) throw new Error('网络接管仅支持 Windows 和 Linux。');
     const patch = upstream === undefined ? {} : { address: upstream?.address, mode: upstream?.mode };
     const next = validateNetworkSettings(patch, this.settings, this.options.platform, this.options.gatewayPort());
@@ -179,7 +181,7 @@ export class FlowBridgeManager {
     this.state = 'disconnecting'; this.message = '正在恢复网络设置…';
     try {
       this.current = status(await this.getEngine().request<NetworkEngineStatus>('disconnect', { recover: this.active, settings: this.settings }));
-      if (!this.current.cleanupConfirmed || this.current.running) throw new Error('清理尚未确认，请重试断开。');
+      if (!this.current.cleanupConfirmed || this.current.running) throw new Error('网络清理尚未确认。请再次点击「恢复网络」。');
       await this.options.setHttpRelay?.(null);
       this.store.setManagedState(LEASE, false); this.active = false;
       this.state = 'idle'; this.message = this.current.message || '已断开，网络设置已恢复'; this.previous = undefined;
@@ -193,7 +195,7 @@ export class FlowBridgeManager {
       const value = status(await this.getEngine().request<NetworkEngineStatus>('snapshot'));
       if (this.state !== 'connected') return;
       this.current = value;
-      if (!value.running) { this.options.suspendHttpRelay?.(); this.state = 'error'; this.message = value.message || '网络内核已停止，请点击断开恢复。'; return; }
+      if (!value.running) { this.options.suspendHttpRelay?.(); this.state = 'error'; this.message = value.message || '网络内核已停止。请点击「恢复网络」。'; return; }
       const time = this.now(), delta = this.previous ? (time - this.previous.time) / 1000 : 0;
       const sample = { time, uploadBytes: value.uploadBytes, downloadBytes: value.downloadBytes, uploadRate: delta > 0 ? Math.max(0, value.uploadBytes - this.previous!.uploadBytes) / delta : 0, downloadRate: delta > 0 ? Math.max(0, value.downloadBytes - this.previous!.downloadBytes) / delta : 0 };
       this.previous = sample; this.live.push(sample); this.live = this.live.slice(-60);

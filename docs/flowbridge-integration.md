@@ -77,7 +77,7 @@ Windows 网络任务仅运行 Program Files 内通过 SHA-256 校验的固定组
 失败保留会话/恢复记录，阻止新连接；退出失败保留主窗口、Gateway、数据库供重试。
 
 Electron EOF 请求网络组件清理；独立管道守护恢复桌面代理，Linux root helper 与
-Windows Job 保留原崩溃保护。全局另有 marker，异常重启后显式“断开 / 恢复”调用
+Windows Job 保留原崩溃保护。全局另有 marker，异常重启后点击“恢复网络”调用
 仅恢复协议，不启动新 TUN。未知/损坏所有权记录拒绝覆盖。强杀、断电后的真实路由、
 DNS/WeakHostSend 恢复必须在目标系统验收，不能只以进程退出为证据。
 

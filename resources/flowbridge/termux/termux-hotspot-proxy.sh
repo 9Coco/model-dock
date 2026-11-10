@@ -283,7 +283,7 @@ banner() {
     echo
     addresses
     echo "HTTP / HTTPS 和 SOCKS5 共用入口端口 $PROXY_PORT，支持 TCP 与标准 SOCKS5 UDP 转发。"
-    echo '电脑打开 ModelDock 侧栏的“网络接管”，选择“全局流量”，查询并保存热点地址，再点击“连接”。'
+    echo '电脑打开 ModelDock 侧栏的“网络接管”，选择“全局流量”，查询并选中热点地址，再点击“连接”。'
     echo '全局模式由电脑接管普通 TCP、UDP 和 DNS；手机需先更新到本版代理。'
     echo '实时上传 / 下载：hotspot-proxy monitor'
     echo '重新查看地址：hotspot-proxy info'
@@ -859,7 +859,7 @@ import sys
 
 GATEWAY_COMMAND = "nmcli -f GENERAL.CONNECTION,IP4.GATEWAY device show"
 HINT = "手机接口候选或以前保存的 IP 不保证当前可用，请从连接热点的电脑验证。"
-DESKTOP_HINT = "电脑连接手机热点后，打开 ModelDock 的“网络接管 → 查询热点地址”，选择网关候选并保存，然后点击“连接”验证。"
+DESKTOP_HINT = "电脑连接手机热点后，打开 ModelDock 的“网络接管 → 查询热点地址”，选择热点对应的候选地址，然后点击“连接”验证。"
 VPN_OR_NON_LAN = re.compile(
     r"^(lo\d*$|tun|tap|utun|wg|wireguard|ppp|ipsec|vpn|clat|v4-|"
     r"dummy|docker|veth|virbr|br-|rmnet|r_rmnet|ccmni|pdp|p2p)",
@@ -1090,7 +1090,7 @@ hotspot-proxy autostart on
 
 ## 找到正确手机地址
 
-电脑连接手机热点后，打开 ModelDock 的 **“网络接管 → 查询热点地址”**，选择热点的网关候选。若手机使用自定义端口，请修改上游代理地址中的端口并保存，再点击“连接”验证。
+电脑连接手机热点后，打开 ModelDock 的 **“网络接管 → 查询热点地址”**，选择热点的网关候选。若手机使用自定义端口，请修改上游代理地址中的端口，再点击“连接”验证。
 
 手机脚本列出的接口候选、历史手动 IP 不保证当前仍可连接。Android 可能限制接口查询；电脑连接普通路由器时查到的是路由器，不能当成手机地址。
 
@@ -1105,7 +1105,7 @@ hotspot-proxy set-ip auto
 
 ## 电脑使用
 
-打开 ModelDock 侧栏的“网络接管”，选择“全局流量”，填写手机 IP 与代理端口并保存，然后点击“连接”。Linux 请使用 ModelDock 的 deb 版并在首次连接时完成系统授权，Windows 请以管理员身份运行。启用前会验证 TCP 及经手机中继的 UDP DNS 往返，失败时检查脚本版本、VPN UDP策略、热点及动态 UDP relay 端口是否被系统阻挡。
+打开 ModelDock 侧栏的“网络接管”，选择“全局流量”，填写手机 IP 与代理端口，然后点击“连接”。Linux 请使用 ModelDock 的 deb 版并在首次连接时完成系统授权，Windows 请以管理员身份运行。启用前会验证 TCP 及经手机中继的 UDP DNS 往返，失败时检查脚本版本、VPN UDP策略、热点及动态 UDP relay 端口是否被系统阻挡。
 
 HTTP 模式可使用同一端口。在 ModelDock 侧栏的“网络接管”选择“HTTP 代理”，遵循系统代理设置的应用会通过手机连接。
 

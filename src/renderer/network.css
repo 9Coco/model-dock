@@ -8,14 +8,39 @@
 .network-mode { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-soft); padding: 2px; }
 .network-mode button { padding: 5px 12px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: 12px; }
 .network-mode button[aria-pressed="true"] { color: var(--ink); background: var(--surface); box-shadow: 0 0 0 1px var(--line); font-weight: 600; }
-.network-address-label { display: block; margin: 12px 0 6px; font-size: 12px; color: var(--muted); }
-.network-address { display: flex; align-items: center; gap: 6px; }
-.network-address input { flex: 1; min-width: 0; padding: 7px 9px; font: inherit; font-size: 12px; color: var(--ink); background: var(--field); border: 1px solid var(--line); border-radius: 6px; }
-.network-actions, .network-candidates { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.service-network-body .network-actions { margin-top: 12px; }
-.network-hotspot, .network-candidates { margin-top: 8px; }
+.network-address-heading {
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  margin: 12px 0 4px; font-size: 12px;
+}
+.network-address-heading label { font-weight: 600; color: var(--ink); }
+.network-lookup, .network-revert {
+  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  padding: 4px 6px; border: 0; border-radius: 5px; background: transparent; color: var(--accent); font-size: 12px;
+}
+.network-lookup:hover:enabled, .network-revert:hover:enabled { background: var(--accent-soft); }
+.network-lookup:disabled { color: var(--muted); }
+.network-address { position: relative; display: flex; }
+.network-address input {
+  width: 100%; min-width: 0; padding: 8px 10px; font: inherit; font-size: 13px;
+  color: var(--ink); background: var(--field); border: 1px solid var(--line); border-radius: 6px;
+}
+.network-address:has(.network-revert) input { padding-inline-end: 34px; }
+.network-revert { position: absolute; right: 3px; top: 50%; transform: translateY(-50%); width: 28px; height: 28px; color: var(--muted); }
+.network-address input:focus-visible, .service-network-card button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.network-clear { margin-top: 6px; }
+.network-actions, .network-candidates, .network-session-actions, .network-control-footer { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.network-candidates { gap: 6px; margin-top: 8px; }
+.network-candidate {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 100%; overflow-wrap: anywhere;
+  padding: 3px 8px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-soft);
+  color: var(--ink); font: inherit; font-variant-numeric: tabular-nums;
+}
+.network-candidate:is(:hover, [aria-pressed="true"]) { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
 .network-candidates, .network-hint, .network-tools p { font-size: 12px; color: var(--muted); line-height: 1.6; }
-.network-hint { margin: 8px 0 0; }
+.network-hint { margin: 8px 0 0; overflow-wrap: anywhere; }
+.network-control-footer { justify-content: space-between; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
+.network-control-footer .button { gap: 6px; padding-inline: 12px; }
+.network-mini-launch { margin-inline-start: auto; }
 .network-tools { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; align-items: start; }
 .network-tools > * { min-width: 0; }
 .network-tools .panel { padding: 16px; }
@@ -84,5 +109,3 @@
 @container (max-width: 620px) {
   .service-workspace .gateway-body { flex-direction: column; }
 }
-body:has(.network-mini) { min-width: 0; }
-.network-mini{height:100vh;display:flex;flex-direction:column;padding:10px;background:var(--surface);color:var(--ink);overflow:hidden}.network-mini header{display:flex;align-items:center;gap:8px;-webkit-app-region:drag}.network-mini header button{-webkit-app-region:no-drag;font-size:10px;padding:2px 5px}.network-mini header strong{font-size:11px;flex:1}.network-mini .network-metrics{margin:6px 0;grid-template-columns:1fr 1fr;gap:8px}.network-mini .network-metrics strong{font-size:16px}.network-mini .network-chart{height:55px}

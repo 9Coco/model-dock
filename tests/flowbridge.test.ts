@@ -10,7 +10,7 @@ const folders: string[] = [];
 const temporary = () => { const path = mkdtempSync(join(tmpdir(), 'modeldock-network-test-')); folders.push(path); return path; };
 afterEach(() => { vi.useRealTimers(); for (const path of folders.splice(0)) rmSync(path, { recursive: true, force: true }); });
 const stopped = (): NetworkEngineStatus => ({ running: false, cleanupConfirmed: true, localPort: null, uploadBytes: 0, downloadBytes: 0, connections: 0, message: '' });
-function fixture() {
+function fixture(platform = 'linux') {
   const values = new Map<string, unknown>(), calls: string[] = [];
   const memory = { getManagedState<T>(k: string, v: T): T { return structuredClone(values.get(k) ?? v) as T; }, setManagedState(k: string, v: unknown) { values.set(k, structuredClone(v)); } };
   let stopFails = false, connectFails = false, failExit: () => void = () => {}, release: (() => void) | undefined;
@@ -20,7 +20,7 @@ function fixture() {
     if (method === 'connect') { if (connectFails) throw new Error('UDP preflight rejected'); if (release) await new Promise<void>(resolve => { release = resolve; }); return { ...stopped(), running: true, cleanupConfirmed: false, localPort: 30000 } as T; }
     return stopped() as T;
   }, async close() { calls.push('close'); } };
-  const manager = new FlowBridgeManager(memory, { platform: 'linux', dataDir: temporary(), gatewayPort: () => 18181, engine: (_progress, exit) => { failExit = exit; return engine; } });
+  const manager = new FlowBridgeManager(memory, { platform, dataDir: temporary(), gatewayPort: () => 18181, engine: (_progress, exit) => { failExit = exit; return engine; } });
   return { manager, memory, values, calls, failStop(value = true) { stopFails = value; }, failConnect() { connectFails = true; }, crash() { failExit(); }, hold() { release = () => {}; }, release() { release?.(); } };
 }
 describe('FlowBridge integration', () => {
@@ -36,6 +36,33 @@ describe('FlowBridge integration', () => {
     expect(() => f.manager.speedTestProxy(address)).toThrow('恢复');
     await f.manager.disconnect();
     expect(f.manager.speedTestProxy(address)).toBe(address);
+  });
+  it('prepares a typed endpoint for offline testing without connecting or replacing an active session', async () => {
+    const f = fixture();
+    const saved = await f.manager.save({ address: '192.0.2.30:038473/', mode: 'global' }, { offlineOnly: true });
+    expect(saved.state).toBe('idle');
+    expect(f.manager.speedTestProxy(saved.settings.address)).toBe('socks5://192.0.2.30:38473');
+    expect(f.calls).toEqual([]);
+    const other = { address: '192.0.2.31:38473' };
+    const connecting = f.manager.connect();
+    await expect(f.manager.save(other, { offlineOnly: true })).rejects.toThrow('正在切换');
+    await connecting;
+    await expect(f.manager.save(other, { offlineOnly: true })).rejects.toThrow('网络连接状态已变化');
+    expect(f.manager.snapshot()).toMatchObject({ state: 'connected', settings: saved.settings });
+    expect(f.calls).toEqual(['connect']);
+    await f.manager.shutdown();
+  });
+  it('requires explicit restoration if a poll reports a stopped engine while the durable lease is still active', async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    await f.manager.connect({ address: '192.0.2.30:38473', mode: 'http' });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(f.manager.snapshot()).toMatchObject({ state: 'error', status: { running: false, cleanupConfirmed: false } });
+    expect(f.values.get('network.flowbridge.lease')).toBe(true);
+    await expect(f.manager.connect()).rejects.toThrow('清理');
+    const restored = await f.manager.disconnect();
+    expect(restored).toMatchObject({ state: 'idle', status: { cleanupConfirmed: true } });
+    await f.manager.shutdown();
   });
   it('requires a manual Windows global connection for the initial UAC, and releases the lease after a missing grant', async () => {
     const { memory, values } = fixture();
@@ -64,6 +91,35 @@ describe('FlowBridge integration', () => {
     expect(() => validateNetworkSettings({ mode: 'global', address: 'socks5://127.0.0.1:1080' }, { ...DEFAULT_FLOWBRIDGE }, 'linux', 18181)).toThrow('回环');
     expect(validateNetworkSettings({ mode: 'global', address: 'socks5://127.0.0.1:1080' }, { ...DEFAULT_FLOWBRIDGE }, 'win32', 18181).mode).toBe('global');
     expect(() => validateNetworkSettings({ mode: 'global', address: 'socks5://example.com:1080' }, { ...DEFAULT_FLOWBRIDGE }, 'linux', 18181)).toThrow('数值');
+  });
+  it.each(['linux', 'win32'])('connects a typed endpoint without a separate save on %s and validates reconnection before disconnecting', async platform => {
+    const f = fixture(platform);
+    const connected = await f.manager.connect({ address: '192.0.2.20:38473', mode: 'global' });
+    expect(connected.state).toBe('connected');
+    expect(connected.settings.address).toBe('socks5://192.0.2.20:38473');
+    expect(f.values.get('network.flowbridge.v1')).toEqual(connected.settings);
+    await expect(f.manager.save({ address: '192.0.2.21', mode: 'global' })).rejects.toThrow('端口');
+    await expect(f.manager.save({ address: '', mode: 'global' })).rejects.toThrow('请先断开');
+    expect(f.manager.snapshot().state).toBe('connected');
+    expect(f.calls).toEqual(['connect']);
+    const reconnected = await f.manager.save({ address: '192.0.2.21:38473', mode: 'global' });
+    expect(reconnected.state).toBe('connected');
+    expect(reconnected.settings.address).toBe('socks5://192.0.2.21:38473');
+    expect(f.calls).toEqual(['connect', 'disconnect', 'connect']);
+    await f.manager.shutdown();
+  });
+  it('remembers the new endpoint for retry when its connection fails after restoring the old one', async () => {
+    const f = fixture();
+    await f.manager.connect({ address: '192.0.2.20:38473', mode: 'http' });
+    f.failConnect();
+    await expect(f.manager.save({ address: '192.0.2.21:38473', mode: 'global' })).rejects.toThrow('UDP');
+    expect(f.calls).toEqual(['connect', 'disconnect', 'connect', 'disconnect']);
+    expect(f.manager.snapshot()).toMatchObject({
+      state: 'error',
+      settings: { address: 'socks5://192.0.2.21:38473', mode: 'global' },
+      status: { cleanupConfirmed: true },
+    });
+    await f.manager.shutdown();
   });
   it('switches mode only after acknowledged restoration and keeps the same app preferences', async () => {
     const f = fixture(); f.values.set('app.settings', { preserved: true });

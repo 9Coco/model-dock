@@ -14,7 +14,7 @@ const relayImportCall = async (method: 'relayClientImportCandidates' | 'importRe
 const rendererErrorNames = new Set(['Error', 'TypeError', 'ReferenceError', 'SyntaxError', 'RangeError', 'URIError', 'EvalError', 'AggregateError', 'AbortError', 'TimeoutError']);
 const api: ModelDockApi = {
   runtimeSnapshot: () => call('runtimeSnapshot'),
-  networkSnapshot: () => call('networkSnapshot'), saveNetworkSettings: patch => call('saveNetworkSettings', patch),
+  networkSnapshot: () => call('networkSnapshot'), saveNetworkSettings: (patch, options) => call('saveNetworkSettings', patch, options),
   connectNetwork: upstream => call('connectNetwork', upstream), disconnectNetwork: () => call('disconnectNetwork'),
   checkNetworkSite: site => call('checkNetworkSite', site), networkHotspotCandidates: () => call('networkHotspotCandidates'),
   measureNetworkSpeed: (address, metric) => call('measureNetworkSpeed', address, metric),
