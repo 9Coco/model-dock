@@ -117,6 +117,20 @@ describe('tool adapters', () => {
     expect(copilot.providers[0].models[0].wireApi).toBe('responses');
     expect(buildConfig(store, 'opencode', 19191).canApply).toBe(true);
   });
+  it('exports independent Copilot prompt and output limits even without a total context', () => {
+    const catalog: Model[] = [
+      { ...models[0], contextWindow: 0, maxInputTokens: 128000, maxOutputTokens: 64000, vision: true },
+      { ...models[0], id: 'output', alias: 'output', contextWindow: 0, maxOutputTokens: 96000 },
+      { ...models[0], id: 'input', alias: 'input', contextWindow: 0, maxInputTokens: 90000 },
+    ];
+    const selected = { ...store, listModels: () => catalog,
+      listBindings: () => store.listBindings().map(binding => ({ ...binding, modelIds: catalog.map(model => model.id) })) };
+    expect(buildCopilotDesktopPlan(selected, 19191).providers[0].models).toMatchObject([
+      { contextWindow: 128000, maxOutputTokens: 64000, supportsVision: true },
+      { contextWindow: 0, maxOutputTokens: 96000, supportsVision: false },
+      { contextWindow: 90000, maxOutputTokens: 4096, supportsVision: false },
+    ]);
+  });
   it('uses nonzero client budgets for unknown contexts without changing known models or explicit tool preferences', () => {
     const catalog: Model[] = [models[0], { ...models[0], id: 'unknown', alias: 'unknown-model', upstreamId: 'unknown-upstream', contextWindow: 0, tools: false }];
     const snapshot = structuredClone(catalog);
@@ -338,7 +352,7 @@ describe('tool adapters', () => {
     const expected = [{ id: 'glm-5.3', name: '火山 Coding Plan - glm-5.3' }];
     expect(JSON.parse(buildConfig(direct, 'vscode', 19191).content)[0].models).toMatchObject(expected);
     expect(dshProviders(buildConfig(direct, 'dsh', 19191).content).modeldock.models).toMatchObject(expected);
-    expect(JSON.parse(buildConfig(direct, 'copilot', 19191).content).providers[0].models).toMatchObject(expected.map(model => ({ modelId: model.id, wireModel: model.id, displayName: model.name })));
+    expect(JSON.parse(buildConfig(direct, 'copilot', 19191).content).providers[0]).toMatchObject({ name: '火山 Coding Plan', models: [{ modelId: 'glm-5.3', wireModel: 'glm-5.3', displayName: 'glm-5.3' }] });
     const opencode = JSON.parse(buildConfig(direct, 'opencode', 19191).content);
     expect(opencode.model).toBe('modeldock/glm-5.3');
     expect(Object.keys(opencode.provider.modeldock.models)).toEqual(['glm-5.3']);
@@ -786,7 +800,7 @@ ${JSON.stringify(foreign)} // keep final-array note
     const managed = { ...native, listBindings: () => native.listBindings().map(binding => ({ ...binding, dshSyncScope: 'managed' as const })) };
     expect(buildDshPlan(managed, 19191).legacyDispatch).toBeUndefined();
   });
-  it.each(['auto', 'aggregate'] as const)('exports supplier-first Copilot picker labels with a single ModelDock attribution in %s mode', mode => {
+  it.each(['auto', 'aggregate'] as const)('exports Copilot picker labels for the active %s topology', mode => {
     const native = nativeFixture();
     Object.assign(native.providers[2], { kind: 'openai-compatible', presetId: 'jetbrains-central', nativeAdapter: 'jetbrains-central', name: 'JetBrains AI · IDE 导入' });
     native.providers[0].name = '我的 API 订阅';
@@ -795,13 +809,12 @@ ${JSON.stringify(foreign)} // keep final-array note
     const plan = () => buildCopilotDesktopPlan(native, 19191, false, binding);
     const initial = plan();
     expect(initial.providers).toHaveLength(mode === 'aggregate' ? 1 : 3);
-    expect(initial.providers.every(provider => provider.name === 'ModelDock')).toBe(true);
-    const labels = () => plan().providers.flatMap(provider => provider.models.map(model => model.displayName));
-    expect(labels()).toEqual(['我的 API 订阅 - 同名模型', 'API 套餐 B - 同名模型', 'JetBrains AI - GPT-6 Astra']);
+    const labels = () => plan().providers.flatMap(provider => provider.models.map(model => `${model.displayName} · ${provider.name}`));
+    expect(labels()).toEqual(mode === 'auto' ? ['同名模型 · 我的 API 订阅', '同名模型 · API 套餐 B', 'GPT-6 Astra · JetBrains AI'] : ['我的 API 订阅 - 同名模型 · ModelDock', 'API 套餐 B - 同名模型 · ModelDock', 'JetBrains AI - GPT-6 Astra · ModelDock']);
     native.providers[2].name += ' 2';
-    expect(labels()).toContain('JetBrains AI 2 - GPT-6 Astra');
+    expect(labels()).toContain(mode === 'auto' ? 'GPT-6 Astra · JetBrains AI 2' : 'JetBrains AI 2 - GPT-6 Astra · ModelDock');
     native.providers[2].name = '团队订阅';
-    expect(labels()).toContain('团队订阅 - GPT-6 Astra');
+    expect(labels()).toContain(mode === 'auto' ? 'GPT-6 Astra · 团队订阅' : '团队订阅 - GPT-6 Astra · ModelDock');
   });
 
   it('keeps native Copilot IDs stable across renames and key rotation, namespacing profiles and allowing duplicate upstream IDs as separate aliases', () => {

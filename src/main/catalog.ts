@@ -404,6 +404,8 @@ export class ModelCatalog {
         for (const key of MODEL_SPEC_FIELDS) delete discovered[key];
         return { ...discovered, alias, existingModelId: existing.id, displayName: existing.displayName, wireApi: existing.wireApi,
           contextWindow: existing.contextWindow, tools: existing.tools, vision: existing.vision, ...modelSpecs(existing),
+          ...(!existing.reasoningEfforts?.length && existing.thinking !== false && model.catalogImportable !== false && model.wireApi === existing.wireApi && model.reasoningEfforts?.length && !model.metadataInferred?.includes('reasoningEfforts')
+            ? { availableReasoning: { levels: model.reasoningEfforts, defaultLevel: model.defaultReasoningEffort } } : {}),
           ...(existing.reasoningEfforts ? { reasoningEfforts: [...existing.reasoningEfforts] } : {}),
           ...(existing.defaultReasoningEffort ? { defaultReasoningEffort: existing.defaultReasoningEffort } : {}) };
       });
@@ -456,13 +458,23 @@ export class ModelCatalog {
     const plannedModels: Pick<Model, 'id' | 'providerId' | 'alias'>[] = [...existing];
     const selectedIds = new Set<string>();
     const inputs: ModelInput[] = [];
+    const updatedIds = new Set<string>();
     const skipped: string[] = [];
     for (const selection of selections) {
       if (!selection || typeof selection !== 'object' || !cached.models.has(selection.upstreamId)) throw new Error('所选模型不属于最近读取的模型目录，请重新获取。');
       if (selectedIds.has(selection.upstreamId)) continue;
       selectedIds.add(selection.upstreamId);
-      if (existing.some(model => model.providerId === providerId && model.upstreamId === selection.upstreamId)) { skipped.push(selection.upstreamId); continue; }
       const found = cached.models.get(selection.upstreamId)!;
+      const saved = existing.find(model => model.providerId === providerId && model.upstreamId === selection.upstreamId);
+      if (selection.fillMissingReasoningFor !== undefined) {
+        const offer = found.availableReasoning;
+        if (offer && saved && saved.id === selection.fillMissingReasoningFor && found.existingModelId === saved.id && saved.wireApi === found.wireApi && saved.thinking !== false && !saved.reasoningEfforts?.length) {
+          inputs.push({ ...saved, thinking: true, reasoningEfforts: offer.levels, defaultReasoningEffort: offer.defaultLevel, reasoningEffortFormat: saved.wireApi });
+          updatedIds.add(saved.id);
+        } else skipped.push(selection.upstreamId);
+        continue;
+      }
+      if (saved) { skipped.push(selection.upstreamId); continue; }
       if (found.catalogImportable === false) {
         const reason = found.catalogBlockedReason ? catalogAccessMessages[found.catalogBlockedReason] : '尚未核实可用的官方调用通道，暂不能添加。';
         throw new Error(`「${found.upstreamId}」${reason}`);
@@ -489,7 +501,8 @@ export class ModelCatalog {
       const specs = modelSpecs({ ...found, ...Object.fromEntries(MODEL_SPEC_FIELDS.filter(key => selection[key] !== undefined).map(key => [key, selection[key]])) }, true);
       inputs.push({ providerId, upstreamId: found.upstreamId, alias, displayName, wireApi, contextWindow, tools, vision, enabled: true, ...specs, ...(selection.reasoningEfforts !== undefined || found.reasoningEfforts !== undefined ? { reasoningEfforts, ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}) } : {}) });
     }
-    const added = inputs.length ? this.store.saveModels(inputs) : [];
-    return { added, skipped };
+    const written = inputs.length ? this.store.saveModels(inputs) : [];
+    if (!updatedIds.size) return { added: written, skipped };
+    return { added: written.filter(model => !updatedIds.has(model.id)), updated: written.filter(model => updatedIds.has(model.id)), skipped };
   }
 }

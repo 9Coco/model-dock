@@ -37,11 +37,12 @@ function nativeFailure(message: unknown): CopilotDesktopError {
 export interface CopilotDesktopModelInput {
   id: string; modelId: string; wireModel?: string; displayName: string;
   wireApi: 'chat' | 'responses'; contextWindow?: number; maxOutputTokens?: number;
-  supportedReasoningEfforts?: string[];
+  supportedReasoningEfforts?: string[]; supportsVision?: boolean;
 }
 export interface CopilotDesktopProviderInput {
   id: string; name: string; baseUrl: string; apiKey: string;
   headers?: Record<string, string>; wireApi?: 'chat' | 'responses'; models: CopilotDesktopModelInput[];
+  nameMode?: 'source' | 'exact';
 }
 export interface CopilotDesktopPlan { providers: CopilotDesktopProviderInput[] }
 /** Older sync checkpoints store the source name after the ModelDock prefix. */
@@ -55,7 +56,7 @@ export interface CopilotNativeProvider {
 export interface CopilotNativeModel {
   id: string; providerId: string; modelId: string; displayName: string;
   wireModel?: string; maxPromptTokens?: number; maxOutputTokens?: number;
-  wireApiOverride?: 'completions' | 'responses'; supportedReasoningEfforts?: string[];
+  wireApiOverride?: 'completions' | 'responses'; supportedReasoningEfforts?: string[]; supportsVision?: boolean;
 }
 export interface CopilotDesktopSnapshot { providers: Array<{ provider: CopilotNativeProvider; models: CopilotNativeModel[] }> }
 export interface CopilotDesktopSyncOptions {
@@ -142,6 +143,10 @@ function parseModel(value: unknown, providerId: string): CopilotNativeModel {
   if (value.supportedReasoningEfforts !== undefined && value.supportedReasoningEfforts !== null) {
     if (!Array.isArray(value.supportedReasoningEfforts) || value.supportedReasoningEfforts.some(v => !text(v, 64))) fail('protocol'); result.supportedReasoningEfforts = [...value.supportedReasoningEfforts] as string[];
   }
+  if (value.supportsVision != null) {
+    if (typeof value.supportsVision !== 'boolean') fail('protocol');
+    if (value.supportsVision) result.supportsVision = true;
+  }
   return result;
 }
 function validatePlan(plan: CopilotDesktopPlan): CopilotDesktopPlan {
@@ -151,6 +156,7 @@ function validatePlan(plan: CopilotDesktopPlan): CopilotDesktopPlan {
     if (!object(provider) || !text(provider.id) || !UUID.test(provider.id) || ids.has(provider.id) || !text(provider.name, 256) || !text(provider.baseUrl, 4096) || !text(provider.apiKey, 8192) || !Array.isArray(provider.models) || provider.models.length > 10000) fail('configuration');
     ids.add(provider.id);
     if (provider.wireApi !== undefined && !['chat', 'responses'].includes(provider.wireApi)) fail('configuration');
+    if (provider.nameMode !== undefined && provider.nameMode !== 'source' && provider.nameMode !== 'exact') fail('configuration');
     let url: URL; try { url = new URL(provider.baseUrl); } catch { fail('configuration'); }
     const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(url!.hostname.toLowerCase());
     if (url!.protocol !== 'https:' && !(url!.protocol === 'http:' && loopback) || !url!.hostname || url!.username || url!.password || url!.search || url!.hash) fail('configuration');
@@ -159,6 +165,7 @@ function validatePlan(plan: CopilotDesktopPlan): CopilotDesktopPlan {
     for (const model of provider.models) {
       if (!object(model) || !text(model.id) || !UUID.test(model.id) || ids.has(model.id) || !text(model.modelId) || names.has(model.modelId) || !text(model.displayName) || !['chat', 'responses'].includes(model.wireApi)) fail('configuration');
       if (model.wireModel !== undefined && !text(model.wireModel)) fail('configuration');
+      if (model.supportsVision !== undefined && typeof model.supportsVision !== 'boolean') fail('configuration');
       if (model.supportedReasoningEfforts !== undefined && (!Array.isArray(model.supportedReasoningEfforts) || model.supportedReasoningEfforts.length > 32 || model.supportedReasoningEfforts.some(value => !text(value, 64)) || new Set(model.supportedReasoningEfforts).size !== model.supportedReasoningEfforts.length)) fail('configuration');
       for (const key of ['contextWindow', 'maxOutputTokens'] as const) if (model[key] !== undefined && (!Number.isSafeInteger(model[key]) || Number(model[key]) < (key === 'contextWindow' ? 0 : 1))) fail('configuration');
       ids.add(model.id); names.add(model.modelId);
@@ -361,8 +368,17 @@ export class CopilotDesktopClient {
       if (options.beforeMutation) await this.guardTrusted();
       const result: CopilotDesktopSyncResult = { providerCount: plan.providers.length, modelCount: plan.providers.reduce((n, p) => n + p.models.length, 0), removedProviderCount: 0, removedModelCount: 0 };
       const expectedProviders = new Map<string, { name: string; settings: Record<string, string> }>();
+      const usedNames = new Set(current.filter(provider => !owned.has(provider.id)).map(provider => provider.name));
+      const proposedNames = new Set(plan.providers.map(provider => provider.name));
+      const sourceNames = new Map<string, string>();
+      for (const provider of plan.providers.filter(item => item.nameMode === 'source').sort((a, b) => a.id.localeCompare(b.id))) {
+        let name = provider.name;
+        for (let suffix = 2; usedNames.has(name) || name !== provider.name && proposedNames.has(name); suffix++) name = `${provider.name} (${suffix})`;
+        sourceNames.set(provider.id, name);
+        usedNames.add(name);
+      }
       for (const input of plan.providers) {
-        const name = isCopilotManagedName(input.name) ? input.name : `ModelDock · ${input.name}`;
+        const name = sourceNames.get(input.id) ?? (input.nameMode === 'exact' || isCopilotManagedName(input.name) ? input.name : `ModelDock · ${input.name}`);
         const settings = { baseUrl: input.baseUrl, authKind: 'api_key', wireApi: (input.wireApi ?? input.models[0]?.wireApi) === 'responses' ? 'responses' : 'completions', headersJson: JSON.stringify(input.headers ?? {}) };
         const ack = await this.command({ type: 'upsert_model_provider', provider: { id: input.id, name, kind: 'custom', settings }, secret: { kind: 'api_key', value: input.apiKey } }, 'model_provider_upserted', value => object(value.provider) && value.provider.id === input.id);
         const saved = parseProvider(ack.provider);
@@ -376,10 +392,21 @@ export class CopilotDesktopClient {
         }
         for (const model of input.models) {
           const native: CopilotNativeModel = { id: model.id, providerId: input.id, modelId: model.modelId, displayName: model.displayName, wireApiOverride: model.wireApi === 'responses' ? 'responses' : 'completions', ...(model.wireModel ? { wireModel: model.wireModel } : {}), ...(model.contextWindow ? { maxPromptTokens: model.contextWindow } : {}), ...(model.maxOutputTokens ? { maxOutputTokens: model.maxOutputTokens } : {}), ...(model.supportedReasoningEfforts ? { supportedReasoningEfforts: model.supportedReasoningEfforts } : {}) };
+          if (model.supportsVision !== undefined) native.supportsVision = model.supportsVision;
           await this.command({ type: 'upsert_provider_model', model: native }, 'provider_model_upserted', value => object(value.model) && value.model.id === model.id);
         }
         const savedModels = await this.models(input.id);
-        if (savedModels.length !== input.models.length || input.models.some(model => !savedModels.some(saved => saved.id === model.id && saved.modelId === model.modelId && saved.displayName === model.displayName && (saved.wireModel ?? saved.modelId) === (model.wireModel ?? model.modelId) && saved.wireApiOverride === (model.wireApi === 'responses' ? 'responses' : 'completions') && (model.supportedReasoningEfforts === undefined || JSON.stringify(saved.supportedReasoningEfforts) === JSON.stringify(model.supportedReasoningEfforts))))) fail('protocol');
+        const savedById = new Map(savedModels.map(model => [model.id, model]));
+        if (savedById.size !== input.models.length) fail('protocol');
+        for (const model of input.models) {
+          const saved = savedById.get(model.id);
+          if (!saved || saved.modelId !== model.modelId || saved.displayName !== model.displayName
+            || (saved.wireModel ?? saved.modelId) !== (model.wireModel ?? model.modelId)
+            || saved.wireApiOverride !== (model.wireApi === 'responses' ? 'responses' : 'completions')
+            || saved.maxPromptTokens !== (model.contextWindow || undefined) || saved.maxOutputTokens !== model.maxOutputTokens
+            || (saved.supportsVision ?? false) !== (model.supportsVision ?? false)
+            || JSON.stringify(saved.supportedReasoningEfforts ?? []) !== JSON.stringify(model.supportedReasoningEfforts ?? [])) fail('protocol');
+        }
       }
       for (const { provider } of snapshot.providers) if (!plan.providers.some(p => p.id === provider.id)) {
         await this.command({ type: 'delete_model_provider', provider_id: provider.id }, 'model_provider_deleted', value => value.provider_id === provider.id); result.removedProviderCount++;

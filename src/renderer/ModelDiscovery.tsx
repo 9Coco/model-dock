@@ -261,9 +261,29 @@ export function ModelDiscovery({ api, provider, notify, onClose, onAdded, onManu
     } finally { if (mounted.current) setAdding(false); }
   };
 
+  const missingReasoning = models.filter(model => model.existingModelId && model.availableReasoning);
+  const fillMissingReasoning = async () => {
+    if (!api || adding || !missingReasoning.length) return;
+    setAdding(true); setError(''); setAdded(null);
+    try {
+      const result = await api.addDiscoveredModels(provider.id, missingReasoning.map(model => ({ upstreamId: model.upstreamId, fillMissingReasoningFor: model.existingModelId })));
+      if (!mounted.current) return;
+      const updated = new Map(result.updated?.map(model => [model.id, model]));
+      const skipped = new Set(result.skipped);
+      setModels(current => current.map(model => {
+        const saved = model.existingModelId && updated.get(model.existingModelId);
+        if (saved) return { ...model, availableReasoning: undefined, thinking: saved.thinking, reasoningEfforts: saved.reasoningEfforts, defaultReasoningEffort: saved.defaultReasoningEffort, reasoningEffortFormat: saved.reasoningEffortFormat };
+        return skipped.has(model.upstreamId) ? { ...model, availableReasoning: undefined } : model;
+      }));
+      notify(`已补全 ${updated.size} 个模型的思考档位，请重新同步所用工具。`);
+      await onAdded();
+    } catch (failure) {
+      if (mounted.current) setError(errorText(failure));
+    } finally { if (mounted.current) setAdding(false); }
+  };
   return <Modal wide title="获取模型列表" subtitle={provider.name} onClose={() => { if (!adding) onClose(); }}>
     <div className="discovery-body" onKeyDown={navigatePicker}>
-      <div className="discovery-source"><span>模型来源</span><code title={provider.baseUrl}>{provider.baseUrl}</code><button className="button secondary small" disabled={loading || adding} onClick={() => void fetchModels()}><BusyIcon active={loading}><RefreshCw size={14} /></BusyIcon>{loading ? '获取中' : '重新获取'}</button></div>
+      <div className="discovery-source"><span>模型来源</span><code title={provider.baseUrl}>{provider.baseUrl}</code>{missingReasoning.length > 0 && <button className="button secondary small" data-action="fill-missing-reasoning" disabled={loading || adding} title="将本次目录明确提供的档位写入此供应商缺少档位的已添加模型" onClick={() => void fillMissingReasoning()}>补全思考档位（{missingReasoning.length}）</button>}<button className="button secondary small" disabled={loading || adding} onClick={() => void fetchModels()}><BusyIcon active={loading}><RefreshCw size={14} /></BusyIcon>{loading ? '获取中' : '重新获取'}</button></div>
       {!loading && result?.ok && (
         <div className="discovery-picker-header">
           {catalogSeries.length > 0 && <div className="discovery-series-tabs" role="tablist" aria-label="模型系列">
@@ -331,7 +351,7 @@ export function ModelDiscovery({ api, provider, notify, onClose, onAdded, onManu
         </>}
       </div>
     </div>
-    {result?.ok && error && <div className="discovery-feedback discovery-error" role="alert"><strong>添加未完成</strong><span>{error}</span></div>}
+    {result?.ok && error && <div className="discovery-feedback discovery-error" role="alert"><strong>操作未完成</strong><span>{error}</span></div>}
     {added && <div className="discovery-feedback discovery-success" role="status"><Check size={15} /><span>已添加 {added.added.length} 个模型{added.skipped.length ? `，跳过 ${added.skipped.length} 个已存在模型` : ''}。</span></div>}
     <div className="modal-footer discovery-footer"><span>{loading ? '正在读取模型列表' : result?.ok ? `已选择 ${selected.length} 个待添加模型` : '可手动添加模型并测试连接'}</span><div className="footer-actions">{onManualAdd && <button type="button" className="button secondary" disabled={loading || adding} onClick={onManualAdd}>手动添加</button>}<button className="button secondary" disabled={adding} onClick={onClose}>{added ? '完成' : '取消'}</button><button className="button primary" disabled={loading || adding || !api || !result?.ok || !selected.length} onClick={() => void addSelected()}><BusyIcon active={adding}><Download size={15} /></BusyIcon>{adding ? '添加中…' : `添加所选 ${selected.length} 个模型`}</button></div></div>
   </Modal>;

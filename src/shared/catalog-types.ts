@@ -26,6 +26,8 @@ export interface DiscoveredModel extends ModelSpecs {
   reasoningEfforts?: ReasoningEffort[];
   defaultReasoningEffort?: ReasoningEffort;
   existingModelId?: string;
+  /** Explicitly offered only for a saved model missing levels that this upstream actually advertised. */
+  availableReasoning?: { levels: ReasoningEffort[]; defaultLevel?: ReasoningEffort };
   /** Display scope verified by the native client catalog; never changes routing. */
   catalogVisibility?: 'current' | 'historical';
   /** Main-process directory metadata only. Enforced again when adding the selection. */
@@ -45,6 +47,7 @@ export interface DiscoveryResult {
 /** Only IDs from the main process's most recent successful discovery are accepted. */
 export interface ModelSelection extends ModelSpecs {
   upstreamId: string;
+  fillMissingReasoningFor?: string;
   alias?: string;
   displayName?: string;
   wireApi?: WireApi;
@@ -56,5 +59,6 @@ export interface ModelSelection extends ModelSpecs {
 }
 export interface AddModelsResult {
   added: Model[];
+  updated?: Model[];
   skipped: string[];
 }

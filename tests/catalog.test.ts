@@ -65,6 +65,17 @@ async function reopenAndSerializeVsCode(f: Awaited<ReturnType<typeof persistentC
 }
 
 describe('real model catalog discovery and batch selection', () => {
+  it('fills missing saved reasoning only on explicit request using current upstream levels and the same model identity', async () => {
+    const f = await persistentCatalogFixture({ supported_reasoning_levels: ['low', 'high'], default_reasoning_level: 'low' });
+    const saved = f.store.saveModel({ providerId: f.source.id, upstreamId: 'kimi-k3', alias: 'my-route', displayName: '我的模型', wireApi: 'responses', contextWindow: 40960, enabled: true, tools: false, vision: false, reasoningEfforts: [] });
+    const [row] = (await f.catalog.discover(f.source.id)).models;
+    expect(row.availableReasoning?.levels).toEqual(['low', 'high']);
+    const request = [{ upstreamId: saved.upstreamId, fillMissingReasoningFor: saved.id }];
+    expect(f.catalog.addSelected(f.source.id, [{ upstreamId: saved.upstreamId }]).skipped).toEqual([saved.upstreamId]);
+    expect(f.catalog.addSelected(f.source.id, [{ ...request[0], fillMissingReasoningFor: 'other' }]).updated).toBeUndefined();
+    expect(f.catalog.addSelected(f.source.id, request).updated?.[0]).toMatchObject({ ...saved, thinking: true, reasoningEfforts: ['low', 'high'], defaultReasoningEffort: 'low' });
+    expect(f.catalog.addSelected(f.source.id, request).skipped).toEqual([saved.upstreamId]);
+  });
   it.each([false, true])('preserves JetBrains regional HTTP 451 during native model discovery (account wrapper=%s)', async wrapped => {
     const f = fixture(), apiError = new JetBrainsIdeApiError('region');
     f.store.provider.nativeAdapter = 'jetbrains-ide';
