@@ -76,7 +76,12 @@ const upstream = createServer((req,res) => {
   if (req.url === '/metadata/v1/models') {
     if (req.method !== 'GET' || req.headers.authorization !== 'Bearer synthetic-only') { res.writeHead(401); res.end(); return; }
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ data: [{ id: 'gpt-4o' }, { id: 'gpt-4o-mini', context_window: 4096, vision: false }, { id: 'gpt-4.1' }, { id: 'unknown-fixture-model' }] })); return;
+    res.end(JSON.stringify({ data: [
+      { id: 'gpt-4o' }, { id: 'gemini-2.9-flash', context_window: 64000 },
+      { id: 'gpt-5.2', name: 'GPT-5.2', reasoning_efforts: ['low', 'high'], default_reasoning_effort: 'high' },
+      { id: 'gpt-4o-mini', context_window: 4096, vision: false }, { id: 'unknown-fixture-model' },
+      { id: 'gemini-2.10-flash' }, { id: 'gpt-4.1' }, { id: 'gpt-5.4-nano-2026-03-17' },
+    ] })); return;
   }
   if (req.url?.startsWith('/codex-native/models')) {
     codexModelRequests++;
@@ -252,7 +257,7 @@ child.on('exit', code => {
     }
     if (env.MODELDOCK_SMOKE_METADATA_ONLY === '1') {
       const result = JSON.parse(readFileSync(resolve(output, 'model-metadata-validation.json'), 'utf8'));
-      if (!result.ok || !result.manualZeroAndFalseSaved || !result.rediscoveryPreserved) throw new Error('Model metadata verification failed');
+      if (!result.ok || !result.manualZeroAndFalseSaved || !result.rediscoveryPreserved || !result.seriesOrderVerified || !result.filteredSelectionPreserved) throw new Error('Model metadata verification failed');
       console.log(JSON.stringify({ exitCode: code, bridge: value.bridge, metadata: result, output }));
       process.exit(code || 0);
     }

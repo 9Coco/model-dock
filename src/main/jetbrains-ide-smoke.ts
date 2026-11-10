@@ -244,8 +244,8 @@ export async function verifyJetBrainsIdeImport(window: BrowserWindow, store: Sto
     await privacy();
     await click('[aria-label="刷新本机配置"]'); await click(`[data-source-id="${provider.id}"]`); await click('[data-action="discover-models"]');
     await waitFor(`document.querySelectorAll('.discovery-model').length===3&&!document.querySelector('.discovery-loading,.discovery-error')`, 'OpenAI, Claude and Gemini coexist in native discovery');
-    const vendorRows = await evaluate<string[]>(`[...document.querySelectorAll('.discovery-model')].map(row=>row.textContent)`);
-    assert.equal(vendorRows.filter(text=>text.includes('qa-claude-profile')).length, 1); assert.equal(vendorRows.filter(text=>text.includes('qa-gemini-profile')).length, 1);
+    const vendorRows = await evaluate<string[]>(`[...document.querySelectorAll('.discovery-model-select strong')].map(name=>name.title)`);
+    assert.equal(vendorRows.filter(id=>id==='qa-claude-profile').length, 1); assert.equal(vendorRows.filter(id=>id==='qa-gemini-profile').length, 1);
     for (const [theme, width] of [['dark', 980], ['light', 1180]] as const) {
       window.setSize(width, 800); await evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)};document.documentElement.style.colorScheme=${JSON.stringify(theme)}`); await capture(`vendor-directory-${theme}-${width}`);
     }

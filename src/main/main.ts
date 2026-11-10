@@ -481,14 +481,16 @@ async function createWindow(forceShow = false) {
           }
           writeFileSync(join(outputDir,'feature-layout-validation.json'),JSON.stringify(featureLayouts,null,2));
           const featureDialogs=[];
-          for (const [scenario,page,selector,title] of [
-            ['auth-account','auth','[data-auth-add-account="codex"]','添加 Codex 订阅 账号'],
-            ['auth-jetbrains','auth','[data-action="jetbrains-import-options"]','连接JetBrains账号'],
-            ['service-provider','service','[data-action="add-api-provider"]','添加 API 供应商'],
+          for (const [scenario,page,actions,title] of [
+            ['auth-account','auth',['[data-auth-add-account="codex"]'],'添加 Codex 订阅 账号'],
+            ['auth-jetbrains','auth',['[data-action="add-subscription-provider"]', '[data-preset-id="jetbrains-central"]', '[data-action="jetbrains-import-options"]'],'连接JetBrains账号'],
+            ['service-provider','service',['[data-action="add-api-provider"]'],'添加 API 供应商'],
           ] as const) {
             await window!.webContents.executeJavaScript(`document.querySelector('[data-page="${page}"]').click()`);
-            await new Promise(resolve=>setTimeout(resolve,150));
-            await window!.webContents.executeJavaScript(`document.querySelector(${JSON.stringify(selector)}).click()`);
+            for (const selector of actions) {
+              await new Promise(resolve=>setTimeout(resolve,150));
+              await window!.webContents.executeJavaScript(`document.querySelector(${JSON.stringify(selector)}).click()`);
+            }
             await new Promise(resolve=>setTimeout(resolve,150));
             const dialog=await window!.webContents.executeJavaScript(`(()=>{const dialog=document.querySelector('[role="dialog"]'),rect=dialog.getBoundingClientRect(),buttons=Array.from(dialog.querySelector('.modal-footer,.modal-actions').querySelectorAll('button')).map(button=>button.getBoundingClientRect());return {title:dialog.querySelector('h2').textContent,inViewport:rect.left>=0&&rect.right<=innerWidth&&rect.top>=0&&rect.bottom<=innerHeight,footerVisible:buttons.length>0&&buttons.every(rect=>rect.bottom<=innerHeight&&rect.right<=innerWidth&&rect.top>=0),hasError:!!dialog.querySelector('[role="alert"]')};})()`);
             if(dialog.title!==title||!dialog.inViewport||!dialog.footerVisible||dialog.hasError) throw new Error('Feature dialog unavailable or actions outside minimum window: '+JSON.stringify(dialog));
