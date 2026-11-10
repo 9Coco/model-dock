@@ -56,7 +56,7 @@ export class FlowBridgeManager {
   private cancel = false;
   private active = false;
   private history: NetworkSample[] = [];
-  private live: NetworkSample[] = [];
+  private persistedAt = 0;
   private previous?: NetworkSample;
   private timer?: ReturnType<typeof setInterval>;
   private polling = false;
@@ -68,9 +68,9 @@ export class FlowBridgeManager {
     if (this.active) { this.current.cleanupConfirmed = false; this.state = 'error'; this.message = '上次网络会话的清理尚未确认。请点击「恢复网络」。'; }
     try {
       const file = join(options.dataDir, 'history.json');
-      if (existsSync(file) && statSync(file).size <= 512 * 1024) {
+      if (existsSync(file) && statSync(file).size <= 2 * 1024 * 1024) {
         const value: unknown = JSON.parse(readFileSync(file, 'utf8'));
-        if (Array.isArray(value)) this.history = value.filter((v): v is NetworkSample => plain(v) && Object.keys(v).length === 5 && ['time', 'uploadRate', 'downloadRate', 'uploadBytes', 'downloadBytes'].every(k => typeof v[k] === 'number' && Number.isFinite(v[k]) && v[k] >= 0)).slice(-1440);
+        if (Array.isArray(value)) this.history = value.filter((v): v is NetworkSample => plain(v) && Object.keys(v).length === 5 && ['time', 'uploadRate', 'downloadRate', 'uploadBytes', 'downloadBytes'].every(k => typeof v[k] === 'number' && Number.isFinite(v[k]) && v[k] >= 0)).sort((a, b) => a.time - b.time).slice(-3600);
       }
     } catch { /* Optional traffic history never prevents existing ModelDock data opening. */ }
     this.prune();
@@ -78,7 +78,7 @@ export class FlowBridgeManager {
   validateGatewayPort(port: number) {
     validateNetworkSettings({}, this.settings, this.options.platform, port);
   }
-  speedTestProxy(address: string): string {
+  latencyTestProxy(address: string): string {
     if (!address || address !== this.settings.address) throw new Error('请先应用要测试的代理地址。');
     if (this.busy || this.closing) throw new Error('请在网络切换完成后再测速。');
     if (!this.active) return address;
@@ -91,11 +91,11 @@ export class FlowBridgeManager {
     return `http://127.0.0.1:${this.current.localPort}`;
   }
   private now() { return this.options.now?.() ?? Date.now(); }
-  private prune() { this.history = this.history.filter(v => v.time > this.now() - 86_400_000 && v.time <= this.now()); }
+  private prune() { this.history = this.history.filter(v => v.time > this.now() - 3_600_000 && v.time <= this.now()).slice(-3600); }
   snapshot(): FlowBridgeSnapshot {
     this.prune();
     const status = { ...this.current, cleanupConfirmed: !this.active && this.current.cleanupConfirmed };
-    return { settings: { ...this.settings }, state: this.state, message: this.message, platform: this.options.platform, status, history: [...this.history, ...this.live].map(v => ({ ...v })) };
+    return { settings: { ...this.settings }, state: this.state, message: this.message, platform: this.options.platform, status, history: this.history.map(v => ({ ...v })) };
   }
   private getEngine() {
     return this.engine ??= this.options.engine(message => { this.message = message; }, () => {
@@ -199,13 +199,15 @@ export class FlowBridgeManager {
       if (!value.running) { this.options.suspendHttpRelay?.(); this.state = 'error'; this.message = value.message || '网络内核已停止。请点击「恢复网络」。'; return; }
       const time = this.now(), delta = this.previous ? (time - this.previous.time) / 1000 : 0;
       const sample = { time, uploadBytes: value.uploadBytes, downloadBytes: value.downloadBytes, uploadRate: delta > 0 ? Math.max(0, value.uploadBytes - this.previous!.uploadBytes) / delta : 0, downloadRate: delta > 0 ? Math.max(0, value.downloadBytes - this.previous!.downloadBytes) / delta : 0 };
-      this.previous = sample; this.live.push(sample); this.live = this.live.slice(-60);
-      if (!this.history.length || time - this.history.at(-1)!.time >= 60_000) { this.history.push(sample); this.prune(); this.persistHistory(); }
+      this.previous = sample;
+      this.history.push(sample);
+      this.prune();
+      if (time - this.persistedAt >= 60_000) this.persistHistory();
     } catch (error) { this.options.suspendHttpRelay?.(); this.state = 'error'; this.message = error instanceof Error ? error.message : '无法读取网络状态。'; }
     finally { this.polling = false; }
   }
   private persistHistory() {
-    try { mkdirSync(this.options.dataDir, { recursive: true, mode: 0o700 }); const file = join(this.options.dataDir, 'history.json'); writeFileSync(file + '.tmp', JSON.stringify(this.history.slice(-1440)), { mode: 0o600 }); renameSync(file + '.tmp', file); }
+    try { mkdirSync(this.options.dataDir, { recursive: true, mode: 0o700 }); const file = join(this.options.dataDir, 'history.json'); writeFileSync(file + '.tmp', JSON.stringify(this.history.slice(-3600)), { mode: 0o600 }); renameSync(file + '.tmp', file); this.persistedAt = this.now(); }
     catch { this.message += '（流量历史保存失败）'; }
   }
   async localProxies(): Promise<string[]> {

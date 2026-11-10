@@ -180,45 +180,50 @@ function NetworkTools({ api, snapshot, onChanged, notify }: Required<NetworkCont
         </div>
       </div>
     </section>
-    <TrafficPanel snapshot={snapshot} />
     <ProxySpeedPanel api={api} address={offline ? address : snapshot.settings.address} mode={offline ? mode : snapshot.settings.mode}
       networkState={restoring ? 'disconnecting' : starting ? 'connecting' : snapshot.state} needsRecovery={needsRecovery}
       prepareAddress={offline && dirty ? () => rememberOffline(address, mode) : undefined} />
+    <TrafficPanel snapshot={snapshot} />
     {!windows && <PhoneProxyPanel api={api} notify={notify} />}
   </div>;
 }
 
 function TrafficPanel({ snapshot }: { snapshot: FlowBridgeSnapshot }) {
-  const [range, setRange] = useState<'minute' | 'day'>('minute');
+  const [range, setRange] = useState<1 | 5 | 15 | 60>(1);
   const end = Date.now();
-  const start = end - (range === 'minute' ? 60_000 : 86_400_000);
+  const start = end - range * 60_000;
   const samples = snapshot.history.filter(s => s.time >= start && s.time <= end).sort((a, b) => a.time - b.time);
   const latest = snapshot.state === 'connected' ? snapshot.history.at(-1) : undefined;
   const peak = Math.max(0, ...samples.flatMap(s => [s.uploadRate, s.downloadRate]));
   return <section className="panel traffic-panel" aria-label="网络流量">
     <div className="section-heading">
       <h2>网络流量</h2>
-      <div className="network-mode traffic-range" role="group" aria-label="流量时间范围">
-        <button aria-pressed={range === 'minute'} onClick={() => setRange('minute')}>60 秒</button>
-        <button aria-pressed={range === 'day'} onClick={() => setRange('day')}>24 小时</button>
-      </div>
+      <select className="traffic-range" aria-label="流量时间范围" value={range} onChange={event => setRange(Number(event.target.value) as 1 | 5 | 15 | 60)}>
+        {([1, 5, 15, 60] as const).map(minutes => <option key={minutes} value={minutes}>最近{minutes === 60 ? '1小时' : minutes + '分钟'}</option>)}
+      </select>
     </div>
     <div className="network-metrics">
       <div data-direction="upload"><small>↑ 上传</small><strong>{networkBytes(latest?.uploadRate ?? 0)}/s</strong><span>本次 {networkBytes(snapshot.status.uploadBytes)}</span></div>
       <div data-direction="download"><small>↓ 下载</small><strong>{networkBytes(latest?.downloadRate ?? 0)}/s</strong><span>本次 {networkBytes(snapshot.status.downloadBytes)}</span></div>
-      <div><small>活动连接</small><strong>{snapshot.status.connections}</strong></div>
     </div>
     <figure className="traffic-history">
-      <div className="traffic-plot">
-        <NetworkChart samples={samples} timeWindow={{ start, end }} />
-        {!samples.length && <span className="traffic-empty">暂无流量样本</span>}
+      <div className="traffic-graph">
+        <div className="traffic-y-axis" aria-label="速率刻度">
+          {[1, .5, 0].map(scale => <span key={scale}>{networkBytes(Math.max(1, peak) * scale)}/s</span>)}
+        </div>
+        <div className="traffic-plot">
+          <NetworkChart samples={samples} timeWindow={{ start, end }} />
+          {!samples.length && <span className="traffic-empty">暂无流量样本</span>}
+        </div>
       </div>
       <figcaption>
-        <span>{range === 'minute' ? '60 秒前' : '24 小时前'}</span>
-        {samples.length > 0 && <span>峰值 {networkBytes(peak)}/s</span>}
-        <span>现在</span>
+        {[0, 1 / 3, 2 / 3, 1].map(position => <time key={position} dateTime={new Date(start + (end - start) * position).toISOString()}>{new Date(start + (end - start) * position).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', ...(range === 1 ? { second: '2-digit' } : {}), hour12: false })}</time>)}
       </figcaption>
     </figure>
+    <div className="traffic-footer">
+      <div className="traffic-legend"><span data-direction="upload">上传</span><span data-direction="download">下载</span></div>
+      <span>活动连接 {snapshot.status.connections}</span>
+    </div>
   </section>;
 }
 

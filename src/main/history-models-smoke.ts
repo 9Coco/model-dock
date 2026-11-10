@@ -288,6 +288,48 @@ export async function verifyHistoryModels(window: BrowserWindow, store: Store, o
   async function open(family: Family) { await click('[aria-label="刷新本机配置"]'); await click(`[data-source-id="${ids[family]}"]`); await click('[data-action="discover-models"]'); await waitFor(`!document.querySelector('.discovery-loading,.discovery-error')&&!!document.querySelector('.discovery-footer')`, `${family} native catalog`); }
   async function close() { await click('[aria-label="关闭对话框"]'); await waitFor(`!document.querySelector('[role="dialog"]')`, 'directory closed'); }
   async function capture(name: string) { await evaluate('document.querySelectorAll(\'.toast-stack [aria-label="关闭提示"]\').forEach(button=>button.click())'); await evaluate('new Promise(done=>requestAnimationFrame(()=>requestAnimationFrame(done)))'); const overflow = await evaluate<boolean>(`document.documentElement.scrollWidth>innerWidth+1||document.querySelector('.modal').scrollWidth>document.querySelector('.modal').clientWidth+1`); assert.equal(overflow, false); const file = `history-models-${name}.png`; writeFileSync(join(outputDir, file), await captureUi()); screenshots.push(file); }
+  const seriesTab = (key: string) => `[data-discovery-series-tab="${key}"]`;
+  async function selectSeries(key: string) {
+    await click(seriesTab(key));
+    await waitFor(`document.querySelector(${JSON.stringify(seriesTab(key))})?.getAttribute('aria-selected')==='true'`, 'series tab selected');
+  }
+  async function seriesRows() {
+    const keys = await evaluate<string[]>(`[...document.querySelectorAll('[data-discovery-series-tab]')].map(tab=>tab.dataset.discoverySeriesTab)`);
+    const rows: { id: string; historical: boolean; blocked: boolean; existing: boolean; checked: boolean }[] = [];
+    for (const key of keys) {
+      await selectSeries(key);
+      rows.push(...await evaluate<typeof rows>(`[...document.querySelectorAll('.discovery-model')].map(row=>({
+        id:row.querySelector('.discovery-model-select strong').title, historical:!!row.querySelector('[data-model-historical]'),
+        blocked:!!row.querySelector('[data-model-unimportable]'), existing:row.classList.contains('existing'),
+        checked:row.querySelector('.discovery-model-select input').checked
+      }))`));
+    }
+    assert.equal(new Set(rows.map(row => row.id)).size, rows.length, 'Every model appears in exactly one series');
+    return rows;
+  }
+  async function showPublicModel(id: string) {
+    const keys = await evaluate<string[]>(`[...document.querySelectorAll('[data-discovery-series-tab]')].map(tab=>tab.dataset.discoverySeriesTab)`);
+    for (const key of keys) {
+      await selectSeries(key);
+      if (await evaluate<boolean>(`!!document.querySelector(${JSON.stringify(`input[aria-label="选择模型 ${id}"]`)})`)) return;
+    }
+    throw new Error(`Public model has no series tab: ${id}`);
+  }
+  async function verifySearchLayout() {
+    const layout = await evaluate<{ searchWidth: number; stacked: boolean; overlap: boolean; inputInside: boolean; names: string[]; selectedName: string; hasAll: boolean; missingIcons: boolean }>(`(() => {
+      const search=document.querySelector('.discovery-search'), toolbar=document.querySelector('.discovery-toolbar');
+      const s=search.getBoundingClientRect(), t=toolbar.getBoundingClientRect(), i=search.querySelector('input').getBoundingClientRect();
+      const boxes=[...toolbar.children].map(node=>node.getBoundingClientRect());
+      const tabs=[...document.querySelectorAll('[data-discovery-series-tab]')];
+      return { searchWidth:s.width, stacked:s.bottom<=t.top+1, inputInside:i.left>=s.left && i.right<=s.right+1,
+        overlap:boxes.some((a,index)=>boxes.slice(index+1).some(b=>Math.min(a.right,b.right)>Math.max(a.left,b.left)+1 && Math.min(a.bottom,b.bottom)>Math.max(a.top,b.top)+1)),
+        names:[...document.querySelectorAll('.discovery-series-name')].filter(node=>node.checkVisibility()).map(node=>node.textContent),
+        selectedName:tabs.find(tab=>tab.getAttribute('aria-selected')==='true')?.getAttribute('aria-label'),
+        hasAll:tabs.some(tab=>tab.dataset.discoverySeriesTab===''), missingIcons:tabs.some(tab=>!tab.querySelector('[data-model-series-icon]')) };
+    })()`);
+    assert.ok(layout.searchWidth>350 && layout.stacked && layout.inputInside && !layout.overlap, 'Search has its own usable full-width line above non-overlapping history/count/actions');
+    assert.deepEqual(layout.names, [layout.selectedName]); assert.equal(layout.hasAll, false); assert.equal(layout.missingIcons, false);
+  }
   try {
     window.setMinimumSize(980, 680);
     store.setManagedState(MODE_KEY, 'limited-current'); await open('trae');
@@ -298,6 +340,9 @@ export async function verifyHistoryModels(window: BrowserWindow, store: Store, o
     assert.equal(await evaluate<number>(`document.querySelectorAll('[data-model-unimportable]').length`), 1);
     await expandModel(id('trae', 'current-b'));
     assert.match(await evaluate<string>(`document.querySelector(${JSON.stringify(blocked)}).textContent`), /客户端中可见，官方直连配置尚未核实/);
+    assert.match(await evaluate<string>(`document.querySelector('.discovery-footer').textContent`), /已选择 0 个待添加模型/);
+    assert.equal(await evaluate<boolean>(`document.querySelector('.discovery-footer .button.primary').disabled`), true);
+    await click(selectAll);
     assert.match(await evaluate<string>(`document.querySelector('.discovery-footer').textContent`), /已选择 1 个待添加模型/); await capture('current-visible-unimportable-route');
     await evaluate(`(()=>{const node=document.querySelector(${JSON.stringify(blocked)}+' input[type="checkbox"]');node.checked=true;node.dispatchEvent(new Event('change',{bubbles:true}))})()`);
     await click(selectAll); await waitFor(`document.querySelector('.discovery-footer .button.primary').disabled`, 'a forged disabled checkbox cannot make a nonimportable row submittable');
@@ -311,6 +356,9 @@ export async function verifyHistoryModels(window: BrowserWindow, store: Store, o
       assert.equal(await evaluate<number>(`document.querySelectorAll('.discovery-model').length`), 2);
       assert.equal(await evaluate<number>(`document.querySelectorAll('[data-model-historical]').length`), 0);
       assert.match(await evaluate<string>(`document.querySelector('[data-discovery-count]').textContent`), /^2 个模型/);
+      assert.match(await evaluate<string>(`document.querySelector('.discovery-footer').textContent`), /已选择 0 个待添加模型/);
+      assert.equal(await evaluate<boolean>(`document.querySelector('.discovery-footer .button.primary').disabled`), true);
+      await click(selectAll);
       assert.match(await evaluate<string>(`document.querySelector('.discovery-footer').textContent`), /已选择 2 个待添加模型/);
       const calls = store.getManagedState(CALLS_KEY, 0);
       await click(toggle); await waitFor(`document.querySelectorAll('.discovery-model').length===4`, 'history becomes visible');
@@ -327,7 +375,8 @@ export async function verifyHistoryModels(window: BrowserWindow, store: Store, o
       assert.equal(await evaluate<string>(`document.querySelector('input[aria-label="${id(family, 'history-new')} 上下文长度"]').value`), '32768', 'Bulk edits exclude history hidden by the history filter');
       await expandModel(id(family, 'current-b'));
       assert.equal(await evaluate<string>(`document.querySelector('input[aria-label="${id(family, 'current-b')} 上下文长度"]').value`), '64000');
-      await click(selectAll); // All visible pending candidates become unselected.
+      for (const suffix of ['current-a', 'current-b']) await click(`${row(family, suffix)} input[type="checkbox"]`);
+      assert.equal(await evaluate<number>(`document.querySelectorAll('.discovery-model-select input:checked').length`), 0);
       await textInput('input[aria-label="搜索模型"]', 'history-new');
       await waitFor(`document.querySelectorAll('.discovery-model').length===1`, 'history search'); await click(selectAll);
       await click(toggle); await waitFor(`document.querySelectorAll('.discovery-model').length===0`, 'hidden history stays hidden under search');
@@ -351,6 +400,7 @@ export async function verifyHistoryModels(window: BrowserWindow, store: Store, o
       assert.deepEqual(store.listBindings(), initialBindings, 'Historical filtering and adding current models preserve tool bindings');
       await close(); await open(family);
       assert.equal(await evaluate<boolean>(`document.querySelector('${toggle}').checked`), false); assert.equal(await evaluate<number>(`document.querySelectorAll('.discovery-model.existing').length`), 2);
+      assert.equal(await evaluate<number>(`document.querySelectorAll('.discovery-model-select input:checked').length`), 0, 'Reopening never selects pending or previously added models');
       await click(toggle); await waitFor(`document.querySelectorAll('.discovery-model.existing').length===3`, 'saved history is still present after reopening'); await close(); checked.push(family);
     }
     store.setManagedState(MODE_KEY, 'unverified'); await open('trae');
@@ -376,42 +426,59 @@ export async function verifyHistoryModels(window: BrowserWindow, store: Store, o
     store.saveBinding({ ...historyBinding, modelIds: [...historyBinding.modelIds, keptPublicHistory.id], defaultModelId: keptPublicHistory.id });
     const publicModelsBefore = store.listModels(), publicBindingsBefore = store.listBindings();
     store.setManagedState(MODE_KEY, 'public-shape'); window.setSize(980, 800); await evaluate("document.documentElement.dataset.theme='dark';document.documentElement.style.colorScheme='dark'"); await open('trae');
-    await waitFor(`document.querySelectorAll('.discovery-model').length===18`, 'all eighteen client-current public model names are displayed');
+    await waitFor(`document.querySelector('[data-discovery-series-tab="deepseek"]')?.getAttribute('aria-selected')==='true'`, 'the first DeepSeek series opens by default');
+    const currentRows = await seriesRows();
+    assert.equal(currentRows.length, 18);
+    assert.equal(currentRows.filter(row=>row.blocked).length, 1); assert.equal(currentRows.filter(row=>row.checked).length, 0);
+    await selectSeries('deepseek');
+    assert.deepEqual(await evaluate<string[]>(`[...document.querySelectorAll('.discovery-series-tabs button')].map(tab=>tab.getAttribute('aria-label'))`),
+      ['DeepSeek', 'GLM', 'Kimi', 'MiMo', 'MiniMax', 'Qwen', 'Seed', 'Step']);
+    await verifySearchLayout();
+    await evaluate(`document.querySelector('[aria-label="搜索模型"]').focus()`);
+    for (const keyCode of 'V4.1') window.webContents.sendInputEvent({ type: 'char', keyCode });
+    await waitFor(`document.querySelector('[aria-label="搜索模型"]').value==='V4.1'&&document.querySelectorAll('.discovery-model').length===1`, 'native typing filters within a model series');
+    await textInput('[aria-label="搜索模型"]', '');
+    await waitFor(`document.querySelectorAll('.discovery-model').length===2`, 'DeepSeek search clears');
     assert.equal(await evaluate<boolean>(`document.querySelector('${toggle}').checked`), false);
-    assert.equal(await evaluate<number>(`document.querySelectorAll('[data-model-unimportable]').length`), 1);
-    assert.equal(await evaluate<number>(`document.querySelectorAll('.discovery-model-select > input:not(:disabled):checked').length`), 17);
-    assert.match(await evaluate<string>(`document.querySelector('[data-discovery-count]').textContent`), /^18 个模型/);
-    assert.match(await evaluate<string>(`document.querySelector('.discovery-footer').textContent`), /已选择 17 个待添加模型/);
+    assert.equal(await evaluate<number>(`document.querySelectorAll('.discovery-model-select > input:not(:disabled):checked').length`), 0);
+    assert.match(await evaluate<string>(`document.querySelector('[data-discovery-count]').textContent`), /^2 个模型/);
+    assert.match(await evaluate<string>(`document.querySelector('.discovery-footer').textContent`), /已选择 0 个待添加模型/);
     assert.equal(await evaluate<boolean>(`(()=>{const note=document.querySelector('[data-discovery-history-message]');return note.textContent===${JSON.stringify(TRAE_PUBLIC_SCOPE)}&&note.scrollWidth<=note.clientWidth+1})()`), true, 'The complete account-cache scope and account-access explanation wraps without overflow');
+    const publicCalls = store.getManagedState(CALLS_KEY, 0); await capture('series-icons-deepseek-dark-980');
+    await showPublicModel('kimi-k3.1-pro');
     const lockedKimi = '.discovery-model:has([data-model-unimportable="account-access"])';
     assert.equal(await evaluate<string>(`document.querySelector(${JSON.stringify(lockedKimi)}+' strong').title`), 'kimi-k3.1-pro');
     assert.equal(await evaluate<boolean>(`document.querySelector(${JSON.stringify(lockedKimi)}+' input[type="checkbox"]').disabled`), true);
-    const publicCalls = store.getManagedState(CALLS_KEY, 0); await capture('public-shape-current-top-dark-980');
+    await capture('public-shape-current-top-dark-980');
     await expandModel('kimi-k3.1-pro');
     assert.match(await evaluate<string>(`document.querySelector(${JSON.stringify(lockedKimi)}).textContent`), /当前 TRAE 账号没有此模型的使用权限/);
     await evaluate(`document.querySelector(${JSON.stringify(lockedKimi)}).scrollIntoView({block:'center'})`);
     await capture('public-shape-account-restriction-dark-980');
     const lastCurrent = TRAE_PUBLIC_DIRECTORY.filter(model => model.visibility === 'current').at(-1)!;
+    await showPublicModel(lastCurrent.id);
     await evaluate(`document.querySelector(${JSON.stringify(`.discovery-model:has(input[aria-label="选择模型 ${lastCurrent.id}"])`)}).scrollIntoView({block:'center'})`); await capture('public-shape-current-last-dark-980');
-    await click(toggle); await waitFor(`document.querySelectorAll('.discovery-model').length===37`, 'history reveals thirty-seven eligible subscription entries without personal BYOK');
-    assert.equal(await evaluate<number>(`document.querySelectorAll('[data-model-historical]').length`), 19);
-    assert.equal(await evaluate<number>(`document.querySelectorAll('[data-model-unimportable]').length`), 1);
-    assert.equal(await evaluate<number>(`document.querySelectorAll('.discovery-model.existing').length`), 1);
-    assert.match(await evaluate<string>(`document.querySelector('[data-discovery-count]').textContent`), /^37 个模型 · 1 个已添加/);
+    await click(toggle);
+    await waitFor(`document.querySelector('${toggle}').checked`, 'history filter enabled');
+    const historyRows = await seriesRows();
+    assert.equal(historyRows.length, 37); assert.equal(historyRows.filter(row=>row.historical).length, 19);
+    assert.equal(historyRows.filter(row=>row.blocked).length, 1); assert.equal(historyRows.filter(row=>row.existing).length, 1);
+    await verifySearchLayout();
+    await capture('series-icons-history-dark-980');
+    await showPublicModel(publicHistory.id);
     const publicHistoryRow = `.discovery-model:has(input[aria-label="选择模型 ${publicHistory.id}"])`;
     assert.equal(await evaluate<boolean>(`document.querySelector(${JSON.stringify(publicHistoryRow)}+' input[type="checkbox"]').disabled`), true);
     await evaluate(`document.querySelector(${JSON.stringify(publicHistoryRow)}).scrollIntoView({block:'center'})`); await capture('public-shape-history-dark-980');
-    await click(toggle); await waitFor(`document.querySelectorAll('.discovery-model').length===18`, 'default current inventory is restored');
-    assert.match(await evaluate<string>(`document.querySelector('.discovery-footer').textContent`), /已选择 17 个待添加模型/);
+    await click(toggle); await waitFor(`!document.querySelector('${toggle}').checked`, 'default current filter is restored');
+    assert.equal((await seriesRows()).length, 18);
+    assert.match(await evaluate<string>(`document.querySelector('.discovery-footer').textContent`), /已选择 0 个待添加模型/);
     assert.equal(store.getManagedState(CALLS_KEY, 0), publicCalls);
     assert.deepEqual(store.listModels(), publicModelsBefore);
     const eight = TRAE_PUBLIC_DIRECTORY.filter(model => model.visibility === 'current' && model.importable).slice(-8);
-    await click(selectAll);
-    for (const { id: modelId } of eight) await click(`input[aria-label="选择模型 ${modelId}"]`);
+    for (const { id: modelId } of eight) { await showPublicModel(modelId); await click(`input[aria-label="选择模型 ${modelId}"]`); }
     const last = eight[eight.length - 1].id, aliasField = `input[aria-label="${last} 模型简称"]`, submit = '.discovery-footer .button.primary';
     await expandModel(last);
     await textInput(aliasField, 'invalid alias');
-    await evaluate("document.querySelector('.discovery-body').scrollTop=document.querySelector('.discovery-body').scrollHeight");
+    await evaluate("document.querySelector('.discovery-content').scrollTop=document.querySelector('.discovery-content').scrollHeight");
     await click(submit);
     await waitFor(`document.querySelector('[role="alert"]')?.textContent.includes('简称')`, 'invalid edit explains the refusal');
     assert.equal(await evaluate<boolean>(`(()=>{const alert=document.querySelector('[role="alert"]').getBoundingClientRect();const bounds=document.querySelector('.modal').getBoundingClientRect();return alert.top>=bounds.top && alert.bottom<=bounds.bottom && document.elementFromPoint(alert.left+6,alert.top+6)?.closest('[role="alert"]')!==null})()`),true);
@@ -430,8 +497,12 @@ export async function verifyHistoryModels(window: BrowserWindow, store: Store, o
     assert.deepEqual(store.listBindings(), publicBindingsBefore);
     await capture('added-eight-after-expiry');
     await close();
-    await open('trae'); await waitFor(`document.querySelectorAll('.discovery-model.existing').length === 8`, 'saved choices survive reopening'); await close();
+    await open('trae');
+    const reopened = await seriesRows(); assert.equal(reopened.filter(row=>row.existing).length, 8, 'Saved choices survive reopening across series');
+    assert.equal(reopened.filter(row=>row.checked).length, 0);
+    assert.equal(await evaluate<boolean>(`document.querySelector('.discovery-footer .button.primary').disabled`), true);
+    await close();
     const publicView = await evaluate<string>('(async()=>JSON.stringify({snapshot:await window.modelDock.snapshot(),body:document.body.innerText,diagnostics:await window.modelDock.queryDiagnostics({limit:200})}))()'); assert.equal(publicView.includes(PRIVATE_KEY), false);
-    writeFileSync(join(outputDir, 'history-models-validation.json'), JSON.stringify({ ok: true, families: checked, defaultHistoryHidden: true, toggleDoesNotRefetch: true, hiddenHistoryNeverSubmittedOrBulkEdited: true, currentUnroutableVisibleButNotImportable: true, forgedCheckboxCannotSubmitUnroutable: true, backendRejectsUnroutableModel: true, searchSelectionSemanticsPreserved: true, existingHistoricalModelsAndBindingsPreserved: true, reopenDefaultsToCurrent: true, unknownVisibilityNotInvented: true, unknownHiddenByDefault: true, unverifiedCurrentMessageVisible: true, emptyCurrentRequiresExplicitHistory: true, genericApiNoHistoryCheckbox: true, expiredSelection: { minutesOpen: 11, saved: 8, refreshes: 1, editsPreserved: true }, publicTraeShape: { current: 18, historical: 19, total: 37, currentImportable: 17, currentReadOnly: 1, longScopeFits: true, historicalModelAndBindingPreserved: true }, noRealAccountsOrNetwork: true, screenshots }, null, 2));
+    writeFileSync(join(outputDir, 'history-models-validation.json'), JSON.stringify({ ok: true, families: checked, defaultHistoryHidden: true, toggleDoesNotRefetch: true, hiddenHistoryNeverSubmittedOrBulkEdited: true, currentUnroutableVisibleButNotImportable: true, forgedCheckboxCannotSubmitUnroutable: true, backendRejectsUnroutableModel: true, searchSelectionSemanticsPreserved: true, existingHistoricalModelsAndBindingsPreserved: true, reopenDefaultsToCurrent: true, unknownVisibilityNotInvented: true, unknownHiddenByDefault: true, unverifiedCurrentMessageVisible: true, emptyCurrentRequiresExplicitHistory: true, genericApiNoHistoryCheckbox: true, expiredSelection: { minutesOpen: 11, saved: 8, refreshes: 1, editsPreserved: true }, publicTraeShape: { iconSeriesTabs: true, fullWidthSearchAndNonOverlappingControls: true, current: 18, historical: 19, total: 37, currentImportable: 17, currentReadOnly: 1, longScopeFits: true, historicalModelAndBindingPreserved: true }, noRealAccountsOrNetwork: true, screenshots }, null, 2));
   } finally { store.setManagedState(MODE_KEY, 'verified'); await evaluate(`(()=>{const original=${JSON.stringify(originalTheme)};if(original.theme===undefined)delete document.documentElement.dataset.theme;else document.documentElement.dataset.theme=original.theme;document.documentElement.style.colorScheme=original.colorScheme})()`); window.setMinimumSize(minimum[0], minimum[1]); window.setSize(initialSize[0], initialSize[1]); }
 }

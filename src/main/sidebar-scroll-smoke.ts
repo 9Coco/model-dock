@@ -12,7 +12,7 @@ interface ListReadback {
 }
 interface SidebarReadback {
   viewport: { width: number; height: number; dpr: number }; lists: ListReadback[];
-  fixed: { name: string; visible: boolean; box: Box }[]; documentOverflow: boolean; sidebarOverflow: boolean;
+  fixed: { name: string; visible: boolean; box: Box }[]; brandRemoved: boolean; navigationFirst: boolean; documentOverflow: boolean; sidebarOverflow: boolean;
 }
 type UiState = { theme?: string; colorScheme: string; navigation: Record<string, string>; toolCategory?: string; providerCategory?: string; scroll: Record<string, number> };
 interface WheelEventReadback { section: string; deltaX: number; deltaY: number; mode: number; trusted: boolean; targetTag: string }
@@ -45,8 +45,8 @@ export async function verifySidebarScroll(window: BrowserWindow, store: Store, o
         label:box(label),labelVisible:visible(label),lastVisible:!!lastBox&&visible(last)&&lastBox.top>=r.top-1&&lastBox.bottom<=r.bottom+1,
         rows:[...list.querySelectorAll('button.nav-item')].filter(row=>box(row).height>0).map(row=>({height:box(row).height,font:parseFloat(getComputedStyle(row).fontSize),lineHeight:getComputedStyle(row).lineHeight}))};
     });
-    const fixed=[['brand','.sidebar .brand'],['tool-tabs','.tool-category-tabs'],['functions','.sidebar-functions'],['footer','.sidebar-bottom'],['settings','.sidebar-bottom [data-page="settings"]']].map(([name,selector])=>{const element=document.querySelector(selector);return {name,visible:visible(element),box:element?box(element):{top:0,bottom:0,left:0,right:0,width:0,height:0}};});
-    const sidebar=document.querySelector('.sidebar');return {viewport:{width:innerWidth,height:innerHeight,dpr:devicePixelRatio},lists,fixed,documentOverflow:document.documentElement.scrollWidth>innerWidth+1,sidebarOverflow:[...sidebar.children].filter(child=>!child.hasAttribute('data-sidebar-resizer')).some(child=>child.scrollWidth>child.clientWidth+1||child.getBoundingClientRect().right>sidebar.getBoundingClientRect().right+1)};
+    const fixed=[['tool-tabs','.tool-category-tabs'],['functions','.sidebar-functions'],['footer','.sidebar-bottom'],['settings','.sidebar-bottom [data-page="settings"]']].map(([name,selector])=>{const element=document.querySelector(selector);return {name,visible:visible(element),box:element?box(element):{top:0,bottom:0,left:0,right:0,width:0,height:0}};});
+    const sidebar=document.querySelector('.sidebar');return {viewport:{width:innerWidth,height:innerHeight,dpr:devicePixelRatio},lists,fixed,brandRemoved:!sidebar.querySelector('.brand,[data-app-brand-icon]'),navigationFirst:sidebar.firstElementChild?.matches('.sidebar-functions')===true,documentOverflow:document.documentElement.scrollWidth>innerWidth+1,sidebarOverflow:[...sidebar.children].filter(child=>!child.hasAttribute('data-sidebar-resizer')).some(child=>child.scrollWidth>child.clientWidth+1||child.getBoundingClientRect().right>sidebar.getBoundingClientRect().right+1)};
   })()`;
   const config = () => ({ providers: store.listProviders(), bindings: store.listBindings(), models: store.listModels() });
   const originalConfig = config(), originalSize = window.getSize(), originalMinimum = window.getMinimumSize();
@@ -75,7 +75,9 @@ export async function verifySidebarScroll(window: BrowserWindow, store: Store, o
   }
   function validate(value: SidebarReadback): void {
     assert.deepEqual(value.lists.map(list => list.name), ['tools', 'providers']);
-    assert.ok(value.fixed.every(item => item.visible), 'Brand, functional destinations and footer must remain in the viewport');
+    assert.equal(value.brandRemoved, true, 'The sidebar brand row is removed');
+    assert.equal(value.navigationFirst, true, 'Functional navigation is the first sidebar content');
+    assert.ok(value.fixed.every(item => item.visible), 'Functional destinations and footer must remain in the viewport');
     assert.equal(value.documentOverflow || value.sidebarOverflow, false, 'Sidebar must not introduce horizontal overflow');
     for (const list of value.lists) {
       assert.ok(['auto', 'scroll'].includes(list.overflowY) && list.clientHeight > 0, `Each sidebar list has its own scroll viewport: ${list.name}`);
@@ -83,9 +85,15 @@ export async function verifySidebarScroll(window: BrowserWindow, store: Store, o
       assert.ok(list.rows.every(row => row.font >= 12 && row.height >= 28), `Navigation text and click rows retain readable dimensions: ${list.name}`);
     }
     assert.ok(value.lists[0].box.bottom <= value.lists[1].label.top + 1, 'Tools must not cover the provider group');
-    assert.ok(value.lists[1].box.bottom <= value.fixed.find(item => item.name === 'functions')!.box.top + 1, 'Provider viewport must leave the functional navigation visible');
+    const fixedBox = (name: string) => value.fixed.find(item => item.name === name)!.box;
+    assert.ok(fixedBox('functions').bottom <= value.lists[0].label.top + 1, 'Functional navigation precedes the tool group');
+    assert.ok(value.lists[1].box.bottom <= fixedBox('footer').top + 1, 'Provider scrolling leaves the bottom actions visible');
+    assert.ok(fixedBox('settings').top >= fixedBox('footer').top - 1 && fixedBox('settings').bottom <= fixedBox('footer').bottom + 1,
+      'Settings stays within the bottom action area');
+    assert.ok(fixedBox('footer').bottom >= value.viewport.height - 2, 'Bottom actions remain pinned to the viewport bottom');
   }
   try {
+    window.setMinimumSize(780, 580);
     // These sources deliberately have no credentials or models. Navigating to
     // them cannot invoke an upstream or cause external config synchronization.
     for (let index = 1; index <= 24; index++) {
@@ -95,7 +103,7 @@ export async function verifySidebarScroll(window: BrowserWindow, store: Store, o
     await evaluate(`document.querySelector('[aria-label="刷新本机配置"]').click()`);
     const last = created[created.length - 1];
     await waitFor(`!!document.querySelector('.sidebar [data-source-id="${last.id}"]')`, 'synthetic provider list refreshed');
-    for (const theme of ['dark', 'light']) for (const requestedSize of [[1320, 880], [980, 680]]) {
+    for (const theme of ['dark', 'light']) for (const requestedSize of [[1320, 880], [980, 680], [780, 580]]) {
       window.setSize(requestedSize[0], requestedSize[1]);
       await evaluate(`document.querySelector('[data-tool-category="agent"]').click();document.querySelector('[data-provider-category="api"]').click();document.documentElement.dataset.theme=${JSON.stringify(theme)};document.documentElement.style.colorScheme=${JSON.stringify(theme)};document.querySelectorAll('[data-sidebar-scroll]').forEach(list=>list.scrollTop=0)`);
       await pause(100);

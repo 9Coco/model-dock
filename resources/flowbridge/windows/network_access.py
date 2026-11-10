@@ -13,9 +13,11 @@ from windows.network_pipe import open_client, pipe_name
 from windows.proxy import display_global_address
 
 ROOT = Path(__file__).resolve().parents[1]
-PAYLOAD_SHA256 = '9a094115e411455ebd48976ab1719e55008f97ef4116420db00e2c77156036f7'
-# Old tasks share the protected recovery journal and stop protocol. New sessions need the corrected pipe ACL.
+PAYLOAD_SHA256 = '5e6024be86dc8e951162936a9a8de7324bbb1c3231dcfcf1b300c9d10ea4f860'
+# Known older tasks share the protected recovery journal and stop protocol.
+# New sessions require the current fixed website directory and worker payload.
 RECOVERY_PREDECESSORS = (
+    '9a094115e411455ebd48976ab1719e55008f97ef4116420db00e2c77156036f7',
     '0dc57d97ab47c139a54c511953a21b9e34daa41eabef7867bad1a239e2c6a536',
     'f24621227afa878442356ac5dd274c78689e82e8556b6f59ee03b2ee035bd12d',
 )

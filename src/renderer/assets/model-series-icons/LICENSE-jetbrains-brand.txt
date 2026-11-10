@@ -1,0 +1,20 @@
+JetBrains AI Assistant icon attribution and brand guidance
+
+Copyright (c) 2026 JetBrains s.r.o. AI Assistant and the AI Assistant logo
+are trademarks of JetBrains s.r.o.
+
+The AI Assistant SVG icon was downloaded on 2026-11-10 from the official
+JetBrains Brand Assets page's Product Icons / AI Assistant download link.
+Its original colors, geometry and proportions are preserved. It identifies
+the JetBrains AI service destination in ModelDock's network diagnostics.
+
+Authoritative brand guidance and trademark terms:
+https://www.jetbrains.com/company/brand/
+
+Official icon download:
+https://resources.jetbrains.com/storage/products/company/brand/logos/AI_icon.svg
+
+This brand asset is excluded from ModelDock's and LobeHub's MIT artwork
+licenses. This attribution record does not replace JetBrains' brand
+usage guidelines or grant independent trademark rights. Its use identifies
+the service and does not imply affiliation or endorsement by JetBrains.

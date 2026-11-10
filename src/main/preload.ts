@@ -17,14 +17,23 @@ const api: ModelDockApi = {
   networkSnapshot: () => call('networkSnapshot'), saveNetworkSettings: (patch, options) => call('saveNetworkSettings', patch, options),
   connectNetwork: upstream => call('connectNetwork', upstream), disconnectNetwork: () => call('disconnectNetwork'),
   checkNetworkSite: site => call('checkNetworkSite', site), networkHotspotCandidates: () => call('networkHotspotCandidates'),
-  measureNetworkSpeed: (address, metric) => call('measureNetworkSpeed', address, metric),
   measureNetworkSites: async (address, onResult) => {
     const id = crypto.randomUUID();
+    const reported = new Set<SiteLatency['site']>();
+    const deliver = (result: SiteLatency) => {
+      if (reported.has(result.site)) return;
+      reported.add(result.site);
+      onResult(result);
+    };
     const report = (_event: Electron.IpcRendererEvent, runId: string, result: SiteLatency) => {
-      if (runId === id) onResult(result);
+      if (runId === id) deliver(result);
     };
     ipcRenderer.on('modeldock:site-latency-result', report);
-    try { await call('measureNetworkSites', address, id); }
+    try {
+      const results: SiteLatency[] = await call('measureNetworkSites', address, id);
+      // The invoke reply also carries final results so teardown cannot lose a late event.
+      for (const result of results) deliver(result);
+    }
     finally { ipcRenderer.removeListener('modeldock:site-latency-result', report); }
   },
   networkLocalProxies: () => call('networkLocalProxies'),

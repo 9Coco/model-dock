@@ -39,7 +39,6 @@ import { ResizableSidebar } from './ResizableSidebar';
 import { CopyValue, SecretField } from './ConnectionFields';
 import { AggregatePanel } from './AggregatePanel';
 import { SubscriptionConnection } from './SubscriptionConnection';
-import brandIcon from '../../assets/modeldock.svg?no-inline';
 import { SettingsPanel } from './SettingsPanel';
 import { applyTheme } from './theme';
 import { ToolIcon } from './ToolIcon';
@@ -1054,16 +1053,15 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
 
   return <div className="app-shell" onContextMenu={handleContextMenu} onKeyDown={handleContextKey}>
     <ResizableSidebar>
-      <button className="brand" onClick={() => selectProvider(null)} aria-label="ModelDock 首页"><span className="brand-mark"><img src={brandIcon} alt="" data-app-brand-icon /></span><span>ModelDock</span></button>
-      <div className="sidebar-navigation" data-sidebar-navigation>
-      <ToolNavigation tools={toolIds.map(id => ({ id, name: id === 'dsh' ? 'DSH' : id === 'copilot' ? 'Copilot app' : toolInfo[id].name, connected: bindingFor(id).enabled }))} selectedTool={selectedTool} active={page === 'tools'} onSelect={selectTool} />
-        <ProviderNavigation providers={data.providers} selectedProviderId={selectedProviderId} active={page === 'providers'} category={sourceCategory} onCategoryChange={setSourceCategory} onSelect={selectProvider} onAddApi={() => setProviderDraft(freshProvider('deepseek'))} />
-      </div>
       <nav className="sidebar-functions" aria-label="功能导航">
         <button data-page="network" className={`nav-item ${page === 'network' ? 'active' : ''}`} aria-current={page === 'network' ? 'page' : undefined} onClick={() => navigate('network')}><Globe2 size={18} /><span>网络接管</span></button>
         <button data-page="auth" className={`nav-item ${page === 'auth' ? 'active' : ''}`} aria-current={page === 'auth' ? 'page' : undefined} onClick={() => navigate('auth')}><KeyRound size={18} /><span>授权中心</span></button>
         <button data-page="service" className={`nav-item ${page === 'service' ? 'active' : ''}`} aria-current={page === 'service' ? 'page' : undefined} onClick={() => navigate('service')}><Activity size={18} /><span>服务工作台</span><span className={`status-dot ${data.gateway.running ? 'green' : ''}`} /></button>
       </nav>
+      <div className="sidebar-navigation" data-sidebar-navigation>
+      <ToolNavigation tools={toolIds.map(id => ({ id, name: id === 'dsh' ? 'DSH' : id === 'copilot' ? 'Copilot app' : toolInfo[id].name, connected: bindingFor(id).enabled }))} selectedTool={selectedTool} active={page === 'tools'} onSelect={selectTool} />
+        <ProviderNavigation providers={data.providers} selectedProviderId={selectedProviderId} active={page === 'providers'} category={sourceCategory} onCategoryChange={setSourceCategory} onSelect={selectProvider} onAddApi={() => setProviderDraft(freshProvider('deepseek'))} />
+      </div>
       <div className="sidebar-bottom"><div className="sidebar-local-info"><strong>本地工作空间</strong><small title={`${data.version ? `v${data.version}` : '桌面预览'} · 127.0.0.1`}>{data.version ? `v${data.version}` : '桌面预览'} · 127.0.0.1</small></div><div className="sidebar-bottom-actions"><button data-page="settings" className={`sidebar-icon sidebar-settings ${page === 'settings' ? 'active' : ''}`} aria-current={page === 'settings' ? 'page' : undefined} title="设置" aria-label="打开设置" onClick={() => navigate('settings')}><Settings2 size={18} /></button><button className="sidebar-icon" title="打开数据目录" aria-label="打开数据目录" onClick={() => void run('open-dir', () => bridge!.openDataDir())}><FolderOpen size={17} /></button></div></div>
     </ResizableSidebar>
     <div className="main-shell">

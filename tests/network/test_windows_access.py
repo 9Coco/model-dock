@@ -54,7 +54,8 @@ class AccessTests(unittest.TestCase):
         self.pipe.assert_not_called()
 
     def test_recovery_reuses_only_the_known_compatible_protected_worker(self):
-        previous = access.RECOVERY_PREDECESSORS[0]
+        previous = '9a094115e411455ebd48976ab1719e55008f97ef4116420db00e2c77156036f7'
+        self.assertIn(previous, access.RECOVERY_PREDECESSORS)
         stream = self.pipe.return_value = Mock()
         self.pipe.side_effect = None
         stream.readline.return_value = b'{"result":true}\n'

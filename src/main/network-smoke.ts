@@ -118,9 +118,9 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
       await wait(`${query(tile + ' .site-latency')}.textContent === ${JSON.stringify(expected)}`);
     }
     assert.equal(await evaluate(`${query('[data-site="ChatGPT"] .site-http-status')}.textContent`), 'HTTP 403');
-    for (const [key, value] of [['download', '80.0 Mbps'], ['upload', '20.0 Mbps']]) {
-      await wait(`${query('[data-speed-result="' + key + '"]')}.textContent === ${JSON.stringify(value)}`);
-    }
+    assert.equal(await evaluate(`document.querySelectorAll('.site-tile').length`), 12);
+    assert.equal(await evaluate(`!!document.querySelector('.transfer-rates, [data-speed-result]')`), false);
+    assert.equal(await evaluate(`typeof window.modelDock.measureNetworkSpeed`), 'undefined');
   }
   const gateway = () => evaluate<{ running: boolean; port: number; host: string }>('window.modelDock.runtimeSnapshot().then(s=>s.gateway)');
   const servicePage = '[data-service-workspace]';
@@ -210,7 +210,7 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
   const saved = (await network()).settings;
   assert.ok(saved.address.endsWith('://' + speedDraft), 'Offline measurement must use the normalized draft');
   await fill('#network-address', 'invalid-address');
-  await wait(`${query('[data-speed-result="download"]')}.textContent === '—'`);
+  await wait(`${query('[data-site="Google"] .site-latency')}.textContent === '—'`);
   await verifyNoSaveButton();
   await click(connectButton);
   await wait("Array.from(document.querySelectorAll('.toast-stack .toast.error')).some(toast=>toast.textContent.includes('端口'))");
@@ -254,7 +254,7 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
   async function verifyTrafficColors(theme: 'light' | 'dark', contents = window.webContents) {
     const colors: { text: string[]; line: string }[] = await contents.executeJavaScript(`['upload', 'download'].map(direction => {
       const selector = '[data-direction="' + direction + '"]';
-      const metrics = document.querySelectorAll('.network-metrics ' + selector + ' > *, .transfer-rates ' + selector + ', .transfer-rates ' + selector + ' > strong');
+      const metrics = document.querySelectorAll('.network-metrics ' + selector + ' > *');
       const series = getComputedStyle(document.querySelector('polyline[data-direction="' + direction + '"]'));
       return { text: Array.from(metrics, metric => getComputedStyle(metric).color), line: series.stroke.toLowerCase() === 'currentcolor' ? series.color : series.stroke };
     })`);
@@ -262,13 +262,21 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
       assert.ok(text.length >= 2);
       for (const color of text) assert.equal(color, line, 'Traffic labels, values and curve must have the same color');
     }
-    const expected = theme === 'dark' ? ['rgb(245, 203, 92)', 'rgb(112, 215, 151)'] : ['rgb(133, 100, 0)', 'rgb(34, 113, 67)'];
-    assert.deepEqual(colors.map(({ line }) => line), expected, 'Upload must be yellow and download green');
+    const expected = theme === 'dark' ? ['rgb(245, 203, 92)', 'rgb(85, 180, 255)'] : ['rgb(133, 100, 0)', 'rgb(34, 121, 187)'];
+    assert.deepEqual(colors.map(({ line }) => line), expected, 'Upload must be yellow and download blue');
   }
+  const rangeSelect = '[aria-label="流量时间范围"]';
+  assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('${rangeSelect} option'), option => option.textContent)`), ['最近1分钟', '最近5分钟', '最近15分钟', '最近1小时']);
+  for (const minutes of [1, 5, 15, 60]) {
+    await evaluate(`(() => { const select = ${query(rangeSelect)}; select.value = '${minutes}'; select.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+    await wait(`${query(rangeSelect)}.value === '${minutes}'`);
+    assert.equal(await evaluate(`document.querySelectorAll('.traffic-history time').length`), 4);
+  }
+  await evaluate(`(() => { const select = ${query(rangeSelect)}; select.value = '1'; select.dispatchEvent(new Event('change', { bubbles: true })); })()`);
   window.setMinimumSize(780, 580);
   for (const [theme, width, height, filename] of [
     ['light', 1320, 880, 'network-light.png'], ['dark', 1320, 880, 'network-dark.png'],
-    ['dark', 1080, 740, 'network-controls.png'], ['dark', 980, 680, 'network-compact.png'], ['dark', 780, 620, 'network-narrow.png'],
+    ['dark', 1070, 740, 'network-controls.png'], ['dark', 980, 680, 'network-compact.png'], ['dark', 780, 620, 'network-narrow.png'],
   ] as const) {
     await click('[data-page="settings"]');
     await wait(`!!${query('[aria-label="随 ModelDock 自动连接网络"]')}`);
@@ -278,24 +286,25 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
     window.setContentSize(width, height);
     await wait(`innerWidth===${width} && ${networkState('connected')}`);
     await wait(`!!${query('[aria-label="网站延迟"]')} && !!${query('[aria-label="流量时间范围"]')}`);
-    await click('[data-action="measure-proxy-speed"]');
-    await wait(`${query('[data-speed-result="upload"]')}.textContent === '20.0 Mbps'`);
-    const geometry = await evaluate<{ sameRow: boolean; fullWidth: boolean; iconsAbove: boolean; alignedTraffic: boolean; phoneFullWidth: boolean | null }>(`(() => {
+    await verifyProxySpeed();
+    const geometry = await evaluate<{ responsiveGrid: boolean; firstRow: boolean; iconsAbove: boolean; fullWidthTraffic: boolean; phoneFullWidth: boolean | null }>(`(() => {
       const tiles = [...document.querySelectorAll('.site-tile')];
       const panel = document.querySelector('.proxy-speed-panel'), grid = document.querySelector('.network-tools');
+      const columns = getComputedStyle(document.querySelector('.site-tiles')).gridTemplateColumns.split(' ').length;
+      const panelBox = panel.getBoundingClientRect();
       const controls = grid.querySelector('[data-network-panel]').getBoundingClientRect();
       const traffic = grid.querySelector('.traffic-panel').getBoundingClientRect();
       const phone = grid.querySelector('.phone-proxy-panel');
       return {
-        sameRow: tiles.length === 6 && tiles.every(tile => tile.offsetTop === tiles[0].offsetTop),
-        fullWidth: Math.abs(panel.getBoundingClientRect().width - grid.getBoundingClientRect().width) <= 2,
-        iconsAbove: tiles.every(tile => tile.querySelector('.site-mark').getBoundingClientRect().bottom < tile.querySelector('.site-latency').getBoundingClientRect().top && getComputedStyle(tile.querySelector('.site-mark')).maskImage !== 'none'),
-        alignedTraffic: grid.clientWidth >= 720 ? Math.abs(controls.top - traffic.top) < 1 && Math.abs(controls.bottom - traffic.bottom) < 1 : traffic.top >= controls.bottom,
+        responsiveGrid: tiles.length === 12 && [3, 4, 6].includes(columns) && tiles.every((tile, index) => tile.offsetTop === tiles[Math.floor(index / columns) * columns].offsetTop),
+        firstRow: grid.clientWidth >= 720 ? Math.abs(controls.top - panelBox.top) < 1 && controls.right <= panelBox.left : panelBox.top >= controls.bottom,
+        iconsAbove: tiles.every(tile => tile.querySelector('.site-mark').getBoundingClientRect().bottom < tile.querySelector('.site-latency').getBoundingClientRect().top && (getComputedStyle(tile.querySelector('.site-mark')).maskImage !== 'none' || getComputedStyle(tile.querySelector('.site-mark')).backgroundImage !== 'none' || !!tile.querySelector('.site-mark img')?.complete)),
+        fullWidthTraffic: traffic.top >= Math.max(controls.bottom, panelBox.bottom) && Math.abs(traffic.width - grid.clientWidth) <= 1,
         phoneFullWidth: phone ? Math.abs(phone.getBoundingClientRect().width - grid.clientWidth) <= 1 : null
       };
     })()`);
-    assert.ok(geometry.sameRow && geometry.fullWidth && geometry.iconsAbove, 'Speed tiles must fill one row with icons above latency');
-    assert.ok(geometry.alignedTraffic, 'Traffic and controls must fill their row or stack on narrow screens');
+    assert.ok(geometry.responsiveGrid && geometry.firstRow && geometry.iconsAbove, 'Twelve compact latency tiles sit beside controls on desktop and stack responsively');
+    assert.ok(geometry.fullWidthTraffic, 'Traffic spans the complete second row');
     assert.equal(geometry.phoneFullWidth, windowsNetwork ? null : true, 'Phone setup must span the workspace where available');
     const layout = await evaluate<{ overflow: boolean; menuVisible: boolean }>(`(() => {
       const main=document.querySelector('main'), menu=${query('[data-page="network"]')}.getBoundingClientRect();
@@ -320,7 +329,7 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
     writeFileSync(join(output, filename), await capture());
     screenshots.push(filename);
   }
-  await click('[aria-label="ModelDock 首页"]');
+  await click('[data-page="service"]');
   await verifyPage('service');
   for (const tab of ['logs', 'interface']) {
     await click(`[data-service-tab="${tab}"]`);
@@ -456,7 +465,7 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
   assert.equal(store.getManagedState('network.flowbridge.lease', false), false);
   writeFileSync(join(output, 'network-validation.json'), JSON.stringify({ ok: true, defaultServiceWorkspace: true,
     sidebarNetworkBeforeAuth: true, dedicatedNetworkPage: true, sessionPreservedAcrossNavigation: true,
-    offlineSpeedFromDraft: true, connectedWithDraft: true, explicitReconnect: true, cleanupRecovery: true, gatewayControlsIndependent: true, simulatedNetworkConnectDisconnectAndCancel: true,
+    offlineSpeedFromDraft: true, connectedWithDraft: true, explicitReconnect: true, cleanupRecovery: true, gatewayControlsIndependent: true, twelveWebsiteLatenciesOnly: true, trafficWindows: [1, 5, 15, 60], simulatedNetworkConnectDisconnectAndCancel: true,
     osNetworkUntouched: true, existingDataPreserved: true,
     miniPreloadIsolated: true, layouts, screenshots }, null, 2));
   if (process.env.MODELDOCK_SMOKE_NETWORK_HOLD === '1') { window.show(); await delay(60_000); }
