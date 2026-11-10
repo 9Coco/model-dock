@@ -207,8 +207,7 @@ function nativeCopilotId(namespace: string, kind: 'provider' | 'model', id: stri
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 /** Only the main process requests revealed keys for native synchronization. */
-export function buildCopilotDesktopPlan(store: AdapterStore, port: number, revealKey = false): CopilotDesktopPlan {
-  const { binding } = selected(store, 'copilot', true);
+export function buildCopilotDesktopPlan(store: AdapterStore, port: number, revealKey = false, binding = selected(store, 'copilot', true).binding): CopilotDesktopPlan {
   const groups = connectionGroups(store, 'copilot', binding, port, revealKey);
   const namespace = store.dataDir ? (process.platform === 'win32' ? resolve(store.dataDir).toLowerCase() : resolve(store.dataDir)) : 'adapter-fixture';
   const originals = store.listModels();

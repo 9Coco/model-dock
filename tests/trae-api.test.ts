@@ -16,6 +16,18 @@ const tool = { type: 'function', function: { name: 'read_file', parameters: { ty
 const fetchMock = (respond: (url: string, init: RequestInit) => Response | Promise<Response>) => vi.fn<typeof fetch>(async (url, init) => respond(String(url), init!));
 
 describe('direct TraeCode CN native Raw v2 protocol', () => {
+  it('forwards a pasted user image to the selected vision route and preserves interleaved text', async () => {
+    const fetch = fetchMock(url => url.includes('get_detail_param') ? catalog() : sse(frame('output', { response: 'purple and yellow' }) + finished));
+    const api = new TraeApi({ fetch, clientModels: async () => ({ client: 'trae-cn', models: [{ id: 'flashx', configName: 'glm-5.3', vision: true }] }) });
+    const url = 'data:image/png;base64,iVBORw0KGgo=';
+    const parts = [{ type: 'text', text: 'left' }, { type: 'image_url', image_url: { url } }, { type: 'text', text: 'right' }];
+    const result = await api.chat(credential, { model: 'flashx', messages: [{ role: 'user', content: parts }] });
+    expect((await result.json()).choices[0].message.content).toBe('purple and yellow');
+    expect(JSON.parse(String(fetch.mock.calls[1][1]?.body))).toMatchObject({ config_name: 'glm-5.3', messages: [{ role: 'user', content: parts }] });
+    await expect(api.chat(credential, { model: 'glm-5.3', messages: [{ role: 'user', content: parts }] })).rejects.toMatchObject({ code: 'image-model', status: 400 });
+    await expect(api.chat(credential, { model: 'flashx', messages: [{ role: 'assistant', content: parts }] })).rejects.toMatchObject({ code: 'image-format' });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
   it('uses the exact function-scoped catalog and accurate provider id without Work aliases or guessed models', async () => {
     const fetch = fetchMock(() => catalog()), api = new TraeApi({ fetch });
     const models = await api.models(credential);

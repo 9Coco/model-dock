@@ -15,9 +15,9 @@ describe('TRAE client picker visibility and independent verified routes',()=>{
   expect(clientModels).toHaveBeenCalledWith(credentials.userId, undefined);
   expect(result.modeldock_history).toMatchObject({source:'trae-client',currentVerified:true});expect(result.modeldock_history.message).toContain('1 项尚无');
   expect(result.data).toEqual([
-   {id:'route-current',object:'model',owned_by:'trae',name:'Current exact client name',modeldock_catalog_visibility:'current'},
-   {id:'new-client-model',object:'model',owned_by:'trae',name:'New client model',modeldock_catalog_visibility:'current',modeldock_catalog_importable:false},
-   {id:'route-history',object:'model',owned_by:'trae',modeldock_catalog_visibility:'historical'},
+   {id:'route-current',object:'model',owned_by:'trae',name:'Current exact client name',vision:false,modeldock_catalog_visibility:'current'},
+   {id:'new-client-model',object:'model',owned_by:'trae',name:'New client model',vision:false,modeldock_catalog_visibility:'current',modeldock_catalog_importable:false},
+   {id:'route-history',object:'model',owned_by:'trae',vision:false,modeldock_catalog_visibility:'historical'},
   ]);
   await expect(api.chat(credentials,{...request,model:'new-client-model'})).rejects.toMatchObject({code:'model'});
   expect(fetch).toHaveBeenCalledTimes(1);

@@ -443,4 +443,18 @@ describe('explicit Copilot single-step undo through native registry and opaque c
     await manager.undo('copilot'); expect(binding).toMatchObject({ enabled: false, providerIds: [], modelIds: [], defaultModelId: '', note: 'New unrelated note' });
     expect(f.app.providers.has(FOREIGN)).toBe(true); expect(manager.status('copilot').available).toBe(false);
   });
+  it('checkpoints the in-flight Copilot plan even if a later selection was saved during gateway startup', async () => {
+    const f = setup();
+    const before: ToolBinding = { id: 'copilot', name: 'Copilot', note: '', mode: 'auto', enabled: false, providerIds: [], modelIds: [], defaultModelId: '' };
+    const first = { ...before, enabled: true, providerIds: ['first'] };
+    let latest: ToolBinding = { ...first, providerIds: ['first', 'second'] };
+    const store = Object.assign(f.store, { listBindings: () => [structuredClone(latest)], restoreBindingSelection: (saved: ToolBinding) => { latest = structuredClone(saved); } });
+    const manager = new ToolSyncUndoManager(store, { appData: join(tmpdir(), 'fixture-appdata'), copilotHome: home, copilotOptions: f.options });
+    await manager.run('copilot', before, () => f.apply(makePlan()), first);
+    expect(store.getManagedState(toolSyncUndoKey('copilot'), null)).toMatchObject({ beforeBinding: before, appliedBinding: first });
+    expect(latest.providerIds).toEqual(['first', 'second']);
+    await manager.run('copilot', first, () => f.apply(makePlan(A, MA, 'SYNTHETIC_SECOND')), latest);
+    await manager.undo('copilot');
+    expect(latest).toEqual(first);
+  });
 });
