@@ -19,7 +19,7 @@ interface ProbeSample {
 }
 
 /** Observes the normal presentation gate without changing focus until after the baseline. */
-export function observeWindowPresentation(window: BrowserWindow, outputDir: string, options: ProbeOptions) {
+export function observeWindowPresentation(window: BrowserWindow, outputDir: string, options: ProbeOptions, revealWindow: () => void) {
   assert.equal(__MODELDOCK_SMOKE_BUILD__, true);
   assert.equal(resolve(outputDir), resolve(process.env.MODELDOCK_SMOKE!));
   const createdAt = Date.now(), events: ProbeEvent[] = [], samples: ProbeSample[] = [], images = new Map<string, NativeImage>();
@@ -120,6 +120,52 @@ export function observeWindowPresentation(window: BrowserWindow, outputDir: stri
     })();
     void finished.catch(() => {});
   }
+  async function verifyTrayNavigation(): Promise<void> {
+    const evaluate = <T>(source: string): Promise<T> => window.webContents.executeJavaScript(source);
+    const selectionState = `(() => {
+      const active=document.querySelector('.sidebar [aria-current="page"]');
+      return {page: active.dataset.page ?? (active.dataset.sourceId ? 'providers' : ''),
+        tool: active.dataset.toolId, provider: active.dataset.sourceId,
+        title: document.querySelector('.breadcrumbs').textContent};
+    })()`;
+    const current = () => evaluate<{ page: string; tool?: string; provider?: string; title: string }>(selectionState);
+    async function waitFor(expression: string, description: string) {
+      for (let attempt = 0; attempt < 100; attempt++) {
+        if (await evaluate<boolean>(expression)) return;
+        await pause(30);
+      }
+      throw new Error(`Tray navigation verification timed out: ${description}`);
+    }
+    const selections = [
+      { page: 'settings', selector: '.sidebar [data-page="settings"]' },
+      { page: 'tools', selector: '.sidebar [data-tool-id="codex"]' },
+      { page: 'providers', selector: '.sidebar [data-source-id]' },
+    ];
+    assert.equal((await current()).page, 'network', 'A newly started process opens on network management');
+    revealWindow();
+    for (let attempt = 0; attempt < 100 && !window.isVisible(); attempt++) await pause(30);
+    assert.equal(window.isVisible(), true, 'The product tray action reveals its existing window');
+    assert.equal((await current()).page, 'network', 'The first tray reveal shows network management');
+    await pause(100);
+    writeFileSync(join(outputDir, 'tray-first-network.png'), (await window.webContents.capturePage()).toPNG());
+    const readbacks = [];
+    for (const selection of selections) {
+      await waitFor(`!!document.querySelector(${JSON.stringify(selection.selector)})`, selection.selector);
+      await evaluate(`document.querySelector(${JSON.stringify(selection.selector)}).click()`);
+      await waitFor(`(${selectionState}).page===${JSON.stringify(selection.page)}`, selection.page);
+      const before = await current();
+      window.hide();
+      assert.equal(window.isVisible(), false);
+      revealWindow();
+      for (let attempt = 0; attempt < 100 && !window.isVisible(); attempt++) await pause(30);
+      assert.equal(window.isVisible(), true);
+      const after = await current();
+      assert.deepEqual(after, before, 'Later tray reveals preserve the menu and selected item');
+      readbacks.push(before);
+    }
+    writeFileSync(join(outputDir, 'tray-navigation-validation.json'), JSON.stringify({ ok: true,
+      firstRevealPage: 'network', preservesExistingWindow: true, laterReveals: readbacks }, null, 2));
+  }
   window.once('show', () => { if (!options.hidden) startTimeline(); });
   return {
     rendererPrepared(): void { rendererReady = true; event('renderer-ready'); if (options.hidden) startTimeline(); },
@@ -129,6 +175,7 @@ export function observeWindowPresentation(window: BrowserWindow, outputDir: stri
       try { await Promise.race([started, new Promise<never>((_, reject) => { timeout = setTimeout(() => reject(new Error('Window presentation did not reach its expected startup gate')), 15_000); })]); }
       finally { clearTimeout(timeout); }
       await finished;
+      if (options.hidden) await verifyTrayNavigation();
     },
   };
 }

@@ -15,9 +15,10 @@ export interface FlowBridgeSettings {
   mode: NetworkMode;
   dnsMode: 'fast' | 'compatible';
   autoConnect: boolean;
+  autoDiscover: boolean;
   showMiniOnStart: boolean;
 }
-export const DEFAULT_FLOWBRIDGE: Readonly<FlowBridgeSettings> = Object.freeze({ address: '', mode: 'http', dnsMode: 'fast', autoConnect: false, showMiniOnStart: false });
+export const DEFAULT_FLOWBRIDGE: Readonly<FlowBridgeSettings> = Object.freeze({ address: '', mode: 'http', dnsMode: 'fast', autoConnect: false, autoDiscover: true, showMiniOnStart: false });
 export interface NetworkSample { time: number; uploadRate: number; downloadRate: number; uploadBytes: number; downloadBytes: number }
 export interface NetworkEngineStatus { running: boolean; cleanupConfirmed: boolean; localPort: number | null; uploadBytes: number; downloadBytes: number; connections: number; message: string }
 export interface FlowBridgeSnapshot {

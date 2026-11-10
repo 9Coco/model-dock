@@ -144,6 +144,7 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
       .some(button => /^(保存|应用|应用并重连)$/.test(button.textContent.trim()))`), false);
   }
   async function verifyProxySpeed() {
+    await wait(`Array.from(document.querySelectorAll('[aria-label="网络连接模式"] button')).every(button=>!button.disabled)`);
     await click('[data-action="measure-proxy-speed"]');
     for (const [index, site] of NETWORK_SITES.entries()) {
       const tile = '[data-site="' + site + '"]';
@@ -172,7 +173,7 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
       assert.equal(await evaluate(`!!${query(servicePage)}`), false);
     } else {
       await wait(`!!${query(servicePage + ' [data-gateway-panel]')}`);
-      assert.equal(await evaluate(`!!${query('[data-network-panel], .network-tools, [data-service-tab="network"]')}`), false);
+      assert.equal(await evaluate(`Array.from(document.querySelectorAll('[data-network-panel], .network-tools, [data-service-tab="network"]')).some(element => element.checkVisibility())`), false);
     }
   }
   async function openPage(page: 'service' | 'network') {
@@ -187,9 +188,10 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
     assert.ok(before.models.some(model => model.providerId === id && model.alias === `duplicate-${suffix}`));
   }
   assert.ok(before.bindings.length);
-  await verifyPage('service');
+  await verifyPage('network');
   assert.equal(await evaluate(`${query('[data-page="network"]')}.textContent.trim()`), '网络接管');
   assert.equal(await evaluate(`${query('[data-page="network"]')}.nextElementSibling === ${query('[data-page="auth"]')}`), true);
+  await openPage('service');
   assert.equal(await evaluate(gatewayState('stopped')), true);
   const idle = await network();
   const windowsNetwork = idle.platform === 'win32';
@@ -246,8 +248,39 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
   assert.equal((await network()).state, 'idle', 'Testing a typed upstream must not take over the system network');
   const saved = (await network()).settings;
   assert.ok(saved.address.endsWith('://' + speedDraft), 'Offline measurement must use the normalized draft');
+  await click('[data-site="X"]');
+  await evaluate(`(() => { const select=document.querySelector('[aria-label="流量时间范围"]');select.value='15';select.dispatchEvent(new Event('change',{bubbles:true})); })()`);
+  const speedState = `(() => ({sites: Array.from(document.querySelectorAll('.site-tile')).map(tile => ({
+    site: tile.getAttribute('data-site'), text: tile.querySelector('.site-latency').textContent,
+    status: tile.querySelector('.site-http-status')?.textContent,
+  })), details: document.querySelector('[data-site-details]')?.getAttribute('data-site-details'),
+    range: document.querySelector('[aria-label="流量时间范围"]').value}))()`;
+  const measured = await evaluate(speedState);
+  for (const destination of ['[data-page="service"]', '[data-tool-id="codex"]']) {
+    await click(destination);
+    await wait(`!${query('.network-page')}.checkVisibility()`);
+    await openPage('network');
+    assert.deepEqual(await evaluate(speedState), measured, 'Completed latency results, details and range survive navigation');
+  }
+  await click('[data-site="X"]');
+  await click('[data-action="measure-proxy-speed"]');
+  await wait(`${query('[data-action="measure-proxy-speed"]')}.disabled`);
+  await click('[data-tool-id="codex"]');
+  await wait(`!${query('.network-page')}.checkVisibility()`);
+  await wait(`${query('[data-site="Google"] .site-latency')}.textContent==='42 ms' && !${query('[data-action="measure-proxy-speed"]')}.disabled`);
+  await openPage('network');
+  for (const [index, site] of NETWORK_SITES.entries()) {
+    assert.equal(await evaluate(`${query('[data-site="' + site + '"] .site-latency')}.textContent`), site === 'X' ? '超时' : (42 + index) + ' ms');
+  }
+  const modeIndex = await evaluate<number>(`Array.from(document.querySelectorAll('[aria-label="网络连接模式"] button')).findIndex(button=>button.getAttribute('aria-pressed')==='true')`);
+  assert.ok(modeIndex === 0 || modeIndex === 1);
+  await click(`[aria-label="网络连接模式"] button:nth-child(${2 - modeIndex})`);
+  await wait(`Array.from(document.querySelectorAll('.site-latency')).every(element=>element.textContent==='—') && !document.querySelector('[data-site-details]')`);
+  await click(`[aria-label="网络连接模式"] button:nth-child(${modeIndex + 1})`);
+  await wait(`window.modelDock.networkSnapshot().then(snapshot => snapshot.settings.mode===${JSON.stringify(modeIndex === 0 ? "http" : "global")})`);
+  await verifyProxySpeed();
   await fill('#network-address', 'invalid-address');
-  await wait(`${query('[data-site="Google"] .site-latency')}.textContent === '—'`);
+  await wait(`Array.from(document.querySelectorAll('.site-latency')).every(element=>element.textContent==='—')`);
   await verifyNoSaveButton();
   await click(connectButton);
   await wait("Array.from(document.querySelectorAll('.toast-stack .toast.error')).some(toast=>toast.textContent.includes('端口'))");
@@ -500,8 +533,9 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
   await wait(networkState('idle'));
   assert.deepEqual(modelConfig(), before);
   assert.equal(store.getManagedState('network.flowbridge.lease', false), false);
-  writeFileSync(join(output, 'network-validation.json'), JSON.stringify({ ok: true, defaultServiceWorkspace: true,
+  writeFileSync(join(output, 'network-validation.json'), JSON.stringify({ ok: true, defaultNetworkWorkspace: true,
     sidebarNetworkBeforeAuth: true, dedicatedNetworkPage: true, sessionPreservedAcrossNavigation: true,
+    completedLatencyPreservedAcrossNavigation: true, pendingLatencyCompletesWhileHidden: true, latencyResetsOnModeAndAddressChange: true,
     offlineSpeedFromDraft: true, connectedWithDraft: true, explicitReconnect: true, cleanupRecovery: true, gatewayControlsIndependent: true, twelveWebsiteLatenciesOnly: true, trafficWindows: [1, 5, 15, 60], simulatedNetworkConnectDisconnectAndCancel: true,
     osNetworkUntouched: true, existingDataPreserved: true, anonymousElectronRedirectProbe: true,
     miniPreloadIsolated: true, layouts, screenshots }, null, 2));

@@ -13,9 +13,9 @@ const plain = (value: unknown): value is Record<string, unknown> => !!value && t
 export function validateNetworkSettings(raw: unknown, previous: FlowBridgeSettings, platform: string, gatewayPort: number): FlowBridgeSettings {
   if (!plain(raw) || Object.keys(raw).some(key => !Object.hasOwn(DEFAULT_FLOWBRIDGE, key))) throw new Error('网络设置字段无效。');
   const next = { ...previous, ...raw };
-  if (!['http', 'global'].includes(next.mode) || !['fast', 'compatible'].includes(next.dnsMode) || typeof next.autoConnect !== 'boolean' || typeof next.showMiniOnStart !== 'boolean') throw new Error('网络设置选项无效。');
+  if (!['http', 'global'].includes(next.mode) || !['fast', 'compatible'].includes(next.dnsMode) || typeof next.autoConnect !== 'boolean' || typeof next.autoDiscover !== 'boolean' || typeof next.showMiniOnStart !== 'boolean') throw new Error('网络设置选项无效。');
   if (typeof next.address !== 'string' || next.address.length > 512 || /[\s\x00-\x1f\x7f\\]/.test(next.address)) throw new Error('请填写不含凭据的代理地址和端口。');
-  if (!next.address) { if (next.autoConnect) throw new Error('自动连接需要代理地址。请在网络接管页填写地址并连接。'); return next; }
+  if (!next.address) { if (next.autoConnect && !next.autoDiscover) throw new Error('自动连接需要代理地址或启动时自动查找。'); return next; }
   const scheme = next.mode === 'global' ? 'socks5' : 'http';
   let address = next.address;
   if (next.mode !== previous.mode && !Object.hasOwn(raw, 'address')) address = address.replace(/^(?:http|socks5):\/\//, scheme + '://');
@@ -43,6 +43,7 @@ export interface FlowBridgeOptions {
   setHttpRelay?: (port: number | null) => Promise<void>;
   suspendHttpRelay?: () => void;
   now?: () => number;
+  discoverCandidates?: (settings: Readonly<FlowBridgeSettings>) => Promise<string[]>;
 }
 export class FlowBridgeManager {
   private settings: FlowBridgeSettings = { ...DEFAULT_FLOWBRIDGE };
@@ -61,8 +62,16 @@ export class FlowBridgeManager {
   private timer?: ReturnType<typeof setInterval>;
   private polling = false;
   private checking = false;
+  private automaticGeneration = 0;
+  private automaticRun?: Promise<void>;
+  private wakeAutomatic?: () => void;
   constructor(private store: SettingsStore, private options: FlowBridgeOptions) {
-    try { this.settings = validateNetworkSettings(store.getManagedState(KEY, {}), this.settings, options.platform, options.gatewayPort()); }
+    try {
+      const saved = store.getManagedState<unknown>(KEY, {});
+      // Older explicit autoconnect settings retain their fixed upstream until discovery is enabled.
+      const patch = plain(saved) && Object.hasOwn(saved, 'autoConnect') && !Object.hasOwn(saved, 'autoDiscover') ? { ...saved, autoDiscover: false } : saved;
+      this.settings = validateNetworkSettings(patch, this.settings, options.platform, options.gatewayPort());
+    }
     catch { this.state = 'error'; this.message = '无法读取网络设置，请重新填写代理地址并连接。'; }
     this.active = store.getManagedState(LEASE, false);
     if (this.active) { this.current.cleanupConfirmed = false; this.state = 'error'; this.message = '上次网络会话的清理尚未确认。请点击「恢复网络」。'; }
@@ -108,6 +117,7 @@ export class FlowBridgeManager {
     return result;
   }
   async save(patch: Partial<FlowBridgeSettings>, options?: { offlineOnly: boolean }): Promise<FlowBridgeSnapshot> {
+    this.cancelAutomatic();
     if (this.busy || this.closing) throw new Error('网络正在切换，请完成或取消后再保存。');
     if (options?.offlineOnly && this.active) throw new Error('网络连接状态已变化。请断开并完成恢复后再修改代理地址。');
     const next = validateNetworkSettings(patch, this.settings, this.options.platform, this.options.gatewayPort());
@@ -126,6 +136,7 @@ export class FlowBridgeManager {
     });
   }
   connect(upstream?: Pick<FlowBridgeSettings, 'address' | 'mode'>): Promise<FlowBridgeSnapshot> {
+    this.cancelAutomatic();
     return this.queueConnection(upstream, true);
   }
   private queueConnection(upstream: Pick<FlowBridgeSettings, 'address' | 'mode'> | undefined, allowInstall: boolean) {
@@ -150,7 +161,7 @@ export class FlowBridgeManager {
     this.state = 'connecting'; this.message = '正在连接代理…'; this.previous = undefined;
     this.store.setManagedState(LEASE, true); this.active = true;
     try {
-      this.current = status(await this.getEngine().request<NetworkEngineStatus>('connect', { settings: this.settings, allowInstall: allowInstall && this.options.platform === 'win32' && this.settings.mode === 'global' }));
+      this.current = status(await this.getEngine().request<NetworkEngineStatus>('connect', { settings: this.settings, allowInstall: allowInstall && this.settings.mode === 'global' }));
       if (!this.current.running || this.cancel) { await this.stop(); if (this.cancel) return; throw new Error('未确认网络连接就绪。'); }
       if (this.settings.mode === 'http' && this.current.localPort === null) throw new Error('未确认 HTTP 代理监听端口。');
       await this.options.setHttpRelay?.(this.settings.mode === 'http' ? this.current.localPort : null);
@@ -170,6 +181,7 @@ export class FlowBridgeManager {
     }
   }
   disconnect(manualRecovery = false): Promise<FlowBridgeSnapshot> {
+    this.cancelAutomatic();
     const repair = manualRecovery && this.options.platform === 'win32' && this.active && this.state === 'error';
     this.cancel = true;
     if (this.engine) void this.engine.request('cancel').catch(() => {});
@@ -226,16 +238,80 @@ export class FlowBridgeManager {
     try { return await this.getEngine().request('check', { site }); }
     finally { this.checking = false; }
   }
-  async autoConnect() {
-    if (!this.settings.autoConnect || this.active) return;
+  private cancelAutomatic() {
+    this.automaticGeneration++;
+    this.wakeAutomatic?.();
+    this.wakeAutomatic = undefined;
+  }
+  private async automaticCandidates(): Promise<string[]> {
+    const saved = this.settings.address;
+    if (!this.settings.autoDiscover) return saved ? [saved] : [];
+    let found: string[] = [];
+    try {
+      if (this.options.discoverCandidates) found = await this.options.discoverCandidates({ ...this.settings });
+      else if (this.options.platform === 'win32') found = await this.localProxies();
+      else {
+        const port = parseNetworkEndpoint(saved, this.settings.mode)?.port ?? 38473;
+        const scheme = this.settings.mode === 'global' ? 'socks5' : 'http';
+        found = (await hotspotCandidates(this.options.platform)).map(host => `${scheme}://${host.includes(':') ? `[${host}]` : host}:${port}`);
+      }
+    } catch { /* Saved upstream remains a fallback when network discovery is not ready. */ }
+    const valid = Array.isArray(found) ? found.filter(address => typeof address === 'string' && !!parseNetworkEndpoint(address, this.settings.mode)) : [];
+    if (saved && valid.includes(saved)) valid.unshift(saved);
+    if (saved) valid.push(saved);
+    return [...new Set(valid)].slice(0, 16);
+  }
+  autoConnect(): Promise<void> {
+    if (this.automaticRun) return this.automaticRun;
+    if (!this.settings.autoConnect || this.active || this.cancel || this.closing) return Promise.resolve();
+    const generation = ++this.automaticGeneration;
+    const run = this.runAutomatic(generation).catch(error => {
+      this.state = 'error'; this.message = error instanceof Error ? error.message : '自动连接失败，请手动重试。';
+    });
+    this.automaticRun = run;
+    void run.finally(() => { if (this.automaticRun === run) this.automaticRun = undefined; });
+    return run;
+  }
+  private async runAutomatic(generation: number) {
+    const current = () => generation === this.automaticGeneration && this.settings.autoConnect && !this.cancel && !this.closing;
     const deadline = this.now() + 120_000;
-    do {
-      try { await this.queueConnection(undefined, false); return; }
-      catch (error) { if (this.active || this.cancel || this.closing || error instanceof NetworkAuthorizationRequired) return; }
-      if (this.now() >= deadline) return;
-      this.message = '上游尚未就绪，等待自动重试（最多两分钟）…';
-      await new Promise<void>(resolve => setTimeout(resolve, 3000));
-    } while (!this.cancel && !this.closing);
+    let expired = false;
+    const timeout = setTimeout(() => {
+      if (!current()) return;
+      expired = true;
+      this.cancel = true;
+      this.wakeAutomatic?.(); this.wakeAutomatic = undefined;
+      if (this.engine) void this.engine.request('cancel').catch(() => {});
+    }, 120_000);
+    timeout.unref();
+    try {
+      for (let round = 0; current() && round < 41; round++) {
+        this.message = this.settings.autoDiscover ? '正在查找可用代理地址…' : '正在自动连接代理…';
+        const candidates = await this.automaticCandidates();
+        for (const address of candidates) {
+          if (!current() || this.active || this.busy) return;
+          if (this.now() >= deadline) { expired = true; return; }
+          const previous = { ...this.settings };
+          try { await this.queueConnection({ address, mode: this.settings.mode }, false); return; }
+          catch (error) {
+            if (this.active || !current()) return;
+            this.store.setManagedState(KEY, previous); this.settings = previous;
+            if (error instanceof NetworkAuthorizationRequired) return;
+          }
+        }
+        if (!current()) return;
+        if (this.now() >= deadline || round === 40) { expired = true; return; }
+        this.message = '代理地址或上游尚未就绪，等待自动重试（最多两分钟）…';
+        await new Promise<void>(resolve => {
+          const timer = setTimeout(() => { this.wakeAutomatic = undefined; resolve(); }, 3000);
+          timer.unref();
+          this.wakeAutomatic = () => { clearTimeout(timer); resolve(); };
+        });
+      }
+    } finally {
+      clearTimeout(timeout);
+      if (expired && !this.active && !this.closing) this.message = '自动连接等待已结束，请在网络接管页检查代理后重试。';
+    }
   }
   async shutdown() {
     this.closing = true;
@@ -243,7 +319,7 @@ export class FlowBridgeManager {
     catch (error) { this.closing = false; throw error; }
   }
 }
-export async function hotspotCandidates(platform = process.platform): Promise<string[]> {
+export async function hotspotCandidates(platform: string = process.platform): Promise<string[]> {
   const run = promisify(execFile);
   if (platform === 'linux') {
     const { stdout } = await run('/usr/sbin/ip', ['-j', 'route', 'show', 'default'], { timeout: 5000, maxBuffer: 64 * 1024 });

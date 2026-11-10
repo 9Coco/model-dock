@@ -39,4 +39,10 @@ const result = JSON.parse(readFileSync(validationPath, 'utf8'));
 assert.equal(result.ok, true); assert.equal(result.mode, hidden ? 'hidden' : 'visible'); assert.equal(result.mainPid, child.pid);
 assert.equal(result.samples.length, hidden || noProbeFocus ? 4 : 5); assert.equal(result.explicitProbeFocusCalls, hidden || noProbeFocus ? 0 : 1);
 assert.ok(result.samples.every(value => value.elapsedMs >= 2500), 'No renderer readback occurs in the first 2500ms');
+if (hidden) {
+  const navigation = JSON.parse(readFileSync(join(profile.outputDir, 'tray-navigation-validation.json'), 'utf8'));
+  assert.equal(navigation.ok, true);
+  assert.equal(navigation.firstRevealPage, 'network');
+  assert.deepEqual(navigation.laterReveals.map(item => item.page), ['settings', 'tools', 'providers']);
+}
 console.log(JSON.stringify({ startupProbePid: child.pid, mode: result.mode, samples: result.samples.map(value => ({ stage: value.stage, elapsedMs: value.elapsedMs, nativeFocused: value.nativeFocused, documentFocused: value.dom.focused, visible: value.visible, theme: value.dom.theme, anchor: value.pixels.anchorRgb, cssBackground: value.dom.anchor?.expectedBackground })), comparison: result.comparison, output: profile.outputDir }));

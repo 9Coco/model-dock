@@ -207,7 +207,7 @@ async function createWindow(forceShow = false) {
       contextIsolation: true, sandbox: true, webSecurity: true, backgroundThrottling: !__MODELDOCK_SMOKE_BUILD__ || presentationSmoke },
   });
   const currentWindow = window;
-  windowPresentationProbe = __MODELDOCK_SMOKE_BUILD__ && presentationSmoke ? observeWindowPresentation(currentWindow, runtimeConfig.smoke!.outputDir, { hidden: preferences.get().settings.startHidden, theme: preferences.get().settings.theme }) : undefined;
+  windowPresentationProbe = __MODELDOCK_SMOKE_BUILD__ && presentationSmoke ? observeWindowPresentation(currentWindow, runtimeConfig.smoke!.outputDir, { hidden: preferences.get().settings.startHidden, theme: preferences.get().settings.theme }, revealWindow) : undefined;
   installEditContextMenu(currentWindow.webContents);
   const currentPresentation = new WindowPresentation(
     forceShow || explicitOpenRequested || !preferences.get().settings.startHidden,
@@ -840,6 +840,7 @@ function registerIpc() {
       return await Promise.all(NETWORK_SITES.map(async (site, index) => {
         let result: SiteLatency;
         if (__MODELDOCK_SMOKE_BUILD__ && process.env.MODELDOCK_SMOKE_NETWORK_ONLY === '1') {
+          await new Promise(resolve => setTimeout(resolve, site === 'Google' ? 800 : 75));
           result = site === 'X' ? { site, state: 'timeout' } : { site, state: 'response', ms: 42 + index, httpStatus: site === 'ChatGPT' ? 403 : 200 };
         } else {
           result = await measureSiteLatency(site, (url, init) => probe.fetch(url, init));

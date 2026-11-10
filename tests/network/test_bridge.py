@@ -90,6 +90,35 @@ class BridgeTests(unittest.TestCase):
                 self.session.connect({'address':'http://192.0.2.1:38473','mode':'http','dnsMode':'fast'})
         self.session.desktop.apply.assert_not_called()
 
+    @unittest.skipUnless(sys.platform.startswith('linux'), 'Linux automatic authorization')
+    def test_automatic_global_connection_requires_existing_authorization_without_opening_setup(self):
+        settings = {'mode': 'global', 'address': 'socks5://192.0.2.1:38473'}
+        with patch('linux.tun_access.configured', return_value=False), \
+             patch.object(bridge, 'probe_global_proxy') as probe, \
+             patch.object(bridge, 'TunController') as controller:
+            with self.assertRaises(bridge.NetworkAuthorizationRequired) as caught:
+                self.session.connect(settings, False)
+            self.assertEqual(caught.exception.code, 'NETWORK_AUTH_REQUIRED')
+            probe.assert_not_called()
+            controller.assert_not_called()
+            self.session.ensure_guardian.assert_not_called()
+
+    @unittest.skipUnless(sys.platform.startswith('linux'), 'Linux automatic authorization')
+    def test_an_existing_grant_allows_automatic_preflight_and_manual_or_http_mode_does_not_inspect_grants(self):
+        with patch('linux.tun_access.configured', return_value=True) as configured:
+            bridge.require_automatic_network_access('global', False)
+            configured.assert_called_once_with(os.getuid())
+            configured.reset_mock()
+            bridge.require_automatic_network_access('global', True)
+            bridge.require_automatic_network_access('http', False)
+            configured.assert_not_called()
+
+    @unittest.skipUnless(sys.platform.startswith('linux'), 'Linux automatic authorization')
+    def test_invalid_grant_stops_automatic_attempts_without_launching_setup(self):
+        with patch('linux.tun_access.configured', side_effect=RuntimeError('invalid grant')):
+            with self.assertRaisesRegex(bridge.NetworkAuthorizationRequired, '无法验证'):
+                bridge.require_automatic_network_access('global', False)
+
     @unittest.skipUnless(sys.platform.startswith('linux'), 'Linux global route preflight')
     def test_flowbridge_route_to_endpoint_blocks_connect_before_tun_start(self):
         settings = {'mode': 'global', 'address': 'socks5://[2001:db8::1]:1080'}
@@ -99,7 +128,7 @@ class BridgeTests(unittest.TestCase):
              patch.object(bridge.connectivity, 'probe_global_proxy') as probe, \
              patch.object(bridge, 'TunController') as controller:
             with self.assertRaisesRegex(RuntimeError, '先断开独立流桥'):
-                self.session.connect(settings)
+                self.session.connect(settings, True)
             self.assertEqual(lookup.call_args.args[0], [
                 '/usr/bin/ip', '-N', '-j', 'route', 'get', '2001:db8::1', 'ipproto', 'tcp', 'dport', '1080'])
             probe.assert_not_called()

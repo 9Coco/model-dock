@@ -19,6 +19,23 @@ ROOT = Path(__file__).resolve().parent
 sys.path[:0] = [str(ROOT), str(ROOT / 'linux')]
 from linux.relay import ProxyRelay, Endpoint, parse_proxy_address
 from linux import connectivity
+
+
+class NetworkAuthorizationRequired(RuntimeError):
+    code = 'NETWORK_AUTH_REQUIRED'
+
+
+def require_automatic_network_access(mode, allow_install):
+    if sys.platform == 'win32' or mode != 'global' or allow_install:
+        return
+    from linux.tun_access import configured
+    try:
+        ready = configured(os.getuid())
+    except (OSError, RuntimeError):
+        raise NetworkAuthorizationRequired('无法验证全局模式授权，请在网络接管页手动连接以检查系统服务。') from None
+    if not ready:
+        raise NetworkAuthorizationRequired('全局模式需要首次授权，请在网络接管页手动连接一次。')
+
 if sys.platform == 'win32':
     from windows.network_access import NetworkAccess, TaskTunController
     from windows.system_proxy import DesktopProxyManager
@@ -193,6 +210,7 @@ class NetworkSession:
         if self.cancelled.is_set(): raise RuntimeError('连接已取消。')
         self.check_cancel = connectivity.CheckCancellation()
         mode, address = settings['mode'], settings['address']
+        require_automatic_network_access(mode, allow_install)
         endpoint = parse_global_address(address) if mode == 'global' else parse_proxy_address(address)
         self.ensure_guardian()
         emit({'event':'progress','message':'正在验证代理 TCP 与 UDP/DNS…' if mode == 'global' else '正在验证 HTTP 代理…'})
