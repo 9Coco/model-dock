@@ -11,11 +11,16 @@ import type { Store } from './store';
 import type { NetworkEngine } from './flowbridge-engine';
 
 const cancellationAddress = 'socks5://192.0.2.31:38473';
+const unavailableAddress = 'socks5://192.0.2.32:38473';
+const recoveryAddress = 'socks5://192.0.2.33:38473';
+const delayedCleanupAddress = 'socks5://192.0.2.36:38473';
 
 // Exercise the real manager, IPC and controls while keeping privileged system networking out of QA.
 export function createNetworkSmokeEngine(): NetworkEngine {
   let running = false;
   let samples = 0;
+  let failNextDisconnect = false;
+  let delayNextDisconnect = false;
   let releaseConnect: (() => void) | undefined;
   return {
     async request<T>(method: string, args?: Record<string, unknown>) {
@@ -24,6 +29,9 @@ export function createNetworkSmokeEngine(): NetworkEngine {
           return ['socks5://127.0.0.1:19321'] as T;
         case 'connect': {
           const settings = args?.settings as FlowBridgeSnapshot['settings'];
+          if (settings.address === unavailableAddress) throw new Error('上游代理连接超时');
+          failNextDisconnect = settings.address === recoveryAddress;
+          delayNextDisconnect = settings.address === delayedCleanupAddress;
           if (settings.address === cancellationAddress) {
             await new Promise<void>(resolve => { releaseConnect = resolve; });
             releaseConnect = undefined;
@@ -36,6 +44,14 @@ export function createNetworkSmokeEngine(): NetworkEngine {
           releaseConnect?.();
           break;
         case 'disconnect':
+          if (delayNextDisconnect) {
+            delayNextDisconnect = false;
+            await delay(2500); // Allow the renderer to observe cleanup of the previous upstream.
+          }
+          if (failNextDisconnect) {
+            failNextDisconnect = false;
+            throw new Error('模拟恢复未完成');
+          }
           running = false;
           break;
         case 'snapshot':
@@ -83,6 +99,29 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
       input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
   }
   const network = () => evaluate<FlowBridgeSnapshot>('window.modelDock.networkSnapshot()');
+  const connectButton = '[data-action="connect-network"]';
+  const disconnectButton = '[data-action="disconnect-network"]';
+  const discoverButton = '[data-action="discover-network-proxy"]';
+  async function verifySessionAction(selector: string, label: RegExp) {
+    await wait(`!!${query(selector)} && ${label}.test(${query(selector)}.textContent)`);
+    assert.equal(await evaluate(`document.querySelectorAll('${connectButton}, ${disconnectButton}').length`), 1);
+  }
+  async function verifyNoSaveButton() {
+    assert.equal(await evaluate(`Array.from(document.querySelectorAll('[data-network-panel] button'))
+      .some(button => /^(保存|应用|应用并重连)$/.test(button.textContent.trim()))`), false);
+  }
+  async function verifyProxySpeed() {
+    await click('[data-action="measure-proxy-speed"]');
+    for (const [index, site] of NETWORK_SITES.entries()) {
+      const tile = '[data-site="' + site + '"]';
+      const expected = site === 'X' ? '超时' : (42 + index) + ' ms';
+      await wait(`${query(tile + ' .site-latency')}.textContent === ${JSON.stringify(expected)}`);
+    }
+    assert.equal(await evaluate(`${query('[data-site="ChatGPT"] .site-http-status')}.textContent`), 'HTTP 403');
+    for (const [key, value] of [['download', '80.0 Mbps'], ['upload', '20.0 Mbps']]) {
+      await wait(`${query('[data-speed-result="' + key + '"]')}.textContent === ${JSON.stringify(value)}`);
+    }
+  }
   const gateway = () => evaluate<{ running: boolean; port: number; host: string }>('window.modelDock.runtimeSnapshot().then(s=>s.gateway)');
   const servicePage = '[data-service-workspace]';
   const networkPage = '[data-network-workspace]';
@@ -116,6 +155,7 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
   assert.equal(await evaluate(`${query('[data-page="network"]')}.nextElementSibling === ${query('[data-page="auth"]')}`), true);
   assert.equal(await evaluate(gatewayState('stopped')), true);
   const idle = await network();
+  const windowsNetwork = idle.platform === 'win32';
   assert.equal(idle.state, 'idle');
   assert.equal(idle.settings.autoConnect, false);
 
@@ -125,11 +165,12 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
   await wait(gatewayState('running'));
   assert.deepEqual(await network(), idle, 'Starting the local gateway must preserve the network session');
   await openPage('network');
-  assert.equal(await evaluate(`${query('[data-action="connect-network"]')}.disabled`), true);
-  if (process.platform === 'win32') {
+  await verifyNoSaveButton();
+  await verifySessionAction(connectButton, /连接/);
+  assert.equal(await evaluate(`${query(connectButton)}.disabled`), true);
+  if (windowsNetwork) {
     assert.equal(await evaluate("document.body.innerText.includes('手机热点')"), false);
-    assert.equal(await evaluate(`!!${query('[data-action="save-network-address"]')}`), false);
-    await click('[data-action="discover-network-proxy"]');
+    await click(discoverButton);
     await wait(`!!${query('.network-candidates button')}`);
     assert.deepEqual((await network()).settings, idle.settings, 'Discovery alone must leave settings alone');
     await click('.network-candidates button');
@@ -138,16 +179,7 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
     assert.equal(applied.settings.mode, 'global');
     assert.equal(applied.settings.address, 'socks5://127.0.0.1:19321');
     assert.equal(applied.state, 'idle', 'Applying a candidate must not start the session');
-    await click('[data-action="measure-proxy-speed"]');
-    for (const [index, site] of NETWORK_SITES.entries()) {
-      const tile = '[data-site="' + site + '"]';
-      const expected = site === 'X' ? '超时' : (42 + index) + ' ms';
-      await wait(`${query(tile + ' .site-latency')}.textContent === ${JSON.stringify(expected)}`);
-    }
-    assert.equal(await evaluate(`${query('[data-site="ChatGPT"] .site-http-status')}.textContent`), 'HTTP 403');
-    for (const [key, value] of [['download', '80.0 Mbps'], ['upload', '20.0 Mbps']]) {
-      await wait(`${query('[data-speed-result="' + key + '"]')}.textContent === ${JSON.stringify(value)}`);
-    }
+    await verifyProxySpeed();
     assert.deepEqual((await network()).settings, applied.settings);
     assert.equal((await network()).state, 'idle', 'Measuring the upstream must not take over the system network');
     writeFileSync(join(output, 'network-proxy-speed.png'), await capture());
@@ -160,23 +192,36 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
     await wait(networkState('connected'));
     await click('[data-action="disconnect-network"]');
     await wait(networkState('idle'));
-
-    await fill('#network-address', 'invalid-address');
-    await click('[data-action="connect-network"]');
-    await wait("document.querySelector('.toast-stack .toast.error')?.textContent.includes('端口')");
-    assert.equal((await network()).state, 'idle');
-    assert.deepEqual((await network()).settings, applied.settings);
-    await fill('#network-address', '127.0.0.1:19322');
-    await click('[aria-label="网络连接模式"] button:first-child');
-    await click('[aria-label="网络连接模式"] button:nth-child(2)');
-    assert.deepEqual((await network()).settings, applied.settings, 'Editing must wait for an explicit action');
   } else {
-    await fill('#network-address', '192.0.2.30:38473');
-    await click('[data-action="save-network-address"]');
-    await wait(`${query('#network-address')}.value==='http://192.0.2.30:38473'`);
-    await click('[aria-label="网络连接模式"] button:nth-child(2)');
-    await wait(`${query('#network-address')}.value==='socks5://192.0.2.30:38473'`);
+    await click(discoverButton);
+    await wait(`!!${query('.network-candidates')}`);
+    assert.deepEqual((await network()).settings, idle.settings, 'Looking up a hotspot must preserve settings');
+    if (await evaluate(`!!${query('.network-candidates button')}`)) {
+      await click('.network-candidates button');
+      await wait(`${query('#network-address')}.value.endsWith(':38473')`);
+      assert.equal((await network()).state, 'idle', 'Selecting a hotspot must not connect automatically');
+    }
   }
+  const speedDraft = '192.0.2.35:38473';
+  await fill('#network-address', '192.0.2.35:038473/');
+  await verifyProxySpeed();
+  await wait(`${query('.proxy-speed-panel .network-hint')}.textContent.includes('${speedDraft}')`);
+  assert.equal((await network()).state, 'idle', 'Testing a typed upstream must not take over the system network');
+  const saved = (await network()).settings;
+  assert.ok(saved.address.endsWith('://' + speedDraft), 'Offline measurement must use the normalized draft');
+  await fill('#network-address', 'invalid-address');
+  await wait(`${query('[data-speed-result="download"]')}.textContent === '—'`);
+  await verifyNoSaveButton();
+  await click(connectButton);
+  await wait("Array.from(document.querySelectorAll('.toast-stack .toast.error')).some(toast=>toast.textContent.includes('端口'))");
+  assert.equal(await evaluate(`${query('#network-address')}.value`), 'invalid-address');
+  assert.deepEqual((await network()).settings, saved, 'Invalid input must leave saved settings intact');
+
+  const draft = windowsNetwork ? '127.0.0.1:19322' : '192.0.2.30:38473';
+  await fill('#network-address', draft);
+  await click('[aria-label="网络连接模式"] button:first-child');
+  await click('[aria-label="网络连接模式"] button:nth-child(2)');
+  assert.deepEqual((await network()).settings, saved, 'Editing a draft must wait for an explicit connection');
   assert.equal((await network()).state, 'idle');
   assert.equal(await evaluate(`${query('[data-action="connect-network"]')}.disabled`), false);
   const activeGateway = await gateway();
@@ -185,10 +230,22 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
   assert.equal(activeGateway.host, '127.0.0.1');
   await click('[data-action="connect-network"]');
   await wait(networkState('connected'));
+  const firstConnection = await network();
+  assert.equal(firstConnection.status.running, true);
+  assert.equal(firstConnection.settings.mode, 'global');
+  assert.equal(firstConnection.settings.address, 'socks5://' + draft);
+  await verifySessionAction(disconnectButton, /断开/);
+  if (windowsNetwork) assert.equal(await evaluate(`${query(discoverButton)}.disabled`), true);
+  await fill('#network-address', '192.0.2.34:38473');
+  await wait(`!!${query(connectButton)} && /重连|重新连接/.test(${query(connectButton)}.textContent)`);
+  assert.equal(await evaluate(`${query(disconnectButton)}.disabled`), false, 'Editing an active session must still allow disconnection');
+  await verifyNoSaveButton();
+  assert.deepEqual((await network()).settings, firstConnection.settings);
+  await click(connectButton);
+  await verifySessionAction(disconnectButton, /断开/);
   const configured = await network();
-  assert.equal(configured.status.running, true);
-  assert.equal(configured.settings.mode, 'global');
-  assert.equal(configured.settings.address, process.platform === 'win32' ? 'socks5://127.0.0.1:19322' : 'socks5://192.0.2.30:38473');
+  assert.equal(configured.settings.address, 'socks5://192.0.2.34:38473');
+  assert.equal(configured.state, 'connected');
   assert.equal((await gateway()).running, true);
 
   await evaluate(`document.querySelectorAll('.toast-stack [aria-label="关闭提示"]').forEach(button=>button.click())`);
@@ -211,7 +268,7 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
   window.setMinimumSize(780, 580);
   for (const [theme, width, height, filename] of [
     ['light', 1320, 880, 'network-light.png'], ['dark', 1320, 880, 'network-dark.png'],
-    ['dark', 980, 680, 'network-compact.png'], ['dark', 780, 620, 'network-narrow.png'],
+    ['dark', 1080, 740, 'network-controls.png'], ['dark', 980, 680, 'network-compact.png'], ['dark', 780, 620, 'network-narrow.png'],
   ] as const) {
     await click('[data-page="settings"]');
     await wait(`!!${query('[aria-label="随 ModelDock 自动连接网络"]')}`);
@@ -239,7 +296,7 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
     })()`);
     assert.ok(geometry.sameRow && geometry.fullWidth && geometry.iconsAbove, 'Speed tiles must fill one row with icons above latency');
     assert.ok(geometry.alignedTraffic, 'Traffic and controls must fill their row or stack on narrow screens');
-    assert.equal(geometry.phoneFullWidth, process.platform === 'win32' ? null : true, 'Phone setup must span the workspace where available');
+    assert.equal(geometry.phoneFullWidth, windowsNetwork ? null : true, 'Phone setup must span the workspace where available');
     const layout = await evaluate<{ overflow: boolean; menuVisible: boolean }>(`(() => {
       const main=document.querySelector('main'), menu=${query('[data-page="network"]')}.getBoundingClientRect();
       return {overflow: document.documentElement.scrollWidth>innerWidth+1 || main.scrollWidth>main.clientWidth+1,
@@ -247,6 +304,16 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
     })()`);
     assert.equal(layout.overflow, false, `Network page overflow at ${width}px`);
     assert.ok(layout.menuVisible, `Network menu must remain reachable at ${width}px`);
+    const controlLayout = await evaluate<boolean>(`(() => {
+      const rect = selector => document.querySelector(selector).getBoundingClientRect();
+      const card = rect('[data-network-panel]'), input = rect('#network-address'), lookup = rect('${discoverButton}');
+      const primary = rect('${disconnectButton}'), mini = rect('[data-action="show-network-mini"]');
+      const inside = box => box.width > 0 && box.height > 0 && box.left >= card.left && box.right <= card.right + 1;
+      return [input, lookup, primary, mini].every(inside) &&
+        Math.abs(lookup.top - input.top) < 60 && lookup.bottom <= primary.top + 1 &&
+        (mini.left >= primary.right || mini.bottom <= primary.top || mini.top >= primary.bottom || mini.right <= primary.left);
+    })()`);
+    assert.ok(controlLayout, `Address lookup and connection/monitor actions must remain distinct and fit at ${width}px`);
     await verifyTrafficColors(theme);
     await wait("document.querySelector('.network-metrics [data-direction=upload] strong').textContent !== '0 B/s'");
     layouts.push({ theme, width, ...layout });
@@ -274,9 +341,9 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
   assert.equal((await gateway()).running, true);
 
   await fill('#network-address', cancellationAddress);
-  if (process.platform !== 'win32') await click('[data-action="save-network-address"]');
   await click('[data-action="connect-network"]');
   await wait(networkState('connecting'));
+  await verifySessionAction(disconnectButton, /取消/);
   await openPage('service');
   assert.equal((await network()).state, 'connecting');
   await openPage('network');
@@ -284,11 +351,43 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
   await click('[data-action="disconnect-network"]');
   await wait(networkState('idle'));
   assert.equal((await network()).status.cleanupConfirmed, true);
+  await fill('#network-address', unavailableAddress);
+  await click(connectButton);
+  await wait(networkState('error'));
+  assert.equal((await network()).status.cleanupConfirmed, true);
+  await verifySessionAction(connectButton, /连接|重试/);
+  await fill('#network-address', recoveryAddress);
+  await click(connectButton);
+  await wait(networkState('connected'));
+  await click(disconnectButton);
+  await wait(networkState('error'));
+  assert.equal((await network()).status.cleanupConfirmed, false);
+  await verifySessionAction(disconnectButton, /恢复/);
+  for (const selector of ['#network-address', discoverButton, '[data-action="measure-proxy-speed"]']) {
+    assert.equal(await evaluate(`${query(selector)}.disabled`), true, 'Recovery must finish before changing or testing an upstream');
+  }
+  assert.equal(store.getManagedState('network.flowbridge.lease', false), true);
+  await click(disconnectButton);
+  await wait(networkState('idle'));
+  assert.equal((await network()).status.cleanupConfirmed, true);
+  await fill('#network-address', delayedCleanupAddress);
+  await click(connectButton);
+  await wait(networkState('connected'));
+  await fill('#network-address', cancellationAddress);
+  await click(connectButton);
+  await wait(networkState('disconnecting'));
+  await verifySessionAction(disconnectButton, /取消/);
+  await click(disconnectButton);
+  await wait(networkState('idle'));
+  assert.equal((await network()).status.cleanupConfirmed, true, 'Cancelling a reconnect during cleanup must leave the network idle');
   await openPage('service');
   await wait(gatewayState('running'));
   await click(gatewayButton);
   await wait(gatewayState('stopped'));
   await openPage('network');
+  await fill('#network-address', configured.settings.address);
+  await click(connectButton);
+  await wait(networkState('connected'));
   await click('[data-action="show-network-mini"]');
   let mini: BrowserWindow | undefined;
   for (let attempt = 0; attempt < 100 && !mini; attempt++) {
@@ -308,6 +407,15 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
     });
   })()`;
   assert.equal(await mini.webContents.executeJavaScript(miniLayout), true, 'Collapsed mini monitor must show both rates and all buttons');
+  await wait("document.querySelector('.network-mini [data-direction=upload] strong').textContent !== '0 B/s'", mini.webContents);
+  await mini.webContents.executeJavaScript(`document.querySelector('[aria-label="锁定小窗"]').click()`);
+  await wait(`!!document.querySelector('[aria-label="解锁小窗"]')`, mini.webContents);
+  assert.equal(await mini.webContents.executeJavaScript('window.networkMonitor.snapshot().then(s => s.locked)'), true);
+  const miniDragRegion = "getComputedStyle(document.querySelector('.network-mini header')).getPropertyValue('-webkit-app-region')";
+  assert.equal(await mini.webContents.executeJavaScript(miniDragRegion), 'no-drag', 'A locked monitor must disable its draggable header');
+  await mini.webContents.executeJavaScript(`document.querySelector('[aria-label="解锁小窗"]').click()`);
+  await wait(`!!document.querySelector('[aria-label="锁定小窗"]')`, mini.webContents);
+  assert.equal(await mini.webContents.executeJavaScript(miniDragRegion), 'drag', 'Unlocking must restore the draggable header');
   const area = screen.getDisplayMatching(mini.getBounds()).workArea;
   if (process.platform === 'win32') {
     const { width, height } = mini.getBounds();
@@ -334,12 +442,21 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
   assert.equal(await mini.webContents.executeJavaScript(miniLayout), true, 'Expanded mini monitor must show both rates and all buttons');
   writeFileSync(join(output, 'network-mini.png'), miniCapture.toPNG());
   screenshots.push('network-mini.png');
-  await mini.webContents.executeJavaScript("window.networkMonitor.action('hide')");
+  await mini.webContents.executeJavaScript(`document.querySelector('[aria-label="收起曲线"]').click()`);
+  await wait(`!!document.querySelector('[aria-label="展开曲线"]') && !document.querySelector('.network-mini .network-chart')`, mini.webContents);
+  writeFileSync(join(output, 'network-mini-compact.png'), (await mini.webContents.capturePage()).toPNG());
+  screenshots.push('network-mini-compact.png');
+  await mini.webContents.executeJavaScript(`document.querySelector('[aria-label="隐藏小窗"]').click()`);
+  for (let attempt = 0; attempt < 40 && mini.isVisible(); attempt++) await delay(50);
+  assert.equal(mini.isVisible(), false, 'Hiding the monitor must close its visible window');
+  assert.equal((await network()).state, 'connected', 'Hiding the monitor must preserve the connection');
+  await click(disconnectButton);
+  await wait(networkState('idle'));
   assert.deepEqual(modelConfig(), before);
   assert.equal(store.getManagedState('network.flowbridge.lease', false), false);
   writeFileSync(join(output, 'network-validation.json'), JSON.stringify({ ok: true, defaultServiceWorkspace: true,
     sidebarNetworkBeforeAuth: true, dedicatedNetworkPage: true, sessionPreservedAcrossNavigation: true,
-    modeSwitchSaved: true, gatewayControlsIndependent: true, simulatedNetworkConnectDisconnectAndCancel: true,
+    offlineSpeedFromDraft: true, connectedWithDraft: true, explicitReconnect: true, cleanupRecovery: true, gatewayControlsIndependent: true, simulatedNetworkConnectDisconnectAndCancel: true,
     osNetworkUntouched: true, existingDataPreserved: true,
     miniPreloadIsolated: true, layouts, screenshots }, null, 2));
   if (process.env.MODELDOCK_SMOKE_NETWORK_HOLD === '1') { window.show(); await delay(60_000); }

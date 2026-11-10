@@ -806,7 +806,7 @@ function registerIpc() {
     gateway: gateway.status(), gatewayExposure: store.gatewayExposure(), logs: store.logs(100), dataDir, version: app.getVersion() }));
   handle('runtimeSnapshot', () => runtime.snapshot());
   handle('networkSnapshot', () => network.snapshot());
-  handle('saveNetworkSettings', patch => network.save(patch));
+  handle('saveNetworkSettings', (patch, options) => network.save(patch, options));
   handle('connectNetwork', upstream => network.connect(upstream));
   handle('disconnectNetwork', () => network.disconnect());
   let measuringSpeed = false;

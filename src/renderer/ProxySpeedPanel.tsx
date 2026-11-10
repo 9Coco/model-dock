@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
-import { NETWORK_SITES, type FlowBridgeSnapshot, type NetworkCheck, type NetworkSite, type SiteLatency } from '../shared/flowbridge-types';
+import { useLayoutEffect, useRef, useState } from 'react';
+import { NETWORK_SITES, parseNetworkEndpoint, type FlowBridgeSnapshot, type NetworkCheck, type NetworkMode, type NetworkSite, type SiteLatency } from '../shared/flowbridge-types';
 import type { ModelDockApi } from '../shared/types';
 
 type Transfer = 'download' | 'upload';
-type Stage = 'sites' | Transfer;
+type Stage = 'sites' | Transfer | 'finishing';
 const transfers = ['download', 'upload'] as const;
 const transferLabels = { download: '↓ 下载', upload: '↑ 上传' };
 
@@ -54,8 +54,9 @@ function SiteTile({ site, result, pending, selected, onClick }: {
   </button>;
 }
 
-export function ProxySpeedPanel({ api, address, networkState }: {
-  api: ModelDockApi; address: string; networkState: FlowBridgeSnapshot['state'];
+export function ProxySpeedPanel({ api, address, mode, networkState, prepareAddress, needsRecovery }: {
+  api: ModelDockApi; address: string; mode: NetworkMode; networkState: FlowBridgeSnapshot['state'];
+  prepareAddress?: () => Promise<string>; needsRecovery?: boolean;
 }) {
   const [sites, setSites] = useState<Partial<Record<NetworkSite, SiteLatency>>>({});
   const [rates, setRates] = useState<Partial<Record<Transfer, number>>>({});
@@ -64,8 +65,14 @@ export function ProxySpeedPanel({ api, address, networkState }: {
   const [details, setDetails] = useState<NetworkSite>();
   const active = useRef(false);
   const generation = useRef(0);
-  useEffect(() => () => { generation.current++; }, []);
-  const disabled = networkState === 'connecting' || networkState === 'disconnecting';
+  const disabled = needsRecovery || networkState === 'connecting' || networkState === 'disconnecting';
+  const target = parseNetworkEndpoint(address, mode)?.address ?? address;
+  const route = disabled ? 'switching' : networkState === 'connected' ? 'session' : 'direct';
+  useLayoutEffect(() => {
+    setSites({}); setRates({}); setErrors([]); setDetails(undefined);
+    setStage(active.current ? 'finishing' : undefined);
+    return () => { generation.current++; };
+  }, [target, mode, route]);
   const measure = async () => {
     if (active.current) return;
     active.current = true;
@@ -73,14 +80,16 @@ export function ProxySpeedPanel({ api, address, networkState }: {
     const current = () => generation.current === run;
     setSites({}); setRates({}); setErrors([]); setStage('sites');
     try {
-      await api.measureNetworkSites(address, result => {
+      const proxy = prepareAddress ? await prepareAddress() : address;
+      if (!current()) return;
+      await api.measureNetworkSites(proxy, result => {
         if (current()) setSites(previous => ({ ...previous, [result.site]: result }));
       });
       for (const transfer of transfers) {
         if (!current()) return;
         setStage(transfer);
         try {
-          const rate = await api.measureNetworkSpeed(address, transfer);
+          const rate = await api.measureNetworkSpeed(proxy, transfer);
           if (current()) setRates(previous => ({ ...previous, [transfer]: rate }));
         } catch {
           if (current()) setErrors(previous => [...previous, transferLabels[transfer] + '测速失败']);
@@ -90,13 +99,13 @@ export function ProxySpeedPanel({ api, address, networkState }: {
       if (current()) setErrors([error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '') : '代理测速失败。']);
     } finally {
       active.current = false;
-      if (current()) setStage(undefined);
+      setStage(undefined);
     }
   };
   return <section className="panel proxy-speed-panel" aria-label="代理测速">
     <div className="section-heading">
-      <div><h2>代理测速</h2><p className="network-hint">{address ? '经 ' + address + ' 测量官网 HTTPS 响应延迟' : '请先填写并应用上游代理地址。'}</p></div>
-      <button className="button primary small" data-action="measure-proxy-speed" disabled={!address || disabled || !!stage} onClick={() => void measure()}>{stage ? '测速中…' : '一键测速'}</button>
+      <div><h2>代理测速</h2><p className="network-hint">{address.trim() ? '经 ' + address + ' 测量官网 HTTPS 响应延迟' : '填写上游代理地址即可测速。'}</p></div>
+      <button className="button primary small" data-action="measure-proxy-speed" disabled={!address.trim() || disabled || !!stage} onClick={() => void measure()}>{stage === 'finishing' ? '等待上次测速…' : stage ? '测速中…' : '一键测速'}</button>
     </div>
     <div className="site-tiles" role="group" aria-label="网站延迟">
       {NETWORK_SITES.map(site => <SiteTile key={site} site={site} result={sites[site]} pending={stage === 'sites'}

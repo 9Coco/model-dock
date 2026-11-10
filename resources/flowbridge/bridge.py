@@ -142,7 +142,7 @@ class NetworkSession:
                 # Never pass this user-writable journal to the privileged task.
                 state = native.tun_state()
                 if state['up'] or state['routes'] or (self.directory / 'tun-recovery.json').exists():
-                    raise RuntimeError('旧版本留下了网络恢复记录。请以管理员身份打开一次 ModelDock，点击断开 / 恢复。')
+                    raise RuntimeError('旧版本留下了网络恢复记录。请以管理员身份打开一次 ModelDock，点击「恢复网络」。')
                 marker.unlink()
                 return
             mutex = native.SessionMutex()
@@ -285,6 +285,8 @@ def main():
                 emit({'id':request['id'],'ok':True,'result':result})
             except Exception as error:
                 message = str(error)[:500] if isinstance(error,(ValueError,RuntimeError,OSError)) else '网络操作失败，请检查配置与权限。'
+                # Older helpers refer to the former combined disconnect/recover control.
+                message = message.replace('点击断开 / 恢复', '点击「恢复网络」').replace('重试断开', '重试「恢复网络」')
                 emit({'id':request['id'],'ok':False,'message':message,'code':getattr(error, 'code', None)})
     finally:
         if cleanup_on_exit:

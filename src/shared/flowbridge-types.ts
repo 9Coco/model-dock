@@ -1,5 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 export type NetworkMode = 'http' | 'global';
+export function parseNetworkEndpoint(address: string, mode: NetworkMode) {
+  const scheme = mode === 'global' ? 'socks5' : 'http';
+  const value = address.includes('://') ? address : scheme + '://' + address;
+  const match = /^(http|socks5):\/\/(\[[0-9a-fA-F:]+\]|[a-zA-Z0-9.-]+):([0-9]+)\/?$/.exec(value);
+  if (!match || match[1] !== scheme) return;
+  const port = Number(match[3]);
+  if (port < 1 || port > 65535) return;
+  const host = match[2].toLowerCase();
+  return { host, port, address: `${scheme}://${host}:${port}` };
+}
 export interface FlowBridgeSettings {
   address: string;
   mode: NetworkMode;
@@ -34,7 +44,7 @@ export interface FlowBridgeApi {
   measureNetworkSites(address: string, onResult: (result: SiteLatency) => void): Promise<void>;
   measureNetworkSpeed(address: string, metric: ProxySpeedMetric): Promise<number>;
   networkSnapshot(): Promise<FlowBridgeSnapshot>;
-  saveNetworkSettings(patch: Partial<FlowBridgeSettings>): Promise<FlowBridgeSnapshot>;
+  saveNetworkSettings(patch: Partial<FlowBridgeSettings>, options?: { offlineOnly: boolean }): Promise<FlowBridgeSnapshot>;
   connectNetwork(upstream?: Pick<FlowBridgeSettings, 'address' | 'mode'>): Promise<FlowBridgeSnapshot>;
   disconnectNetwork(): Promise<FlowBridgeSnapshot>;
   checkNetworkSite(site: NetworkSite): Promise<NetworkCheck>;

@@ -2,8 +2,8 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ModelDockApi } from '../shared/types';
 import { type FlowBridgeSnapshot, type NetworkMode, type NetworkSample } from '../shared/flowbridge-types';
-import { Toggle, type Notify } from './components';
-import { Activity, Download } from './MaterialIcon';
+import { BusyIcon, Toggle, type Notify } from './components';
+import { Activity, Check, Download, Monitor, Plug2, RefreshCw, RotateCcw, Search, Unplug, X } from './MaterialIcon';
 import { ProxySpeedPanel } from './ProxySpeedPanel';
 import './network.css';
 export const networkBytes = (value: number) => value >= 1024 ** 3 ? `${(value / 1024 ** 3).toFixed(2)} GB` : value >= 1024 ** 2 ? `${(value / 1024 ** 2).toFixed(1)} MB` : value >= 1024 ? `${(value / 1024).toFixed(1)} KB` : `${Math.round(value)} B`;
@@ -58,21 +58,29 @@ export function NetworkPreferences({ api, snapshot, onChanged, notify }: Network
     {snapshot.platform === 'win32' && <div className="settings-row"><div className="settings-row-copy"><strong>全局模式解析</strong><small>快速解析保留虚拟地址映射；兼容解析经同一代理使用 DoH。保存后，已连接会话会先断开再重连。</small></div><select aria-label="全局模式解析" value={snapshot.settings.dnsMode} disabled={!!busy} onChange={e => void save({ dnsMode: e.target.value as 'fast' | 'compatible' })}><option value="fast">快速解析</option><option value="compatible">兼容解析</option></select></div>}
   </div></section>;
 }
-function NetworkControls({ api, snapshot, onChanged, notify }: Required<NetworkControlProps>) {
-  const [address, setAddress] = useState(snapshot.settings.address);
-  const [mode, setMode] = useState<NetworkMode>(snapshot.settings.mode);
+function NetworkTools({ api, snapshot, onChanged, notify }: Required<NetworkControlProps>) {
+  const [draft, setDraft] = useState<{ address: string; mode: NetworkMode } | null>(null);
+  const { address, mode } = draft ?? snapshot.settings;
   const [candidates, setCandidates] = useState<string[] | null>(null);
   const windows = snapshot.platform === 'win32';
   const { busy, action } = useNetworkAction(notify);
   useEffect(() => {
-    setAddress(snapshot.settings.address);
-    setMode(snapshot.settings.mode);
     setCandidates(null);
   }, [snapshot.settings.address, snapshot.settings.mode]);
-  const connecting = snapshot.state === 'connecting' || snapshot.state === 'disconnecting';
+  const [disconnecting, setDisconnecting] = useState(false);
+  const disconnectLock = useRef(false);
+  const connected = snapshot.state === 'connected';
+  const starting = snapshot.state === 'connecting' || busy === 'connect' || busy === 'reconnect';
+  const restoring = disconnecting || (snapshot.state === 'disconnecting' && !starting);
+  const needsRecovery = snapshot.state === 'error' && !snapshot.status.cleanupConfirmed;
+  const changing = restoring || starting;
   const dirty = address !== snapshot.settings.address || mode !== snapshot.settings.mode;
   const global = mode === 'global';
-  const canDiscover = !busy && !connecting && (!windows || snapshot.status.cleanupConfirmed);
+  const editingDisabled = !!busy || changing || needsRecovery;
+  const canDiscover = !editingDisabled && (!windows || (!connected && snapshot.status.cleanupConfirmed));
+  const canConnect = !editingDisabled && !!address.trim() && (!connected || dirty);
+  const candidateAddress = (value: string) => windows ? value
+    : `${global ? 'socks5' : 'http'}://${value.includes(':') ? `[${value}]` : value}:38473`;
   const discover = () => action('discover', async () => {
     setCandidates(null);
     const values = windows ? await api.networkLocalProxies() : await api.networkHotspotCandidates();
@@ -82,62 +90,102 @@ function NetworkControls({ api, snapshot, onChanged, notify }: Required<NetworkC
   const change = (name: string, run: () => Promise<unknown>) => action(name, async () => {
     try { await run(); }
     finally { await onChanged(); }
+    setDraft(current => current === draft ? null : current);
   });
-  const applyAddress = (value: string, selectedMode: NetworkMode) => change('apply', async () => {
-    const { settings } = await api.saveNetworkSettings({ address: value, mode: selectedMode });
-    setAddress(settings.address);
-    setMode(settings.mode);
-    setCandidates(null);
-  });
+  const rememberOffline = async (value: string, selectedMode: NetworkMode) => {
+    const { settings } = await api.saveNetworkSettings({ address: value, mode: selectedMode }, { offlineOnly: true });
+    await onChanged();
+    setDraft(current => current === draft ? null : current);
+    return settings.address;
+  };
   const chooseCandidate = (value: string) => {
-    if (windows) return applyAddress(value, value.startsWith('socks5://') ? 'global' : 'http');
-    setAddress(`${global ? 'socks5' : 'http'}://${value.includes(':') ? `[${value}]` : value}:38473`);
+    if (windows) return action('candidate', () => rememberOffline(value, value.startsWith('socks5://') ? 'global' : 'http'));
+    setDraft({ address: candidateAddress(value), mode });
   };
   const editAddress = (value: string) => {
-    setAddress(value);
-    if (windows && value.startsWith('socks5://')) setMode('global');
-    if (windows && value.startsWith('http://')) setMode('http');
+    let nextMode = mode;
+    if (windows && value.startsWith('socks5://')) nextMode = 'global';
+    if (windows && value.startsWith('http://')) nextMode = 'http';
+    setDraft({ address: value, mode: nextMode });
   };
   const selectMode = (option: NetworkMode) => {
-    if (windows && dirty) {
-      setMode(option);
-      setAddress(address.replace(/^(?:http|socks5):\/\//, option === 'global' ? 'socks5://' : 'http://'));
+    if (option === mode) return;
+    if (dirty) {
+      setDraft({ mode: option, address: address.replace(/^(?:http|socks5):\/\//, option === 'global' ? 'socks5://' : 'http://') });
       return;
     }
-    return change('mode', () => api.saveNetworkSettings({ mode: option }));
+    return change(connected ? 'reconnect' : 'mode', () => api.saveNetworkSettings({ mode: option }));
   };
-  const connect = () => change('connect', async () => {
-    const { settings } = await api.connectNetwork(windows && dirty ? { address, mode } : undefined);
-    setAddress(settings.address);
-    setMode(settings.mode);
-  });
+  const connect = () => change(connected ? 'reconnect' : 'connect', () =>
+    connected ? api.saveNetworkSettings({ address, mode }) : api.connectNetwork({ address, mode }));
+  // Cancellation must reach the manager while its connection request is pending.
   const disconnect = async () => {
+    if (disconnectLock.current) return;
+    disconnectLock.current = true;
+    setDisconnecting(true);
     try { await api.disconnectNetwork(); }
     catch (e) { notify(networkError(e, '网络恢复失败。'), 'error'); }
-    finally { await onChanged(); }
+    finally {
+      try { await onChanged(); }
+      finally { disconnectLock.current = false; setDisconnecting(false); }
+    }
   };
-  return <section className="service-network-card" data-network-panel>
-    <div className="gateway-top"><span className={`gateway-icon ${snapshot.state === 'connected' ? 'on' : ''}`}><Activity size={26} /></span><div><h2>网络接管</h2><p>{global ? '通过 SOCKS5 转发 TCP、UDP 和 DNS。' : '为桌面应用设置 HTTP / HTTPS 代理。'}</p></div><span className={`badge ${snapshot.state === 'connected' ? 'positive' : 'neutral'}`} data-network-service-status={snapshot.state} role="status"><span className="status-dot" />{stateLabel}</span></div>
-    <div className="service-network-body">
-      <div className="network-mode" role="group" aria-label="网络连接模式">{(['http', 'global'] as const).map(option => <button key={option} aria-pressed={mode === option} disabled={!!busy || connecting || (!windows && dirty)} onClick={() => void selectMode(option)}>{option === 'http' ? 'HTTP 代理' : '全局流量'}</button>)}</div>
-      <label className="network-address-label" htmlFor="network-address">上游代理</label>
-      <div className="network-address">
-        <input id="network-address" value={address} placeholder={`${global ? 'socks5' : 'http'}://${windows ? '127.0.0.1:端口' : '手机IP:38473'}`} disabled={!!busy || connecting} onChange={e => editAddress(e.target.value)} />
-        {!windows && <button className="button small secondary" data-action="save-network-address" disabled={!!busy || connecting || !dirty} onClick={() => void applyAddress(address, mode)}>保存</button>}
-        {windows && dirty && <button className="button small secondary" disabled={!!busy || connecting || (snapshot.state === 'connected' && !address)} onClick={() => void applyAddress(address, mode)}>{!address ? '清除地址' : snapshot.state === 'connected' ? '应用并重连' : '应用'}</button>}
+  const showConnect = !changing && !needsRecovery && (!connected || (dirty && !!address.trim()));
+  const showDisconnect = changing || connected || needsRecovery;
+  const disconnectLabel = restoring ? '正在恢复' : starting ? '取消连接' : needsRecovery ? '恢复网络' : '断开连接';
+  const hint = snapshot.state === 'error' || snapshot.state === 'connecting' || snapshot.state === 'disconnecting' ? snapshot.message
+    : dirty && connected ? '当前连接仍使用原地址。' : '';
+  const offline = !connected && !changing && !needsRecovery;
+  return <div className="network-tools">
+    <section className="service-network-card" data-network-panel>
+      <div className="gateway-top"><span className={`gateway-icon ${snapshot.state === 'connected' ? 'on' : ''}`}><Activity size={26} /></span><div><h2>网络接管</h2><p>{global ? '通过 SOCKS5 转发 TCP、UDP 和 DNS。' : '为桌面应用设置 HTTP / HTTPS 代理。'}</p></div><span className={`badge ${snapshot.state === 'connected' ? 'positive' : 'neutral'}`} data-network-service-status={snapshot.state} role="status"><span className="status-dot" />{stateLabel}</span></div>
+      <div className="service-network-body">
+        <div className="network-mode" role="group" aria-label="网络连接模式">{(['http', 'global'] as const).map(option => <button key={option} aria-pressed={mode === option} disabled={editingDisabled} onClick={() => void selectMode(option)}>{option === 'http' ? 'HTTP 代理' : '全局流量'}</button>)}</div>
+        <div className="network-address-heading">
+          <label htmlFor="network-address">上游代理</label>
+          <button type="button" className="network-lookup" data-action="discover-network-proxy" disabled={!canDiscover}
+            title={windows && connected ? '断开后可查找本机代理' : undefined} onClick={() => void discover()}>
+            <BusyIcon active={busy === 'discover'}><Search size={15} /></BusyIcon>{busy === 'discover' ? '正在查找…' : windows ? '查找本机代理' : '查询热点地址'}
+          </button>
+        </div>
+        <div className="network-address">
+          <input id="network-address" value={address} placeholder={`${global ? 'socks5' : 'http'}://${windows ? '127.0.0.1:端口' : '手机IP:38473'}`}
+            disabled={editingDisabled} spellCheck={false} autoComplete="off" onChange={e => editAddress(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing && canConnect) void connect(); }} />
+          {dirty && <button type="button" className="network-revert" title="还原输入" aria-label="还原输入" disabled={editingDisabled}
+            onClick={() => setDraft(null)}><RotateCcw size={15} /></button>}
+        </div>
+        {offline && dirty && !address && snapshot.settings.address && <button className="text-button network-clear" disabled={editingDisabled}
+          onClick={() => void action('clear', () => rememberOffline('', mode))}>清除已记住的地址</button>}
+        {candidates && canDiscover && <div className="network-candidates" role="status">
+          <span>{candidates.length ? (windows ? '本机代理' : '热点候选') : (windows ? '未发现本机代理，请手动填写地址和端口。' : '未找到热点网关，请手动填写手机地址。')}</span>
+          {candidates.map(value => <button key={value} type="button" className="network-candidate" aria-pressed={address === candidateAddress(value)}
+            title={windows ? `使用 ${value}` : `填入 ${candidateAddress(value)}`} onClick={() => void chooseCandidate(value)}>
+            {address === candidateAddress(value) && <Check size={14} />}{value}
+          </button>)}
+        </div>}
+        {hint && <p className="network-hint" role="status">{hint}</p>}
+        <div className="network-control-footer">
+          <div className="network-session-actions">
+            {showConnect && <button className="button primary" data-action="connect-network" disabled={!canConnect} onClick={() => void connect()}>
+              {connected ? <RefreshCw size={16} /> : <Plug2 size={16} />}{connected ? '重新连接' : '连接'}
+            </button>}
+            {showDisconnect && <button className={`button ${needsRecovery ? 'primary' : 'secondary'}`} data-action="disconnect-network" disabled={restoring} onClick={() => void disconnect()}>
+              <BusyIcon active={restoring}>{starting ? <X size={16} /> : needsRecovery ? <RotateCcw size={16} /> : <Unplug size={16} />}</BusyIcon>{disconnectLabel}
+            </button>}
+          </div>
+          <button className="button secondary network-mini-launch" data-action="show-network-mini" onClick={() => void api.showNetworkMini().catch(e => notify(networkError(e, '无法打开网速小窗。'), 'error'))}>
+            <Monitor size={16} />网速小窗
+          </button>
+        </div>
       </div>
-      <div className="network-actions"><button className="button primary" data-action="connect-network" disabled={!!busy || snapshot.state === 'connected' || connecting || (!windows && dirty) || !address.trim()} onClick={() => void connect()}>连接</button>
-        <button className="button secondary" data-action="disconnect-network" disabled={snapshot.state === 'disconnecting' || (snapshot.state === 'idle' && busy !== 'connect')} onClick={() => void disconnect()}>{connecting ? '取消并恢复' : '断开 / 恢复'}</button>
-        <button className="text-button" onClick={() => void action('mini', () => api.showNetworkMini())} data-action="show-network-mini">网速小窗</button></div>
-      <button className="text-button network-hotspot" data-action="discover-network-proxy" disabled={!canDiscover} onClick={() => void discover()}>{busy === 'discover' ? '正在查找…' : windows ? '查找本机代理' : '查询热点地址'}</button>
-      {candidates && canDiscover && <div className="network-candidates" role="status">
-        {candidates.length ? (windows ? '选择代理' : '网关候选') : (windows ? '未发现可用的本机代理。可手动填写代理软件显示的地址和端口。' : '未找到默认网关，请手动填写手机地址。')}
-        {candidates.map(value => <button className="button small secondary" key={value} onClick={() => void chooseCandidate(value)}>{windows ? `应用 ${value}` : value}</button>)}
-      </div>}
-      {dirty && windows && <button className="text-button" onClick={() => { setAddress(snapshot.settings.address); setMode(snapshot.settings.mode); }}>还原输入</button>}
-      <p className="network-hint" role="status">{dirty && !windows ? '地址尚未保存。请先保存，再连接或切换模式。' : snapshot.message || (global ? snapshot.platform === 'linux' ? 'Linux deb 版包含全局模式。首次连接需系统授权，上游请填写远端 IP。' : '首次连接时请确认 Windows 授权。以后重连或重启电脑，直接点连接即可。' : windows ? '填写或应用代理地址后，点击连接。' : '保存上游地址，然后点击连接。')}</p>
-    </div>
-  </section>;
+    </section>
+    <TrafficPanel snapshot={snapshot} />
+    <ProxySpeedPanel api={api} address={offline ? address : snapshot.settings.address} mode={offline ? mode : snapshot.settings.mode}
+      networkState={restoring ? 'disconnecting' : starting ? 'connecting' : snapshot.state} needsRecovery={needsRecovery}
+      prepareAddress={offline && dirty ? () => rememberOffline(address, mode) : undefined} />
+    {!windows && <PhoneProxyPanel api={api} notify={notify} />}
+  </div>;
 }
 
 function TrafficPanel({ snapshot }: { snapshot: FlowBridgeSnapshot }) {
@@ -194,11 +242,6 @@ function PhoneProxyPanel({ api, notify }: { api: ModelDockApi; notify: Notify })
 export function NetworkWorkspace({ api, snapshot, onChanged, notify, error }: NetworkControlProps & { error: string }) {
   return <div className="network-workspace" data-network-workspace>
     {error && <p className="bridge-banner" role="alert">{error}</p>}
-    {snapshot && api ? <div className="network-tools">
-      <NetworkControls api={api} snapshot={snapshot} onChanged={onChanged} notify={notify} />
-      <TrafficPanel snapshot={snapshot} />
-      <ProxySpeedPanel key={snapshot.settings.address} api={api} address={snapshot.settings.address} networkState={snapshot.state} />
-      {snapshot.platform !== 'win32' && <PhoneProxyPanel api={api} notify={notify} />}
-    </div> : !error && <p className="settings-note" role="status">{api ? '正在读取网络状态…' : '等待桌面连接'}</p>}
+    {snapshot && api ? <NetworkTools api={api} snapshot={snapshot} onChanged={onChanged} notify={notify} /> : !error && <p className="settings-note" role="status">{api ? '正在读取网络状态…' : '等待桌面连接'}</p>}
   </div>;
 }
