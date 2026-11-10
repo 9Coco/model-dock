@@ -30,7 +30,7 @@ export async function verifyModelMetadata(window: BrowserWindow, outputDir: stri
   }
   const initial = await evaluate<Snapshot>('window.modelDock.snapshot()');
   assert.equal(resolve(initial.dataDir), resolve(dataDir));
-  const provider = await evaluate<Provider>(`window.modelDock.saveProvider(${JSON.stringify({ name: '模型参数字典测试', kind: 'openai-compatible', presetId: 'custom', baseUrl: upstream, enabled: true, apiKey: 'synthetic-only' })})`);
+  const provider = await evaluate<Provider>(`window.modelDock.saveProvider(${JSON.stringify({ name: '模型测试套餐', kind: 'openai-compatible', presetId: 'custom', baseUrl: upstream, enabled: true, apiKey: 'synthetic-only' })})`);
   const discovered = await evaluate<DiscoveryResult>(`window.modelDock.discoverModels(${JSON.stringify(provider.id)})`);
   assert.equal(discovered.ok, true);
   const gpt4o = discovered.models.find(model => model.upstreamId === 'gpt-4o')!;
@@ -44,13 +44,132 @@ export async function verifyModelMetadata(window: BrowserWindow, outputDir: stri
   await click('[aria-label="刷新本机配置"]');
   await click(`[data-source-id="${provider.id}"]`);
   await click('[data-action="discover-models"]');
-  await waitFor(`document.querySelectorAll('.discovery-model').length===4`, 'four fixture candidates');
+  await waitFor(`document.querySelectorAll('.discovery-model').length===8`, 'mixed-series candidates');
+  const series = await evaluate<{ label: string; ids: string[] }[]>(`
+    [...document.querySelectorAll('[data-model-series]')].map(section => ({
+      label: section.getAttribute('aria-label'),
+      ids: [...section.querySelectorAll('.discovery-model-select strong')].map(row => row.title),
+    }))`);
+  assert.equal(series[0].label, 'GPT');
+  assert.deepEqual(series[0].ids.slice(0, 2), ['gpt-5.4-nano-2026-03-17', 'gpt-5.2']);
+  assert.deepEqual(new Set(series[0].ids), new Set(['gpt-4o', 'gpt-4o-mini', 'gpt-5.2', 'gpt-4.1', 'gpt-5.4-nano-2026-03-17']));
+  assert.deepEqual(series.find(group => group.ids.includes('gemini-2.9-flash'))?.ids, ['gemini-2.10-flash', 'gemini-2.9-flash']);
+  const displayRows = await evaluate<Record<string, string>>(`Object.fromEntries([...document.querySelectorAll('.discovery-model-select strong')].map(name => [name.title, name.textContent]))`);
+  for (const model of discovered.models) assert.equal(displayRows[model.upstreamId], `${provider.name} - ${model.displayName}`);
+  assert.equal(displayRows['gpt-5.2'], '模型测试套餐 - GPT-5.2');
+  const compact = await evaluate<boolean>(`[...document.querySelectorAll('.discovery-model')].every(row => {
+    const box = row.getBoundingClientRect(), name = row.querySelector('strong').getBoundingClientRect();
+    const button = row.querySelector('button[aria-expanded="false"]')?.getBoundingClientRect();
+    return button && !row.querySelector('.discovery-model-settings,input[type="text"]') && name.right <= button.left
+      && button.top < name.bottom && name.top < button.bottom && box.height < button.height * 2;
+  })`);
+  assert.ok(compact, 'Collapsed candidates fit the checkbox, name and disclosure on one compact line');
+  function press(keyCode: string) {
+    window.webContents.sendInputEvent({ type: 'keyDown', keyCode });
+    window.webContents.sendInputEvent({ type: 'keyUp', keyCode });
+  }
+  const tab = (key: string) => `[role="tablist"][aria-label="模型系列"] [role="tab"][data-discovery-series-tab="${key}"]`;
+  async function switchSeries(key: string, count: number) {
+    await click(tab(key));
+    await waitFor(`document.querySelector(${JSON.stringify(tab(key))}).getAttribute('aria-selected')==='true'
+      && document.querySelectorAll('.discovery-model').length===${count}`, 'selected series and row count');
+    if (key) assert.deepEqual(await evaluate<string[]>(`[...document.querySelectorAll('[data-model-series]')].map(group=>group.dataset.modelSeries)`), [key]);
+  }
+  assert.equal(await evaluate<string>(`document.querySelector(${JSON.stringify(tab(''))}).getAttribute('aria-selected')`), 'true');
+  window.webContents.sendInputEvent({ type: 'mouseMove', x: 1, y: 1 });
+  await evaluate(`document.querySelector(${JSON.stringify(tab(''))}).focus()`);
+  for (const [key, seriesKey] of [['Right', 'gpt'], ['Home', '']]) {
+    press(key);
+    await waitFor(`document.activeElement.matches(${JSON.stringify(tab(seriesKey) + '[aria-selected="true"]')})`, 'keyboard selects series tab');
+  }
+  await evaluate(`document.querySelector('input[aria-label="搜索模型"]').focus()`);
+  const first = '选择模型 gpt-5.4-nano-2026-03-17', second = '选择模型 gpt-5.2';
+  for (const [key, label] of [['Down', first], ['Down', second]]) {
+    press(key);
+    await waitFor(`document.activeElement.getAttribute('aria-label') === ${JSON.stringify(label)}`, 'arrow key focuses the expected candidate');
+  }
+  const visibleContexts = `[...document.querySelectorAll('.discovery-context')]
+    .filter(node => node.checkVisibility({checkOpacity: true, checkVisibilityCSS: true}) && node.getBoundingClientRect().width > 0)`;
+  const visibleDetails = () => evaluate<string[]>(`${visibleContexts}.map(node => node.innerText.trim())`);
+  async function expectOnlySummary(id: string) {
+    await waitFor(`${visibleContexts}.map(node => node.closest('.discovery-option').querySelector('strong').title).join(',') === ${JSON.stringify(id)}`, `only ${id} shows a summary`);
+  }
+  await expectOnlySummary('gpt-5.2');
+  const point = await evaluate<{ x: number; y: number }>(`(() => {
+    const box = document.querySelector('[aria-label="选择模型 gpt-4o"]').closest('.discovery-option').getBoundingClientRect();
+    return { x: Math.round(box.left + box.width / 2), y: Math.round(box.top + box.height / 2) };
+  })()`);
+  window.webContents.sendInputEvent({ type: 'mouseMove', ...point });
+  await expectOnlySummary('gpt-4o');
+  assert.equal(await evaluate<string>(`document.activeElement.getAttribute('aria-label')`), second);
+  press('Up');
+  await expectOnlySummary('gpt-5.4-nano-2026-03-17');
+  press('Down');
+  await expectOnlySummary('gpt-5.2');
+  const focusedText = await evaluate<string>(`document.activeElement.closest('.discovery-option').innerText`);
+  assert.match(focusedText, /Max 400K/); assert.match(focusedText, /high|高/i);
+  const startingTheme = await evaluate<string | undefined>('document.documentElement.dataset.theme');
+  await evaluate("document.documentElement.dataset.theme='dark'");
+  writeFileSync(join(outputDir, 'discovery-all-series.png'), await captureUi());
+  await switchSeries('gpt', 5);
+  await evaluate(`document.querySelector('[aria-label="选择模型 gpt-5.2"]').focus()`);
+  writeFileSync(join(outputDir, 'discovery-series.png'), await captureUi());
+  await evaluate(startingTheme ? `document.documentElement.dataset.theme=${JSON.stringify(startingTheme)}` : 'delete document.documentElement.dataset.theme');
+  press('Return');
+  await waitFor(`!!document.querySelector('input[aria-label="gpt-5.2 显示名称"]')`, 'Enter opens the focused model editor');
+  assert.equal(await evaluate<string>(`document.querySelector('input[aria-label="gpt-5.2 显示名称"]').value`), 'GPT-5.2');
+  await click('button[aria-label="gpt-5.2 参数设置"][aria-expanded="true"]');
+  await switchSeries('gemini', 2);
+  await evaluate(`document.querySelector('[aria-label="选择模型 gemini-2.9-flash"]').focus()`);
+  const noDefault = await visibleDetails();
+  assert.deepEqual(noDefault, ['Max 64K'], 'A known context without a default effort only shows its context limit');
+  await switchSeries('gpt', 5);
+  await evaluate(`document.querySelector('[aria-label="选择模型 gpt-5.2"]').focus()`);
+  press('Up');
+  await waitFor(`document.activeElement.getAttribute('aria-label') === ${JSON.stringify(first)}`, 'Up focuses the previous model');
+  for (const checked of [false, true]) {
+    press('Space');
+    await waitFor(`document.activeElement.checked === ${checked}`, 'Space toggles the focused candidate');
+  }
+  press('Up');
+  await waitFor(`document.activeElement.getAttribute('aria-label')==='搜索模型'`, 'Up on the first candidate returns to search');
+
+  async function searchModels(query: string, count: number) {
+    await evaluate(`(() => {
+      const input = document.querySelector('[aria-label="搜索模型"]');
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(query)});
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    })()`);
+    await waitFor(`document.querySelectorAll('.discovery-model').length===${count}
+      && [...document.querySelectorAll('.discovery-model-select strong')].every(row => row.title.includes(${JSON.stringify(query)}))`, 'filtered model IDs');
+  }
+  await searchModels('gemini-', 0);
+  await searchModels('gpt-5.', 2);
+  assert.equal(await evaluate<boolean>(`document.querySelector('.discovery-list-header input[type="checkbox"]').checked`), true);
+  await click('.discovery-list-header input[type="checkbox"]');
+  await searchModels('', 5);
+  await switchSeries('gemini', 2);
+  assert.equal(await evaluate<boolean>(`document.querySelector('.discovery-list-header input[type="checkbox"]').checked`), true);
+  await click('.discovery-list-header input[type="checkbox"]');
+  await switchSeries('', 8);
+  const expectedSelection = new Set(['gpt-4o', 'gpt-4o-mini', 'gpt-4.1', 'unknown-fixture-model']);
+  const checkedIds = await evaluate<string[]>(`[...document.querySelectorAll('.discovery-model-select:has(input:checked) strong')].map(row => row.title)`);
+  assert.deepEqual(new Set(checkedIds), expectedSelection);
   const row = '.discovery-model:has(input[aria-label="选择模型 gpt-4o"])';
+  await click('[aria-label="gpt-4o 参数设置"][aria-expanded="false"]');
   assert.ok((await evaluate<string>(`document.querySelector(${JSON.stringify(row)}).innerText`)).includes('字典补全'));
-  await click(`${row} summary`);
   await waitFor(`!!document.querySelector('input[aria-label="gpt-4o 上下文长度"]')`, 'individual context editor');
+  const editedName = 'GPT-4o 参数测试';
+  await evaluate(`(() => {
+    const input = document.querySelector('input[aria-label="gpt-4o 显示名称"]');
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(editedName)});
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
   const directoryUnknown = '.discovery-model:has(input[aria-label="选择模型 unknown-fixture-model"])';
-  await click(`${directoryUnknown} summary`);
+  await click('[aria-label="unknown-fixture-model 参数设置"][aria-expanded="false"]');
+  await waitFor(`document.querySelectorAll('.discovery-model-settings').length === 1 &&
+    !!document.querySelector('[aria-label="gpt-4o 参数设置"][aria-expanded="false"]') &&
+    !document.querySelector('input[aria-label="gpt-4o 上下文长度"]')`, 'only the latest row remains expanded');
   await evaluate(`(()=>{const select=document.querySelector('select[aria-label="unknown-fixture-model 思考能力"]');Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(select,'yes');select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
   await waitFor(`document.querySelectorAll('${directoryUnknown} input[aria-label*="思考等级"]').length===7`, 'directory all legal reasoning grades');
   await click('input[aria-label="unknown-fixture-model 思考等级 medium"]');
@@ -65,7 +184,7 @@ export async function verifyModelMetadata(window: BrowserWindow, outputDir: stri
   for (const [width, height] of [[1320, 880], [980, 680]]) {
     window.setContentSize(width, height);
     await new Promise(done => setTimeout(done, 180));
-    const layout = await evaluate<{ noOverflow: boolean; footerVisible: boolean; editorVisible: boolean }>(`(()=>{const modal=document.querySelector('.modal'),footer=modal.querySelector('.modal-footer').getBoundingClientRect(),editor=document.querySelector('input[aria-label="gpt-4o 上下文长度"]');return {noOverflow:document.documentElement.scrollWidth<=innerWidth+1&&modal.scrollWidth<=modal.clientWidth+1,footerVisible:footer.bottom<=innerHeight+1&&footer.top>=0,editorVisible:!!editor&&!editor.disabled}})()`);
+    const layout = await evaluate<{ noOverflow: boolean; footerVisible: boolean; editorVisible: boolean }>(`(()=>{const modal=document.querySelector('.modal'),footer=modal.querySelector('.modal-footer').getBoundingClientRect(),editor=document.querySelector('input[aria-label="unknown-fixture-model 上下文长度"]');return {noOverflow:document.documentElement.scrollWidth<=innerWidth+1&&modal.scrollWidth<=modal.clientWidth+1,footerVisible:footer.bottom<=innerHeight+1&&footer.top>=0,editorVisible:!!editor&&!editor.disabled}})()`);
     assert.equal(layout.noOverflow, true); assert.equal(layout.footerVisible, true); assert.equal(layout.editorVisible, true);
     layouts.push({ width, height, ...layout });
     writeFileSync(join(outputDir, `model-metadata-${width}.png`), await captureUi());
@@ -73,6 +192,8 @@ export async function verifyModelMetadata(window: BrowserWindow, outputDir: stri
     await new Promise(done => setTimeout(done, 100));
     writeFileSync(join(outputDir, `directory-reasoning-${width}.png`), await captureUi());
   }
+  await click('[aria-label="gpt-4o 参数设置"][aria-expanded="false"]');
+  assert.equal(await evaluate<string>(`document.querySelector('input[aria-label="gpt-4o 显示名称"]').value`), editedName);
   await evaluate(`(()=>{const input=document.querySelector('input[aria-label="gpt-4o 上下文长度"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'0');input.dispatchEvent(new Event('input',{bubbles:true}));input.dispatchEvent(new Event('change',{bubbles:true}));})()`);
   await waitFor(`document.querySelector('input[aria-label="gpt-4o 上下文长度"]').value==='0'`, 'zero context override');
   await evaluate(`(()=>{const select=document.querySelector('select[aria-label="gpt-4o 图片输入"]');Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(select,'no');select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
@@ -81,6 +202,8 @@ export async function verifyModelMetadata(window: BrowserWindow, outputDir: stri
   await waitFor(`!!document.querySelector('.discovery-success')`, 'batch imported');
   const saved = (await evaluate<Snapshot>('window.modelDock.snapshot()')).models.filter(model => model.providerId === provider.id);
   assert.equal(saved.length, 4);
+  assert.deepEqual(new Set(saved.map(model => model.upstreamId)), expectedSelection);
+  assert.equal(saved.find(model => model.upstreamId === 'gpt-4o')!.displayName, editedName);
   assert.equal(saved.find(model => model.upstreamId === 'gpt-4o')!.contextWindow, 0);
   assert.equal(saved.find(model => model.upstreamId === 'gpt-4o')!.vision, false);
   assert.equal(saved.find(model => model.upstreamId === 'gpt-4.1')!.contextWindow, discovered.models.find(model => model.upstreamId === 'gpt-4.1')!.contextWindow);
@@ -92,6 +215,9 @@ export async function verifyModelMetadata(window: BrowserWindow, outputDir: stri
   await click('.discovery-footer .footer-actions .button.secondary:nth-last-child(2)');
   await click('[data-action="discover-models"]');
   await waitFor(`document.querySelectorAll('.discovery-model.existing').length===4`, 'existing candidates');
+  assert.deepEqual(new Set(await evaluate<string[]>(`
+    [...document.querySelectorAll('.discovery-model.existing .discovery-model-select:has(input:disabled:not(:checked)) strong')].map(row => row.title)
+  `)), expectedSelection);
   const rediscovered = await evaluate<DiscoveryResult>(`window.modelDock.discoverModels(${JSON.stringify(provider.id)})`);
   assert.equal(rediscovered.models.find(model => model.upstreamId === 'gpt-4o')!.contextWindow, 0);
   assert.equal(rediscovered.models.find(model => model.upstreamId === 'gpt-4o')!.vision, false);
@@ -233,5 +359,5 @@ export async function verifyModelMetadata(window: BrowserWindow, outputDir: stri
   const subscriptionSaved = (await evaluate<Snapshot>('window.modelDock.snapshot()')).models.find(model => model.id === subscriptionModel.id)!;
   assert.equal(subscriptionSaved.contextWindow, 200_000); assert.equal(subscriptionSaved.vision, false);
   assert.deepEqual(subscriptionSaved.reasoningEfforts, ['low', 'medium', 'high']);
-  writeFileSync(join(outputDir, 'model-metadata-validation.json'), JSON.stringify({ ok: true, dictionaryFilled: true, upstreamPrecedence: true, unknownRetained: true, manualZeroAndFalseSaved: true, rediscoveryPreserved: true, modelsAdded: saved.length, layouts, manualLayouts, newModelDefaults: true, unknownIdCleared: true, manualOverridesPreserved: true, explicitApplyUpdatedExisting: true, sevenReasoningGradesEditable: true, builtinKimiDefaults: true, customReasoningSavedAndReopened: true, protocolFormatUpdated: true, directoryReasoningSaved: true, directoryToolChoicePreservedThroughIpc: true, darkReasoning980CapturedAndThemeRestored: true, oldEmptyGradesApplied: true, unknownThinkingEditable: true, subscriptionReasoningOnlyDefaults: true, syntheticOnly: true }, null, 2));
+  writeFileSync(join(outputDir, 'model-metadata-validation.json'), JSON.stringify({ ok: true, dictionaryFilled: true, upstreamPrecedence: true, unknownRetained: true, manualZeroAndFalseSaved: true, rediscoveryPreserved: true, seriesOrderVerified: true, seriesTabsVerified: true, focusedSummaryVerified: true, keyboardEditingVerified: true, filteredSelectionPreserved: true, modelsAdded: saved.length, layouts, manualLayouts, newModelDefaults: true, unknownIdCleared: true, manualOverridesPreserved: true, explicitApplyUpdatedExisting: true, sevenReasoningGradesEditable: true, builtinKimiDefaults: true, customReasoningSavedAndReopened: true, protocolFormatUpdated: true, directoryReasoningSaved: true, directoryToolChoicePreservedThroughIpc: true, darkReasoning980CapturedAndThemeRestored: true, oldEmptyGradesApplied: true, unknownThinkingEditable: true, subscriptionReasoningOnlyDefaults: true, syntheticOnly: true }, null, 2));
 }

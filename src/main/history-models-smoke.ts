@@ -283,6 +283,7 @@ export async function verifyHistoryModels(window: BrowserWindow, store: Store, o
   async function click(selector: string) { await waitFor(`!!document.querySelector(${JSON.stringify(selector)})&&!document.querySelector(${JSON.stringify(selector)}).disabled`, selector); await evaluate(`(()=>{const node=document.querySelector(${JSON.stringify(selector)});node.scrollIntoView({block:'nearest'});node.click()})()`); }
   async function textInput(selector: string, value: string) { await evaluate(`(()=>{const node=document.querySelector(${JSON.stringify(selector)});Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(node,${JSON.stringify(value)});node.dispatchEvent(new Event('input',{bubbles:true}));node.dispatchEvent(new Event('change',{bubbles:true}))})()`); }
   const row = (family: Family, suffix: string) => `.discovery-model:has(input[aria-label="选择模型 ${id(family, suffix)}"])`;
+  const expandModel = (upstreamId: string) => click(`button[aria-expanded="false"][aria-label="${upstreamId} 参数设置"]`);
   const toggle = '[data-action="show-history-models"]', selectAll = '.discovery-list-header input[type="checkbox"]';
   async function open(family: Family) { await click('[aria-label="刷新本机配置"]'); await click(`[data-source-id="${ids[family]}"]`); await click('[data-action="discover-models"]'); await waitFor(`!document.querySelector('.discovery-loading,.discovery-error')&&!!document.querySelector('.discovery-footer')`, `${family} native catalog`); }
   async function close() { await click('[aria-label="关闭对话框"]'); await waitFor(`!document.querySelector('[role="dialog"]')`, 'directory closed'); }
@@ -295,6 +296,7 @@ export async function verifyHistoryModels(window: BrowserWindow, store: Store, o
     assert.equal(await evaluate<boolean>(`document.querySelector(${JSON.stringify(blocked)}+' input[type="checkbox"]').disabled`), true);
     assert.equal(await evaluate<boolean>(`document.querySelector(${JSON.stringify(blocked)}+' input[type="checkbox"]').checked`), false);
     assert.equal(await evaluate<number>(`document.querySelectorAll('[data-model-unimportable]').length`), 1);
+    await expandModel(id('trae', 'current-b'));
     assert.match(await evaluate<string>(`document.querySelector(${JSON.stringify(blocked)}).textContent`), /客户端中可见，官方直连配置尚未核实/);
     assert.match(await evaluate<string>(`document.querySelector('.discovery-footer').textContent`), /已选择 1 个待添加模型/); await capture('current-visible-unimportable-route');
     await evaluate(`(()=>{const node=document.querySelector(${JSON.stringify(blocked)}+' input[type="checkbox"]');node.checked=true;node.dispatchEvent(new Event('change',{bubbles:true}))})()`);
@@ -321,7 +323,9 @@ export async function verifyHistoryModels(window: BrowserWindow, store: Store, o
       await textInput('.discovery-advanced-grid input[type="number"]', '64000');
       await click('.discovery-advanced > .button');
       await click(toggle);
+      await expandModel(id(family, 'history-new'));
       assert.equal(await evaluate<string>(`document.querySelector('input[aria-label="${id(family, 'history-new')} 上下文长度"]').value`), '32768', 'Bulk edits exclude history hidden by the history filter');
+      await expandModel(id(family, 'current-b'));
       assert.equal(await evaluate<string>(`document.querySelector('input[aria-label="${id(family, 'current-b')} 上下文长度"]').value`), '64000');
       await click(selectAll); // All visible pending candidates become unselected.
       await textInput('input[aria-label="搜索模型"]', 'history-new');
@@ -359,7 +363,8 @@ export async function verifyHistoryModels(window: BrowserWindow, store: Store, o
     assert.equal(await evaluate<number>(`document.querySelectorAll('[data-model-historical]').length`), 2, 'Unknown entries are not mislabeled as proven non-client entries');
     await click(toggle); await click('.discovery-toolbar button[aria-expanded]'); await textInput('.discovery-advanced-grid input[type="number"]', '96000');
     assert.equal(await evaluate<boolean>(`document.querySelector('.discovery-advanced > .button').disabled`), true, 'Unverified entries hidden by the history filter cannot receive bulk edits');
-    await click(toggle); assert.equal(await evaluate<string>(`document.querySelector('input[aria-label="${id('trae', 'visibility-unknown')} 上下文长度"]').value`), '32768');
+    await click(toggle); await expandModel(id('trae', 'visibility-unknown'));
+    assert.equal(await evaluate<string>(`document.querySelector('input[aria-label="${id('trae', 'visibility-unknown')} 上下文长度"]').value`), '32768');
     await evaluate(`document.querySelector(${JSON.stringify(row('trae', 'visibility-unknown'))}).scrollIntoView({block:'center'})`); await capture('unverified-other-entries'); await close();
     store.setManagedState(MODE_KEY, 'no-current'); await open('trae');
     assert.equal(await evaluate<number>(`document.querySelectorAll('.discovery-model').length`), 0); assert.match(await evaluate<string>(`document.querySelector('.discovery-body').textContent`), /没有已确认的当前模型/); await click(toggle); await waitFor(`document.querySelectorAll('.discovery-model').length===2`, 'explicitly reveal an all-history catalog'); await close();
@@ -379,10 +384,11 @@ export async function verifyHistoryModels(window: BrowserWindow, store: Store, o
     assert.match(await evaluate<string>(`document.querySelector('.discovery-footer').textContent`), /已选择 17 个待添加模型/);
     assert.equal(await evaluate<boolean>(`(()=>{const note=document.querySelector('[data-discovery-history-message]');return note.textContent===${JSON.stringify(TRAE_PUBLIC_SCOPE)}&&note.scrollWidth<=note.clientWidth+1})()`), true, 'The complete account-cache scope and account-access explanation wraps without overflow');
     const lockedKimi = '.discovery-model:has([data-model-unimportable="account-access"])';
-    assert.equal(await evaluate<string>(`document.querySelector(${JSON.stringify(lockedKimi)}+' strong').textContent`), 'kimi-k3.1-pro');
-    assert.match(await evaluate<string>(`document.querySelector(${JSON.stringify(lockedKimi)}).textContent`), /当前 TRAE 账号没有此模型的使用权限/);
+    assert.equal(await evaluate<string>(`document.querySelector(${JSON.stringify(lockedKimi)}+' strong').title`), 'kimi-k3.1-pro');
     assert.equal(await evaluate<boolean>(`document.querySelector(${JSON.stringify(lockedKimi)}+' input[type="checkbox"]').disabled`), true);
     const publicCalls = store.getManagedState(CALLS_KEY, 0); await capture('public-shape-current-top-dark-980');
+    await expandModel('kimi-k3.1-pro');
+    assert.match(await evaluate<string>(`document.querySelector(${JSON.stringify(lockedKimi)}).textContent`), /当前 TRAE 账号没有此模型的使用权限/);
     await evaluate(`document.querySelector(${JSON.stringify(lockedKimi)}).scrollIntoView({block:'center'})`);
     await capture('public-shape-account-restriction-dark-980');
     const lastCurrent = TRAE_PUBLIC_DIRECTORY.filter(model => model.visibility === 'current').at(-1)!;
@@ -403,6 +409,7 @@ export async function verifyHistoryModels(window: BrowserWindow, store: Store, o
     await click(selectAll);
     for (const { id: modelId } of eight) await click(`input[aria-label="选择模型 ${modelId}"]`);
     const last = eight[eight.length - 1].id, aliasField = `input[aria-label="${last} 模型简称"]`, submit = '.discovery-footer .button.primary';
+    await expandModel(last);
     await textInput(aliasField, 'invalid alias');
     await evaluate("document.querySelector('.discovery-body').scrollTop=document.querySelector('.discovery-body').scrollHeight");
     await click(submit);

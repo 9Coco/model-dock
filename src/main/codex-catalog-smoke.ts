@@ -46,9 +46,10 @@ export async function verifyCodexCatalog(window: BrowserWindow, store: Store, ou
   await click(`[data-source-id="${provider.id}"]`);
   await click('[data-action="discover-models"]');
   await waitFor(`document.querySelectorAll('.discovery-model').length===1&&!document.querySelector('.discovery-loading, .discovery-error')`, 'native visible model loaded');
+  await click('[aria-label="mock-codex 参数设置"][aria-expanded="false"]');
   const candidate = await evaluate<{ count: number; upstreamId: string; displayName: string; alias: string; selected: boolean; disabled: boolean; details: string; hiddenShown: boolean; hasError: boolean }>(`(()=>{
     const dialog=document.querySelector('[role="dialog"]'),rows=dialog.querySelectorAll('.discovery-model'),row=rows[0],checkbox=row.querySelector('input[type="checkbox"]');
-    return {count:rows.length,upstreamId:row.querySelector('.discovery-model-select strong').textContent,displayName:row.querySelector('[aria-label="mock-codex 显示名称"]').value,alias:row.querySelector('[aria-label="mock-codex 模型简称"]').value,selected:checkbox.checked,disabled:checkbox.disabled,details:row.textContent,hiddenShown:dialog.textContent.includes('mock-codex-hidden')||dialog.textContent.includes('mock-codex-none'),hasError:!!dialog.querySelector('[role="alert"]')};
+    return {count:rows.length,upstreamId:row.querySelector('.discovery-model-select strong').title,displayName:row.querySelector('[aria-label="mock-codex 显示名称"]').value,alias:row.querySelector('[aria-label="mock-codex 模型简称"]').value,selected:checkbox.checked,disabled:checkbox.disabled,details:row.textContent,hiddenShown:dialog.textContent.includes('mock-codex-hidden')||dialog.textContent.includes('mock-codex-none'),hasError:!!dialog.querySelector('[role="alert"]')};
   })()`);
   assert.equal(candidate.count, 1); assert.equal(candidate.upstreamId, 'mock-codex'); assert.equal(candidate.displayName, 'Native Codex');
   assert.equal(candidate.selected, true); assert.equal(candidate.disabled, false); assert.equal(candidate.hiddenShown, false); assert.equal(candidate.hasError, false);
