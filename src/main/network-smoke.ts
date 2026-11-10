@@ -2,18 +2,50 @@
 import assert from 'node:assert/strict';
 import { writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
+import { createServer as createHttpServer } from 'node:http';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { BrowserWindow, screen } from 'electron';
+import { BrowserWindow, screen, session } from 'electron';
 import type { FlowBridgeSnapshot, NetworkEngineStatus } from '../shared/flowbridge-types';
-import { NETWORK_SITES } from '../shared/flowbridge-types';
+import { NETWORK_PROBE_URLS, NETWORK_SITES } from '../shared/flowbridge-types';
 import type { Store } from './store';
 import type { NetworkEngine } from './flowbridge-engine';
+import { measureSiteLatency } from './proxy-speed-test';
 
 const cancellationAddress = 'socks5://192.0.2.31:38473';
 const unavailableAddress = 'socks5://192.0.2.32:38473';
 const recoveryAddress = 'socks5://192.0.2.33:38473';
 const delayedCleanupAddress = 'socks5://192.0.2.36:38473';
+
+async function verifyAnonymousRedirectProbe() {
+  const requests: { method: string | undefined; path: string | undefined; authenticated: boolean }[] = [];
+  const origin = createHttpServer((request, response) => {
+    requests.push({ method: request.method, path: request.url, authenticated: !!request.headers.authorization || !!request.headers.cookie });
+    response.writeHead(request.url === '/start' ? 301 : 405, request.url === '/start' ? { location: '/service' } : {});
+    response.end();
+  });
+  await new Promise<void>((resolve, reject) => origin.once('error', reject).listen(0, '127.0.0.1', resolve));
+  const address = origin.address();
+  assert.ok(address && typeof address === 'object');
+  const probe = session.fromPartition('network-probe-redirect-smoke-' + address.port);
+  try {
+    await probe.setProxy({ mode: 'direct' });
+    const result = await measureSiteLatency('JetBrains AI', (url, init) => {
+      assert.equal(url, NETWORK_PROBE_URLS['JetBrains AI']);
+      return probe.fetch(`http://127.0.0.1:${address.port}/start`, init);
+    });
+    assert.equal(result.state, 'response', 'Electron must follow the HEAD redirect instead of rejecting a reachable origin');
+    assert.ok(result.state === 'response' && result.httpStatus === 405);
+    assert.deepEqual(requests, [
+      { method: 'HEAD', path: '/start', authenticated: false },
+      { method: 'HEAD', path: '/service', authenticated: false },
+    ]);
+  } finally {
+    await probe.closeAllConnections();
+    origin.closeAllConnections();
+    await new Promise<void>(resolve => origin.close(() => resolve()));
+  }
+}
 
 // Exercise the real manager, IPC and controls while keeping privileged system networking out of QA.
 export function createNetworkSmokeEngine(): NetworkEngine {
@@ -78,6 +110,7 @@ async function availableGatewayPort() {
 }
 
 export async function verifyNetworkUi(window: BrowserWindow, store: Store, output: string, capture: () => Promise<Buffer>) {
+  await verifyAnonymousRedirectProbe();
   const modelConfig = () => ({ providers: store.listProviders(), models: store.listModels(), bindings: store.listBindings() });
   const before = modelConfig();
   const evaluate = <T>(script: string): Promise<T> => window.webContents.executeJavaScript(script);
@@ -121,6 +154,10 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
     assert.equal(await evaluate(`document.querySelectorAll('.site-tile').length`), 12);
     assert.equal(await evaluate(`!!document.querySelector('.transfer-rates, [data-speed-result]')`), false);
     assert.equal(await evaluate(`typeof window.modelDock.measureNetworkSpeed`), 'undefined');
+    await click('[data-site="JetBrains AI"]');
+    await wait(`${query('[data-network-probe-url]')}.textContent === 'https://api.jetbrains.ai/'`);
+    assert.match(await evaluate<string>(`${query('[data-latency-detail]')}.textContent`), /已收到服务响应.*HTTP 200/);
+    await click('[data-site="JetBrains AI"]');
   }
   const gateway = () => evaluate<{ running: boolean; port: number; host: string }>('window.modelDock.runtimeSnapshot().then(s=>s.gateway)');
   const servicePage = '[data-service-workspace]';
@@ -466,7 +503,7 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
   writeFileSync(join(output, 'network-validation.json'), JSON.stringify({ ok: true, defaultServiceWorkspace: true,
     sidebarNetworkBeforeAuth: true, dedicatedNetworkPage: true, sessionPreservedAcrossNavigation: true,
     offlineSpeedFromDraft: true, connectedWithDraft: true, explicitReconnect: true, cleanupRecovery: true, gatewayControlsIndependent: true, twelveWebsiteLatenciesOnly: true, trafficWindows: [1, 5, 15, 60], simulatedNetworkConnectDisconnectAndCancel: true,
-    osNetworkUntouched: true, existingDataPreserved: true,
+    osNetworkUntouched: true, existingDataPreserved: true, anonymousElectronRedirectProbe: true,
     miniPreloadIsolated: true, layouts, screenshots }, null, 2));
   if (process.env.MODELDOCK_SMOKE_NETWORK_HOLD === '1') { window.show(); await delay(60_000); }
 }

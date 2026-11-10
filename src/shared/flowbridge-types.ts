@@ -36,8 +36,18 @@ export const NETWORK_SITE_URLS: Record<NetworkSite, string> = {
   Grok: 'https://grok.com/', 'JetBrains AI': 'https://www.jetbrains.com/ai/', 'Gemini AI': 'https://gemini.google.com/',
   OpenRouter: 'https://openrouter.ai/', Claude: 'https://claude.ai/', 'Hugging Face': 'https://huggingface.co/',
 };
+/** Browser destinations and unauthenticated service probes may use different origins. */
+export const NETWORK_PROBE_URLS: Record<NetworkSite, string> = {
+  ...NETWORK_SITE_URLS,
+  'JetBrains AI': 'https://api.jetbrains.ai/',
+};
+export const NETWORK_FAILURE_LABELS = {
+  timeout: '超时', dns: 'DNS 失败', tls: 'TLS 失败',
+  proxy: '代理失败', redirect: '重定向失败', connection: '连接失败',
+} as const;
+export type NetworkFailure = keyof typeof NETWORK_FAILURE_LABELS;
 export type SiteLatency = { site: NetworkSite } & (
-  { state: 'response'; ms: number; httpStatus: number | null } | { state: 'timeout' | 'unreachable' }
+  { state: 'response'; ms: number; httpStatus: number | null } | { state: 'timeout' | 'unreachable'; failure?: NetworkFailure }
 );
 export interface WebsiteResult { name: string; url: string; status_code: number | null; elapsed_ms: number; ok: boolean; detail: string; reachable: boolean; browser_verification: boolean; attempts: number }
 export interface NetworkCheck { system: WebsiteResult; proxy: WebsiteResult | null }

@@ -71,6 +71,19 @@ class AccessTests(unittest.TestCase):
         self.install.assert_not_called()
         self.run_task.assert_called_once()
 
+    def test_recovery_accepts_the_previous_service_probe_payload_only_for_stopping(self):
+        previous = '5e6024be86dc8e951162936a9a8de7324bbb1c3231dcfcf1b300c9d10ea4f860'
+        self.assertIn(previous, access.RECOVERY_PREDECESSORS)
+        stream = self.pipe.return_value = Mock()
+        self.pipe.side_effect = None
+        stream.readline.return_value = b'{"result":true}\n'
+        self.state.side_effect = lambda sid, digest: 'ready' if digest == previous else 'outdated'
+        self.assertTrue(access.NetworkAccess(Mock()).call('stop'))
+        stream.write.assert_called_once_with(b'{"method": "stop"}\n')
+        with self.assertRaises(access.AuthorizationRequired):
+            access.NetworkAccess(Mock()).open(False)
+        self.install.assert_not_called()
+
     def test_manual_repair_upgrades_the_old_pipe_before_recovery(self):
         self.state.return_value = 'outdated'
         access.NetworkAccess(Mock()).open(True, recovery=True)

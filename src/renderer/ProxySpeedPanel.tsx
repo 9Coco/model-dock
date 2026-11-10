@@ -1,11 +1,11 @@
 import { useLayoutEffect, useRef, useState } from 'react';
-import { NETWORK_SITES, parseNetworkEndpoint, type FlowBridgeSnapshot, type NetworkCheck, type NetworkMode, type NetworkSite, type SiteLatency } from '../shared/flowbridge-types';
+import { NETWORK_FAILURE_LABELS, NETWORK_PROBE_URLS, NETWORK_SITES, parseNetworkEndpoint, type FlowBridgeSnapshot, type NetworkCheck, type NetworkMode, type NetworkSite, type SiteLatency } from '../shared/flowbridge-types';
 import type { ModelDockApi } from '../shared/types';
 import jetBrainsAi from './assets/model-series-icons/jetbrains-ai.svg?no-inline';
 
 type Stage = 'sites' | 'finishing';
 
-function SiteDetails({ site, api, disabled }: { site: NetworkSite; api: ModelDockApi; disabled: boolean }) {
+function SiteDetails({ site, api, disabled, latency }: { site: NetworkSite; api: ModelDockApi; disabled: boolean; latency?: SiteLatency }) {
   const [check, setCheck] = useState<NetworkCheck>();
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState('');
@@ -19,13 +19,17 @@ function SiteDetails({ site, api, disabled }: { site: NetworkSite; api: ModelDoc
   return <div className="site-details" data-site-details={site}>
     <div className="network-actions"><strong>{site}</strong>
       <button className="button secondary small" disabled={checking || disabled} onClick={() => void diagnose()}>{checking ? '检测中…' : '对比系统与代理'}</button>
-      <button className="text-button" onClick={() => void api.openNetworkSite(site).catch(() => setError('无法打开浏览器。'))}>浏览器验证</button>
+      <button className="text-button" onClick={() => void api.openNetworkSite(site).catch(() => setError('无法打开浏览器。'))}>打开官网</button>
     </div>
+    <p className="network-hint">探测地址 <code data-network-probe-url>{NETWORK_PROBE_URLS[site]}</code></p>
+    {latency && <p className="network-hint" data-latency-detail>{latency.state === 'response'
+      ? `已收到服务响应${latency.httpStatus ? ' · HTTP ' + latency.httpStatus : ''} · ${latency.ms} ms`
+      : NETWORK_FAILURE_LABELS[latency.failure ?? (latency.state === 'timeout' ? 'timeout' : 'connection')]}</p>}
     {error && <p role="alert">{error}</p>}
     {check && <div className="network-checks">{(['system', 'proxy'] as const).map(path => {
       const result = check[path];
       return <div key={path}><strong>{path === 'system' ? '系统网络' : '代理出口'}</strong>
-        {result ? <><span>{result.browser_verification ? '需浏览器验证' : result.ok ? '检测通过' : '自动检测未确认'}</span>
+        {result ? <><span>{result.browser_verification ? '需浏览器验证' : result.ok ? '检测通过' : result.reachable ? '已收到服务响应' : '连接未建立'}</span>
           <small>{result.detail} · {result.elapsed_ms} ms{result.status_code ? ' · HTTP ' + result.status_code : ''}</small></> : <span>请先连接代理</span>}
       </div>;
     })}</div>}
@@ -41,7 +45,7 @@ function SiteTile({ site, result, pending, selected, onClick }: {
     value = result.ms + ' ms';
     if (result.httpStatus && result.httpStatus >= 400) status = 'HTTP ' + result.httpStatus;
   } else if (result) {
-    value = result.state === 'timeout' ? '超时' : '连接失败';
+    value = NETWORK_FAILURE_LABELS[result.failure ?? (result.state === 'timeout' ? 'timeout' : 'connection')];
   }
   return <button type="button" className="site-tile" data-site={site} aria-expanded={selected}
     aria-label={site + '，' + value + (status ? '，' + status : '') + '，网站详情'} onClick={onClick}>
@@ -91,7 +95,7 @@ export function ProxySpeedPanel({ api, address, mode, networkState, prepareAddre
   };
   return <section className="panel proxy-speed-panel" aria-label="代理测速">
     <div className="section-heading">
-      <div><h2>代理测速</h2><p className="network-hint">{address.trim() ? '经 ' + address + ' 测量官网 HTTPS 响应延迟' : '填写上游代理地址即可测速。'}</p></div>
+      <div><h2>代理测速</h2><p className="network-hint">{address.trim() ? '经 ' + address + ' 测量 HTTPS 入口响应延迟' : '填写上游代理地址即可测速。'}</p></div>
       <button className="button primary small" data-action="measure-proxy-speed" disabled={!address.trim() || disabled || !!stage} onClick={() => void measure()}>{stage === 'finishing' ? '等待上次测速…' : stage ? '测速中…' : '一键测速'}</button>
     </div>
     <div className="site-tiles" role="group" aria-label="网站延迟">
@@ -99,6 +103,6 @@ export function ProxySpeedPanel({ api, address, mode, networkState, prepareAddre
         selected={details === site} onClick={() => setDetails(previous => previous === site ? undefined : site)} />)}
     </div>
     {errors.length > 0 && <p className="feature-error" role="alert">{errors.join(' · ')}</p>}
-    {details && <SiteDetails key={details + networkState} site={details} api={api} disabled={disabled} />}
+    {details && <SiteDetails key={details + networkState} site={details} api={api} disabled={disabled} latency={sites[details]} />}
   </section>;
 }

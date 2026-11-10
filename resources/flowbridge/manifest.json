@@ -81,8 +81,8 @@
       "source": "linux/connectivity.py",
       "path": "linux/connectivity.py",
       "upstreamSha256": "e019d9618fc6510f7c0af93f918f79ab2efeb7f092da3dd63e83da7302f8feca",
-      "sha256": "0802bea1180325fc18a49c7770e58e5ad31fae8d737a8ece45357d0230a59bab",
-      "changes": "Describe HTTP connection failures for both desktop and phone upstreams. Include X in the fixed public site list."
+      "sha256": "12c7c246455e52399d44988fe3ab2c085a7cfc59d1df76840900f0c6bee2556f",
+      "changes": "Describe HTTP connection failures for both desktop and phone upstreams. Include X in the fixed public site list. Route JetBrains AI diagnostics to its service API while retaining the original website hostname alias."
     },
     {
       "source": "linux/tun_client.py",
@@ -203,8 +203,8 @@
       "source": "linux/test_connectivity.py",
       "path": "linux/test_connectivity.py",
       "upstreamSha256": "8ff5ded5a64e8f2fb67e802abdb043647cec516296c6b184ff0ba1f17ba3850d",
-      "sha256": "3b48834e7e2ec9479d49699ccad0d71a88f0d6f1d87c140030b1f9848e4bf76a",
-      "changes": "Include X in the fixed public site list."
+      "sha256": "9dd6d4dd5c9d9b0ed925f60de058ab24fd563982f5f29eab35a5b7febb501c33",
+      "changes": "Include X in the fixed public site list. Verify the JetBrains service destination and original website hostname lookup."
     },
     {
       "source": "linux/test_tun_client.py",
@@ -328,8 +328,8 @@
       "sha256": "f58d0bd8a4608df9d64f77059b76f4fbaca6bde409c74817ac555acf4023c4d1"
     },
     {
-      "source": "termux/验证记录.txt",
-      "path": "termux/验证记录.txt",
+      "source": "termux/\u9a8c\u8bc1\u8bb0\u5f55.txt",
+      "path": "termux/\u9a8c\u8bc1\u8bb0\u5f55.txt",
       "upstreamSha256": "afd8a0c0e38f2c41ee5c97124ce962ec5a09a785af2983ca8b248baa268417cf",
       "sha256": "afd8a0c0e38f2c41ee5c97124ce962ec5a09a785af2983ca8b248baa268417cf"
     }
@@ -372,15 +372,15 @@
     {
       "source": "https://github.com/9Coco/model-dock/blob/a7371a9fc067fa5271d1973f399645dc09659257/resources/flowbridge/windows/network-payload.json",
       "path": "resources/flowbridge/windows/network-payload.json",
-      "sha256": "5e6024be86dc8e951162936a9a8de7324bbb1c3231dcfcf1b300c9d10ea4f860",
-      "changes": "Pin the protected worker with the corrected pipe permissions, embedded runtime and core. Pin the extended website diagnostic allowlist and retain recovery compatibility with the previous ModelDock worker.",
+      "sha256": "988ad9732df5efe0940552d71fd846716db3b6cc9d4a27edb94f0ac0a80121fd",
+      "changes": "Pin the protected worker with the corrected pipe permissions, embedded runtime and core. Pin the extended website diagnostic allowlist and retain recovery compatibility with the previous ModelDock worker. Pin the JetBrains service probe change while allowing the 0.4.19 worker for recovery only.",
       "upstreamSha256": "0dc57d97ab47c139a54c511953a21b9e34daa41eabef7867bad1a239e2c6a536"
     },
     {
       "source": "https://github.com/9Coco/model-dock/blob/a7371a9fc067fa5271d1973f399645dc09659257/resources/flowbridge/windows/network_access.py",
       "path": "resources/flowbridge/windows/network_access.py",
-      "sha256": "dbe5409057cda1177c1aeb518eb6cc078538ee4b4fe44b4e41cf83d400ee43be",
-      "changes": "Request first-use consent, upgrade old worker ACLs for new connections and report installation stages. Pin the extended website diagnostic allowlist and retain recovery compatibility with the previous ModelDock worker.",
+      "sha256": "36d52ba3a1e6f7a2b9b124122fd65399dc4128a4c1a8f706ab15c741f59f04b6",
+      "changes": "Request first-use consent, upgrade old worker ACLs for new connections and report installation stages. Pin the extended website diagnostic allowlist and retain recovery compatibility with the previous ModelDock worker. Pin the JetBrains service probe change while allowing the 0.4.19 worker for recovery only.",
       "upstreamSha256": "b1cec3b3711de731c54e20fa83afe81cfdf27e62ac9cad16997a82c212c4f0cd"
     },
     {
