@@ -170,13 +170,13 @@ export class ToolSyncUndoManager {
     this.store.setManagedState(toolSyncUndoKey(tool), null);
     if (tool === 'copilot') this.store.setManagedState(copilotSyncUndoKey(this.copilotHome()), null);
   }
-  async run<T>(tool: ToolId, beforeBinding: ToolBinding | undefined, operation: () => T | Promise<T>): Promise<T> {
+  async run<T>(tool: ToolId, beforeBinding: ToolBinding | undefined, operation: () => T | Promise<T>, requestedBinding?: ToolBinding): Promise<T> {
     if (isJetBrainsTool(tool)) return await operation();
     if (this.active.has(tool)) fail('busy');
     this.active.add(tool);
     try {
-      const appliedBinding = this.binding(tool), before = clone(beforeBinding ?? appliedBinding);
-      if (before.id !== tool) fail('invalid');
+      const appliedBinding = requestedBinding ? clone(requestedBinding) : this.binding(tool), before = clone(beforeBinding ?? appliedBinding);
+      if (before.id !== tool || appliedBinding.id !== tool) fail('invalid');
       const previousRecord = this.store.getManagedState<unknown>(toolSyncUndoKey(tool), null);
       if (tool === 'copilot') {
         const nativeKey = copilotSyncUndoKey(this.copilotHome()), previousNative = this.store.getManagedState<unknown>(nativeKey, null);
@@ -189,6 +189,8 @@ export class ToolSyncUndoManager {
         catch {
           try {
             await undoCopilotDesktop(this.store, this.copilotHome(), this.options.copilotOptions, () => {
+              // A failed checkpoint rolls back this write. Keep any later user selection for its queued sync.
+              if (!isDeepStrictEqual(selection(this.binding(tool)), selection(appliedBinding))) return;
               try { this.store.restoreBindingSelection(mergeSelection(this.binding(tool), before)); }
               catch (error) {
                 if (isDeepStrictEqual(selection(this.binding(tool)), selection(before))) this.store.restoreBindingSelection(mergeSelection(this.binding(tool), appliedBinding));

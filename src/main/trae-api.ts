@@ -3,7 +3,7 @@ import { catalogAccessMessages } from '../shared/catalog-types';
 import type { SubscriptionUsage } from '../shared/auth-types';
 import type { TraeClientCredentials } from './trae-client-import';
 import { parseTraeQuota, parseTraePlan } from './trae-relay-usage';
-import { canUseTraeClientModel, readTraeClientModelCatalog, traeModelAccess, type TraeClientModel, type TraeClientModelCatalog, type TraeClientModelOptions } from './trae-client-models';
+import { canUseTraeClientModel, readTraeClientModelCatalog, traeModelAccess, traeModelVision, type TraeClientModel, type TraeClientModelCatalog, type TraeClientModelOptions } from './trae-client-models';
 
 /** TraeCode CN CustomModel / ChatMessageData protocol, fixed reference:
  * Trae2api-cn bb7b659 raw_client.build_traecode_chat_body/headers and installed
@@ -26,7 +26,7 @@ type ObjectValue = Record<string, unknown>;
 const object = (value: unknown): ObjectValue | undefined => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as ObjectValue : undefined;
 const text = (value: unknown, max = 256): string | undefined => typeof value === 'string' && value.length > 0 && value.length <= max && !/[\x00-\x1f\x7f]/.test(value) ? value : undefined;
 const name = (value: unknown): string | undefined => { const result = text(value); return result && /^[\w.\-:/@+]+$/.test(result) ? result : undefined; };
-export type TraeApiErrorCode = 'account-access' | 'access-unknown' | 'credentials' | 'authorization' | 'network' | 'request' | 'response' | 'model' | 'cancelled' | 'limit' | 'upstream' | 'capability';
+export type TraeApiErrorCode = 'account-access' | 'access-unknown' | 'credentials' | 'authorization' | 'network' | 'request' | 'response' | 'model' | 'cancelled' | 'limit' | 'upstream' | 'capability' | 'image-model' | 'image-format';
 const errors: Record<TraeApiErrorCode, string> = {
   ...catalogAccessMessages,
   credentials: 'TRAE 本机账号信息无效，请回到原客户端重新登录并导入。',
@@ -38,7 +38,9 @@ const errors: Record<TraeApiErrorCode, string> = {
   cancelled: 'TRAE 请求已取消或超时。',
   limit: 'TRAE 请求或响应超过支持范围。',
   upstream: 'TRAE 原生接口拒绝本次请求，请检查账号、模型权限及客户端状态。',
-  capability: '此 TRAE 连接尚未验证所请求的输入或控制能力，请使用文本和原生函数工具。',
+  capability: '当前 TRAE 连接不支持所请求的输入或控制参数。',
+  'image-model': '当前 TRAE 模型目录未确认此模型支持图片。请选择支持图片的模型，或移除对话中的图片。',
+  'image-format': 'TRAE 图片输入需要用户消息中的内嵌 PNG、JPEG、WebP 或 GIF 图片。请直接粘贴或附加图片。',
 };
 export class TraeApiError extends Error {
   constructor(readonly code: TraeApiErrorCode, readonly status?: number, readonly parameter?: string) {
@@ -52,6 +54,7 @@ export interface TraeApiModel {
   modeldock_catalog_importable?: false;
   modeldock_catalog_blocked_reason?: BlockedReason;
   reasoning_efforts?: string[];
+  vision?: boolean;
   default_reasoning_effort?: string;
 }
 interface ReasoningConfig {
@@ -155,18 +158,28 @@ async function readJson(response: Response, signal: AbortSignal): Promise<Object
   } catch (error) { throw error instanceof TraeApiError ? error : fail(signal.aborted ? 'cancelled' : 'response'); }
   finally { signal.removeEventListener('abort', abort); await reader.cancel().catch(() => {}); }
 }
-function content(value: unknown): ObjectValue[] {
+function content(value: unknown, role: unknown): ObjectValue[] {
   if (value === null || value === undefined) return [];
   if (typeof value === 'string') return [{ type: 'text', text: value }];
   if (!Array.isArray(value)) throw fail('request');
-  return value.map(part => { const item = object(part); if (!item || item.type !== 'text' && item.type !== 'input_text' || typeof item.text !== 'string') throw fail('capability'); return { type: 'text', text: item.text }; });
+  return value.map(part => {
+    const item = object(part);
+    if (item?.type === 'image_url') {
+      const image = object(item.image_url), url = image?.url;
+      if (role !== 'user' || typeof url !== 'string' || !/^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+={0,2}$/.test(url)) throw fail('image-format', 400);
+      if (image?.detail !== undefined && image.detail !== 'auto') throw fail('capability', 400, 'image_url.detail');
+      return { type: 'image_url', image_url: { url } };
+    }
+    if (!item || item.type !== 'text' && item.type !== 'input_text' || typeof item.text !== 'string') throw fail('capability');
+    return { type: 'text', text: item.text };
+  });
 }
 function messages(raw: unknown): ObjectValue[] {
   if (!Array.isArray(raw) || raw.length < 1 || raw.length > 1000) throw fail('request');
   const pending = new Map<string, string>();
   return raw.map(value => {
     const item = object(value); if (!item || !['user', 'assistant', 'system', 'developer', 'tool'].includes(String(item.role))) throw fail('request');
-    const role = item.role === 'developer' ? 'system' : item.role, blocks = content(item.content);
+    const role = item.role === 'developer' ? 'system' : item.role, blocks = content(item.content, role);
     const converted: ObjectValue = { role, ...(blocks.length ? { content: blocks } : {}) };
     if (role === 'assistant' && item.tool_calls !== undefined) {
       if (!Array.isArray(item.tool_calls) || item.tool_calls.length > 128) throw fail('request');
@@ -377,7 +390,7 @@ export class TraeApi {
         if (routes.has(id)) throw fail('response');
         const display = text(row.display_name ?? object(row.display_config)?.display_name, 512);
         const reasoning = reasoningConfig(row);
-        routes.set(id, { model: { id, object: 'model', owned_by: 'trae', ...(display ? { name: display } : {}),
+        routes.set(id, { model: { id, object: 'model', owned_by: 'trae', vision: traeModelVision(row), ...(display ? { name: display } : {}),
           ...(reasoning ? { reasoning_efforts: reasoning.options.map(level => reasoning.pickerLabels?.get(level) ?? level),
             ...(reasoning.defaultLevel ? { default_reasoning_effort: reasoning.pickerLabels?.get(reasoning.defaultLevel) ?? reasoning.defaultLevel } : {}) } : {}) }, providerId, configSource: 1, ...(reasoning ? { reasoning } : {}) });
         access.set(id, directoryAccess(row.display_contact_config));
@@ -412,19 +425,20 @@ export class TraeApi {
       let missing = 0, denied = 0, unknown = 0;
       function entry(id: string, route: Route | undefined, visibility?: 'current' | 'historical', displayName?: string): TraeApiModel {
         const reason = blocked.get(id);
-        return { ...(route?.model ?? { object: 'model' as const, owned_by: 'trae' as const }), id,
+        return { ...(route?.model ?? { object: 'model' as const, owned_by: 'trae' as const }), id, vision: route?.model.vision === true,
           ...(displayName ? { name: displayName } : {}), ...(visibility ? { modeldock_catalog_visibility: visibility } : {}),
           ...(!route || reason ? { modeldock_catalog_importable: false as const } : {}),
           ...(reason ? { modeldock_catalog_blocked_reason: reason } : {}) };
       }
       for (const model of picker) {
-        const config = model.configName ?? model.id, route = routes.get(config), reason = blocked.get(config);
+        const config = model.configName ?? model.id, native = routes.get(config), reason = blocked.get(config);
+        const route = native && { ...native, model: { ...native.model, vision: native.model.vision === false ? false : model.vision ?? native.model.vision } };
         current.add(config);
         if (config !== model.id) {
           if (routes.has(model.id)) throw fail('response');
           if (reason) blocked.set(model.id, reason);
-          if (route) callable.set(model.id, route);
         }
+        if (route) callable.set(model.id, route);
         if (reason === 'account-access') denied++;
         else if (reason === 'access-unknown') unknown++;
         else if (!route) missing++;
@@ -477,6 +491,7 @@ export class TraeApi {
     if (!directory || this.now() - directory.at > 300000) { await this.models(value, signal, client); directory = this.directories.get(key); }
     const reason = directory?.blocked.get(model); if (reason) throw fail(reason, reason === 'account-access' ? 403 : 503);
     const route = directory?.routes.get(model); if (!route) throw fail('model');
+    if (!route.model.vision && nativeMessages.some(message => Array.isArray(message.content) && message.content.some(block => block.type === 'image_url'))) throw fail('image-model', 400);
     const effort = requestedEffort === undefined ? undefined : nativeReasoningEffort(route.reasoning, requestedEffort);
     const sid = randomUUID(), payload: ObjectValue = { config_name: route.model.id, model_name: route.providerId, config_source: route.configSource,
       conversation_id: sid, session_id: sid, stream: true, raw_chat_function: FUNCTION, messages: nativeMessages,

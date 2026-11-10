@@ -196,7 +196,10 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
       : !provider.baseUrl && provider.kind === 'openai-compatible' && !(tool === 'claude-code' && nativeClaudeBaseUrl(provider)) ? '请先填写服务地址'
         : !providerToolModels(provider, tool).length ? tool === 'claude-code' ? '请先添加并启用此来源的兼容模型' : tool === 'codex' && data.models.some(model => model.providerId === provider.id && model.enabled) ? 'Codex 需要 Responses 模型' : data.models.some(model => model.providerId === provider.id && model.enabled && model.wireApi === 'messages') ? '此工具暂不支持 Messages 模型' : '请先添加并启用模型' : '';
   const toolSignature = (binding: ToolBinding) => JSON.stringify({ binding: Object.fromEntries(Object.entries(binding).sort(([left], [right]) => left.localeCompare(right))), models: toolModels(binding), providers: data.providers.filter(provider => sourceIdsFor(binding).includes(provider.id)), port: data.gateway.port });
-  const toolOperationPending = (id: ToolId) => pendingActions.current.has('delete') || [`tool-binding-${id}`, `apply-tool-${id}`, `export-tool-${id}`, `preview-${id}`, `restore-tool-${id}`, `undo-tool-${id}`].some(key => pendingActions.current.has(key));
+  const toolOperationPending = (id: ToolId, editingProviders = false) => [...pendingActions.current].some(key => {
+    if (editingProviders && id === 'copilot' && key === 'apply-tool-copilot') return false;
+    return /^(delete$|apply-tool-|restore-tool-|undo-tool-)/.test(key) || [`tool-binding-${id}`, `export-tool-${id}`, `preview-${id}`].includes(key);
+  });
   const anyToolOperationPending = () => !!toolAuto.current?.pending().length || [...pendingActions.current].some(key => /^(tool-binding-|apply-tool-|export-tool-|preview-|restore-tool-|undo-tool-)/.test(key));
   const canApplyTool = (id: ToolId) => isJetBrainsTool(id) ? jetBrainsStatuses[id]?.canApply === true && (jetBrainsStatuses[id]?.plugin ?? 'ai-assistant') === jetBrainsPluginFor(bindingFor(id)) : id === 'codex' || id === 'claude-code' || id === 'junie' || id === 'opencode' || id === 'dsh' || id === 'vscode' || id === 'copilot' || id === 'copilot-cli';
   const addModel = (providerId: string) => {
@@ -515,7 +518,7 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
     } finally { setPendingBindings(previous => { const remaining = { ...previous }; delete remaining[tool]; return remaining; }); }
   };
   const saveInlineBinding = async (tool: ToolId, providerIds: string[], requestedDefault?: string) => {
-    if (toolOperationPending(tool)) return;
+    if (toolOperationPending(tool, requestedDefault === undefined)) return;
     await run(`tool-binding-${tool}`, async () => {
       const current = bindingFor(tool);
       // 修改点：默认模型变化不改连接拓扑，也不扩大已保存的精确模型范围。
@@ -824,8 +827,8 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
   const currentDefault = currentModels.find(model => model.id === currentBinding.defaultModelId) ?? currentModels[0];
   const currentDelivery = toolDeliveries[selectedTool]?.signature === toolSignature(currentBinding) ? toolDeliveries[selectedTool] : undefined;
   const currentJetBrainsConnection = currentJetBrains ? jetBrainsConnectionParameters({ ...currentBinding, enabled: true }, data.models, data.providers, data.gateway.port) : undefined;
-  const globalToolWriteBusy = Object.entries(busy).some(([key, value]) => value && /^(delete$|apply-tool-|restore-tool-|undo-tool-)/.test(key));
-  const currentToolBusy = globalToolWriteBusy || !!busy[`tool-binding-${selectedTool}`] || !!busy[`export-tool-${selectedTool}`] || !!busy[`preview-${selectedTool}`];
+  const currentToolBusy = toolOperationPending(selectedTool);
+  const providerSelectionBusy = toolOperationPending(selectedTool, true);
   const currentApplicationState = currentToolAuto?.phase === 'waiting' ? 'waiting' : currentToolAuto?.phase === 'applying' ? 'syncing' : currentJetBrainsAuto ? currentJetBrainsAuto.phase === 'applying' ? 'syncing' : currentJetBrainsAuto.phase : currentRestoredState();
   function currentRestoredState() {
     return toolRestoreLocations[selectedTool] && !currentBinding.enabled && !currentSourceIds.length ? 'official' : currentDelivery?.kind === 'undone' ? 'undone' : currentDelivery?.kind === 'applied' && !currentModels.length ? 'cleared' : currentDelivery?.kind === 'applied' ? 'synced' : toolSyncErrors[selectedTool] ? 'error' : 'saved';
@@ -919,7 +922,7 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
     return items;
   };
   const toolMenu = (tool: ToolId): ContextMenuItem[] => {
-    const pending = !bridge || toolOperationPending(tool) || globalToolWriteBusy;
+    const pending = !bridge || toolOperationPending(tool);
     const binding = bindingFor(tool), models = toolModels(binding);
     const air = isJetBrainsTool(tool) && jetBrainsPluginFor(binding) === 'air';
     const canClear = tool !== 'codex' || sourceIdsFor(binding).length === 0 || binding.modelSelection === 'selected' && !models.length;
@@ -1004,7 +1007,7 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
     const testing = !!busy[`test-${provider.id}`];
     const unavailableReason = providerUnavailableReason(provider, selectedTool);
     return <article className={`provider-row ${selected ? 'selected' : ''} ${!provider.enabled ? 'muted-card' : ''}`} key={provider.id} data-provider-id={provider.id} tabIndex={0} aria-haspopup="menu">
-      {forTool && <label className="provider-inline-select" title={selected ? '取消选择此供应商' : unavailableReason || '选择此供应商'}><input type="checkbox" data-action="select-tool-provider" data-tool-id={selectedTool} data-provider-id={provider.id} checked={selected} disabled={!bridge || currentToolBusy || !selected && !!unavailableReason} aria-label={currentSingleEntry && currentAggregate ? `聚合接口内部使用 ${subscriptionDisplayName(provider)}` : `为 ${toolInfo[selectedTool].name} 选择 ${subscriptionDisplayName(provider)}`} onChange={event => void saveInlineBinding(selectedTool, event.target.checked ? [...currentSourceIds, provider.id] : currentSourceIds.filter(id => id !== provider.id))} /><span className="sr-only">{subscriptionDisplayName(provider)}</span></label>}
+{forTool && <label className="provider-inline-select" title={selected ? '取消选择此供应商' : unavailableReason || '选择此供应商'}><input type="checkbox" data-action="select-tool-provider" data-tool-id={selectedTool} data-provider-id={provider.id} checked={selected} disabled={!bridge || providerSelectionBusy || !selected && !!unavailableReason} aria-label={currentSingleEntry && currentAggregate ? `聚合接口内部使用 ${subscriptionDisplayName(provider)}` : `为 ${toolInfo[selectedTool].name} 选择 ${subscriptionDisplayName(provider)}`} onChange={event => void saveInlineBinding(selectedTool, event.target.checked ? [...currentSourceIds, provider.id] : currentSourceIds.filter(id => id !== provider.id))} /><span className="sr-only">{subscriptionDisplayName(provider)}</span></label>}
       <span className={`provider-monogram ${provider.kind}`}>{providerKinds[provider.kind].symbol}</span>
       <div className="provider-row-main">
         <div className="provider-row-title"><h3>{forTool || selectedProviderId === provider.id ? subscriptionDisplayName(provider) : <button type="button" className="provider-details-link" data-action="open-provider" onClick={() => selectProvider(provider.id)}>{subscriptionDisplayName(provider)}</button>}</h3><span className={`badge ${!provider.enabled || (provider.kind === 'openai-compatible' && !provider.baseUrl) ? 'neutral' : provider.authStatus === 'ready' ? 'positive' : provider.authStatus === 'error' ? 'negative' : 'warning'}`}><span className="status-dot" />{providerStatus(provider)}</span></div>
@@ -1043,7 +1046,7 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
   </table>}</ModelListViewport>;
 
   const toolProviderSelection = <section className="tool-provider-selection" data-aggregate-internal-sources={currentSingleEntry && currentAggregate ? selectedTool : undefined}>
-          <div className="section-heading tool-source-heading"><h2>{currentSingleEntry ? '内部供应商' : '可用供应商'}<span className="count-tag">{data.providers.length}</span></h2><div className="tool-source-batch-actions">{!currentSingleProvider && <button className="button small secondary" data-action="select-all-tool-providers" disabled={!bridge || currentToolBusy || !availableToolProviderIds.length} title="选择全部已启用、有凭据且有可用模型的来源，包含搜索结果外的来源" onClick={() => void saveInlineBinding(selectedTool, availableToolProviderIds)}><CheckCheck size={14} />全选可用</button>}<button className="button small secondary" data-action="clear-tool-providers" disabled={!bridge || currentToolBusy || (!currentSourceIds.length && !currentCanClear)} title="清空当前工具的选择及对应配置，包含搜索结果外的来源；保留全局供应商和模型" onClick={() => void saveInlineBinding(selectedTool, [])}><X size={14} />清空选择</button></div><label className="search-box"><Search size={15} /><input aria-label="搜索供应商" placeholder="搜索供应商" value={search} onChange={event => setSearch(event.target.value)} /></label></div>
+          <div className="section-heading tool-source-heading"><h2>{currentSingleEntry ? '内部供应商' : '可用供应商'}<span className="count-tag">{data.providers.length}</span></h2><div className="tool-source-batch-actions">{!currentSingleProvider && <button className="button small secondary" data-action="select-all-tool-providers" disabled={!bridge || providerSelectionBusy || !availableToolProviderIds.length} title="选择全部已启用、有凭据且有可用模型的来源，包含搜索结果外的来源" onClick={() => void saveInlineBinding(selectedTool, availableToolProviderIds)}><CheckCheck size={14} />全选可用</button>}<button className="button small secondary" data-action="clear-tool-providers" disabled={!bridge || providerSelectionBusy || (!currentSourceIds.length && !currentCanClear)} title="清空当前工具的选择及对应配置，包含搜索结果外的来源；保留全局供应商和模型" onClick={() => void saveInlineBinding(selectedTool, [])}><X size={14} />清空选择</button></div><label className="search-box"><Search size={15} /><input aria-label="搜索供应商" placeholder="搜索供应商" value={search} onChange={event => setSearch(event.target.value)} /></label></div>
           <p className="tool-source-selection-note">{currentSingleEntry ? '这里选择聚合接口内部可调用的供应商；工具始终只连接上方的一个 ModelDock 入口。' : currentSingleProvider ? '一次选择一家 API 或账号订阅来源；勾选另一家会替换当前来源。开启「使用聚合接口」可同时使用多家模型。' : currentLegacyMode ? '当前沿用已有连接方式，修改来源仍保留原连接方式；点击上方聚合选项可切换。' : `可选择多家来源。全选覆盖全部 ${availableToolProviderIds.length} 家已启用、有凭据且有兼容模型的来源，包含搜索结果外的来源。`}{' 清空只移除当前工具选择，保留全局供应商和模型。'}</p>
           {toolProviders.length ? <div className="provider-list">{toolProviders.map(provider => providerRow(provider, true))}</div> : <EmptyState compact icon={data.providers.length ? <Search size={25} /> : <Plug2 size={25} />} title={data.providers.length ? '没有匹配的供应商' : '还没有供应商'} description={data.providers.length ? '试试其他名称或服务地址。' : '添加 API 或在授权中心添加订阅，再为这个工具选择模型来源。'} />}
           <div className="panel-footnote"><CircleHelp size={14} /><span>{currentJetBrains ? currentJetBrainsPlugin === 'air' ? 'Air 接入参数已保存。请在 Air Accounts 的 More Providers → OpenAI 中添加连接，粘贴 URL 和 Key，再选择 Agent 与模型。' : '内部来源与映射模型变化会自动同步；IDE 运行时保存最新选择，退出后更新设置。API Key 需在 IDE 中确认。' : currentCanApply ? '勾选和默认模型变化会在短暂停顿后合并同步，保留工具的其他配置，可撤销上次同步。模型参数变化或同步失败时，可点击“重新同步”。' : '勾选会立即保存来源；导出后需要在工具中导入配置。模型或选择变化后，请再次导出并导入。'}</span></div>

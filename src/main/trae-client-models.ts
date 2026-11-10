@@ -7,6 +7,7 @@ export interface TraeClientModel {
   id: string;
   name?: string;
   configName?: string;
+  vision?: boolean;
   allowedIdentities?: number[];
   locked?: true;
 }
@@ -23,6 +24,12 @@ const MAX_DATABASE = 64 * 1024 * 1024, MAX_JSON = 4 * 1024 * 1024;
 const id = (value: unknown): value is string => typeof value === 'string' && /^[\w.\-:/@+]{1,256}$/.test(value);
 const label = (value: unknown): value is string => typeof value === 'string' && !!value.trim() && value.length <= 512 && !/[\x00-\x1f\x7f]/.test(value);
 const object = (value: unknown): Record<string, unknown> | undefined => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+
+export function traeModelVision(model: Record<string, unknown>): boolean | undefined {
+  const feature = object(object(model.features)?.multimodal)?.enable;
+  const flags = [model.multimodal, model.support_read_image, feature];
+  return flags.includes(false) ? false : flags.includes(true) ? true : undefined;
+}
 
 // The installed picker's default restriction rules only run enabled feature
 // routes. access/download_work and access are distinct routes selected by subKey.
@@ -68,8 +75,10 @@ function parseClientSnapshot(value: string): Omit<TraeClientModelCatalog, 'clien
       continue;
     }
     if (!id(configName)) return;
+    const vision = traeModelVision(model);
     models.push({
       id: model.name,
+      ...(vision !== undefined ? { vision } : {}),
       ...(label(model.display_name) ? { name: model.display_name } : {}),
       ...(configName !== model.name ? { configName } : {}),
       ...traeModelAccess(model.features),

@@ -710,16 +710,16 @@ function registerIpc() {
     dshHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.dsh') : process.env.DSH_HOME?.trim() ? resolve(process.env.DSH_HOME.trim()) : join(featureHome, '.dsh'),
     copilotHome: copilot.home, copilotOptions: { openClient: copilot.openClient },
   });
-  const assertEditable = () => {
+  const assertEditable = (editingBinding?: ToolId) => {
     if (jetBrainsImportPending) throw new Error('JetBrains 账号正在导入，请等待当前操作完成。');
     if (providerRemovalPending) throw new Error('供应商正在删除并同步，请稍后修改配置。');
     if (toolRestorePending) throw new Error('正在还原官方配置，请稍后修改配置。');
-    if (toolConfigPending.size) throw new Error('工具配置正在同步，请稍后修改配置。');
+    const savingDuringCopilotSync = editingBinding === 'copilot' && toolConfigPending.size === 1 && toolConfigPending.has('copilot');
+    if (toolConfigPending.size && !savingDuringCopilotSync) throw new Error('工具配置正在同步，请稍后修改配置。');
   };
   async function synchronizeTool(id: ToolId): Promise<string> {
     if (toolRestorePending || toolConfigPending.has(id)) throw new Error('此工具配置正在更新，请稍后再试。');
     toolConfigPending.add(id);
-    let synchronized = false;
     try {
     const binding = store.listBindings().find(item => item.id === id);
     if (isJetBrainsTool(id) && store.getJetBrainsPlugin(id) === 'air') throw new Error('请在 Air Accounts 的 More Providers → OpenAI 中添加提供商并填写 URL 和 Key；Air 不支持无密钥的离线账户同步。');
@@ -733,7 +733,7 @@ function registerIpc() {
     let operation: () => string | Promise<string>;
     if (id === 'copilot') {
       const target = copilotTarget();
-      operation = () => applyCopilotDesktop(store, buildCopilotDesktopPlan(store, gateway.status().port, true), target.home, { openClient: target.openClient, syncScope: binding?.copilotSyncScope ?? 'selected', recordUndo: !providerRemovalPending });
+      operation = () => applyCopilotDesktop(store, buildCopilotDesktopPlan(store, gateway.status().port, true, binding), target.home, { openClient: target.openClient, syncScope: binding?.copilotSyncScope ?? 'selected', recordUndo: !providerRemovalPending });
     } else if (id === 'dsh') {
       const configuredDshHome = process.env.DSH_HOME?.trim();
       const dshHome = __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home', '.dsh')
@@ -757,14 +757,16 @@ function registerIpc() {
     });
     }
     // Global deletion has its own recovery transaction; its removed references cannot be reintroduced by a tool undo.
-    const result = providerRemovalPending ? await operation() : await undoManager.run(id, beforeToolSelections.get(id), operation);
+    const result = providerRemovalPending ? await operation() : await undoManager.run(id, beforeToolSelections.get(id), operation, binding);
     if (providerRemovalPending) undoManager.clear(id);
-    synchronized = true;
+    // A newer Copilot choice may already be saved. Its undo baseline is the selection just applied.
+    if (id === 'copilot' && binding && !isDeepStrictEqual(binding, store.listBindings().find(item => item.id === id))) beforeToolSelections.set(id, binding);
+    else beforeToolSelections.delete(id);
     return result;
     } catch (error) {
       recordDiagnostic('error', 'config.apply', { operation: 'applyConfig', toolId: id, stage: 'configuration', outcome: 'failure', ...describeError(error) });
       throw error;
-    } finally { if (synchronized) beforeToolSelections.delete(id); toolConfigPending.delete(id); }
+    } finally { toolConfigPending.delete(id); }
   }
   function handle(name: keyof ModelDockApi, fn: (...args: any[]) => unknown) {
     ipcMain.handle('modeldock:' + name, async (event, ...args: unknown[]) => {
@@ -945,8 +947,8 @@ function registerIpc() {
   handle('saveModel', (input: ModelInput) => { assertEditable(); return store.saveModel(input); });
   handle('deleteModel', (id: string) => { assertEditable(); return store.deleteModel(id); });
   handle('saveBinding', (binding: ToolBinding) => {
-    assertEditable();
     const id = toolId(binding.id), before = store.listBindings().find(value => value.id === id);
+    assertEditable(id);
     store.saveBinding({ ...binding, id });
     if (!isJetBrainsTool(id) && before && !beforeToolSelections.has(id)) beforeToolSelections.set(id, structuredClone(before));
   });
