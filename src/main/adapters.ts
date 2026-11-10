@@ -8,6 +8,7 @@ import type { ConfigPreview, Model, Provider, ProviderSecret, ReasoningEffort, T
 import { traeRelayClientModel } from '../shared/trae-relay-models';
 import { bindingConnectionPolicy, resolveBindingModels } from '../shared/bindings';
 import { modelDisplayLabel, modelLocalAlias } from '../shared/model-names';
+import { subscriptionDisplayName } from '../shared/subscription-names';
 import type { CopilotDesktopPlan } from './copilot-desktop';
 import { dshPatchPreview, type DshPlan, type DshProviderProfile } from './dsh-config';
 import { openCodeConfigDirectory } from './opencode-paths';
@@ -74,9 +75,9 @@ function ownsCodexCatalog(raw: string): boolean {
 function modelProvider(store: AdapterStore, model: Model): Provider | undefined {
   return store.getProvider?.(model.providerId) ?? store.listProviders?.().find(item => item.id === model.providerId);
 }
-function clientModel(store: AdapterStore, model: Model, directApi = false): Model {
-  const provider = modelProvider(store, model);
-  return { ...model, displayName: modelDisplayLabel(model, provider), alias: directApi ? model.upstreamId : model.alias };
+function clientModel(tool: ToolId, model: Model, provider: Provider | undefined, directApi: boolean): Model {
+  const source = tool === 'copilot' && provider ? { name: subscriptionDisplayName(provider, 'short') } : provider;
+  return { ...traeRelayClientModel(tool, model, provider), displayName: modelDisplayLabel(model, source), alias: directApi ? model.upstreamId : model.alias };
 }
 function selected(store: AdapterStore, id: ToolId, allowEmpty = false) {
   const binding = store.listBindings().find(b => b.id === id);
@@ -102,7 +103,7 @@ function connectionGroups(store: AdapterStore, tool: ToolId, binding: ToolBindin
     const apiKey = directApi && revealKey ? store.getSecret?.(provider!.id)?.apiKey : undefined;
     if (directApi && revealKey && !apiKey) throw new Error('直连供应商尚未填写 API Key。');
     return { id, name, base, directApi, key: directApi ? apiKey ?? '__PROVIDER_API_KEY__' : revealKey ? store.gatewayKey() : PLACEHOLDER,
-      models: allModels.filter(model => group.modelIds.includes(model.id)).map(model => clientModel(store, traeRelayClientModel(tool, model, providers?.find(source => source.id === model.providerId)), directApi)) };
+      models: allModels.filter(model => group.modelIds.includes(model.id)).map(model => clientModel(tool, model, providers?.find(source => source.id === model.providerId), directApi)) };
   });
 }
 function ownsOpenCodeProvider(id: string): boolean { return id === 'modeldock' || id.startsWith('modeldock-'); }
@@ -213,11 +214,7 @@ export function buildCopilotDesktopPlan(store: AdapterStore, port: number, revea
   const originals = store.listModels();
   return { providers: groups.map(group => {
     const id = nativeCopilotId(namespace, 'provider', group.id);
-    const providerIds = [...new Set(group.models.map(model => model.providerId))];
-    const name = group.name === 'ModelDock' ? providerIds.length === 1
-      ? `ModelDock · ${store.getProvider?.(providerIds[0])?.name ?? store.listProviders?.().find(provider => provider.id === providerIds[0])?.name ?? '模型来源'}`
-      : 'ModelDock · 聚合供应商' : group.name;
-    return { id, name, baseUrl: group.base, apiKey: group.key, models: group.models.map(model => {
+    return { id, name: 'ModelDock', baseUrl: group.base, apiKey: group.key, models: group.models.map(model => {
       const original = originals.find(value => value.id === model.id) ?? model;
       const budget = clientBudget(model);
       return { id: nativeCopilotId(namespace, 'model', `${group.id}/${model.id}`),

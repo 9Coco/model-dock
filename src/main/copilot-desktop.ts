@@ -44,6 +44,10 @@ export interface CopilotDesktopProviderInput {
   headers?: Record<string, string>; wireApi?: 'chat' | 'responses'; models: CopilotDesktopModelInput[];
 }
 export interface CopilotDesktopPlan { providers: CopilotDesktopProviderInput[] }
+/** Older sync checkpoints store the source name after the ModelDock prefix. */
+export function isCopilotManagedName(name: string): boolean {
+  return name === 'ModelDock' || name.startsWith('ModelDock · ');
+}
 export interface CopilotNativeProvider {
   id: string; name: string; kind: string; settings: Record<string, unknown>;
   hasSecret: boolean; accountId?: string;
@@ -358,7 +362,7 @@ export class CopilotDesktopClient {
       const result: CopilotDesktopSyncResult = { providerCount: plan.providers.length, modelCount: plan.providers.reduce((n, p) => n + p.models.length, 0), removedProviderCount: 0, removedModelCount: 0 };
       const expectedProviders = new Map<string, { name: string; settings: Record<string, string> }>();
       for (const input of plan.providers) {
-        const name = input.name.startsWith('ModelDock · ') ? input.name : `ModelDock · ${input.name}`;
+        const name = isCopilotManagedName(input.name) ? input.name : `ModelDock · ${input.name}`;
         const settings = { baseUrl: input.baseUrl, authKind: 'api_key', wireApi: (input.wireApi ?? input.models[0]?.wireApi) === 'responses' ? 'responses' : 'completions', headersJson: JSON.stringify(input.headers ?? {}) };
         const ack = await this.command({ type: 'upsert_model_provider', provider: { id: input.id, name, kind: 'custom', settings }, secret: { kind: 'api_key', value: input.apiKey } }, 'model_provider_upserted', value => object(value.provider) && value.provider.id === input.id);
         const saved = parseProvider(ack.provider);

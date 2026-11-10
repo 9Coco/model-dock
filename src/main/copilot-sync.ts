@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { CopilotDesktopClient, CopilotDesktopError, validateCopilotDesktopSnapshot, type CopilotDesktopPlan, type CopilotDesktopProviderInput, type CopilotDesktopSnapshot, type CopilotDesktopSyncOptions, type CopilotDesktopSyncResult } from './copilot-desktop';
+import { CopilotDesktopClient, CopilotDesktopError, isCopilotManagedName, validateCopilotDesktopSnapshot, type CopilotDesktopPlan, type CopilotDesktopProviderInput, type CopilotDesktopSnapshot, type CopilotDesktopSyncOptions, type CopilotDesktopSyncResult } from './copilot-desktop';
 import { captureCopilotCredentials, restoreCopilotCredentials, validateCopilotCredentialBackup, CopilotCredentialError, type CopilotCredentialBackup } from './copilot-credentials';
 
 export interface CopilotSyncStore {
@@ -143,7 +143,7 @@ function restore(snapshot: CopilotDesktopSnapshot, previous: CopilotDesktopPlan,
     if (!record(entry) || Object.keys(entry).some(key => key !== 'provider' && key !== 'models') || !record(entry.provider) || !Array.isArray(entry.models)) fail('history');
     const native = entry.provider;
     if (Object.keys(native).some(key => !['id', 'name', 'kind', 'settings', 'hasSecret', 'accountId'].includes(key))) fail('history');
-    if (!text(native.id) || !UUID.test(native.id) || !owned.includes(native.id) || seen.has(native.id) || native.kind !== 'custom' || native.accountId !== undefined || typeof native.hasSecret !== 'boolean' || !text(native.name, 256) || !native.name.startsWith('ModelDock · ') || !record(native.settings) || !endpoint(native.settings.baseUrl) || native.settings.authKind !== 'api_key' || native.settings.azureApiVersion !== undefined && native.settings.azureApiVersion !== null) fail('history');
+    if (!text(native.id) || !UUID.test(native.id) || !owned.includes(native.id) || seen.has(native.id) || native.kind !== 'custom' || native.accountId !== undefined || typeof native.hasSecret !== 'boolean' || !text(native.name, 256) || !isCopilotManagedName(native.name) || !record(native.settings) || !endpoint(native.settings.baseUrl) || native.settings.authKind !== 'api_key' || native.settings.azureApiVersion !== undefined && native.settings.azureApiVersion !== null) fail('history');
     seen.add(native.id);
     if (Object.keys(native.settings).some(key => !['baseUrl', 'authKind', 'wireApi', 'headersJson', 'azureApiVersion'].includes(key)) || native.settings.wireApi !== 'responses' && native.settings.wireApi !== 'completions') fail('history');
     const cached = previous.providers.find(provider => provider.id === native.id);
