@@ -118,13 +118,15 @@ function plan(value: unknown, category: 'configuration' | 'history'): CopilotDes
     if (!record(value) || Object.keys(value).some(key => key !== 'providers') || !Array.isArray(value.providers) || value.providers.length > 1000) fail(category);
     const used = new Set<string>();
     for (const provider of value.providers) {
-      if (!record(provider) || Object.keys(provider).some(key => !['id', 'name', 'baseUrl', 'apiKey', 'headers', 'models', 'wireApi'].includes(key)) || !text(provider.id) || !UUID.test(provider.id) || used.has(provider.id) || !text(provider.name, 256) || !endpoint(provider.baseUrl) || !text(provider.apiKey, 8192) || !Array.isArray(provider.models) || provider.models.length > 10000) fail(category);
+      if (!record(provider) || Object.keys(provider).some(key => !['id', 'name', 'baseUrl', 'apiKey', 'headers', 'models', 'wireApi', 'nameMode'].includes(key)) || !text(provider.id) || !UUID.test(provider.id) || used.has(provider.id) || !text(provider.name, 256) || !endpoint(provider.baseUrl) || !text(provider.apiKey, 8192) || !Array.isArray(provider.models) || provider.models.length > 10000) fail(category);
+      if (provider.nameMode !== undefined && provider.nameMode !== 'source' && provider.nameMode !== 'exact') fail(category);
       if (provider.wireApi !== undefined && provider.wireApi !== 'chat' && provider.wireApi !== 'responses') fail(category);
       used.add(provider.id);
       if (provider.headers !== undefined && (!record(provider.headers) || Object.entries(provider.headers).some(([key, value]) => !/^[!#$%&'*+.^_`|~\w-]+$/.test(key) || typeof value !== 'string' || value.length > 8192 || /[\x00-\x1f\x7f]/.test(value) || /^(authorization|cookie|host|connection|content-length)$/i.test(key)))) fail(category);
       const names = new Set<string>();
       for (const model of provider.models) {
-        if (!record(model) || Object.keys(model).some(key => !['id', 'modelId', 'wireModel', 'displayName', 'wireApi', 'contextWindow', 'maxOutputTokens', 'supportedReasoningEfforts'].includes(key)) || !text(model.id) || !UUID.test(model.id) || used.has(model.id) || !text(model.modelId) || names.has(model.modelId) || !text(model.displayName) || !['chat', 'responses'].includes(String(model.wireApi))) fail(category);
+        if (!record(model) || Object.keys(model).some(key => !['id', 'modelId', 'wireModel', 'displayName', 'wireApi', 'contextWindow', 'maxOutputTokens', 'supportedReasoningEfforts', 'supportsVision'].includes(key)) || !text(model.id) || !UUID.test(model.id) || used.has(model.id) || !text(model.modelId) || names.has(model.modelId) || !text(model.displayName) || !['chat', 'responses'].includes(String(model.wireApi))) fail(category);
+        if (model.supportsVision !== undefined && typeof model.supportsVision !== 'boolean') fail(category);
         if (model.wireModel !== undefined && !text(model.wireModel)) fail(category);
         for (const key of ['contextWindow', 'maxOutputTokens']) if (model[key] !== undefined && (!Number.isSafeInteger(model[key]) || Number(model[key]) < (key === 'contextWindow' ? 0 : 1))) fail(category);
         if (model.supportedReasoningEfforts !== undefined && (!Array.isArray(model.supportedReasoningEfforts) || model.supportedReasoningEfforts.length > 32 || new Set(model.supportedReasoningEfforts).size !== model.supportedReasoningEfforts.length || model.supportedReasoningEfforts.some(level => !text(level, 64)))) fail(category);
@@ -143,27 +145,30 @@ function restore(snapshot: CopilotDesktopSnapshot, previous: CopilotDesktopPlan,
     if (!record(entry) || Object.keys(entry).some(key => key !== 'provider' && key !== 'models') || !record(entry.provider) || !Array.isArray(entry.models)) fail('history');
     const native = entry.provider;
     if (Object.keys(native).some(key => !['id', 'name', 'kind', 'settings', 'hasSecret', 'accountId'].includes(key))) fail('history');
-    if (!text(native.id) || !UUID.test(native.id) || !owned.includes(native.id) || seen.has(native.id) || native.kind !== 'custom' || native.accountId !== undefined || typeof native.hasSecret !== 'boolean' || !text(native.name, 256) || !isCopilotManagedName(native.name) || !record(native.settings) || !endpoint(native.settings.baseUrl) || native.settings.authKind !== 'api_key' || native.settings.azureApiVersion !== undefined && native.settings.azureApiVersion !== null) fail('history');
+    if (!text(native.id) || !UUID.test(native.id) || !owned.includes(native.id) || seen.has(native.id) || native.kind !== 'custom' || native.accountId !== undefined || typeof native.hasSecret !== 'boolean' || !text(native.name, 256) || !record(native.settings) || !endpoint(native.settings.baseUrl) || native.settings.authKind !== 'api_key' || native.settings.azureApiVersion !== undefined && native.settings.azureApiVersion !== null) fail('history');
     seen.add(native.id);
     if (Object.keys(native.settings).some(key => !['baseUrl', 'authKind', 'wireApi', 'headersJson', 'azureApiVersion'].includes(key)) || native.settings.wireApi !== 'responses' && native.settings.wireApi !== 'completions') fail('history');
     const cached = previous.providers.find(provider => provider.id === native.id);
     if (!cached || !text(cached.apiKey, 8192)) fail('history');
+    if (!isCopilotManagedName(native.name) && native.name !== cached.name &&
+      !(cached.nameMode === 'source' && native.name.startsWith(cached.name) && /^ \([1-9]\d*\)$/.test(native.name.slice(cached.name.length)))) fail('history');
     let headers: Record<string, string> | undefined;
     if (native.settings.headersJson !== undefined && native.settings.headersJson !== null) {
       if (typeof native.settings.headersJson !== 'string') fail('history');
       try { headers = JSON.parse(native.settings.headersJson); } catch { fail('history'); }
     }
     const models = entry.models.map(model => {
-      if (!record(model) || Object.keys(model).some(key => !['id', 'providerId', 'modelId', 'displayName', 'wireModel', 'maxPromptTokens', 'maxOutputTokens', 'wireApiOverride', 'supportedReasoningEfforts'].includes(key)) || model.providerId !== native.id) fail('history');
+      if (!record(model) || Object.keys(model).some(key => !['id', 'providerId', 'modelId', 'displayName', 'wireModel', 'maxPromptTokens', 'maxOutputTokens', 'wireApiOverride', 'supportedReasoningEfforts', 'supportsVision'].includes(key)) || model.providerId !== native.id) fail('history');
       const protocol = model.wireApiOverride ?? native.settings.wireApi;
       if (protocol !== 'responses' && protocol !== 'completions') fail('history');
       return { id: model.id, modelId: model.modelId, displayName: model.displayName, wireApi: protocol === 'responses' ? 'responses' as const : 'chat' as const,
         ...(model.wireModel !== undefined ? { wireModel: model.wireModel } : {}),
         ...(model.maxPromptTokens !== undefined ? { contextWindow: model.maxPromptTokens } : {}),
         ...(model.maxOutputTokens !== undefined ? { maxOutputTokens: model.maxOutputTokens } : {}),
+        ...(model.supportsVision !== undefined ? { supportsVision: model.supportsVision } : {}),
         ...(model.supportedReasoningEfforts !== undefined ? { supportedReasoningEfforts: model.supportedReasoningEfforts } : {}) };
     });
-    return { id: native.id, name: native.name, baseUrl: native.settings.baseUrl, apiKey: cached.apiKey, wireApi: native.settings.wireApi === 'responses' ? 'responses' : 'chat', ...(headers !== undefined ? { headers } : {}), models } as CopilotDesktopProviderInput;
+    return { id: native.id, name: native.name, ...(!isCopilotManagedName(native.name) ? { nameMode: 'exact' as const } : {}), baseUrl: native.settings.baseUrl, apiKey: cached.apiKey, wireApi: native.settings.wireApi === 'responses' ? 'responses' : 'chat', ...(headers !== undefined ? { headers } : {}), models } as CopilotDesktopProviderInput;
   });
   return plan({ providers }, 'history');
 }

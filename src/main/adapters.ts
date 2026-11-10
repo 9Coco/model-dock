@@ -87,7 +87,7 @@ function selected(store: AdapterStore, id: ToolId, allowEmpty = false) {
   if (!models.length && !allowEmpty) throw new Error('请至少选择一个模型。');
   return { binding, models };
 }
-interface ClientGroup { id: string; name: string; base: string; key: string; models: Model[]; directApi: boolean }
+interface ClientGroup { id: string; name: string; base: string; key: string; models: Model[]; directApi: boolean; singleSource?: Provider }
 function connectionGroups(store: AdapterStore, tool: ToolId, binding: ToolBinding, port: number, revealKey: boolean): ClientGroup[] {
   const allModels = store.listModels();
   const providers = store.listProviders?.() ?? (store.getProvider ? [...new Set(allModels.map(model => model.providerId))].flatMap(id => { const p = store.getProvider!(id); return p ? [p] : []; }) : undefined);
@@ -102,7 +102,7 @@ function connectionGroups(store: AdapterStore, tool: ToolId, binding: ToolBindin
     if (!base) throw new Error('请先为供应商填写套餐专属地址。');
     const apiKey = directApi && revealKey ? store.getSecret?.(provider!.id)?.apiKey : undefined;
     if (directApi && revealKey && !apiKey) throw new Error('直连供应商尚未填写 API Key。');
-    return { id, name, base, directApi, key: directApi ? apiKey ?? '__PROVIDER_API_KEY__' : revealKey ? store.gatewayKey() : PLACEHOLDER,
+    return { id, name, base, directApi, singleSource: policy.kind === 'aggregate' ? undefined : provider, key: directApi ? apiKey ?? '__PROVIDER_API_KEY__' : revealKey ? store.gatewayKey() : PLACEHOLDER,
       models: allModels.filter(model => group.modelIds.includes(model.id)).map(model => clientModel(tool, model, providers?.find(source => source.id === model.providerId), directApi)) };
   });
 }
@@ -214,17 +214,20 @@ export function buildCopilotDesktopPlan(store: AdapterStore, port: number, revea
   const originals = store.listModels();
   return { providers: groups.map(group => {
     const id = nativeCopilotId(namespace, 'provider', group.id);
-    return { id, name: 'ModelDock', baseUrl: group.base, apiKey: group.key, models: group.models.map(model => {
+    const source = group.singleSource;
+    return { id, name: source ? subscriptionDisplayName(source, 'short') : 'ModelDock', ...(source ? { nameMode: 'source' as const } : {}), baseUrl: group.base, apiKey: group.key, models: group.models.map(model => {
       const original = originals.find(value => value.id === model.id) ?? model;
       const budget = clientBudget(model);
       return { id: nativeCopilotId(namespace, 'model', `${group.id}/${model.id}`),
         modelId: group.directApi ? modelLocalAlias(original) : model.alias,
         wireModel: group.directApi ? model.upstreamId : model.alias,
-        displayName: model.displayName || model.alias,
+        displayName: source ? modelDisplayLabel(original) : model.displayName || model.alias,
+        supportsVision: model.vision,
         wireApi: model.wireApi === 'responses' ? 'responses' as const : 'chat' as const,
-        // Copilot stores an input budget, separately from the output budget.
-        contextWindow: model.contextWindow > 0 ? clientInputBudget(model) : 0,
-        maxOutputTokens: budget.output,
+        // The native registry has independent prompt and output limits. A missing
+        // total context must not discard either configured limit or cap it at 32K.
+        contextWindow: model.contextWindow > 0 ? clientInputBudget(model) : model.maxInputTokens || 0,
+        maxOutputTokens: model.contextWindow > 0 ? budget.output : model.maxOutputTokens || UNKNOWN_OUTPUT_BUDGET,
         ...(model.reasoningEfforts?.length ? { supportedReasoningEfforts: [...model.reasoningEfforts] } : {}),
       };
     }) };

@@ -208,6 +208,25 @@ describe('Copilot desktop native configuration bridge', () => {
     expect(JSON.stringify(result)).not.toContain('PRIVATE_');
   });
 
+  it('disambiguates equal short source names without a UUID, preserves efforts and round-trips the native vision flag', async () => {
+    const { client, fixture } = await connect();
+    const desired = plan();
+    for (const p of desired.providers) { p.nameMode = 'source'; p.name = fixture.providers[0].name; }
+    const first = desired.providers[0].models[0];
+    first.supportedReasoningEfforts = ['low', 'high'];
+    first.supportsVision = true;
+    await client.sync(desired, { ownedProviderIds: owned });
+    const names = fixture.providers.filter(p => owned.includes(p.id)).map(p => p.name).sort();
+    expect(names).toEqual([`${desired.providers[0].name} (2)`, `${desired.providers[0].name} (3)`]);
+    const snapshot = await client.captureSnapshot(owned);
+    const before = snapshot.providers.flatMap(p => p.models).find(m => m.id === first.id);
+    expect(before).toMatchObject({ supportedReasoningEfforts: ['low', 'high'], supportsVision: true });
+    first.supportsVision = false;
+    await client.sync(desired, { ownedProviderIds: owned });
+    await client.restoreSnapshot(snapshot, { ownedProviderIds: owned });
+    expect(await client.captureSnapshot(owned)).toEqual(snapshot);
+  });
+
   it('takes the backup before changing owned rows, prunes only old owned models, and clears only owned providers on uncheck-all', async () => {
     const { client, fixture } = await connect(); await client.sync(plan(), { ownedProviderIds: owned }); fixture.commands = [];
     const next = plan(); next.providers.pop(); next.providers[0].models.pop();
@@ -299,6 +318,19 @@ describe('Copilot desktop native configuration bridge', () => {
     await expect(client.sync(plan(), { ownedProviderIds: owned })).resolves.toMatchObject({ providerCount: 2 }); expect(fixture.secrets.size).toBe(2);
   });
 
+  it.each([
+    { maxPromptTokens: 2048 }, { maxOutputTokens: 512 }, { supportsVision: false },
+    { supportedReasoningEfforts: [] }, { wireApiOverride: 'responses' },
+  ])('rejects an acknowledged native write that drops or changes a configured field: %o', async changed => {
+    const { client, fixture } = await connect();
+    const desired = plan();
+    Object.assign(desired.providers[0].models[0], { maxOutputTokens: 16384, supportsVision: true, supportedReasoningEfforts: ['high'] });
+    fixture.intercept = body => {
+      if (body.type === 'upsert_provider_model' && body.model.id === modelA) Object.assign(body.model, changed);
+      return false;
+    };
+    await expect(client.sync(desired, { ownedProviderIds: owned })).rejects.toMatchObject({ category: 'protocol' });
+  });
   it('preserves native reasoning effort metadata in Chat and Responses models for rollback', async () => {
     const { client, fixture } = await connect(); const input = plan();
     input.providers[0].models[0].supportedReasoningEfforts = ['low', 'medium', 'high'];
