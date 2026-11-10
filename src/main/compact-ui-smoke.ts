@@ -20,7 +20,7 @@ interface CompactLayout {
 interface MaterialReadback {
   icons: { symbol: string; family: string; width: number; height: number; paths: number; geometryWidth: number; geometryHeight: number; color: string; fill: string; stroke: string; currentColor: boolean; decorative: boolean; focusable: boolean; externalNode: boolean; controlNamed: boolean; filled?: number; outline?: number }[];
   navigation: { page: string; symbol: string; active: boolean; filled?: number; outline?: number }[];
-  brand: { app: string; tools: { tool: string; mask: string; image: string; imageComplete: boolean; naturalWidth: number; naturalHeight: number; filter: string; material: boolean }[] };
+  brand: { appRowRemoved: boolean; tools: { tool: string; mask: string; image: string; imageComplete: boolean; naturalWidth: number; naturalHeight: number; filter: string; material: boolean }[] };
   remoteFonts: string[];
   legacySvg: number;
 }
@@ -94,7 +94,7 @@ export async function verifyCompactUi(window: BrowserWindow, store: Store, outpu
         decorative:icon.getAttribute('aria-hidden')==='true',focusable:icon.getAttribute('focusable')!=='false'||icon.getAttribute('tabindex')==='0',externalNode:!!icon.querySelector('use,image,foreignObject'),controlNamed:named,...variant(icon)};
     });
     const navigation=[...document.querySelectorAll('.sidebar button[data-page]')].flatMap(button=>{const icon=button.querySelector('svg[data-material-symbol]');return icon?[{page:button.dataset.page,symbol:icon.dataset.materialSymbol,active:button.getAttribute('aria-current')==='page',...variant(icon)}]:[];});
-    const brand={app:document.querySelector('[data-app-brand-icon]')?.getAttribute('src')||'',tools:[...document.querySelectorAll('.sidebar [data-tool-icon]')].map(icon=>{const mark=icon.querySelector('.tool-logo-mark'),image=icon.querySelector('.tool-logo-image'),css=mark?getComputedStyle(mark):null;return {tool:icon.dataset.toolIcon,mask:css?.maskImage||css?.webkitMaskImage||'',image:image?(image.currentSrc||image.src):'',imageComplete:!!image?.complete,naturalWidth:image?.naturalWidth||0,naturalHeight:image?.naturalHeight||0,filter:image?getComputedStyle(image).filter:'none',material:!!icon.querySelector('[data-material-symbol]')};})};
+    const brand={appRowRemoved:!document.querySelector('.sidebar .brand,[data-app-brand-icon]'),tools:[...document.querySelectorAll('.sidebar [data-tool-icon]')].map(icon=>{const mark=icon.querySelector('.tool-logo-mark'),image=icon.querySelector('.tool-logo-image'),css=mark?getComputedStyle(mark):null;return {tool:icon.dataset.toolIcon,mask:css?.maskImage||css?.webkitMaskImage||'',image:image?(image.currentSrc||image.src):'',imageComplete:!!image?.complete,naturalWidth:image?.naturalWidth||0,naturalHeight:image?.naturalHeight||0,filter:image?getComputedStyle(image).filter:'none',material:!!icon.querySelector('[data-material-symbol]')};})};
     const remoteFonts=performance.getEntriesByType('resource').map(entry=>entry.name).filter(name=>/https?:\\/\\/(?:fonts\\.googleapis\\.com|fonts\\.gstatic\\.com)\\//i.test(name));
     return {icons,navigation,brand,remoteFonts,legacySvg:document.querySelectorAll('svg.lucide').length};
   })()`;
@@ -141,13 +141,19 @@ export async function verifyCompactUi(window: BrowserWindow, store: Store, outpu
   let originalBrand: MaterialReadback['brand'] | undefined;
   async function inspectMaterial(name: string) {
     const value = await evaluate<MaterialReadback>(materialScript);
-    assert.ok(value.icons.length >= 12, `Functional Material icons must render: ${name}`);
+    assert.ok(value.icons.length > value.navigation.length, `Page controls render Material icons alongside navigation: ${name}`);
+    for (const symbol of ['add', 'refresh']) assert.ok(value.icons.some(icon => icon.symbol === symbol), `Subscription actions retain their Material icon: ${symbol} ${name}`);
     assert.equal(value.legacySvg, 0, 'Functional controls must use the selected Material family');
     assert.deepEqual(value.remoteFonts, [], 'Material SVG icons must not load Google icon fonts at runtime');
-    const expected: Record<string, string> = { auth: 'key', service: 'monitor_heart', settings: 'tune' };
+    const expected: Record<string, string> = { network: 'language', auth: 'key', service: 'monitor_heart', settings: 'tune' };
     assert.deepEqual(value.navigation.map(item => item.page).sort(), Object.keys(expected).sort(), 'Functional sidebar destinations retain their semantic icons');
     for (const item of value.navigation) {
       assert.equal(item.symbol, expected[item.page], `Correct navigation icon: ${item.page}`);
+      if (item.page === 'network') {
+        assert.equal(item.filled, undefined, 'Language uses its single official glyph');
+        assert.equal(item.outline, undefined, 'Language has no separate fill variant');
+        continue;
+      }
       assert.equal(item.filled, item.active ? 1 : 0, `Selected navigation uses Google's fill 1 geometry: ${item.page}`);
       assert.equal(item.outline, item.active ? 0 : 1, `Unselected navigation uses outline geometry: ${item.page}`);
     }
@@ -160,7 +166,8 @@ export async function verifyCompactUi(window: BrowserWindow, store: Store, outpu
       assert.ok(icon.controlNamed, `An icon control must retain its text, title or ARIA name: ${icon.symbol}`);
     }
     assert.deepEqual(value.brand.tools.map(item => item.tool).sort(), ['codex', 'claude-code', 'junie', 'opencode', 'dsh', 'vscode', 'copilot', 'copilot-cli', 'webstorm', 'intellij-idea', 'rider', 'pycharm'].sort(), 'Every supported tool retains its brand asset independently of sidebar grouping');
-    assert.ok(value.brand.app && value.brand.tools.every(item => !item.material), 'App and tool identities remain separate local brand assets');
+    assert.equal(value.brand.appRowRemoved, true, 'The sidebar brand row is removed');
+    assert.ok(value.brand.tools.every(item => !item.material), 'Tool identities remain local brand assets');
     for (const item of value.brand.tools) {
       const colorLogo = ['webstorm', 'intellij-idea', 'rider', 'pycharm'].includes(item.tool);
       assert.ok(colorLogo ? item.image && !item.mask && item.imageComplete && item.naturalWidth > 0 && item.naturalHeight > 0 && item.filter === 'none' : item.mask.startsWith('url(') && !item.image, `Tool brand must retain its image or mask rendering: ${item.tool}`);

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FlowBridgeManager, validateNetworkSettings } from '../src/main/flowbridge';
@@ -28,20 +28,20 @@ describe('FlowBridge integration', () => {
     const f = fixture();
     const address = 'socks5://192.0.2.30:38473';
     await f.manager.save({ address, mode: 'global' });
-    expect(f.manager.speedTestProxy(address)).toBe(address);
-    expect(() => f.manager.speedTestProxy('socks5://192.0.2.31:38473')).toThrow('应用');
+    expect(f.manager.latencyTestProxy(address)).toBe(address);
+    expect(() => f.manager.latencyTestProxy('socks5://192.0.2.31:38473')).toThrow('应用');
     await f.manager.connect();
-    expect(f.manager.speedTestProxy(address)).toBe('http://127.0.0.1:30000');
+    expect(f.manager.latencyTestProxy(address)).toBe('http://127.0.0.1:30000');
     f.crash();
-    expect(() => f.manager.speedTestProxy(address)).toThrow('恢复');
+    expect(() => f.manager.latencyTestProxy(address)).toThrow('恢复');
     await f.manager.disconnect();
-    expect(f.manager.speedTestProxy(address)).toBe(address);
+    expect(f.manager.latencyTestProxy(address)).toBe(address);
   });
   it('prepares a typed endpoint for offline testing without connecting or replacing an active session', async () => {
     const f = fixture();
     const saved = await f.manager.save({ address: '192.0.2.30:038473/', mode: 'global' }, { offlineOnly: true });
     expect(saved.state).toBe('idle');
-    expect(f.manager.speedTestProxy(saved.settings.address)).toBe('socks5://192.0.2.30:38473');
+    expect(f.manager.latencyTestProxy(saved.settings.address)).toBe('socks5://192.0.2.30:38473');
     expect(f.calls).toEqual([]);
     const other = { address: '192.0.2.31:38473' };
     const connecting = f.manager.connect();
@@ -81,6 +81,48 @@ describe('FlowBridge integration', () => {
     await manager.connect();
     expect(permissions).toEqual([false, true]);
     await manager.shutdown();
+  });
+  it('retains real one-second samples beyond one minute, persists them and prunes only the one-hour window', async () => {
+    vi.useFakeTimers();
+    const initial = Date.UTC(2026, 10, 10);
+    vi.setSystemTime(initial);
+    const directory = temporary(), values = new Map<string, unknown>();
+    const memory = { getManagedState<T>(key: string, fallback: T): T { return (values.get(key) ?? fallback) as T; }, setManagedState(key: string, value: unknown) { values.set(key, value); } };
+    let bytes = 0;
+    const manager = new FlowBridgeManager(memory, { platform: 'linux', dataDir: directory, gatewayPort: () => 18181,
+      engine: () => ({ async request<T>(method: string) {
+        if (method === 'disconnect') return stopped() as T;
+        if (method === 'snapshot') bytes += 100;
+        return { ...stopped(), running: true, cleanupConfirmed: false, localPort: 30000, uploadBytes: bytes, downloadBytes: bytes * 2 } as T;
+      }, async close() {} }) });
+    await manager.connect({ address: '192.0.2.30:38473', mode: 'http' });
+    await vi.advanceTimersByTimeAsync(300_000);
+    const samples = manager.snapshot().history;
+    expect(samples).toHaveLength(300);
+    expect(samples[0].time).toBe(initial + 1000);
+    expect(samples.at(-1)!.time).toBe(initial + 300_000);
+    expect(samples.every((sample, index) => index === 0 || sample.time - samples[index - 1].time === 1000)).toBe(true);
+    expect(samples.at(-1)).toMatchObject({ uploadRate: 100, downloadRate: 200 });
+    await manager.shutdown();
+    const persisted = JSON.parse(readFileSync(join(directory, 'history.json'), 'utf8'));
+    expect(persisted).toEqual(samples);
+    const reopened = new FlowBridgeManager(memory, { platform: 'linux', dataDir: directory, gatewayPort: () => 18181,
+      engine: () => { throw new Error('Reading history must not launch a helper'); } });
+    expect(reopened.snapshot().history).toEqual(samples);
+    vi.setSystemTime(initial + 3_601_000);
+    expect(reopened.snapshot().history).toEqual(samples.slice(1));
+    vi.setSystemTime(initial + 3_900_000);
+    expect(reopened.snapshot().history).toEqual([]);
+    await reopened.shutdown();
+  });
+  it('keeps existing sparse minute samples at their original timestamps without fabricating second samples', () => {
+    const directory = temporary(), now = Date.UTC(2026, 10, 10);
+    const history = [90, 5, 4, 3].map(minutes => ({ time: now - minutes * 60_000, uploadRate: minutes, downloadRate: minutes * 2, uploadBytes: 100, downloadBytes: 200 }));
+    writeFileSync(join(directory, 'history.json'), JSON.stringify(history));
+    const store = { getManagedState<T>(_key: string, fallback: T): T { return fallback; }, setManagedState() {} };
+    const manager = new FlowBridgeManager(store, { platform: 'linux', dataDir: directory, gatewayPort: () => 18181, now: () => now,
+      engine: () => { throw new Error('Reading history must not launch a helper'); } });
+    expect(manager.snapshot().history).toEqual(history.slice(1));
   });
   it('is inert by default and shutdown does not launch a helper or write legacy settings', async () => {
     const f = fixture(); expect(f.manager.snapshot().settings).toEqual(DEFAULT_FLOWBRIDGE);

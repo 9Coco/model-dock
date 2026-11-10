@@ -38,6 +38,7 @@ export function NetworkMini() {
   const lockLabel = value?.locked ? '解锁小窗' : '锁定小窗';
   const chartLabel = value?.expanded ? '收起曲线' : '展开曲线';
   const sample = value?.state === 'connected' ? value.history.at(-1) : undefined;
+  const end = Date.now();
   return <section className="network-mini" onDoubleClick={() => void window.networkMonitor?.action('open')}>
     <header data-draggable={value?.locked === false}>
       <strong>ModelDock · 网速</strong>
@@ -56,6 +57,6 @@ export function NetworkMini() {
       <div data-direction="upload"><small>↑ 上传</small><strong>{networkBytes(sample?.uploadRate ?? 0)}/s</strong></div>
       <div data-direction="download"><small>↓ 下载</small><strong>{networkBytes(sample?.downloadRate ?? 0)}/s</strong></div>
     </div>
-    {value?.expanded && <NetworkChart samples={value.history} />}
+    {value?.expanded && <NetworkChart samples={value.history} timeWindow={{ start: end - 60_000, end }} />}
   </section>;
 }

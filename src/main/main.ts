@@ -76,8 +76,7 @@ import { jetBrainsWindowsSmokeOptions, verifyJetBrainsWindowsProfiles } from './
 import { verifyAggregateModes } from './aggregate-modes-smoke';
 import { restoreToolBinding } from './tool-restore-binding';
 import { importOpenCodeGo } from './opencode-go-import';
-import { measureProxySpeed, measureSiteLatency } from './proxy-speed-test';
-import type { ProxySpeedMetric } from '../shared/flowbridge-types';
+import { measureSiteLatency } from './proxy-speed-test';
 import { ApplicationNetworkSession } from './network-proxy';
 import { inspectAuthNetwork } from './network-diagnostic';
 import { createSystemNetworkFetch } from './system-network';
@@ -548,7 +547,11 @@ async function createWindow(forceShow = false) {
           await window!.webContents.executeJavaScript(`document.querySelector('[data-action="discover-models"]').click()`);
           await new Promise(resolve=>setTimeout(resolve,300));
           const discoveredUi=await window!.webContents.executeJavaScript(`(()=>{const dialog=document.querySelector('[role="dialog"]'),rows=Array.from(dialog.querySelectorAll('.discovery-model'));return {title:dialog.querySelector('h2').textContent,models:rows.length,alreadyAdded:rows.filter(row=>row.classList.contains('existing')).length,selected:rows.filter(row=>row.querySelector('input[type="checkbox"]').checked&&!row.classList.contains('existing')).length,hasError:!!dialog.querySelector('[role="alert"]')};})()`);
-          if(discoveredUi.models!==3||discoveredUi.alreadyAdded!==1||discoveredUi.selected!==2||discoveredUi.hasError) throw new Error('Real model discovery UI did not populate from mock upstream');
+          if(discoveredUi.models!==3||discoveredUi.alreadyAdded!==1||discoveredUi.selected!==0||discoveredUi.hasError) throw new Error('Real model discovery UI did not populate from mock upstream');
+          const discoveryInitiallyDisabled=await window!.webContents.executeJavaScript(`document.querySelector('.discovery-footer .button.primary').disabled`);
+          if(!discoveryInitiallyDisabled) throw new Error('Model discovery must require an explicit selection');
+          await window!.webContents.executeJavaScript(`document.querySelector('.discovery-list-header input[type="checkbox"]').click()`);
+          await new Promise(resolve=>setTimeout(resolve,100));
           writeFileSync(join(outputDir,'electron-discovery-dark-1320.png'),await captureUi());
           window!.setSize(980,680);
           await new Promise(resolve=>setTimeout(resolve,150));
@@ -811,37 +814,30 @@ function registerIpc() {
   handle('saveNetworkSettings', (patch, options) => network.save(patch, options));
   handle('connectNetwork', upstream => network.connect(upstream));
   handle('disconnectNetwork', () => network.disconnect(true));
-  let measuringSpeed = false;
-  let speedProxy = '';
-  async function withSpeedProbe<T>(address: string, run: (probe: Electron.Session) => Promise<T>): Promise<T> {
-    const proxyRules = network.speedTestProxy(address);
-    if (measuringSpeed) throw new Error('代理测速正在进行。');
-    measuringSpeed = true;
+  let measuringLatency = false;
+  let latencyProxy = '';
+  async function withLatencyProbe<T>(address: string, run: (probe: Electron.Session) => Promise<T>): Promise<T> {
+    const proxyRules = network.latencyTestProxy(address);
+    if (measuringLatency) throw new Error('代理测速正在进行。');
+    measuringLatency = true;
     try {
-      const probe = session.fromPartition('modeldock-speed-test', { cache: false });
-      if (speedProxy !== proxyRules) {
+      const probe = session.fromPartition('modeldock-latency-test', { cache: false });
+      if (latencyProxy !== proxyRules) {
         await probe.closeAllConnections();
         await probe.setProxy({ mode: 'fixed_servers', proxyRules });
-        speedProxy = proxyRules;
+        latencyProxy = proxyRules;
       }
       return await run(probe);
     } catch (error) {
       if (error instanceof Error && error.message.startsWith('测速')) throw error;
       throw new Error('通过上游代理访问测速节点失败或超时，请检查代理地址和连接。');
-    } finally { measuringSpeed = false; }
+    } finally { measuringLatency = false; }
   }
-  handle('measureNetworkSpeed', (address: string, metric: ProxySpeedMetric) => {
-    if (!['latency', 'download', 'upload'].includes(metric)) throw new Error('未知测速项目。');
-    return withSpeedProbe(address, async probe => {
-      if (__MODELDOCK_SMOKE_BUILD__ && process.env.MODELDOCK_SMOKE_NETWORK_ONLY === '1') return { latency: 42, download: 80, upload: 20 }[metric];
-      return measureProxySpeed(metric, (url, init) => probe.fetch(url, init));
-    });
-  });
   handle('measureNetworkSites', (address: string, id: string) => {
     if (typeof id !== 'string' || !/^[0-9a-f-]{36}$/i.test(id)) throw new Error('测速请求无效。');
     const target = window?.webContents;
-    return withSpeedProbe(address, async probe => {
-      await Promise.all(NETWORK_SITES.map(async (site, index) => {
+    return withLatencyProbe(address, async probe => {
+      return await Promise.all(NETWORK_SITES.map(async (site, index) => {
         let result: SiteLatency;
         if (__MODELDOCK_SMOKE_BUILD__ && process.env.MODELDOCK_SMOKE_NETWORK_ONLY === '1') {
           result = site === 'X' ? { site, state: 'timeout' } : { site, state: 'response', ms: 42 + index, httpStatus: site === 'ChatGPT' ? 403 : 200 };
@@ -849,6 +845,7 @@ function registerIpc() {
           result = await measureSiteLatency(site, (url, init) => probe.fetch(url, init));
         }
         if (target && !target.isDestroyed()) target.send('modeldock:site-latency-result', id, result);
+        return result;
       }));
     });
   });

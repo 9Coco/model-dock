@@ -11,6 +11,8 @@ The Google, YouTube, X, GitHub and Cloudflare site icons come from [Simple Icons
 
 | Material | Source | License and local records |
 | --- | --- | --- |
+| Model-series and service identification marks | [LobeHub Lobe Icons](https://github.com/lobehub/lobe-icons), revision `ea434b96e75813517b377825e01c0df61dee8836` | MIT; [license](src/renderer/assets/model-series-icons/LICENSE-MIT.txt), [notice](src/renderer/assets/model-series-icons/NOTICE.md), [manifest](src/renderer/assets/model-series-icons/manifest.json) |
+| JetBrains AI Assistant service icon | [JetBrains official brand assets](https://www.jetbrains.com/company/brand/) | JetBrains Brand Guidelines and trademark terms; [attribution](src/renderer/assets/model-series-icons/LICENSE-jetbrains-brand.txt), [manifest](src/renderer/assets/model-series-icons/manifest.json). Displayed in its original colors and proportions. |
 | Material Symbols Rounded | [Google material-design-icons](https://github.com/google/material-design-icons), revision `737e3324305806514d7909874fa1818ae1808232` | Apache-2.0; [license](src/renderer/assets/material-symbols/LICENSE-Apache-2.0.txt), [notice](src/renderer/assets/material-symbols/NOTICE.md), [manifest](src/renderer/assets/material-symbols/manifest.json) |
 | Codex / OpenAI and VS Code identification marks | [Microsoft vscode-codicons](https://github.com/microsoft/vscode-codicons) | CC-BY-4.0; [license](src/renderer/assets/tool-icons/LICENSE-codicons.txt), [notice](src/renderer/assets/tool-icons/NOTICE.md) |
 | OpenCode identification mark | [anomalyco/opencode](https://github.com/anomalyco/opencode) | MIT; [license](src/renderer/assets/tool-icons/LICENSE-opencode.txt), [notice](src/renderer/assets/tool-icons/NOTICE.md) |

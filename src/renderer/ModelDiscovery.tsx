@@ -8,6 +8,7 @@ import { lookupModelMetadata, lookupModelReasoningDefaults } from '../shared/mod
 import { applyOfficialModelParameters, officialModelParameterFields, reasoningSelectionPatch, withReasoningWireApi } from '../shared/model-draft';
 import { modelDisplayLabel, modelLocalAlias } from '../shared/model-names';
 import { groupModelsBySeries } from '../shared/model-order';
+import { ModelSeriesIcon } from './ModelSeriesIcon';
 import { BusyIcon, EmptyState, Modal, type Notify } from './components';
 
 type MetadataField = ModelMetadataField;
@@ -25,7 +26,7 @@ const errorText = (error: unknown) => (error instanceof Error ? error.message : 
   .replace(/^(?:Error:\s*)?Error invoking remote method ['"]modeldock:(?:discoverModels|addDiscoveredModels)['"]:\s*(?:Error:\s*)?/, '');
 const protocolLabel = (wireApi: WireApi) => wireApi === 'messages' ? 'Anthropic Messages' : wireApi === 'responses' ? 'Responses' : 'Chat Completions';
 const reasoningEffortLabels: Record<ReasoningEffort, string> = { none: '无', minimal: '最小', low: '低', medium: '中', high: '高', xhigh: '超高', max: '最大' };
-const candidateDraft = (model: DiscoveredModel, providerId: string): CandidateDraft => ({ ...model, alias: modelLocalAlias({ providerId, alias: model.alias }), selected: !model.existingModelId && model.catalogImportable !== false });
+const candidateDraft = (model: DiscoveredModel, providerId: string): CandidateDraft => ({ ...model, alias: modelLocalAlias({ providerId, alias: model.alias }), selected: false });
 const metadataLabels: Record<MetadataField, string> = { contextWindow: '上下文', tools: '工具调用', vision: '图片输入', maxInputTokens: '输入上限', maxOutputTokens: '输出预算', thinking: '思考能力', reasoningEfforts: '思考等级', defaultReasoningEffort: '默认强度', reasoningEffortFormat: '思考格式', adaptiveThinking: '自适应思考', minThinkingBudget: '最低思考预算', maxThinkingBudget: '最高思考预算' };
 const activeMetadataFields = (model: CandidateDraft, fields: readonly MetadataField[] | undefined) => (fields ?? []).filter(field => !model.editedFields?.includes(field));
 const metadataFieldLabels = (fields: readonly MetadataField[]) => fields.map(field => metadataLabels[field]).join('、');
@@ -100,7 +101,7 @@ function navigatePicker(event: KeyboardEvent<HTMLDivElement>) {
   }
   if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
   const row = target.closest<HTMLElement>('.discovery-option');
-  const search = event.currentTarget.querySelector<HTMLInputElement>('.discovery-toolbar input[type="search"]');
+  const search = event.currentTarget.querySelector<HTMLInputElement>('.discovery-search input[type="search"]');
   if (!row && target !== search) return;
   const rows = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('.discovery-option'));
   if (!rows.length) return;
@@ -173,11 +174,11 @@ export function ModelDiscovery({ api, provider, notify, onClose, onAdded, onManu
   const eligible = useMemo(() => models.filter(model => !historySupported || showHistorical || model.catalogVisibility === 'current'), [models, historySupported, showHistorical]);
   const catalogSource = result?.history?.source;
   const catalogSeries = useMemo(() => groupModelsBySeries(eligible, catalogSource), [eligible, catalogSource]);
-  const currentSeries = catalogSeries.find(group => group.key === seriesKey);
-  const tabs = [{ key: '', label: '全部' }, ...catalogSeries];
-  const currentTab = currentSeries?.key ?? '';
+  const currentSeries = catalogSeries.find(group => group.key === seriesKey) ?? catalogSeries[0];
+  const tabs = catalogSeries;
+  const currentTab = currentSeries?.key;
   const series = useMemo(() => {
-    const scope = currentSeries ? [currentSeries] : catalogSeries;
+    const scope = currentSeries ? [currentSeries] : [];
     const query = search.trim().toLowerCase();
     if (!query) return scope;
     return scope.map(group => ({
@@ -186,8 +187,8 @@ export function ModelDiscovery({ api, provider, notify, onClose, onAdded, onManu
     })).filter(group => group.models.length);
   }, [currentSeries, catalogSeries, search, provider]);
   const visible = series.flatMap(group => group.models);
-  const scopeSize = currentSeries?.models.length ?? eligible.length;
-  const selectAllLabel = search.trim() ? '全选筛选结果' : currentSeries ? '全选当前系列' : '全选可添加模型';
+  const scopeSize = currentSeries?.models.length ?? 0;
+  const selectAllLabel = search.trim() ? '全选筛选结果' : '全选当前系列';
   const available = visible.filter(model => !model.existingModelId && model.catalogImportable !== false);
   const selected = eligible.filter(model => model.selected && !model.existingModelId && model.catalogImportable !== false);
   const allSelected = available.length > 0 && available.every(model => model.selected);
@@ -261,69 +262,74 @@ export function ModelDiscovery({ api, provider, notify, onClose, onAdded, onManu
   };
 
   return <Modal wide title="获取模型列表" subtitle={provider.name} onClose={() => { if (!adding) onClose(); }}>
-    <div className="discovery-body" ref={listBody} onKeyDown={navigatePicker}>
+    <div className="discovery-body" onKeyDown={navigatePicker}>
       <div className="discovery-source"><span>模型来源</span><code title={provider.baseUrl}>{provider.baseUrl}</code><button className="button secondary small" disabled={loading || adding} onClick={() => void fetchModels()}><BusyIcon active={loading}><RefreshCw size={14} /></BusyIcon>{loading ? '获取中' : '重新获取'}</button></div>
-      {loading ? <div className="discovery-loading" role="status"><BusyIcon active><Download size={24} /></BusyIcon><strong>正在获取供应商模型列表…</strong><span>使用已保存的凭据连接上游服务。</span></div> : <>
-        {!result?.ok && (error || result) && <div className="discovery-error" role="alert"><strong>{result?.errorCategory === 'unsupported' ? '此供应商没有模型列表接口' : result?.statusCode ? `获取失败 · HTTP ${result.statusCode}` : '获取失败'}</strong><span>{error || result?.message}</span>{result && <small>模型列表不可用不代表模型无法调用；可以手动添加模型后测试连接。</small>}</div>}
-        {result?.ok && <>
-          <div className="discovery-picker-header">
-            {catalogSeries.length > 0 && <div className="discovery-series-tabs" role="tablist" aria-label="模型系列">
-              {tabs.map((tab, index) => <button type="button" key={tab.key} role="tab" id={`${seriesPanelId}-tab-${index}`}
-                data-discovery-series-tab={tab.key} aria-controls={seriesPanelId} aria-selected={currentTab === tab.key}
-                tabIndex={currentTab === tab.key ? 0 : -1} disabled={adding} title={tab.label}
-                onKeyDown={event => navigateSeries(event, index)} onClick={() => { setSeriesKey(tab.key); setExpandedId(null); listBody.current?.scrollTo({ top: 0 }); }}>
-                {tab.label}
-              </button>)}
-            </div>}
-            <div className="discovery-toolbar"><label className="search-box"><Search size={15} /><input autoFocus type="search" aria-label="搜索模型" placeholder={currentSeries ? `搜索 ${currentSeries.label} 模型` : '搜索模型 ID 或名称'} value={search} disabled={adding} onChange={event => { setSearch(event.target.value); setExpandedId(null); listBody.current?.scrollTo({ top: 0 }); }} /></label>{historySupported && <label className="discovery-history-toggle"><input type="checkbox" aria-label="显示历史模型" data-action="show-history-models" checked={showHistorical} disabled={loading || adding} onChange={event => { setShowHistorical(event.target.checked); setError(''); setAdded(null); }} />显示历史模型</label>}<span data-discovery-count>{search.trim() ? `${visible.length} / ${scopeSize}` : scopeSize} 个模型{visible.some(model => model.existingModelId) ? ` · ${visible.filter(model => model.existingModelId).length} 个已添加` : ''}</span><button className={`button secondary small ${advanced ? 'selected' : ''}`} aria-expanded={advanced} disabled={adding} onClick={() => setAdvanced(value => !value)}><Settings2 size={14} />高级设置<ChevronDown size={13} className={advanced ? 'discovery-chevron-open' : ''} /></button></div>
-          </div>
-          {historySupported && <p className="discovery-history-note" data-discovery-history-message>{result.history?.message || (result.history?.currentVerified ? '默认仅显示已确认的当前模型；勾选后可查看客户端未展示或显示状态未核实的条目。已添加的模型保持不变。' : '尚未核实完整的当前客户端清单；默认仅显示已确认的当前模型，勾选可查看其他已识别条目。')}</p>}
-          {advanced && <div className="discovery-advanced">
-            <div className="discovery-advanced-copy"><strong>批量配置所选模型</strong><small>优先使用供应商返回的参数；缺少时按内置字典补全。可逐个展开「参数设置」或在这里批量修正，手动设置会覆盖补全值。无法核实的工具和图片能力默认关闭，可自行启用。</small></div>
-            <div className="discovery-advanced-grid">
-              <label>调用接口<select value={bulkWireApi} disabled={adding || chatOnly} onChange={event => setBulkWireApi(event.target.value as WireApi | '')}><option value="">保留列表设置</option>{(provider.kind === 'openai-compatible' || provider.kind === 'copilot' || provider.kind === 'opencode-go') && <option value="chat-completions">Chat Completions</option>}<option value="responses">Responses</option>{provider.kind === 'openai-compatible' && <option value="messages">Anthropic Messages</option>}</select></label>
-              <label>上下文长度<input type="number" min="0" step="1" value={bulkContext} disabled={adding} placeholder="留空保留，0 为未设置" onChange={event => setBulkContext(event.target.value)} /></label>
-              <label>工具调用<select value={bulkTools} disabled={adding} onChange={event => setBulkTools(event.target.value)}><option value="">保留列表设置</option><option value="yes">启用</option><option value="no">关闭</option></select></label>
-              <label>图片输入<select value={bulkVision} disabled={adding} onChange={event => setBulkVision(event.target.value)}><option value="">保留列表设置</option><option value="yes">启用</option><option value="no">关闭</option></select></label>
-            </div>
-            <button className="button secondary small" disabled={adding || !selected.length || (!bulkWireApi && !bulkContext.trim() && !bulkTools && !bulkVision)} onClick={applyAdvanced}>应用到所选 {selected.length} 个模型</button>
+      {!loading && result?.ok && (
+        <div className="discovery-picker-header">
+          {catalogSeries.length > 0 && <div className="discovery-series-tabs" role="tablist" aria-label="模型系列">
+            {tabs.map((tab, index) => <button type="button" key={tab.key} role="tab" id={`${seriesPanelId}-tab-${index}`}
+              data-discovery-series-tab={tab.key} aria-controls={seriesPanelId} aria-selected={currentTab === tab.key}
+              tabIndex={currentTab === tab.key ? 0 : -1} disabled={adding} aria-label={tab.label} title={tab.label}
+              onKeyDown={event => navigateSeries(event, index)} onClick={() => { setSeriesKey(tab.key); setExpandedId(null); listBody.current?.scrollTo({ top: 0 }); }}>
+              <ModelSeriesIcon series={tab.key} />
+              {currentTab === tab.key && <span className="discovery-series-name">{tab.label}</span>}
+            </button>)}
           </div>}
-          <div id={seriesPanelId} role={catalogSeries.length ? 'tabpanel' : undefined} aria-labelledby={catalogSeries.length ? `${seriesPanelId}-tab-${tabs.findIndex(tab => tab.key === currentTab)}` : undefined}>
-            {visible.length ? <div className="discovery-list" data-mixed-selection={someSelected && !allSelected || undefined} data-pointer-navigation={pointerNavigation || undefined}
-              onPointerMove={() => { if (!pointerNavigation) setPointerNavigation(true); }} onPointerLeave={() => setPointerNavigation(false)}
-              onFocusCapture={() => setPointerNavigation(false)} onKeyDownCapture={() => setPointerNavigation(false)}>
-              <div className="discovery-list-header"><label><input ref={selectionBox} type="checkbox" aria-label={selectAllLabel} checked={allSelected} disabled={adding || !available.length} onChange={event => selectVisible(event.target.checked)} />{selectAllLabel}</label></div>
-              {series.map(group => <section key={group.key} data-model-series={group.key} aria-label={group.label}>
-                {!currentSeries && <h3 className="discovery-series-title">{group.label}</h3>}
-                {group.models.map(model => {
-                  const locked = adding || !!model.existingModelId || model.catalogImportable === false;
-                  const open = expandedId === model.upstreamId;
-                  return <div className={`discovery-model ${open ? 'open' : ''} ${model.existingModelId ? 'existing' : ''} ${model.catalogImportable === false ? 'unavailable' : ''}`} key={model.upstreamId}>
-                    <div className="discovery-option">
-                      <label className="discovery-model-select">
-                        <input type="checkbox" checked={model.selected} disabled={locked} aria-label={`选择模型 ${model.upstreamId}`} onChange={event => updateModel(model.upstreamId, { selected: event.target.checked })} />
-                        <strong title={model.upstreamId}>{modelDisplayLabel(model, provider)}</strong>
-                      </label>
-                      {historySupported && model.catalogVisibility === 'historical' && <span className="badge" data-model-historical>客户端未展示</span>}
-                      {historySupported && model.catalogVisibility === undefined && <span className="badge" data-model-visibility-unknown>显示状态未核实</span>}
-                      {model.catalogImportable === false && <span className="badge" data-model-unimportable={model.catalogBlockedReason ?? ''} title={model.catalogBlockedReason ? catalogAccessMessages[model.catalogBlockedReason] : undefined}>暂不支持添加</span>}
-                      {model.existingModelId && <span className="badge positive"><Check size={11} />已添加</span>}
-                      <span className="discovery-context" title={model.contextWindow ? `上下文长度：${model.contextWindow.toLocaleString('zh-CN')} tokens` : '上下文未设置'}>
-                        {model.defaultReasoningEffort && <span>{reasoningEffortLabels[model.defaultReasoningEffort]}</span>}
-                        {model.contextWindow > 0 && <span>Max {compactContext.format(model.contextWindow)}</span>}
-                      </span>
-                      <button type="button" className="discovery-toggle" aria-label={`${model.upstreamId} 参数设置`} aria-expanded={open} aria-controls={open ? editorId : undefined} title={open ? '收起参数' : '查看和编辑模型参数'} onClick={() => setExpandedId(open ? null : model.upstreamId)}><ChevronDown size={14} /></button>
-                    </div>
-                    {open && <CandidateSettings id={editorId} model={model} provider={provider} locked={locked} onUpdate={patch => updateModel(model.upstreamId, patch)} />}
-                  </div>;
-                })}
-              </section>)}
-            </div> : <EmptyState compact icon={<Layers3 size={24} />} title={search.trim() ? '没有匹配的模型' : historySupported && !showHistorical ? result.history?.currentVerified ? '没有已确认的当前模型' : '尚未核实当前客户端清单' : '供应商返回了空列表'} description={search.trim() ? '修改搜索内容后继续选择。' : historySupported && !showHistorical ? '可刷新客户端清单后重试，或勾选“显示历史模型”查看其他已识别条目。已添加的模型保持不变。' : '该地址暂未返回模型，请检查供应商地址与账号权限，也可以手动添加。'} />}
-          </div>
-          <details className="discovery-note"><summary>参数来源与默认值</summary><p>参数优先采用供应商声明，缺少时按内置字典补全，可展开「参数设置」手动修正。不同供应商可以添加同名模型；目录和工具中按「套餐名 - 模型名」展示。无法核实的工具和图片能力默认关闭，可自行启用。模型可见和字典规格不代表实际调用权限，仍需推理验证。上下文未设置时，工具配置使用 32K 上下文 / 4K 输出的保守预算，以上预算并非上游规格。</p></details>
+          <label className="search-box discovery-search"><Search size={15} /><input autoFocus type="search" aria-label="搜索模型" placeholder={currentSeries ? `搜索 ${currentSeries.label} 模型` : '搜索模型 ID 或名称'} value={search} disabled={adding} onChange={event => { setSearch(event.target.value); setExpandedId(null); listBody.current?.scrollTo({ top: 0 }); }} /></label>
+          <div className="discovery-toolbar">{historySupported && <label className="discovery-history-toggle"><input type="checkbox" aria-label="显示历史模型" data-action="show-history-models" checked={showHistorical} disabled={loading || adding} onChange={event => { setShowHistorical(event.target.checked); setError(''); setAdded(null); }} />显示历史模型</label>}<span data-discovery-count>{search.trim() ? `${visible.length} / ${scopeSize}` : scopeSize} 个模型{visible.some(model => model.existingModelId) ? ` · ${visible.filter(model => model.existingModelId).length} 个已添加` : ''}</span><button className={`button secondary small ${advanced ? 'selected' : ''}`} aria-expanded={advanced} disabled={adding} onClick={() => setAdvanced(value => !value)}><Settings2 size={14} />高级设置<ChevronDown size={13} className={advanced ? 'discovery-chevron-open' : ''} /></button></div>
+        </div>
+      )}
+      <div className="discovery-content" ref={listBody}>
+        {loading ? <div className="discovery-loading" role="status"><BusyIcon active><Download size={24} /></BusyIcon><strong>正在获取供应商模型列表…</strong><span>使用已保存的凭据连接上游服务。</span></div> : <>
+          {!result?.ok && (error || result) && <div className="discovery-error" role="alert"><strong>{result?.errorCategory === 'unsupported' ? '此供应商没有模型列表接口' : result?.statusCode ? `获取失败 · HTTP ${result.statusCode}` : '获取失败'}</strong><span>{error || result?.message}</span>{result && <small>模型列表不可用不代表模型无法调用；可以手动添加模型后测试连接。</small>}</div>}
+          {result?.ok && <>
+            {historySupported && <p className="discovery-history-note" data-discovery-history-message>{result.history?.message || (result.history?.currentVerified ? '默认仅显示已确认的当前模型；勾选后可查看客户端未展示或显示状态未核实的条目。已添加的模型保持不变。' : '尚未核实完整的当前客户端清单；默认仅显示已确认的当前模型，勾选可查看其他已识别条目。')}</p>}
+            {advanced && <div className="discovery-advanced">
+              <div className="discovery-advanced-copy"><strong>批量配置所选模型</strong><small>优先使用供应商返回的参数；缺少时按内置字典补全。可逐个展开「参数设置」或在这里批量修正，手动设置会覆盖补全值。无法核实的工具和图片能力默认关闭，可自行启用。</small></div>
+              <div className="discovery-advanced-grid">
+                <label>调用接口<select value={bulkWireApi} disabled={adding || chatOnly} onChange={event => setBulkWireApi(event.target.value as WireApi | '')}><option value="">保留列表设置</option>{(provider.kind === 'openai-compatible' || provider.kind === 'copilot' || provider.kind === 'opencode-go') && <option value="chat-completions">Chat Completions</option>}<option value="responses">Responses</option>{provider.kind === 'openai-compatible' && <option value="messages">Anthropic Messages</option>}</select></label>
+                <label>上下文长度<input type="number" min="0" step="1" value={bulkContext} disabled={adding} placeholder="留空保留，0 为未设置" onChange={event => setBulkContext(event.target.value)} /></label>
+                <label>工具调用<select value={bulkTools} disabled={adding} onChange={event => setBulkTools(event.target.value)}><option value="">保留列表设置</option><option value="yes">启用</option><option value="no">关闭</option></select></label>
+                <label>图片输入<select value={bulkVision} disabled={adding} onChange={event => setBulkVision(event.target.value)}><option value="">保留列表设置</option><option value="yes">启用</option><option value="no">关闭</option></select></label>
+              </div>
+              <button className="button secondary small" disabled={adding || !selected.length || (!bulkWireApi && !bulkContext.trim() && !bulkTools && !bulkVision)} onClick={applyAdvanced}>应用到所选 {selected.length} 个模型</button>
+            </div>}
+            <div id={seriesPanelId} role={catalogSeries.length ? 'tabpanel' : undefined} aria-labelledby={catalogSeries.length ? `${seriesPanelId}-tab-${tabs.findIndex(tab => tab.key === currentTab)}` : undefined}>
+              {visible.length ? <div className="discovery-list" data-mixed-selection={someSelected && !allSelected || undefined} data-pointer-navigation={pointerNavigation || undefined}
+                onPointerMove={() => { if (!pointerNavigation) setPointerNavigation(true); }} onPointerLeave={() => setPointerNavigation(false)}
+                onFocusCapture={() => setPointerNavigation(false)} onKeyDownCapture={() => setPointerNavigation(false)}>
+                <div className="discovery-list-header"><label><input ref={selectionBox} type="checkbox" aria-label={selectAllLabel} checked={allSelected} disabled={adding || !available.length} onChange={event => selectVisible(event.target.checked)} />{selectAllLabel}</label></div>
+                {series.map(group => <section key={group.key} data-model-series={group.key} aria-label={group.label}>
+                  {group.models.map(model => {
+                    const locked = adding || !!model.existingModelId || model.catalogImportable === false;
+                    const open = expandedId === model.upstreamId;
+                    return <div className={`discovery-model ${open ? 'open' : ''} ${model.existingModelId ? 'existing' : ''} ${model.catalogImportable === false ? 'unavailable' : ''}`} key={model.upstreamId}>
+                      <div className="discovery-option">
+                        <label className="discovery-model-select">
+                          <input type="checkbox" checked={model.selected} disabled={locked} aria-label={`选择模型 ${model.upstreamId}`} onChange={event => updateModel(model.upstreamId, { selected: event.target.checked })} />
+                          <strong title={model.upstreamId}>{modelDisplayLabel(model, provider)}</strong>
+                        </label>
+                        {historySupported && model.catalogVisibility === 'historical' && <span className="badge" data-model-historical>客户端未展示</span>}
+                        {historySupported && model.catalogVisibility === undefined && <span className="badge" data-model-visibility-unknown>显示状态未核实</span>}
+                        {model.catalogImportable === false && <span className="badge" data-model-unimportable={model.catalogBlockedReason ?? ''} title={model.catalogBlockedReason ? catalogAccessMessages[model.catalogBlockedReason] : undefined}>暂不支持添加</span>}
+                        {model.existingModelId && <span className="badge positive"><Check size={11} />已添加</span>}
+                        <span className="discovery-context" title={model.contextWindow ? `上下文长度：${model.contextWindow.toLocaleString('zh-CN')} tokens` : '上下文未设置'}>
+                          {model.defaultReasoningEffort && <span>{reasoningEffortLabels[model.defaultReasoningEffort]}</span>}
+                          {model.contextWindow > 0 && <span>Max {compactContext.format(model.contextWindow)}</span>}
+                        </span>
+                        <button type="button" className="discovery-toggle" aria-label={`${model.upstreamId} 参数设置`} aria-expanded={open} aria-controls={open ? editorId : undefined} title={open ? '收起参数' : '查看和编辑模型参数'} onClick={() => setExpandedId(open ? null : model.upstreamId)}><ChevronDown size={14} /></button>
+                      </div>
+                      {open && <CandidateSettings id={editorId} model={model} provider={provider} locked={locked} onUpdate={patch => updateModel(model.upstreamId, patch)} />}
+                    </div>;
+                  })}
+                </section>)}
+              </div> : <EmptyState compact icon={<Layers3 size={24} />} title={search.trim() ? '没有匹配的模型' : historySupported && !showHistorical ? result.history?.currentVerified ? '没有已确认的当前模型' : '尚未核实当前客户端清单' : '供应商返回了空列表'} description={search.trim() ? '修改搜索内容后继续选择。' : historySupported && !showHistorical ? '可刷新客户端清单后重试，或勾选“显示历史模型”查看其他已识别条目。已添加的模型保持不变。' : '该地址暂未返回模型，请检查供应商地址与账号权限，也可以手动添加。'} />}
+            </div>
+            <details className="discovery-note"><summary>参数来源与默认值</summary><p>参数优先采用供应商声明，缺少时按内置字典补全，可展开「参数设置」手动修正。不同供应商可以添加同名模型；目录和工具中按「套餐名 - 模型名」展示。无法核实的工具和图片能力默认关闭，可自行启用。模型可见和字典规格不代表实际调用权限，仍需推理验证。上下文未设置时，工具配置使用 32K 上下文 / 4K 输出的保守预算，以上预算并非上游规格。</p></details>
+          </>}
+          {!result && !error && <EmptyState compact icon={<Layers3 size={24} />} title="尚未获取模型" description="点击重新获取，从供应商读取真实模型列表。" />}
         </>}
-        {!result && !error && <EmptyState compact icon={<Layers3 size={24} />} title="尚未获取模型" description="点击重新获取，从供应商读取真实模型列表。" />}
-      </>}
+      </div>
     </div>
     {result?.ok && error && <div className="discovery-feedback discovery-error" role="alert"><strong>添加未完成</strong><span>{error}</span></div>}
     {added && <div className="discovery-feedback discovery-success" role="status"><Check size={15} /><span>已添加 {added.added.length} 个模型{added.skipped.length ? `，跳过 ${added.skipped.length} 个已存在模型` : ''}。</span></div>}

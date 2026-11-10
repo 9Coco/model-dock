@@ -1,6 +1,6 @@
 {
   "name": "model-dock",
-  "version": "0.4.16",
+  "version": "0.4.19",
   "description": "ModelDock — 配置一次，让模型连接你的工具。",
   "license": "GPL-3.0-or-later",
   "author": {
@@ -110,6 +110,15 @@
       {
         "from": "src/renderer/assets/material-symbols",
         "to": "licenses/material-symbols",
+        "filter": [
+          "LICENSE-*.txt",
+          "NOTICE.md",
+          "manifest.json"
+        ]
+      },
+      {
+        "from": "src/renderer/assets/model-series-icons",
+        "to": "licenses/model-series-icons",
         "filter": [
           "LICENSE-*.txt",
           "NOTICE.md",

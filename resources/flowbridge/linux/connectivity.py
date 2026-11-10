@@ -35,6 +35,12 @@ SITES = {
     "GitHub": "https://github.com/",
     "ChatGPT": "https://chatgpt.com/",
     "Cloudflare": "https://www.cloudflare.com/",
+    "Grok": "https://grok.com/",
+    "JetBrains AI": "https://www.jetbrains.com/ai/",
+    "Gemini AI": "https://gemini.google.com/",
+    "OpenRouter": "https://openrouter.ai/",
+    "Claude": "https://claude.ai/",
+    "Hugging Face": "https://huggingface.co/",
 }
 _ALIASES = {"谷歌": "Google", "油管": "YouTube", "github": "GitHub", "chatgpt": "ChatGPT"}
 _REDIRECTS = {301, 302, 303, 307, 308}

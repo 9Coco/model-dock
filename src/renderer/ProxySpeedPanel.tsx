@@ -1,11 +1,9 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { NETWORK_SITES, parseNetworkEndpoint, type FlowBridgeSnapshot, type NetworkCheck, type NetworkMode, type NetworkSite, type SiteLatency } from '../shared/flowbridge-types';
 import type { ModelDockApi } from '../shared/types';
+import jetBrainsAi from './assets/model-series-icons/jetbrains-ai.svg?no-inline';
 
-type Transfer = 'download' | 'upload';
-type Stage = 'sites' | Transfer | 'finishing';
-const transfers = ['download', 'upload'] as const;
-const transferLabels = { download: '↓ 下载', upload: '↑ 上传' };
+type Stage = 'sites' | 'finishing';
 
 function SiteDetails({ site, api, disabled }: { site: NetworkSite; api: ModelDockApi; disabled: boolean }) {
   const [check, setCheck] = useState<NetworkCheck>();
@@ -47,7 +45,7 @@ function SiteTile({ site, result, pending, selected, onClick }: {
   }
   return <button type="button" className="site-tile" data-site={site} aria-expanded={selected}
     aria-label={site + '，' + value + (status ? '，' + status : '') + '，网站详情'} onClick={onClick}>
-    <span className="site-mark" aria-hidden="true" />
+    <span className="site-mark" aria-hidden="true">{site === 'JetBrains AI' && <img src={jetBrainsAi} alt="" draggable={false} />}</span>
     <span className="site-name">{site}</span>
     <strong className="site-latency" data-state={result?.state} aria-live="polite">{value}</strong>
     {status && <small className="site-http-status">{status}</small>}
@@ -59,7 +57,6 @@ export function ProxySpeedPanel({ api, address, mode, networkState, prepareAddre
   prepareAddress?: () => Promise<string>; needsRecovery?: boolean;
 }) {
   const [sites, setSites] = useState<Partial<Record<NetworkSite, SiteLatency>>>({});
-  const [rates, setRates] = useState<Partial<Record<Transfer, number>>>({});
   const [stage, setStage] = useState<Stage>();
   const [errors, setErrors] = useState<string[]>([]);
   const [details, setDetails] = useState<NetworkSite>();
@@ -69,7 +66,7 @@ export function ProxySpeedPanel({ api, address, mode, networkState, prepareAddre
   const target = parseNetworkEndpoint(address, mode)?.address ?? address;
   const route = disabled ? 'switching' : networkState === 'connected' ? 'session' : 'direct';
   useLayoutEffect(() => {
-    setSites({}); setRates({}); setErrors([]); setDetails(undefined);
+    setSites({}); setErrors([]); setDetails(undefined);
     setStage(active.current ? 'finishing' : undefined);
     return () => { generation.current++; };
   }, [target, mode, route]);
@@ -78,23 +75,13 @@ export function ProxySpeedPanel({ api, address, mode, networkState, prepareAddre
     active.current = true;
     const run = ++generation.current;
     const current = () => generation.current === run;
-    setSites({}); setRates({}); setErrors([]); setStage('sites');
+    setSites({}); setErrors([]); setStage('sites');
     try {
       const proxy = prepareAddress ? await prepareAddress() : address;
       if (!current()) return;
       await api.measureNetworkSites(proxy, result => {
         if (current()) setSites(previous => ({ ...previous, [result.site]: result }));
       });
-      for (const transfer of transfers) {
-        if (!current()) return;
-        setStage(transfer);
-        try {
-          const rate = await api.measureNetworkSpeed(proxy, transfer);
-          if (current()) setRates(previous => ({ ...previous, [transfer]: rate }));
-        } catch {
-          if (current()) setErrors(previous => [...previous, transferLabels[transfer] + '测速失败']);
-        }
-      }
     } catch (error) {
       if (current()) setErrors([error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '') : '代理测速失败。']);
     } finally {
@@ -110,9 +97,6 @@ export function ProxySpeedPanel({ api, address, mode, networkState, prepareAddre
     <div className="site-tiles" role="group" aria-label="网站延迟">
       {NETWORK_SITES.map(site => <SiteTile key={site} site={site} result={sites[site]} pending={stage === 'sites'}
         selected={details === site} onClick={() => setDetails(previous => previous === site ? undefined : site)} />)}
-    </div>
-    <div className="transfer-rates" aria-live="polite"><span>Cloudflare 测速</span>
-      {transfers.map(key => <span key={key} data-direction={key}>{transferLabels[key]} <strong data-speed-result={key}>{rates[key] !== undefined ? rates[key].toFixed(1) + ' Mbps' : stage === key ? '测量中…' : '—'}</strong></span>)}
     </div>
     {errors.length > 0 && <p className="feature-error" role="alert">{errors.join(' · ')}</p>}
     {details && <SiteDetails key={details + networkState} site={details} api={api} disabled={disabled} />}

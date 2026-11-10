@@ -52,7 +52,10 @@ export async function verifyCodexCatalog(window: BrowserWindow, store: Store, ou
     return {count:rows.length,upstreamId:row.querySelector('.discovery-model-select strong').title,displayName:row.querySelector('[aria-label="mock-codex 显示名称"]').value,alias:row.querySelector('[aria-label="mock-codex 模型简称"]').value,selected:checkbox.checked,disabled:checkbox.disabled,details:row.textContent,hiddenShown:dialog.textContent.includes('mock-codex-hidden')||dialog.textContent.includes('mock-codex-none'),hasError:!!dialog.querySelector('[role="alert"]')};
   })()`);
   assert.equal(candidate.count, 1); assert.equal(candidate.upstreamId, 'mock-codex'); assert.equal(candidate.displayName, 'Native Codex');
-  assert.equal(candidate.selected, true); assert.equal(candidate.disabled, false); assert.equal(candidate.hiddenShown, false); assert.equal(candidate.hasError, false);
+  assert.equal(candidate.selected, false); assert.equal(candidate.disabled, false); assert.equal(candidate.hiddenShown, false); assert.equal(candidate.hasError, false);
+  assert.equal(await evaluate<boolean>(`document.querySelector('.discovery-footer button.primary').disabled`), true);
+  await click('input[aria-label="选择模型 mock-codex"]');
+  assert.equal(await evaluate<boolean>(`document.querySelector('input[aria-label="选择模型 mock-codex"]').checked`), true);
   assert.match(candidate.details, /Responses/); assert.match(candidate.details, /272,000/); assert.match(candidate.details, /工具调用/); assert.match(candidate.details, /图片输入/);
 
   async function layout() {

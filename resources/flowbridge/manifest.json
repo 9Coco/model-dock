@@ -2,7 +2,7 @@
   "source": "https://github.com/9Coco/flowbridge",
   "revision": "f80139e040ca51cd0e7036659b350e692b9c495c",
   "license": "GPL-3.0-or-later",
-  "changes": "Isolated ModelDock system paths/interface names; recomputed Windows Wintun interface GUID; independent recovery state directories without selecting test backends; ModelDock self-loop rejection; fixed script entry for embedded Python signal delivery; tests pin KDE or inject POSIX cache paths only for mock Windows cores. Original Qt GUI/storage/autostart are not imported. Namespace harness expects the ModelDock root-helper runtime path. ModelDock owns the Linux authorization prompts and service descriptions. Linux setup guidance and the bundled phone instructions refer to the integrated ModelDock application. Per-user system sockets require a trusted root grant as well as kernel peer identity; grant revocation gracefully shuts down the active helper.",
+  "changes": "Isolated ModelDock system paths/interface names; recomputed Windows Wintun interface GUID; independent recovery state directories without selecting test backends; ModelDock self-loop rejection; fixed script entry for embedded Python signal delivery; tests pin KDE or inject POSIX cache paths only for mock Windows cores. Original Qt GUI/storage/autostart are not imported. Namespace harness expects the ModelDock root-helper runtime path. ModelDock owns the Linux authorization prompts and service descriptions. Linux setup guidance and the bundled phone instructions refer to the integrated ModelDock application. Per-user system sockets require a trusted root grant as well as kernel peer identity; grant revocation gracefully shuts down the active helper. ModelDock adds fixed public AI website diagnostic targets to the shared connectivity allowlist.",
   "files": [
     {
       "source": "LICENSE",
@@ -81,7 +81,7 @@
       "source": "linux/connectivity.py",
       "path": "linux/connectivity.py",
       "upstreamSha256": "e019d9618fc6510f7c0af93f918f79ab2efeb7f092da3dd63e83da7302f8feca",
-      "sha256": "71f207edbd6b344598e14f511e1f3c85c3b1bd1b15b623c5c3741d306f1e3a7f",
+      "sha256": "0802bea1180325fc18a49c7770e58e5ad31fae8d737a8ece45357d0230a59bab",
       "changes": "Describe HTTP connection failures for both desktop and phone upstreams. Include X in the fixed public site list."
     },
     {
@@ -203,7 +203,7 @@
       "source": "linux/test_connectivity.py",
       "path": "linux/test_connectivity.py",
       "upstreamSha256": "8ff5ded5a64e8f2fb67e802abdb043647cec516296c6b184ff0ba1f17ba3850d",
-      "sha256": "3dbe55f8f6a5119e20de007614d6253428be82c940611610ce9af390b5eedfa1",
+      "sha256": "3b48834e7e2ec9479d49699ccad0d71a88f0d6f1d87c140030b1f9848e4bf76a",
       "changes": "Include X in the fixed public site list."
     },
     {
@@ -372,15 +372,15 @@
     {
       "source": "https://github.com/9Coco/model-dock/blob/a7371a9fc067fa5271d1973f399645dc09659257/resources/flowbridge/windows/network-payload.json",
       "path": "resources/flowbridge/windows/network-payload.json",
-      "sha256": "9a094115e411455ebd48976ab1719e55008f97ef4116420db00e2c77156036f7",
-      "changes": "Pin the protected worker with the corrected pipe permissions, embedded runtime and core.",
+      "sha256": "5e6024be86dc8e951162936a9a8de7324bbb1c3231dcfcf1b300c9d10ea4f860",
+      "changes": "Pin the protected worker with the corrected pipe permissions, embedded runtime and core. Pin the extended website diagnostic allowlist and retain recovery compatibility with the previous ModelDock worker.",
       "upstreamSha256": "0dc57d97ab47c139a54c511953a21b9e34daa41eabef7867bad1a239e2c6a536"
     },
     {
       "source": "https://github.com/9Coco/model-dock/blob/a7371a9fc067fa5271d1973f399645dc09659257/resources/flowbridge/windows/network_access.py",
       "path": "resources/flowbridge/windows/network_access.py",
-      "sha256": "0b04e82e84f7fa499c5e300f2f3be2381fec369de7363b67111f5501c5fd749b",
-      "changes": "Request first-use consent, upgrade old worker ACLs for new connections and report installation stages.",
+      "sha256": "dbe5409057cda1177c1aeb518eb6cc078538ee4b4fe44b4e41cf83d400ee43be",
+      "changes": "Request first-use consent, upgrade old worker ACLs for new connections and report installation stages. Pin the extended website diagnostic allowlist and retain recovery compatibility with the previous ModelDock worker.",
       "upstreamSha256": "b1cec3b3711de731c54e20fa83afe81cfdf27e62ac9cad16997a82c212c4f0cd"
     },
     {

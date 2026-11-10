@@ -81,6 +81,7 @@ const upstream = createServer((req,res) => {
       { id: 'gpt-5.2', name: 'GPT-5.2', reasoning_efforts: ['low', 'high'], default_reasoning_effort: 'high' },
       { id: 'gpt-4o-mini', context_window: 4096, vision: false }, { id: 'unknown-fixture-model' },
       { id: 'gemini-2.10-flash' }, { id: 'gpt-4.1' }, { id: 'gpt-5.4-nano-2026-03-17' },
+      ...Array.from({ length: 60 }, (_, index) => ({ id: `scroll-fixture-${index + 1}` })),
     ] })); return;
   }
   if (req.url?.startsWith('/codex-native/models')) {
@@ -152,7 +153,7 @@ child.on('exit', code => {
   try {
     if(existsSync(errorFile)) throw new Error(readFileSync(errorFile,'utf8'));
     const value = JSON.parse(readFileSync(resolve(output, 'electron-smoke.json'), 'utf8'));
-    if (!value.bridge || !value.text.includes('ModelDock')) throw new Error('Renderer/preload bridge unavailable');
+    if (!value.bridge || !value.title.includes('ModelDock')) throw new Error('Renderer/preload bridge unavailable');
     if (env.MODELDOCK_SMOKE_NETWORK_ONLY === '1') {
       const result = JSON.parse(readFileSync(resolve(output, 'network-validation.json'), 'utf8'));
       assert.ok(result.ok); console.log(JSON.stringify({exitCode:code, network:true, output})); process.exit(code || 0);

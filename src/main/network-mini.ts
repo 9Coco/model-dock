@@ -25,7 +25,7 @@ export class NetworkMini {
   constructor(private manager: FlowBridgeManager, private store: SettingsStore, private reveal: () => void, private directory: string, private devUrl?: string) {
     ipcMain.handle('modeldock:network-mini', (event, action: string) => {
       if (!this.window || event.sender !== this.window.webContents || event.senderFrame !== this.window.webContents.mainFrame) throw new Error('未知小窗。');
-      if (action === 'snapshot') { const value = this.manager.snapshot(); return { state: value.state, history: value.history.slice(-60), theme: nativeTheme.shouldUseDarkColors ? 'dark' : 'light', expanded: this.expanded, locked: this.locked }; }
+      if (action === 'snapshot') { const value = this.manager.snapshot(); return { state: value.state, history: value.history.filter(sample => sample.time > Date.now() - 60_000 && sample.time <= Date.now()), theme: nativeTheme.shouldUseDarkColors ? 'dark' : 'light', expanded: this.expanded, locked: this.locked }; }
       if (action === 'hide') this.window.hide();
       else if (action === 'open') this.reveal();
       else if (action === 'expand') {
