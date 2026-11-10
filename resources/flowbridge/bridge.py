@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import shutil
 import subprocess
 import sys
 import threading
@@ -26,15 +27,56 @@ if sys.platform == 'win32':
 else:
     from linux.system_proxy import DesktopProxyManager
     from linux.tun_client import ReusableTunController as TunController
-    from linux.tun_config import validate_endpoint
+    from linux.tun_config import ROUTE_TABLE, validate_endpoint
     def parse_global_address(value):
         endpoint = parse_proxy_address(value.replace('socks5://', 'http://', 1))
         validate_endpoint(endpoint)
         return endpoint
-    def probe_global_proxy(endpoint):
-        try: connectivity.probe_global_proxy(endpoint)
-        except connectivity.GlobalProbeTransient:
-            connectivity.probe_global_proxy(endpoint, tcp_target='www.microsoft.com')
+
+    def check_global_upstream_route(endpoint):
+        # Ask the kernel which interface a TCP connection from this user and to
+        # this address/port would use. Other VPN interfaces can coexist.
+        ip = shutil.which('ip', path='/usr/sbin:/usr/bin:/sbin:/bin')
+        if not ip:
+            return
+        try:
+            result = subprocess.run([ip, '-N', '-j', 'route', 'get', endpoint.host,
+                                     'ipproto', 'tcp', 'dport', str(endpoint.port)],
+                                    capture_output=True, timeout=2, check=True)
+            routes = json.loads(result.stdout)
+        except (OSError, subprocess.SubprocessError, ValueError):
+            return  # The actual SOCKS5 preflight can still establish reachability.
+        route = routes[0] if isinstance(routes, list) and routes else None
+        if isinstance(route, dict) and route.get('dev') == 'flowbridge0' and str(route.get('table')) == str(ROUTE_TABLE):
+            raise RuntimeError(f"到 {endpoint.display.removeprefix('http://')} 的连接当前经过流桥的 flowbridge0 接口。"
+                               '请先断开独立流桥的全局接管，再连接 ModelDock。')
+
+    def probe_global_proxy(endpoint, *, cancel_event, progress):
+        check_global_upstream_route(endpoint)
+        if cancel_event.is_set():
+            raise InterruptedError('连接已取消。')
+        target = 'example.com'
+        address = endpoint.display.removeprefix('http://')
+        try:
+            connectivity.probe_global_proxy(endpoint, tcp_target=target)
+            return
+        except (connectivity.GlobalProbeTargetTimeout, connectivity.GlobalProbeTargetRejected) as error:
+            target = 'www.microsoft.com'
+            message = f'{error}。正在通过同一代理验证备用目标 {target}…'
+        except (connectivity.GlobalProbeTimeout, connectivity.GlobalProbeTransient) as error:
+            message = f'{error}。正在重试 {address}…'
+        if cancel_event.is_set():
+            raise InterruptedError('连接已取消。')
+        progress(message)
+        if cancel_event.wait(.5):
+            raise InterruptedError('连接已取消。')
+        try:
+            connectivity.probe_global_proxy(endpoint, tcp_target=target)
+        except (connectivity.GlobalProbeTransient, connectivity.GlobalProbeTimeout) as error:
+            if cancel_event.is_set():
+                raise InterruptedError('连接已取消。') from None
+            raise OSError(f'{address} 已检测两次。{error}') from None
+
 output_lock = threading.Lock()
 def emit(value):
     # Electron reads UTF-8, while redirected Windows stdout uses the local code page.
@@ -57,6 +99,7 @@ class NetworkSession:
         self.directory = directory
         self.desktop = DesktopProxyManager(state_dir=directory)
         self.controller = self.relay = self.port = self.mode = self.guard = None
+        self._linux_recovery = None
         self.last_stats = {}
         self.cancelled = threading.Event()
         self.check_cancel = connectivity.CheckCancellation()
@@ -110,13 +153,14 @@ class NetworkSession:
                 recovery._recover_previous()
             finally: mutex.close()
         else:
-            from linux.tun_client import TunController as Recovery
-            # Recover-only protocol cannot create a new TUN. The installed root
-            # helper verifies its journal and exact route ownership.
-            recovery = Recovery(Endpoint('192.0.2.1',38473))
-            recovery._cleanup_confirmed = False
-            recovery._recover_cleanup()
+            # A previous bridge lost its control pipe. Only the authorized
+            # service can confirm the root journal is clean. Keep a timed-out
+            # recovery around so a retry can collect its acknowledgement.
+            if self._linux_recovery is None:
+                self._linux_recovery = TunController(Endpoint('192.0.2.1', 38473))
+            self._linux_recovery.recover_previous()
         marker.unlink()
+        self._linux_recovery = None
     def disconnect(self):
         self.check_cancel.cancel()
         if self.controller is not None:
@@ -150,7 +194,9 @@ class NetworkSession:
         endpoint = parse_global_address(address) if mode == 'global' else parse_proxy_address(address)
         self.ensure_guardian()
         emit({'event':'progress','message':'正在验证代理 TCP 与 UDP/DNS…' if mode == 'global' else '正在验证 HTTP 代理…'})
-        if mode == 'global': probe_global_proxy(endpoint)
+        if mode == 'global':
+            probe_global_proxy(endpoint, cancel_event=self.cancelled,
+                               progress=lambda message: emit({'event': 'progress', 'message': message}))
         else: connectivity.probe_http_proxy(endpoint)
         if self.cancelled.is_set(): raise RuntimeError('连接已取消。')
         try:

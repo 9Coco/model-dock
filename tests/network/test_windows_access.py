@@ -53,6 +53,21 @@ class AccessTests(unittest.TestCase):
         self.run_task.assert_not_called()
         self.pipe.assert_not_called()
 
+    def test_recovery_reuses_only_the_known_compatible_protected_worker(self):
+        previous = access.COMPATIBLE_PREDECESSOR[access.PAYLOAD_SHA256]
+        stream = self.pipe.return_value = Mock()
+        self.pipe.side_effect = None
+        stream.readline.return_value = b'{"result":true}\n'
+        self.state.side_effect = lambda sid, digest: 'ready' if digest == previous else 'outdated'
+        self.assertTrue(access.NetworkAccess(Mock()).call('stop'))
+        stream.write.assert_called_once_with(b'{"method": "stop"}\n')
+        self.state.side_effect = None
+        self.state.return_value = 'outdated'
+        with self.assertRaises(access.AuthorizationRequired):
+            access.NetworkAccess(Mock()).call('stop')
+        self.install.assert_not_called()
+        self.run_task.assert_called_once()
+
     def test_disabled_or_foreign_task_is_never_replaced(self):
         for state in ('disabled', 'conflict'):
             self.state.return_value = state

@@ -3,7 +3,7 @@ import json
 import threading
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from relay import Endpoint
 import tun_client as client
@@ -161,7 +161,7 @@ class ReusableTunClientTests(unittest.TestCase):
 class PersistentServiceSetupTests(unittest.TestCase):
     def make(self,connector,setup):
         return client.ReusableTunController(Endpoint('10.15.60.93',38473),service_connector=connector,
-            setup_runner=setup,start_timeout=.3,stop_timeout=.15,poll_interval=.01,api_timeout=.1)
+            setup_runner=setup,api_opener=FakeOpener(),start_timeout=.3,stop_timeout=.15,poll_interval=.01,api_timeout=.1)
 
     def test_existing_service_never_launches_pkexec_or_setup(self):
         from unittest.mock import Mock
@@ -219,16 +219,86 @@ class PersistentServiceSetupTests(unittest.TestCase):
         controller.set_endpoint(Endpoint('10.15.60.94',38473))
         controller.close()
 
-    def test_recovery_uses_the_same_service_transport_factory(self):
+    def test_recovery_only_uses_existing_service_and_is_idempotent_after_ack(self):
+        recovery = FakeProcess(on_init=lambda process: process.request_stop())
+        connector, setup = Mock(return_value=recovery), Mock()
+        controller = self.make(connector, setup)
+        with patch.object(client.subprocess, 'Popen') as popen:
+            controller.recover_previous()
+            controller.recover_previous()
+            controller.close()
+            popen.assert_not_called()
+        connector.assert_called_once_with()
+        setup.assert_not_called()
+        self.assertEqual(recovery.stdin.messages, [{'version': 1, 'command': 'recover'}])
+        self.assertTrue(controller.cleanup_confirmed)
+
+    def test_close_after_losing_the_active_lease_recovers_over_existing_service(self):
+        original = ReusableProcess()
+        recovery = FakeProcess(on_init=lambda process: process.request_stop())
+        connector, setup = Mock(side_effect=[original, recovery]), Mock()
+        controller = self.make(connector, setup)
+        with patch.object(client, '_check_installed_helper'), patch.object(client.subprocess, 'Popen') as popen:
+            controller.start()
+            original.finish(1)
+            self.assertTrue(controller._exited.wait(1))
+            self.assertFalse(controller.cleanup_confirmed)
+            controller.close()
+            self.assertTrue(controller.cleanup_confirmed)
+            popen.assert_not_called()
+        self.assertEqual(recovery.stdin.messages, [{'version': 1, 'command': 'recover'}])
+        setup.assert_not_called()
+
+    def test_unavailable_or_untrusted_recovery_service_never_requests_authorization(self):
         import tun_access
-        from unittest.mock import Mock
-        recovery=FakeProcess(initial={'event':'stopped'},on_init=lambda process:process.request_stop())
-        connector=Mock(return_value=recovery);setup=Mock()
-        controller=self.make(connector,setup)
-        with patch.object(client,'_check_installed_helper'):
-            controller._recover_cleanup()
-        connector.assert_called_once_with();setup.assert_not_called()
-        self.assertEqual(recovery.stdin.messages,[{'version':1,'command':'recover'}])
+        for failure, configured, advice in [
+            (tun_access.AccessUnavailable(), False, f'pkexec {client.SETUP_HELPER}'),
+            (tun_access.AccessUnavailable(), True, '已有网络授权'),
+            (tun_access.AccessError('权限服务身份异常。'), True, '权限服务身份异常'),
+        ]:
+            with self.subTest(advice=advice):
+                recovery = FakeProcess(on_init=lambda process: process.request_stop())
+                connector, setup = Mock(side_effect=[failure, recovery]), Mock()
+                controller = self.make(connector, setup)
+                with patch.object(tun_access, 'configured', return_value=configured), patch.object(client.subprocess, 'Popen') as popen:
+                    with self.assertRaises(client.TunStopError) as caught:
+                        controller.recover_previous()
+                    self.assertIn(advice, str(caught.exception))
+                    self.assertIs(caught.exception.controller, controller)
+                    self.assertTrue(controller.needs_cleanup)
+                    with self.assertRaises(client.TunStartError):
+                        controller.start()
+                    controller.recover_previous()
+                    popen.assert_not_called()
+                setup.assert_not_called()
+                self.assertTrue(controller.cleanup_confirmed)
+                self.assertEqual(recovery.stdin.messages, [{'version': 1, 'command': 'recover'}])
+
+    def test_previous_lease_requires_ack_and_successful_exit(self):
+        for ack, code in [(False, 0), (True, 1)]:
+            with self.subTest(ack=ack, code=code):
+                recovery = FakeProcess(on_init=lambda process: process.request_stop(), stop_ack=ack, stop_code=code)
+                controller = self.make(Mock(return_value=recovery), Mock())
+                with self.assertRaises(client.TunStopError):
+                    controller.recover_previous()
+                self.assertFalse(controller.cleanup_confirmed)
+
+    def test_retrying_a_pending_recovery_reuses_the_same_lease(self):
+        recovery = FakeProcess(on_init=lambda _: None, ignore_stop=True)
+        connector, setup = Mock(return_value=recovery), Mock()
+        controller = self.make(connector, setup)
+        controller._start_timeout = controller._stop_timeout = .02
+        try:
+            for _ in range(2):
+                with self.assertRaises(client.TunStopError):
+                    controller.recover_previous()
+            self.assertFalse(controller.cleanup_confirmed)
+        finally:
+            recovery.emit({'event': 'stopped'})
+            recovery.finish(0)
+        controller.recover_previous()
+        connector.assert_called_once_with()
+        setup.assert_not_called()
         self.assertTrue(controller.cleanup_confirmed)
 
     def test_timed_out_setup_retry_reuses_pending_authentication_process(self):

@@ -3,15 +3,19 @@ import { useEffect, useRef, useState } from 'react';
 import type { ModelDockApi } from '../shared/types';
 import { type FlowBridgeSnapshot, type NetworkMode, type NetworkSample } from '../shared/flowbridge-types';
 import { Toggle, type Notify } from './components';
-import { Activity } from './MaterialIcon';
+import { Activity, Download } from './MaterialIcon';
 import { ProxySpeedPanel } from './ProxySpeedPanel';
 import './network.css';
 export const networkBytes = (value: number) => value >= 1024 ** 3 ? `${(value / 1024 ** 3).toFixed(2)} GB` : value >= 1024 ** 2 ? `${(value / 1024 ** 2).toFixed(1)} MB` : value >= 1024 ? `${(value / 1024).toFixed(1)} KB` : `${Math.round(value)} B`;
-export function NetworkChart({ samples }: { samples: NetworkSample[] }) {
+type ChartWindow = { start: number; end: number };
+export function NetworkChart({ samples, timeWindow }: { samples: NetworkSample[]; timeWindow?: ChartWindow }) {
   const max = Math.max(1, ...samples.flatMap(s => [s.uploadRate, s.downloadRate]));
-  const points = (key: 'uploadRate' | 'downloadRate') => samples.map((s, i) => `${i * 600 / Math.max(1, samples.length - 1)},${94 - s[key] / max * 86}`).join(' ');
+  const points = (key: 'uploadRate' | 'downloadRate') => samples.map((sample, index) => {
+    const offset = timeWindow ? (sample.time - timeWindow.start) / (timeWindow.end - timeWindow.start) : index / Math.max(1, samples.length - 1);
+    return `${offset * 600},${94 - sample[key] / max * 86}`;
+  }).join(' ');
   return <svg className="network-chart" viewBox="0 0 600 100" preserveAspectRatio="none" role="img" aria-label="网络上传与下载速率曲线">
-    <path d="M0 94H600 M0 50H600 M0 8H600" stroke="var(--line)" strokeWidth="1" fill="none" />
+    <path d="M0 94H600 M0 50H600 M0 8H600" stroke="var(--line)" strokeWidth="1" vectorEffect="non-scaling-stroke" fill="none" />
     <polyline points={points('downloadRate')} data-direction="download" fill="none" stroke="currentColor" strokeWidth="2" vectorEffect="non-scaling-stroke" />
     <polyline points={points('uploadRate')} data-direction="upload" fill="none" stroke="currentColor" strokeWidth="2" strokeDasharray="6 4" vectorEffect="non-scaling-stroke" />
   </svg>;
@@ -23,6 +27,10 @@ interface NetworkProps {
 }
 type NetworkControlProps = NetworkProps & { onChanged: () => Promise<void> };
 
+function networkError(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message.replace(/^Error invoking remote method 'modeldock:[^']+': (?:Error: )?/, '') : fallback;
+}
+
 function useNetworkAction(notify: Notify) {
   const [busy, setBusy] = useState('');
   const lock = useRef(false);
@@ -31,7 +39,7 @@ function useNetworkAction(notify: Notify) {
     lock.current = true;
     setBusy(name);
     try { await run(); }
-    catch (e) { notify(e instanceof Error ? e.message : '网络操作失败。', 'error'); }
+    catch (e) { notify(networkError(e, '网络操作失败。'), 'error'); }
     finally { lock.current = false; setBusy(''); }
   };
   return { busy, action };
@@ -105,7 +113,7 @@ function NetworkControls({ api, snapshot, onChanged, notify }: Required<NetworkC
   });
   const disconnect = async () => {
     try { await api.disconnectNetwork(); }
-    catch (e) { notify(e instanceof Error ? e.message : '网络恢复失败。', 'error'); }
+    catch (e) { notify(networkError(e, '网络恢复失败。'), 'error'); }
     finally { await onChanged(); }
   };
   return <section className="service-network-card" data-network-panel>
@@ -132,20 +140,55 @@ function NetworkControls({ api, snapshot, onChanged, notify }: Required<NetworkC
   </section>;
 }
 
-function NetworkTools({ api, snapshot, notify }: Required<NetworkProps>) {
-  const { action } = useNetworkAction(notify);
+function TrafficPanel({ snapshot }: { snapshot: FlowBridgeSnapshot }) {
   const [range, setRange] = useState<'minute' | 'day'>('minute');
-  const connected = snapshot.state === 'connected';
-  const latest = snapshot.history.at(-1);
-  const samples = snapshot.history.filter(s => s.time >= Date.now() - (range === 'minute' ? 60_000 : 86_400_000)).sort((a, b) => a.time - b.time);
-  return <>
-    <div className="panel"><div className="section-heading"><h2>网络流量</h2><select aria-label="流量时间范围" value={range} onChange={e => setRange(e.target.value as 'minute' | 'day')}><option value="minute">最近 60 秒</option><option value="day">最近 24 小时</option></select></div>
-      <div className="network-metrics"><div data-direction="upload"><small>↑ 上传</small><strong>{networkBytes(connected ? latest?.uploadRate ?? 0 : 0)}/s</strong><span>本次 {networkBytes(snapshot.status.uploadBytes)}</span></div><div data-direction="download"><small>↓ 下载</small><strong>{networkBytes(connected ? latest?.downloadRate ?? 0 : 0)}/s</strong><span>本次 {networkBytes(snapshot.status.downloadBytes)}</span></div><div><small>活动连接</small><strong>{snapshot.status.connections}</strong><span>统计当前代理会话</span></div></div>
-      <NetworkChart samples={samples} /><p className="network-hint">24 小时历史按分钟采样。</p>
+  const end = Date.now();
+  const start = end - (range === 'minute' ? 60_000 : 86_400_000);
+  const samples = snapshot.history.filter(s => s.time >= start && s.time <= end).sort((a, b) => a.time - b.time);
+  const latest = snapshot.state === 'connected' ? snapshot.history.at(-1) : undefined;
+  const peak = Math.max(0, ...samples.flatMap(s => [s.uploadRate, s.downloadRate]));
+  return <section className="panel traffic-panel" aria-label="网络流量">
+    <div className="section-heading">
+      <h2>网络流量</h2>
+      <div className="network-mode traffic-range" role="group" aria-label="流量时间范围">
+        <button aria-pressed={range === 'minute'} onClick={() => setRange('minute')}>60 秒</button>
+        <button aria-pressed={range === 'day'} onClick={() => setRange('day')}>24 小时</button>
+      </div>
     </div>
-    <ProxySpeedPanel key={snapshot.settings.address} api={api} address={snapshot.settings.address} networkState={snapshot.state} />
-    {snapshot.platform !== 'win32' && <div className="panel"><div className="section-heading"><div><h2>手机热点代理</h2><p>导出 FlowBridge Termux 安装器，在手机 Termux 手动执行；默认端口 38473，支持 HTTP、SOCKS5 与 UDP。</p></div><button className="button secondary" onClick={() => void action('export', async () => { const path = await api.exportPhoneProxy(); if (path) notify('手机脚本已导出，请在手机 Termux 中执行。', 'success'); })}>导出手机脚本</button></div><p className="network-hint">手机 VPN 须允许 Termux 联网。仅导出文件，不会连接手机或修改其配置。</p></div>}
-  </>;
+    <div className="network-metrics">
+      <div data-direction="upload"><small>↑ 上传</small><strong>{networkBytes(latest?.uploadRate ?? 0)}/s</strong><span>本次 {networkBytes(snapshot.status.uploadBytes)}</span></div>
+      <div data-direction="download"><small>↓ 下载</small><strong>{networkBytes(latest?.downloadRate ?? 0)}/s</strong><span>本次 {networkBytes(snapshot.status.downloadBytes)}</span></div>
+      <div><small>活动连接</small><strong>{snapshot.status.connections}</strong></div>
+    </div>
+    <figure className="traffic-history">
+      <div className="traffic-plot">
+        <NetworkChart samples={samples} timeWindow={{ start, end }} />
+        {!samples.length && <span className="traffic-empty">暂无流量样本</span>}
+      </div>
+      <figcaption>
+        <span>{range === 'minute' ? '60 秒前' : '24 小时前'}</span>
+        {samples.length > 0 && <span>峰值 {networkBytes(peak)}/s</span>}
+        <span>现在</span>
+      </figcaption>
+    </figure>
+  </section>;
+}
+
+function PhoneProxyPanel({ api, notify }: { api: ModelDockApi; notify: Notify }) {
+  const { busy, action } = useNetworkAction(notify);
+  const exportScript = () => action('export', async () => {
+    if (await api.exportPhoneProxy()) notify('手机脚本已导出，请在手机 Termux 中执行。', 'success');
+  });
+  return <section className="panel phone-proxy-panel" aria-label="手机热点代理">
+    <div className="section-heading">
+      <div className="phone-proxy-copy">
+        <h2>手机热点代理</h2>
+        <p>在手机 Termux 中运行导出的脚本。使用手机 VPN 时，请允许 Termux 联网。</p>
+        <p>默认端口 38473，支持 HTTP、SOCKS5 和 UDP。</p>
+      </div>
+      <button className="button secondary" disabled={!!busy} onClick={() => void exportScript()}><Download size={15} />导出手机脚本</button>
+    </div>
+  </section>;
 }
 
 export function NetworkWorkspace({ api, snapshot, onChanged, notify, error }: NetworkControlProps & { error: string }) {
@@ -153,7 +196,9 @@ export function NetworkWorkspace({ api, snapshot, onChanged, notify, error }: Ne
     {error && <p className="bridge-banner" role="alert">{error}</p>}
     {snapshot && api ? <div className="network-tools">
       <NetworkControls api={api} snapshot={snapshot} onChanged={onChanged} notify={notify} />
-      <NetworkTools api={api} snapshot={snapshot} notify={notify} />
+      <TrafficPanel snapshot={snapshot} />
+      <ProxySpeedPanel key={snapshot.settings.address} api={api} address={snapshot.settings.address} networkState={snapshot.state} />
+      {snapshot.platform !== 'win32' && <PhoneProxyPanel api={api} notify={notify} />}
     </div> : !error && <p className="settings-note" role="status">{api ? '正在读取网络状态…' : '等待桌面连接'}</p>}
   </div>;
 }

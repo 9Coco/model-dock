@@ -25,13 +25,27 @@
 .network-metrics > div { display: flex; flex-direction: column; gap: 5px; }
 .network-metrics strong { font-size: 20px; font-variant-numeric: tabular-nums; }
 .network-metrics small, .network-metrics span { font-size: 11px; color: var(--muted); }
-:root { --network-upload: #18734c; --network-download: #155fad; }
-:root[data-theme="dark"] { --network-upload: #7cdaa8; --network-download: #75bcff; }
-.network-chart [data-direction="upload"], .network-metrics [data-direction="upload"] { color: var(--network-upload); }
-.network-chart [data-direction="download"], .network-metrics [data-direction="download"] { color: var(--network-download); }
-:root[data-theme] .network-metrics [data-direction] > :is(small, strong, span) { color: inherit; }
+:root { --network-upload: #856400; --network-download: #227143; }
+:root[data-theme="dark"] { --network-upload: #f5cb5c; --network-download: #70d797; }
+:is(.network-chart, .network-metrics, .transfer-rates) [data-direction="upload"] { color: var(--network-upload); }
+:is(.network-chart, .network-metrics, .transfer-rates) [data-direction="download"] { color: var(--network-download); }
+:root[data-theme] :is(.network-metrics, .transfer-rates) [data-direction] > :is(small, strong, span) { color: inherit; }
 .network-chart { display: block; width: 100%; height: 100px; }
-.proxy-speed-panel { grid-column: 1 / -1; }
+.traffic-panel { display: flex; flex-direction: column; align-self: stretch; }
+.traffic-range button { padding: 4px 9px; }
+.traffic-panel .network-metrics { gap: 0; margin: 0 0 12px; grid-template-columns: repeat(2, minmax(0, 1fr)) minmax(0, .85fr); }
+.traffic-panel .network-metrics > div + div { border-inline-start: 1px solid var(--line); padding-inline-start: 12px; }
+.traffic-panel .network-metrics strong { line-height: 1.25; }
+.traffic-history { display: flex; flex: 1; flex-direction: column; gap: 4px; margin: 0; }
+.traffic-plot { position: relative; flex: 1; min-height: 110px; }
+.traffic-plot .network-chart { position: absolute; inset: 0; height: 100%; }
+.traffic-empty { position: absolute; inset: 0; display: grid; place-content: center; color: var(--muted); font-size: 12px; }
+.traffic-history figcaption { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.phone-proxy-panel, .proxy-speed-panel { grid-column: 1 / -1; }
+.network-tools .phone-proxy-panel .section-heading { margin: 0; gap: 12px 20px; }
+.phone-proxy-copy { flex: 1 1 320px; min-width: 0; }
+.phone-proxy-copy h2 { margin-bottom: 4px; }
+.phone-proxy-panel .button { flex: none; }
 .network-tools .proxy-speed-panel .network-hint { margin-top: 4px; overflow-wrap: anywhere; }
 .site-tiles { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; margin: 16px 0; }
 .site-tile {
@@ -53,8 +67,6 @@
 .site-latency:is([data-state="timeout"], [data-state="unreachable"]) { color: var(--muted); font-size: 13px; }
 .site-http-status { font-size: 10px; }
 .transfer-rates { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
-.transfer-rates [data-direction="download"] { color: var(--network-download); }
-.transfer-rates [data-direction="upload"] { color: var(--network-upload); }
 .transfer-rates strong { font-variant-numeric: tabular-nums; }
 .site-details { margin-top: 12px; }
 @container (max-width: 530px) {
@@ -67,6 +79,7 @@
 .network-checks small { line-height: 1.5; }
 @container (min-width: 720px) {
   .network-tools { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .service-network-card { align-self: stretch; }
 }
 @container (max-width: 620px) {
   .service-workspace .gateway-body { flex-direction: column; }

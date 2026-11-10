@@ -13,7 +13,13 @@ from windows.network_pipe import open_client, pipe_name
 from windows.proxy import display_global_address
 
 ROOT = Path(__file__).resolve().parents[1]
-PAYLOAD_SHA256 = 'f24621227afa878442356ac5dd274c78689e82e8556b6f59ee03b2ee035bd12d'
+PAYLOAD_SHA256 = '0dc57d97ab47c139a54c511953a21b9e34daa41eabef7867bad1a239e2c6a536'
+# The shared TUN module changed only its Linux recovery path between these payloads.
+# Existing Windows workers can complete recovery and subsequent connections.
+COMPATIBLE_PREDECESSOR = {
+    '0dc57d97ab47c139a54c511953a21b9e34daa41eabef7867bad1a239e2c6a536':
+        'f24621227afa878442356ac5dd274c78689e82e8556b6f59ee03b2ee035bd12d',
+}
 INSTALLER_SHA256 = '80222067c5547c43750f263434e3458c2c935e14e7a2b71918f48dab4cedaa59'
 SYSTEM32 = Path(os.environ.get('SystemRoot', r'C:\Windows')) / 'System32'
 POWERSHELL = SYSTEM32 / 'WindowsPowerShell/v1.0/powershell.exe'
@@ -95,6 +101,9 @@ class NetworkAccess:
             return
         self.sid = self.sid or user_sid()
         state = task_state(self.sid, PAYLOAD_SHA256)
+        previous = COMPATIBLE_PREDECESSOR.get(PAYLOAD_SHA256)
+        if state == 'outdated' and previous:
+            state = task_state(self.sid, previous)
         if state in ('missing', 'outdated'):
             if not allow_install:
                 raise AuthorizationRequired('请手动点击连接，完成 Windows 全局网络的一次性授权。')

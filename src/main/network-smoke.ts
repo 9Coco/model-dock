@@ -44,7 +44,7 @@ export function createNetworkSmokeEngine(): NetworkEngine {
         default:
           throw new Error(`Unsupported network UI fixture request: ${method}`);
       }
-      const status: NetworkEngineStatus = { running, cleanupConfirmed: !running, localPort: null,
+      const status: NetworkEngineStatus = { running, cleanupConfirmed: !running, localPort: running ? 19327 : null,
         connections: running ? 1 : 0, uploadBytes: samples * 2048, downloadBytes: samples * 8192, message: '' };
       return status as T;
     },
@@ -194,9 +194,10 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
   await evaluate(`document.querySelectorAll('.toast-stack [aria-label="关闭提示"]').forEach(button=>button.click())`);
   const layouts = [];
   const screenshots = [];
-  async function verifyTrafficColors(contents = window.webContents) {
+  async function verifyTrafficColors(theme: 'light' | 'dark', contents = window.webContents) {
     const colors: { text: string[]; line: string }[] = await contents.executeJavaScript(`['upload', 'download'].map(direction => {
-      const metrics = document.querySelectorAll('.network-metrics [data-direction="' + direction + '"] > *');
+      const selector = '[data-direction="' + direction + '"]';
+      const metrics = document.querySelectorAll('.network-metrics ' + selector + ' > *, .transfer-rates ' + selector + ', .transfer-rates ' + selector + ' > strong');
       const series = getComputedStyle(document.querySelector('polyline[data-direction="' + direction + '"]'));
       return { text: Array.from(metrics, metric => getComputedStyle(metric).color), line: series.stroke.toLowerCase() === 'currentcolor' ? series.color : series.stroke };
     })`);
@@ -204,7 +205,8 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
       assert.ok(text.length >= 2);
       for (const color of text) assert.equal(color, line, 'Traffic labels, values and curve must have the same color');
     }
-    assert.notEqual(colors[0].line, colors[1].line, 'Upload and download must have different colors');
+    const expected = theme === 'dark' ? ['rgb(245, 203, 92)', 'rgb(112, 215, 151)'] : ['rgb(133, 100, 0)', 'rgb(34, 113, 67)'];
+    assert.deepEqual(colors.map(({ line }) => line), expected, 'Upload must be yellow and download green');
   }
   window.setMinimumSize(780, 580);
   for (const [theme, width, height, filename] of [
@@ -221,16 +223,23 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
     await wait(`!!${query('[aria-label="网站延迟"]')} && !!${query('[aria-label="流量时间范围"]')}`);
     await click('[data-action="measure-proxy-speed"]');
     await wait(`${query('[data-speed-result="upload"]')}.textContent === '20.0 Mbps'`);
-    const geometry = await evaluate<{ sameRow: boolean; fullWidth: boolean; iconsAbove: boolean }>(`(() => {
+    const geometry = await evaluate<{ sameRow: boolean; fullWidth: boolean; iconsAbove: boolean; alignedTraffic: boolean; phoneFullWidth: boolean | null }>(`(() => {
       const tiles = [...document.querySelectorAll('.site-tile')];
       const panel = document.querySelector('.proxy-speed-panel'), grid = document.querySelector('.network-tools');
+      const controls = grid.querySelector('[data-network-panel]').getBoundingClientRect();
+      const traffic = grid.querySelector('.traffic-panel').getBoundingClientRect();
+      const phone = grid.querySelector('.phone-proxy-panel');
       return {
         sameRow: tiles.length === 6 && tiles.every(tile => tile.offsetTop === tiles[0].offsetTop),
         fullWidth: Math.abs(panel.getBoundingClientRect().width - grid.getBoundingClientRect().width) <= 2,
-        iconsAbove: tiles.every(tile => tile.querySelector('.site-mark').getBoundingClientRect().bottom < tile.querySelector('.site-latency').getBoundingClientRect().top && getComputedStyle(tile.querySelector('.site-mark')).maskImage !== 'none')
+        iconsAbove: tiles.every(tile => tile.querySelector('.site-mark').getBoundingClientRect().bottom < tile.querySelector('.site-latency').getBoundingClientRect().top && getComputedStyle(tile.querySelector('.site-mark')).maskImage !== 'none'),
+        alignedTraffic: grid.clientWidth >= 720 ? Math.abs(controls.top - traffic.top) < 1 && Math.abs(controls.bottom - traffic.bottom) < 1 : traffic.top >= controls.bottom,
+        phoneFullWidth: phone ? Math.abs(phone.getBoundingClientRect().width - grid.clientWidth) <= 1 : null
       };
     })()`);
-    assert.deepEqual(geometry, { sameRow: true, fullWidth: true, iconsAbove: true });
+    assert.ok(geometry.sameRow && geometry.fullWidth && geometry.iconsAbove, 'Speed tiles must fill one row with icons above latency');
+    assert.ok(geometry.alignedTraffic, 'Traffic and controls must fill their row or stack on narrow screens');
+    assert.equal(geometry.phoneFullWidth, process.platform === 'win32' ? null : true, 'Phone setup must span the workspace where available');
     const layout = await evaluate<{ overflow: boolean; menuVisible: boolean }>(`(() => {
       const main=document.querySelector('main'), menu=${query('[data-page="network"]')}.getBoundingClientRect();
       return {overflow: document.documentElement.scrollWidth>innerWidth+1 || main.scrollWidth>main.clientWidth+1,
@@ -238,7 +247,7 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
     })()`);
     assert.equal(layout.overflow, false, `Network page overflow at ${width}px`);
     assert.ok(layout.menuVisible, `Network menu must remain reachable at ${width}px`);
-    await verifyTrafficColors();
+    await verifyTrafficColors(theme);
     await wait("document.querySelector('.network-metrics [data-direction=upload] strong').textContent !== '0 B/s'");
     layouts.push({ theme, width, ...layout });
     writeFileSync(join(output, filename), await capture());
@@ -316,7 +325,7 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
     await delay(100);
   }
   assert.ok(miniCapture, 'Expanded mini monitor must show a painted frame');
-  await verifyTrafficColors(mini.webContents);
+  await verifyTrafficColors('dark', mini.webContents);
   if (process.platform === 'win32') {
     const { x, y, width, height } = mini.getBounds();
     assert.ok(x >= area.x && y >= area.y && x + width <= area.x + area.width + 1 && y + height <= area.y + area.height + 1,

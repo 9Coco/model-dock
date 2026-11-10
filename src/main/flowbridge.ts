@@ -79,6 +79,18 @@ export class FlowBridgeManager {
   validateGatewayPort(port: number) {
     validateNetworkSettings({}, this.settings, this.options.platform, port);
   }
+  speedTestProxy(address: string): string {
+    if (!address || address !== this.settings.address) throw new Error('请先应用要测试的代理地址。');
+    if (this.busy || this.closing) throw new Error('请在网络切换完成后再测速。');
+    if (!this.active) return address;
+    if (this.state !== 'connected' || !this.current.running || this.current.localPort === null) {
+      throw new Error('请等待网络连接就绪，或断开并完成恢复后再测速。');
+    }
+    // Connecting to the phone directly while a TUN is active can send the
+    // probe back through the tunnel. Its local HTTP listener uses the same
+    // outbound and physical interface as the active connection.
+    return `http://127.0.0.1:${this.current.localPort}`;
+  }
   private now() { return this.options.now?.() ?? Date.now(); }
   private prune() { this.history = this.history.filter(v => v.time > this.now() - 86_400_000 && v.time <= this.now()); }
   snapshot(): FlowBridgeSnapshot {
@@ -106,7 +118,7 @@ export class FlowBridgeManager {
         if (reconnect) await this.stop();
         // Only new namespaced metadata: never migrate/reset providers or app.settings.
         this.store.setManagedState(KEY, next); this.settings = next;
-        if (reconnect) { this.cancel = false; await this.start(); }
+        if (reconnect) await this.start();
         return this.snapshot();
       } finally { this.busy = false; }
     });
@@ -120,6 +132,8 @@ export class FlowBridgeManager {
     return this.enqueue(async () => { try { await this.start(upstream, allowInstall); return this.snapshot(); } finally { this.busy = false; } });
   }
   private async start(upstream?: Pick<FlowBridgeSettings, 'address' | 'mode'>, allowInstall = true) {
+    // A disconnect or quit can arrive while this start waits in the queue or for the previous session to stop.
+    if (this.cancel || this.closing) return;
     if (this.state === 'connected') {
       if (upstream !== undefined) throw new Error('请先断开当前连接再连接新地址。');
       return;
