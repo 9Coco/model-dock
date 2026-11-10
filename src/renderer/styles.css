@@ -1156,6 +1156,18 @@ td { padding: 12px; color: #5b7152; }
 .model-official-parameters small { display: block; color: var(--muted); line-height: 1.7; margin-top: 7px; }
 .model-official-parameters a { color: var(--accent); }
 .model-parameter-note { color: var(--muted); font-size: 11px; line-height: 1.7; margin: -3px 0 16px; }
+.parameter-preview { max-height: 65dvh; overscroll-behavior: contain; }
+.parameter-preview > p, .parameter-row small { color: var(--muted); font-size: 12px; }
+.parameter-mode, .parameter-row > label { display: flex; align-items: center; gap: 8px; line-height: 1.55; font-size: 13px; }
+.parameter-mode + .parameter-mode { margin-top: 8px; }
+.parameter-row { margin-top: 10px; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+.parameter-row > label { flex-wrap: wrap; background: var(--surface-soft); padding: 9px 12px; font-weight: 600; overflow-wrap: anywhere; }
+.parameter-row small { font-weight: 400; }
+.parameter-row table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 12px; }
+.parameter-row th, .parameter-row td { padding: 6px 8px; text-align: left; vertical-align: top; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+.parameter-row th, .parameter-row td:last-child { color: var(--muted); }
+.parameter-row th:first-child { width: 18%; }
+.parameter-row th:last-child { width: 23%; }
 .capability-field { flex-wrap: wrap; row-gap: 9px; }
 
 .trae-relay-guide .row-actions { flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }

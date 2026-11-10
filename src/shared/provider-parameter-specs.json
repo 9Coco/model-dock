@@ -1,0 +1,475 @@
+{
+  "grok": {
+    "source": "https://docs.x.ai/developers/grok-4-7",
+    "checked": "2026-11-10",
+    "models": {
+      "grok-4.7": { "thinking": true, "vision": true, "tools": true, "reasoningEfforts": ["low", "medium", "high", "xhigh"] }
+    }
+  },
+  "copilot": {
+    "source": "https://github.blog/changelog/2026-07-28-grok-4-5-is-now-available-in-github-copilot/",
+    "checked": "2026-11-10",
+    "models": {
+      "grok-4.5": { "vision": true, "tools": true, "thinking": true, "reasoningEfforts": ["low", "medium", "high"] }
+    }
+  },
+  "codex": {
+    "source": "https://learn.chatgpt.com/docs/app-server",
+    "checked": "2026-11-10",
+    "models": {
+      "gpt-6.1-sol": { "thinking": true, "vision": true, "reasoningEfforts": ["low", "medium", "high", "xhigh", "max"] },
+      "gpt-6-astra": { "thinking": true, "vision": true, "reasoningEfforts": ["low", "medium", "high", "xhigh", "max"] },
+      "gpt-6.1-terra": { "thinking": true, "vision": true, "reasoningEfforts": ["low", "medium", "high", "xhigh", "max"] },
+      "gpt-6-luna": { "thinking": true, "vision": true, "reasoningEfforts": ["low", "medium", "high", "xhigh", "max"] }
+    }
+  },
+  "opencode-go": {
+    "source": "https://opencode.ai/inference/go/v1/models",
+    "checked": "2026-11-10",
+    "models": {
+      "deepseek-v4.1-flash": {
+        "contextWindow": 1000000,
+        "maxOutputTokens": 384000,
+        "vision": true,
+        "tools": true,
+        "thinking": true,
+        "reasoningEfforts": [
+          "low",
+          "high",
+          "max"
+        ]
+      },
+      "deepseek-v4-pro": {
+        "contextWindow": 1000000,
+        "maxOutputTokens": 384000,
+        "vision": false,
+        "tools": true,
+        "thinking": true,
+        "reasoningEfforts": [
+          "high",
+          "max"
+        ]
+      },
+      "glm-5.2": {
+        "contextWindow": 1000000,
+        "maxOutputTokens": 131072,
+        "vision": false,
+        "tools": true,
+        "thinking": true,
+        "reasoningEfforts": [
+          "high",
+          "max"
+        ]
+      },
+      "glm-5.3": {
+        "contextWindow": 1000000,
+        "maxOutputTokens": 131072,
+        "vision": false,
+        "tools": true,
+        "thinking": true,
+        "reasoningEfforts": [
+          "low",
+          "high",
+          "max"
+        ]
+      },
+      "grok-4.7": {
+        "contextWindow": 500000,
+        "maxOutputTokens": 500000,
+        "vision": true,
+        "tools": true,
+        "thinking": true,
+        "reasoningEfforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ]
+      },
+      "muse-spark-1.2-contributor": {
+        "contextWindow": 1048576,
+        "maxOutputTokens": 131072,
+        "vision": true,
+        "tools": true,
+        "thinking": true,
+        "reasoningEfforts": [
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ]
+      },
+      "muse-spark-1.3-contributor": {
+        "contextWindow": 1048576,
+        "maxOutputTokens": 131072,
+        "vision": true,
+        "tools": true,
+        "thinking": true,
+        "reasoningEfforts": [
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ]
+      },
+      "glm-5.3-flash": {
+        "contextWindow": 1000000,
+        "maxOutputTokens": 131072,
+        "vision": true,
+        "tools": true,
+        "thinking": true,
+        "reasoningEfforts": [
+          "low",
+          "high",
+          "max"
+        ]
+      },
+      "gpt-5.6-luna": {
+        "contextWindow": 1050000,
+        "maxInputTokens": 922000,
+        "maxOutputTokens": 128000,
+        "vision": true,
+        "tools": true,
+        "thinking": true,
+        "reasoningEfforts": [
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      "gpt-6-luna": {
+        "contextWindow": 1050000,
+        "maxInputTokens": 922000,
+        "maxOutputTokens": 128000,
+        "vision": true,
+        "tools": true,
+        "thinking": true,
+        "reasoningEfforts": [
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      "claude-haiku-5-5": {
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "vision": true,
+        "tools": true,
+        "thinking": true,
+        "reasoningEfforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      "hy3": {
+        "contextWindow": 256000,
+        "maxInputTokens": 192000,
+        "maxOutputTokens": 128000,
+        "vision": false,
+        "tools": true,
+        "thinking": true,
+        "reasoningEfforts": [
+          "none",
+          "low",
+          "high"
+        ]
+      },
+      "hy4-preview": {
+        "contextWindow": 1024000,
+        "maxOutputTokens": 64000,
+        "vision": false,
+        "tools": true,
+        "thinking": true,
+        "reasoningEfforts": [
+          "none",
+          "high"
+        ]
+      },
+      "kimi-k2.7-code": {
+        "contextWindow": 262144,
+        "maxOutputTokens": 262144,
+        "vision": true,
+        "tools": true,
+        "thinking": true
+      },
+      "kimi-k3": {
+        "contextWindow": 1048576,
+        "maxOutputTokens": 131072,
+        "vision": true,
+        "tools": true,
+        "thinking": true,
+        "reasoningEfforts": [
+          "max"
+        ]
+      },
+      "mimo-v2.6-flash": {
+        "contextWindow": 1048576,
+        "maxOutputTokens": 131072,
+        "vision": true,
+        "tools": true,
+        "thinking": true
+      },
+      "mimo-v2.6-pro": {
+        "contextWindow": 1048576,
+        "maxOutputTokens": 131072,
+        "vision": true,
+        "tools": true,
+        "thinking": true
+      },
+      "minimax-m3": {
+        "contextWindow": 1000000,
+        "maxOutputTokens": 131072,
+        "vision": true,
+        "tools": true,
+        "thinking": true
+      },
+      "minimax-m3.1-flash": {
+        "contextWindow": 1000000,
+        "maxOutputTokens": 512000,
+        "vision": true,
+        "tools": true,
+        "thinking": true,
+        "reasoningEfforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      "longcat-2.0": {
+        "contextWindow": 1000000,
+        "maxOutputTokens": 131072,
+        "vision": false,
+        "tools": true,
+        "thinking": true
+      },
+      "step-5-preview": {
+        "contextWindow": 1000000,
+        "maxInputTokens": 1000000,
+        "maxOutputTokens": 65536,
+        "vision": true,
+        "tools": true,
+        "thinking": true,
+        "reasoningEfforts": [
+          "low",
+          "medium",
+          "high"
+        ]
+      },
+      "beam-free": {
+        "contextWindow": 1048576,
+        "maxOutputTokens": 131072,
+        "vision": false,
+        "tools": true,
+        "thinking": true,
+        "reasoningEfforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      "qwen3.8-max": {
+        "contextWindow": 1000000,
+        "maxOutputTokens": 131072,
+        "vision": true,
+        "tools": true,
+        "thinking": true,
+        "reasoningEfforts": [
+          "low",
+          "medium",
+          "xhigh"
+        ]
+      },
+      "qwen3.8-flash": {
+        "contextWindow": 1000000,
+        "maxOutputTokens": 131072,
+        "vision": true,
+        "tools": true,
+        "thinking": true,
+        "reasoningEfforts": [
+          "low",
+          "medium",
+          "xhigh"
+        ]
+      },
+      "qwen3.7-plus": {
+        "contextWindow": 1000000,
+        "maxOutputTokens": 65536,
+        "vision": true,
+        "tools": true,
+        "thinking": true
+      },
+      "kimi-k3.1-pro": {
+        "contextWindow": 1048576,
+        "maxOutputTokens": 131072,
+        "vision": true,
+        "tools": true,
+        "thinking": true,
+        "reasoningEfforts": [
+          "low",
+          "high",
+          "max"
+        ],
+        "defaultReasoningEffort": "max"
+      },
+      "iceman-contributor-free": {
+        "contextWindow": 262144,
+        "maxOutputTokens": 131072,
+        "vision": false,
+        "tools": true,
+        "thinking": true
+      },
+      "gemini-4-argon": {
+        "contextWindow": 1048576,
+        "maxOutputTokens": 65536,
+        "vision": true,
+        "tools": true,
+        "thinking": true,
+        "reasoningEfforts": [
+          "low",
+          "medium",
+          "high"
+        ]
+      },
+      "hy4": {
+        "contextWindow": 1048576,
+        "maxInputTokens": 983010,
+        "maxOutputTokens": 65536,
+        "vision": true,
+        "tools": true,
+        "thinking": true,
+        "reasoningEfforts": [
+          "none",
+          "high"
+        ]
+      },
+      "longcat-2.5-free": {
+        "contextWindow": 1000000,
+        "maxOutputTokens": 262144,
+        "vision": true,
+        "tools": true,
+        "thinking": true
+      }
+    }
+  },
+  "qwen-token": {
+    "source": "https://help.aliyun.com/zh/model-studio/token-plan-personal-overview",
+    "checked": "2026-11-10",
+    "models": {
+      "qwen3.8-max": {
+        "thinking": true,
+        "vision": true
+      },
+      "qwen3.8-max-preview": {
+        "thinking": true,
+        "vision": true
+      },
+      "qwen3.8-flash": {
+        "thinking": true,
+        "vision": true
+      },
+      "qwen3.7-plus": {
+        "thinking": true,
+        "vision": true
+      },
+      "qwen3.6-flash": {
+        "thinking": true,
+        "vision": true
+      },
+      "deepseek-v4.1-flash": {
+        "thinking": true,
+        "vision": true
+      },
+      "deepseek-v4.1-flash-1017": {
+        "thinking": true,
+        "vision": true
+      },
+      "qwen3.7-max": {
+        "thinking": true,
+        "vision": false
+      },
+      "deepseek-v4-pro": {
+        "thinking": true,
+        "vision": false
+      },
+      "deepseek-v4-pro-0813": {
+        "thinking": true,
+        "vision": false
+      },
+      "deepseek-v4-flash-0731": {
+        "thinking": true,
+        "vision": false
+      },
+      "glm-5.3": {
+        "thinking": true,
+        "vision": false
+      },
+      "glm-5.2": {
+        "thinking": true,
+        "vision": false
+      }
+    }
+  },
+  "jetbrains-ide": {
+    "source": "https://www.jetbrains.com/help/ai-assistant/supported-llms.html",
+    "checked": "2026-11-10",
+    "models": {
+      "anthropic-claude-fable-5-1": {
+        "contextWindow": 1000000
+      },
+      "claude-opus-5": {
+        "contextWindow": 1000000
+      },
+      "anthropic-claude-opus-5-5": {
+        "contextWindow": 1000000
+      },
+      "anthropic-claude-sonnet-5": {
+        "contextWindow": 1000000
+      },
+      "anthropic-claude-sonnet-5-5": {
+        "contextWindow": 1000000
+      },
+      "google-gemini-3-6-flash": {
+        "contextWindow": 1000000
+      },
+      "google-gemini-3-7-flash": {
+        "contextWindow": 1000000
+      },
+      "google-gemini-3-8-flash": {
+        "contextWindow": 1000000
+      },
+      "openai-gpt-5-6-luna": {
+        "contextWindow": 1000000
+      },
+      "openai-gpt-5-6-sol": {
+        "contextWindow": 1000000
+      },
+      "openai-gpt-5-6-terra": {
+        "contextWindow": 1000000
+      },
+      "openai-gpt-6-sol": {
+        "contextWindow": 1000000
+      },
+      "openai-gpt-6-luna": {
+        "contextWindow": 1000000
+      },
+      "openai-gpt-6-1-sol": {
+        "contextWindow": 1000000
+      }
+    }
+  }
+}

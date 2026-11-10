@@ -3,7 +3,7 @@ import type { AuthAccount, CopilotImportCandidate, JetBrainsIdeImportResult, Rel
 import type { McpServer, McpServerInput, McpImportResult, McpConfigPreview, McpApplyResult } from './mcp-types';
 import type { ManagedSkill, SkillSnapshot, SkillRepositoryInput, SkillImportResult, SkillFilePreview, SkillRemovePreview } from './skill-types';
 import type { AppSettings, SettingsSnapshot } from './settings-types';
-import type { DiscoveryResult, ModelSelection, AddModelsResult } from './catalog-types';
+import type { DiscoveryResult, ModelSelection, AddModelsResult, ParameterPreview } from './catalog-types';
 import type { ConnectionResult, ConnectionTestInput } from './connection-types';
 export type { ConnectionResult, ConnectionTestInput } from './connection-types';
 export type ProviderKind = 'openai-compatible' | 'codex' | 'grok' | 'copilot' | 'opencode-go';
@@ -250,6 +250,8 @@ export interface ModelDockApi extends FlowBridgeApi {
   setJetBrainsPlugin(tool: import('./jetbrains').JetBrainsToolId, plugin: JetBrainsPlugin): Promise<void>;
   testProvider(id: string, input?: ConnectionTestInput): Promise<ConnectionResult>;
   discoverModels(id: string): Promise<DiscoveryResult>;
+  previewModelParameters(id: string, includeManufacturer?: boolean): Promise<ParameterPreview>;
+  applyModelParameters(id: string, token: string, modelIds: string[], replace: boolean): Promise<number>;
   addDiscoveredModels(id: string, selections: ModelSelection[]): Promise<AddModelsResult>;
   startJetBrainsRelay(providerId?: string): Promise<{ baseUrl: string; apiKey: string }>;
   stopJetBrainsRelay(): Promise<void>;

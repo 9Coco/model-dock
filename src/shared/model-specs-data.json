@@ -2247,6 +2247,40 @@
     },
     {
       "ids": [
+        "gpt-6.1-terra"
+      ],
+      "vendor": "openai",
+      "contextWindow": 1050000,
+      "contextLimitType": "combined",
+      "maxOutputTokens": 128000,
+      "vision": true,
+      "tools": true,
+      "thinking": true,
+      "reasoningEfforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "defaultReasoningEffort": "medium",
+      "reasoningApis": [
+        "responses"
+      ],
+      "supportedWireApis": [
+        "responses"
+      ],
+      "verifiedAt": "2026-11-10",
+      "sourceUrls": [
+        "https://developers.openai.com/api/docs/models/gpt-6.1-terra"
+      ],
+      "notes": [
+        "Public API model. Subscription limits come from the account catalog."
+      ]
+    },
+    {
+      "ids": [
         "gpt-6.1-sol"
       ],
       "vendor": "openai",

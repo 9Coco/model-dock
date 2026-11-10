@@ -58,6 +58,8 @@ const api: ModelDockApi = {
   deleteModel: id => call('deleteModel', id), saveBinding: binding => call('saveBinding', binding),
   testProvider: (id, input) => call('testProvider', id, input), startGateway: port => call('startGateway', port),
   discoverModels: id => call('discoverModels', id), addDiscoveredModels: (id, selected) => call('addDiscoveredModels', id, selected),
+  previewModelParameters: (id, includeManufacturer) => call('previewModelParameters', id, includeManufacturer),
+  applyModelParameters: (id, token, models, replace) => call('applyModelParameters', id, token, models, replace),
   stopGateway: () => call('stopGateway'), copyText: text => call('copyText', text), copyGatewayKey: () => call('copyGatewayKey'),
   setGatewayProviderEnabled: (id, enabled) => call('setGatewayProviderEnabled', id, enabled),
   setGatewayModelEnabled: (id, enabled) => call('setGatewayModelEnabled', id, enabled),
