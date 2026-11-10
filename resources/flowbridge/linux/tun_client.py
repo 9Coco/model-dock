@@ -164,7 +164,7 @@ class TunController:
     @property
     def needs_cleanup(self) -> bool:
         with self._lock:
-            return self._process is not None and not self._cleanup_confirmed
+            return not self._cleanup_confirmed
 
     def _safe_message(self, value) -> str:
         if not isinstance(value, str):
@@ -184,7 +184,7 @@ class TunController:
                 state=self._state,
                 last_error=self._helper_error or self._api_error,
                 cleanup_confirmed=self._cleanup_confirmed,
-                needs_cleanup=self._process is not None and not self._cleanup_confirmed,
+                needs_cleanup=not self._cleanup_confirmed,
             )
             return result
 
@@ -497,23 +497,29 @@ class TunController:
                     pass
             self._finish_recovery(attempt, code)
 
+    def _open_recovery(self):
+        _check_installed_helper()
+        return self._popen(
+            [PKEXEC, "--disable-internal-agent", HELPER],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, encoding="utf-8", errors="replace", bufsize=1,
+            close_fds=True, cwd="/",
+        )
+
     def _recover_cleanup(self):
         """Retry only the old root journal's cleanup, never start a new 全局接管."""
         with self._lock:
             attempt = self._recovery
+            if attempt is not None and self._cleanup_confirmed:
+                return
         if attempt is None or attempt.done.is_set():
             try:
-                _check_installed_helper()
-                process = self._popen(
-                    [PKEXEC, "--disable-internal-agent", HELPER],
-                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                    text=True, encoding="utf-8", errors="replace", bufsize=1,
-                    close_fds=True, cwd="/",
-                )
-            except Exception:
+                process = self._open_recovery()
+            except Exception as error:
                 with self._lock:
                     self._state = "error"
-                    self._helper_error = "无法启动网络恢复，请检查 ModelDock 的 deb 安装和系统管理员认证。上次全局连接的网络清理尚未确认。"
+                    self._helper_error = (str(error) if isinstance(error, TunStopError) else
+                                          "无法连接网络恢复助手，请检查 ModelDock 的安装和系统服务后重试断开。")
                 raise TunStopError(self._helper_error, controller=self) from None
             attempt = _RecoveryAttempt(process)
             with self._lock:
@@ -541,7 +547,7 @@ class TunController:
                     if self._cleanup_confirmed:
                         return
                     self._state = "error"
-                    self._helper_error = "网络恢复认证或清理超时，原 全局接管网络清理尚未确认；可重试断开。"
+                    self._helper_error = "网络恢复超时，上次全局连接的网络清理尚未确认；可重试断开。"
                 raise TunStopError(self._helper_error, controller=self)
         with self._lock:
             if not self._cleanup_confirmed:
@@ -664,6 +670,37 @@ class ReusableTunController(TunController):
         if process.returncode:
             raise TunStartError('首次授权设置未完成，请检查系统的 polkit 和 systemd 服务后重试。', cleanup_confirmed=True)
 
+    def _open_recovery(self):
+        # Recovery only uses the previously granted socket, even after the
+        # active lease has died. Initial setup belongs to a new connection.
+        import tun_access
+        connector = self._service_connector or tun_access.connect_service
+        try:
+            return connector()
+        except tun_access.AccessUnavailable:
+            try:
+                configured = tun_access.configured(os.getuid())
+            except (OSError, tun_access.AccessError):
+                raise TunStopError("无法验证已保存的网络授权，请检查 ModelDock 系统服务后重试断开。", controller=self) from None
+            if not configured:
+                raise TunStopError(f"上次全局连接尚未确认清理，当前用户缺少网络服务授权。"
+                                   f"请在终端运行 pkexec {SETUP_HELPER}，完成后点击断开 / 恢复。", controller=self) from None
+            raise TunStopError("已有网络授权，恢复服务暂不可用。请检查 ModelDock 系统服务后重试断开。", controller=self) from None
+        except tun_access.AccessError as error:
+            raise TunStopError(f"{error} 请检查 ModelDock 系统服务后重试断开。", controller=self) from None
+
+    def recover_previous(self):
+        """Confirm cleanup of a previous bridge's journal on a fresh controller."""
+        with self._start_lock, self._stop_lock:
+            with self._lock:
+                if self._process is not None:
+                    raise TunStopError("请先断开当前全局接管会话。", controller=self)
+                if self._cleanup_confirmed and self._state == "stopped":
+                    return
+                self._cleanup_confirmed = False
+                self._state = "recovering"
+            self._recover_cleanup()
+
     def _open_service(self):
         import tun_access
         connector = self._service_connector or tun_access.connect_service
@@ -721,7 +758,7 @@ class ReusableTunController(TunController):
             with self._lock:
                 if self._ready and self._state == "running" and not self._exited.is_set():
                     return self
-                if self._process is not None and not self._cleanup_confirmed:
+                if not self._cleanup_confirmed:
                     raise TunStartError("上次全局接管的网络清理尚未确认，请先重试断开。", controller=self)
                 fresh = self._process is None or self._exited.is_set()
                 if not fresh and self._state != "idle":
@@ -887,10 +924,11 @@ class ReusableTunController(TunController):
     def _stop(self, *, allow_recover):
         with self._stop_lock:
             with self._lock:
-                if self._process is None or (self._cleanup_confirmed and
-                        (self._state == "idle" or self._exited.is_set())):
+                if self._process is None and (self._cleanup_confirmed or self._state == "starting"):
                     return
-                needs_recovery = self._exited.is_set() and not self._cleanup_confirmed
+                if self._cleanup_confirmed and (self._state == "idle" or self._exited.is_set()):
+                    return
+                needs_recovery = self._process is None or (self._exited.is_set() and not self._cleanup_confirmed)
                 self._state = "stopping"
             if needs_recovery:
                 if allow_recover:

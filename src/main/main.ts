@@ -812,15 +812,15 @@ function registerIpc() {
   let measuringSpeed = false;
   let speedProxy = '';
   async function withSpeedProbe<T>(address: string, run: (probe: Electron.Session) => Promise<T>): Promise<T> {
-    if (!address || address !== network.snapshot().settings.address) throw new Error('请先应用要测试的代理地址。');
+    const proxyRules = network.speedTestProxy(address);
     if (measuringSpeed) throw new Error('代理测速正在进行。');
     measuringSpeed = true;
     try {
       const probe = session.fromPartition('modeldock-speed-test', { cache: false });
-      if (speedProxy !== address) {
+      if (speedProxy !== proxyRules) {
         await probe.closeAllConnections();
-        await probe.setProxy({ mode: 'fixed_servers', proxyRules: address });
-        speedProxy = address;
+        await probe.setProxy({ mode: 'fixed_servers', proxyRules });
+        speedProxy = proxyRules;
       }
       return await run(probe);
     } catch (error) {

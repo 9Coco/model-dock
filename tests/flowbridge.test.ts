@@ -24,6 +24,19 @@ function fixture() {
   return { manager, memory, values, calls, failStop(value = true) { stopFails = value; }, failConnect() { connectFails = true; }, crash() { failExit(); }, hold() { release = () => {}; }, release() { release?.(); } };
 }
 describe('FlowBridge integration', () => {
+  it('measures through the active listener and only uses the saved upstream directly after cleanup', async () => {
+    const f = fixture();
+    const address = 'socks5://192.0.2.30:38473';
+    await f.manager.save({ address, mode: 'global' });
+    expect(f.manager.speedTestProxy(address)).toBe(address);
+    expect(() => f.manager.speedTestProxy('socks5://192.0.2.31:38473')).toThrow('应用');
+    await f.manager.connect();
+    expect(f.manager.speedTestProxy(address)).toBe('http://127.0.0.1:30000');
+    f.crash();
+    expect(() => f.manager.speedTestProxy(address)).toThrow('恢复');
+    await f.manager.disconnect();
+    expect(f.manager.speedTestProxy(address)).toBe(address);
+  });
   it('requires a manual Windows global connection for the initial UAC, and releases the lease after a missing grant', async () => {
     const { memory, values } = fixture();
     const permissions: unknown[] = [];
@@ -59,6 +72,26 @@ describe('FlowBridge integration', () => {
     expect(f.calls).toEqual(['connect','disconnect','connect']);
     expect(f.manager.snapshot().settings.address).toBe('socks5://192.0.2.20:38473');
     expect(f.values.get('app.settings')).toEqual({ preserved: true }); await f.manager.shutdown();
+  });
+  it.each(['manual', 'automatic'])('does not start a queued %s global connection after quit', async mode => {
+    const f = fixture();
+    await f.manager.save({ address: '192.0.2.20:38473', mode: 'global', autoConnect: true });
+    const connection = mode === 'manual' ? f.manager.connect() : f.manager.autoConnect();
+    await Promise.all([connection, f.manager.shutdown()]);
+    expect(f.calls).toEqual([]);
+    expect(f.values.has('network.flowbridge.lease')).toBe(false);
+  });
+  it('saves the new mode without reconnecting if quit is requested while restoring the old session', async () => {
+    const f = fixture();
+    await f.manager.save({ address: '192.0.2.20:38473' });
+    await f.manager.connect();
+    const switchMode = f.manager.save({ mode: 'global' });
+    await Promise.resolve();
+    expect(f.calls).toEqual(['connect', 'disconnect']);
+    await Promise.all([switchMode, f.manager.shutdown()]);
+    expect(f.calls).toEqual(['connect', 'disconnect', 'cancel', 'close']);
+    expect(f.manager.snapshot().settings.mode).toBe('global');
+    expect(f.values.get('network.flowbridge.lease')).toBe(false);
   });
   it('keeps settings, ownership, gateway and helper available when cleanup fails', async () => {
     const f = fixture(); await f.manager.save({ address: '192.0.2.20:38473' }); await f.manager.connect(); f.failStop();

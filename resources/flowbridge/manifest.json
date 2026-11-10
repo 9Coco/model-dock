@@ -88,7 +88,8 @@
       "source": "linux/tun_client.py",
       "path": "linux/tun_client.py",
       "upstreamSha256": "cc98e1ca0fca1bcc082b46ec46ba0116e13f0b65028fdb50713fd78407fbb059",
-      "sha256": "5f24b285a17703e4b64820181281da62df00ad191ebad8162c0ff1a81346193c"
+      "sha256": "0d35956e805dc0bf3e8b6f889f33617f2c27c3e7b8344f24f6bbdacdce990d69",
+      "changes": "Recover interrupted Linux sessions only over the preauthorized user socket and retain pending acknowledgements across retries."
     },
     {
       "source": "linux/tun_helper.py",
@@ -239,7 +240,8 @@
       "source": "linux/test_reusable_tun_client.py",
       "path": "linux/test_reusable_tun_client.py",
       "upstreamSha256": "cd81d1999e39885a259b2bc005395ca9bf79f85e1e00bda7a52ed3ed5495d335",
-      "sha256": "5453f64b3b0ac822346b27c395d498503dee3f100009eed06adb17a4b2734a06"
+      "sha256": "5ecc4e5229c5828a2bae38b2ab75cca648abb57d305991f21c2c4797e7cbfa6a",
+      "changes": "Cover noninteractive stale and interrupted lease recovery, unavailable grants and acknowledgement handling."
     },
     {
       "source": "windows/test_native.py",
@@ -337,8 +339,8 @@
       "source": "https://github.com/9Coco/model-dock/blob/7ea8d51e40b18b23c85eab905b7b6b421632b218/resources/flowbridge/bridge.py",
       "path": "resources/flowbridge/bridge.py",
       "upstreamSha256": "1ea86b5d63bc6189e04ef790e38de0f85b6794c2ff830539eb36caca8f738cf8",
-      "sha256": "e2498c9946cfcf4eec9b6b5f98cea035a80da5e78ac7a75e738bec6995089e17",
-      "changes": "Escape non-ASCII protocol output, expose read-only Windows proxy discovery, and restore on EOF only after session control requests. Delegate Windows global sessions to the protected demand-start task and preserve legacy recovery."
+      "sha256": "90a45fc11b26168354b8fcd58486030fd9312693d5bbdaed8798bd314d8f66e6",
+      "changes": "Escape non-ASCII protocol output, expose read-only Windows proxy discovery, and restore on EOF only after session control requests. Delegate Windows global sessions to the protected demand-start task and preserve legacy recovery. Restore stale Linux sessions via the preauthorized socket and retain pending recovery for retry. Detect standalone FlowBridge TUN conflicts on the actual Linux upstream route and retry transient startup probes once, switching targets only for target-specific failures."
     },
     {
       "source": "https://github.com/9Coco/model-dock/blob/7ea8d51e40b18b23c85eab905b7b6b421632b218/resources/flowbridge/tools/fetch_python.py",
@@ -369,13 +371,13 @@
     {
       "source": "ModelDock Windows network integration",
       "path": "resources/flowbridge/windows/network-payload.json",
-      "sha256": "f24621227afa878442356ac5dd274c78689e82e8556b6f59ee03b2ee035bd12d",
+      "sha256": "0dc57d97ab47c139a54c511953a21b9e34daa41eabef7867bad1a239e2c6a536",
       "changes": "Pin the protected Windows TUN worker, official embedded runtime and core files."
     },
     {
       "source": "ModelDock Windows network integration",
       "path": "resources/flowbridge/windows/network_access.py",
-      "sha256": "7267589659e0b95616da755d98ef926e4a6f690e4ee8864be934aa6d61659be8",
+      "sha256": "b1cec3b3711de731c54e20fa83afe81cfdf27e62ac9cad16997a82c212c4f0cd",
       "changes": "Request first-use consent and reuse the protected network task in subsequent desktop sessions."
     },
     {
