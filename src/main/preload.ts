@@ -81,7 +81,7 @@ const api: ModelDockApi = {
   mcpList: () => call('mcpList'), mcpSave: input => call('mcpSave', input), mcpDelete: id => call('mcpDelete', id),
   mcpSetTool: (id, tool, enabled) => call('mcpSetTool', id, tool, enabled), mcpImport: tool => call('mcpImport', tool),
   mcpPreview: tool => call('mcpPreview', tool), mcpApply: (tool, fingerprint) => call('mcpApply', tool, fingerprint),
-  skillsList: () => call('skillsList'), skillsImportLocal: path => call('skillsImportLocal', path),
+  skillsList: () => call('skillsList'), skillsImportLocal: () => call('skillsImportLocal'),
   skillsImportRepository: input => call('skillsImportRepository', input), skillsScan: tool => call('skillsScan', tool),
   skillsDeploy: (id, tool, enabled) => call('skillsDeploy', id, tool, enabled), skillsReadFile: (id, path) => call('skillsReadFile', id, path),
   skillsAdopt: (id, tool) => call('skillsAdopt', id, tool),

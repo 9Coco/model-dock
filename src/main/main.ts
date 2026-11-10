@@ -106,6 +106,9 @@ import { JetBrainsIdeApi, JetBrainsIdeApiError } from './jetbrains-ide-api';
 import { JetBrainsIdeAccounts } from './jetbrains-ide-account';
 import { JetBrainsGatewayAdapter } from './jetbrains-gateway-adapter';
 import { createJetBrainsIdeFixture, verifyJetBrainsIdeImport } from './jetbrains-ide-smoke';
+import { finishLocalShutdown } from './shutdown-cleanup';
+import { importSelectedLocalSkill } from './skill-import-dialog';
+import { replacePrivateFile } from './private-file';
 
 let window: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -448,12 +451,13 @@ async function createWindow(forceShow = false) {
           const fixtureSkill = join(dataDir, 'fixture-skill');
           mkdirSync(fixtureSkill, { recursive: true });
           writeFileSync(join(fixtureSkill, 'SKILL.md'), '---\nname: native-fixture\ndescription: A local fixture for desktop verification\n---\n# Fixture\nNo scripts are executed.\n');
+          const importedFixtureSkill = skills.importLocal(fixtureSkill);
           const featureOutcome = await window!.webContents.executeJavaScript(`(async()=>{
             const api=window.modelDock;
             const server=await api.mcpSave({name:'fixture-mcp',transport:'stdio',command:'fixture-mcp-command',args:[],env:{PRIVATE_TOKEN:'synthetic-mcp-secret'},enabledTools:['codex']});
             const preview=await api.mcpPreview('codex');
             const applied=await api.mcpApply('codex',preview.fingerprint);
-            const skill=await api.skillsImportLocal(${JSON.stringify(fixtureSkill)});
+            const skill=(await api.skillsList()).skills.find(item=>item.id===${JSON.stringify(importedFixtureSkill.id)});
             await api.skillsDeploy(skill.id,'codex',true);
             await api.skillsDeploy(skill.id,'vscode',true);
             const library=await api.skillsList();
@@ -803,7 +807,7 @@ function registerIpc() {
     const content = diagnostics!.exportText(query);
     const result = await dialog.showSaveDialog(window!, { title: '导出诊断日志', defaultPath: `modeldock-diagnostics-${new Date().toISOString().replace(/[:.]/g, '-')}.jsonl`, filters: [{ name: '诊断日志', extensions: ['jsonl'] }] });
     if (result.canceled || !result.filePath) return null;
-    writeFileSync(result.filePath, content, { mode: 0o600 });
+    replacePrivateFile(result.filePath, content);
     recordDiagnostic('info', 'diagnostics.exported', { operation: 'exportDiagnostics' });
     return result.filePath;
   });
@@ -861,7 +865,7 @@ function registerIpc() {
   handle('exportPhoneProxy', async () => {
     const selected = await dialog.showSaveDialog(window!, { title: '导出手机 Termux 代理', defaultPath: 'termux-hotspot-proxy.sh', filters: [{ name: 'Shell 脚本', extensions: ['sh'] }] });
     if (selected.canceled || !selected.filePath) return null;
-    writeFileSync(selected.filePath, readFileSync(join(networkResourceRoot(), 'termux/termux-hotspot-proxy.sh')), { mode: 0o600 });
+    replacePrivateFile(selected.filePath, readFileSync(join(networkResourceRoot(), 'termux/termux-hotspot-proxy.sh')));
     return selected.filePath;
   });
   handle('getSettings', () => preferences.get());
@@ -1048,7 +1052,7 @@ function registerIpc() {
     const config = buildConfig(store, toolId(tool), gateway.status().port, true, __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home') : app.getPath('home'), { jetBrainsOptions: jetBrainsOptions(), junieHome, copilotCliHome, copilotCliProvidersConfig });
     const result = await dialog.showSaveDialog(window!, { defaultPath: config.filename });
     if (result.canceled || !result.filePath) return null;
-    writeFileSync(result.filePath, config.content, { mode: 0o600 }); return result.filePath;
+    replacePrivateFile(result.filePath, config.content); return result.filePath;
   });
   handle('applyConfig', async (tool: ToolId) => { assertEditable(); return synchronizeTool(toolId(tool)); });
   handle('restoreOfficialConfig', async (value: ToolId) => {
@@ -1120,15 +1124,11 @@ function registerIpc() {
   handle('mcpPreview', (tool: ToolId) => mcp.preview(toolId(tool)));
   handle('mcpApply', (tool: ToolId, fingerprint?: string) => mcp.apply(toolId(tool), fingerprint));
   handle('skillsList', () => skills.list());
-  handle('skillsImportLocal', async (path?: string) => {
-    if (path !== undefined && typeof path !== 'string') throw new Error('技能目录无效。');
-    if (!path) {
-      const result = await dialog.showOpenDialog(window!, { title: '选择包含 SKILL.md 的技能目录', properties: ['openDirectory'] });
-      if (result.canceled || !result.filePaths[0]) return null;
-      path = result.filePaths[0];
-    }
-    return skills.importLocal(path);
-  });
+  handle('skillsImportLocal', (...args: unknown[]) => importSelectedLocalSkill(
+    () => dialog.showOpenDialog(window!, { title: '选择包含 SKILL.md 的技能目录', properties: ['openDirectory'] }),
+    path => skills.importLocal(path),
+    ...args,
+  ));
   handle('skillsImportRepository', (input: SkillRepositoryInput) => skills.importRepository(input));
   handle('skillsScan', (tool: ToolId) => skills.scanFromTool(toolId(tool)));
   handle('skillsDeploy', (id: string, tool: ToolId, enabled: boolean) => skills.deploy(id, toolId(tool), enabled));
@@ -1365,13 +1365,23 @@ function initializeApplication() {
         dialog.showErrorBox('服务尚未退出', error instanceof Error ? error.message : '请重试断开后退出。');
         return;
       }
-      if (!exitDiagnosticRecorded) { exitDiagnosticRecorded = true; recordDiagnostic('info', 'app.exit', { stage: 'shutdown' }); }
-      accounts?.dispose(); copilotProviders?.dispose(); copilotAccounts?.dispose(); oauth?.dispose(); traeNativeAccounts?.dispose(); centralNativeAccounts?.dispose();
-      try { await ideAccounts?.dispose(); } catch { /* Continue closing local resources. */ }
-      networkMini?.close(); store?.close(); tray?.destroy();
-      shutdownComplete = true;
-      // Issue the final quit outside the cancelled before-quit callback.
-      setImmediate(() => app.quit());
+      await finishLocalShutdown([
+        { name: 'exit-diagnostic', dispose: () => { if (!exitDiagnosticRecorded) { exitDiagnosticRecorded = true; recordDiagnostic('info', 'app.exit', { stage: 'shutdown' }); } } },
+        { name: 'accounts', dispose: () => accounts?.dispose() },
+        { name: 'copilot-providers', dispose: () => copilotProviders?.dispose() },
+        { name: 'copilot-accounts', dispose: () => copilotAccounts?.dispose() },
+        { name: 'oauth', dispose: () => oauth?.dispose() },
+        { name: 'trae-accounts', dispose: () => traeNativeAccounts?.dispose() },
+        { name: 'central-accounts', dispose: () => centralNativeAccounts?.dispose() },
+        { name: 'ide-accounts', dispose: () => ideAccounts?.dispose() },
+        { name: 'network-mini', dispose: () => networkMini?.close() },
+        { name: 'store', dispose: () => store?.close() },
+        { name: 'tray', dispose: () => tray?.destroy() },
+      ], () => {
+        shutdownComplete = true; shutdownRunning = false;
+        // Issue the final quit outside the cancelled before-quit callback.
+        setImmediate(() => app.quit());
+      }, () => recordDiagnostic('error', 'app.cleanup_failed', { stage: 'shutdown', operation: 'stop', outcome: 'failure' }));
     })();
   });
   app.on('activate', () => { if (window) revealWindow(); else if (store) void createWindow(true); });

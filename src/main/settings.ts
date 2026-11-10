@@ -218,12 +218,17 @@ export class SettingsManager {
   }
   private writeLinux(content: string, previous: string | undefined, path = this.autostartPath): void {
     const temp = `${path}.${randomUUID()}.tmp`;
+    let failed = false;
     try {
       writeFileSync(temp, content, { flag: 'wx', mode: 0o600 });
       if (this.linuxStartupFile(path)?.content !== previous) throw new SettingsFailure('启动项在保存期间被修改，已保留。');
       if (previous === undefined) linkSync(temp, path);
       else renameSync(temp, path);
-    } finally { if (existsSync(temp)) unlinkSync(temp); }
+    } catch (error) { failed = true; throw error; }
+    finally {
+      try { if (existsSync(temp)) unlinkSync(temp); }
+      catch (error) { if (!failed) throw error; }
+    }
   }
   private changeAutostart(enabled: boolean, next: StoredSettings): () => void {
     const unsupported = this.support();

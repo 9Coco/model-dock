@@ -166,7 +166,6 @@ function safeOAuthFailure(response: OAuthResponse, stage: AuthStage): OAuthFailu
   if (code === 'access_denied') return new OAuthFailure(`你拒绝了授权${http}，请重新登录。`, 'denied', stage, status);
   if (code === 'invalid_grant' || code === 'invalid_token') return new OAuthFailure(`${stageNames[stage]}失败${http}：授权凭据已失效，请重新登录。`, 'expired', stage, status);
   if (code === 'expired_token' || status === 410 && ['device-code', 'device-poll'].includes(stage)) return new OAuthFailure(`设备码已过期${http}，请重新登录。`, 'expired', stage, status);
-  if (code === 'invalid_grant') return new OAuthFailure(`授权凭据已失效${http}，请重新登录。`, 'expired', stage, status);
   if (status === 429 || code === 'slow_down') return new OAuthFailure(`${stageNames[stage]}请求过于频繁${http}，请稍后再试。`, 'rate-limit', stage, status);
   if (format !== 'json' && [403, 404].includes(status)) return new OAuthFailure(`${stageNames[stage]}收到非 JSON 的拒绝响应${http}，授权请求被拦截。请检查系统代理或稍后重试。`, 'blocked', stage, status);
   return new OAuthFailure(`${stageNames[stage]}失败${http}，上游未接受此授权请求。请检查网络或稍后重试。`, 'upstream', stage, status);
@@ -484,20 +483,34 @@ export class OAuthManager {
     };
     const promise = (async () => {
       try {
-        const old = this.store.getSecret(provider.id);
-        expected = old;
-        if (!old?.refreshToken) throw new Error('订阅凭据无法刷新，请重新登录');
-        const endpoint = provider.kind === 'codex' ? CODEX_TOKEN
-          : old.tokenEndpoint ? oauthUrl(old.tokenEndpoint, 'grok') : (await this.discover(controller.signal)).token;
-        const res = await this.post(endpoint, { grant_type: 'refresh_token', client_id: provider.kind === 'codex' ? CODEX_CLIENT : GROK_CLIENT, refresh_token: old.refreshToken, ...(provider.kind === 'grok' ? { scope: GROK_SCOPE } : {}) }, controller.signal, false, REQUEST_TIMEOUT, 'refresh');
-        assertActive(controller.signal);
-        if (epoch !== (this.epochs.get(provider.id) ?? 0) || !this.store.getProvider(provider.id) || !unchanged()) throw cancelled();
-        if (!res.ok || declaresError(res.payload)) throw safeOAuthFailure(res, 'refresh');
-        const secret = tokenSecret(res.payload, old, endpoint, provider.kind);
-        await this.store.setSecret(provider.id, secret);
-        assertActive(controller.signal);
-        await this.store.setAuthStatus(provider.id, 'ready');
-        return secret;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const old = this.store.getSecret(provider.id);
+          expected = old;
+          if (!old?.refreshToken) throw new Error('订阅凭据无法刷新，请重新登录');
+          const endpoint = provider.kind === 'codex' ? CODEX_TOKEN
+            : old.tokenEndpoint ? oauthUrl(old.tokenEndpoint, 'grok') : (await this.discover(controller.signal)).token;
+          const res = await this.post(endpoint, { grant_type: 'refresh_token', client_id: provider.kind === 'codex' ? CODEX_CLIENT : GROK_CLIENT, refresh_token: old.refreshToken, ...(provider.kind === 'grok' ? { scope: GROK_SCOPE } : {}) }, controller.signal, false, REQUEST_TIMEOUT, 'refresh');
+          assertActive(controller.signal);
+          if (epoch !== (this.epochs.get(provider.id) ?? 0) || this.store.getProvider(provider.id)?.kind !== provider.kind) throw cancelled();
+          if (!unchanged()) {
+            const latest = this.store.getSecret(provider.id);
+            // Retry only a rejected, superseded refresh for the same proven account.
+            // Late successes and account switches must never overwrite new authorization.
+            if (attempt === 0 && errorCode(res.payload) === 'invalid_grant' && old.accountId && latest?.accountId === old.accountId
+              && latest.refreshToken && latest.refreshToken !== old.refreshToken) {
+              if (latest.accessToken && (!latest.expiresAt || latest.expiresAt > Date.now() + REFRESH_LEAD)) return latest;
+              continue;
+            }
+            throw cancelled();
+          }
+          if (!res.ok || declaresError(res.payload)) throw safeOAuthFailure(res, 'refresh');
+          const secret = tokenSecret(res.payload, old, endpoint, provider.kind);
+          await this.store.setSecret(provider.id, secret);
+          assertActive(controller.signal);
+          await this.store.setAuthStatus(provider.id, 'ready');
+          return secret;
+        }
+        throw cancelled();
       } catch (error) {
         const definitive = error instanceof OAuthFailure && ['region', 'device-disabled', 'denied', 'expired'].includes(error.category);
         const transient = !definitive && error instanceof OAuthFailure && (['network', 'timeout', 'rate-limit'].includes(error.category) || error.statusCode === 408 || (error.statusCode ?? 0) >= 500);

@@ -63,6 +63,7 @@ export class FlowBridgeManager {
   private polling = false;
   private checking = false;
   private automaticGeneration = 0;
+  private endpointRevision = 0;
   private automaticRun?: Promise<void>;
   private wakeAutomatic?: () => void;
   constructor(private store: SettingsStore, private options: FlowBridgeOptions) {
@@ -119,17 +120,18 @@ export class FlowBridgeManager {
   async save(patch: Partial<FlowBridgeSettings>, options?: { offlineOnly: boolean }): Promise<FlowBridgeSnapshot> {
     this.cancelAutomatic();
     if (this.busy || this.closing) throw new Error('网络正在切换，请完成或取消后再保存。');
-    if (options?.offlineOnly && this.active) throw new Error('网络连接状态已变化。请断开并完成恢复后再修改代理地址。');
-    const next = validateNetworkSettings(patch, this.settings, this.options.platform, this.options.gatewayPort());
-    const reconnect = this.state === 'connected' && ['address', 'mode', 'dnsMode'].some(k => next[k as keyof FlowBridgeSettings] !== this.settings[k as keyof FlowBridgeSettings]);
-    if (reconnect && !next.address) throw new Error('请先断开当前连接，再清除上游代理地址。');
-    if (this.active && this.state !== 'connected') throw new Error('请先点击「恢复网络」，完成后再修改网络设置。');
     this.busy = true;
     return this.enqueue(async () => {
       try {
+        if (options?.offlineOnly && this.active) throw new Error('网络连接状态已变化。请断开并完成恢复后再修改代理地址。');
+        const next = validateNetworkSettings(patch, this.settings, this.options.platform, this.options.gatewayPort());
+        const reconnect = this.state === 'connected' && ['address', 'mode', 'dnsMode'].some(k => next[k as keyof FlowBridgeSettings] !== this.settings[k as keyof FlowBridgeSettings]);
+        if (reconnect && !next.address) throw new Error('请先断开当前连接，再清除上游代理地址。');
+        if (this.active && this.state !== 'connected') throw new Error('请先点击「恢复网络」，完成后再修改网络设置。');
         if (reconnect) await this.stop();
         // Only new namespaced metadata: never migrate/reset providers or app.settings.
         this.store.setManagedState(KEY, next); this.settings = next;
+        if (Object.hasOwn(patch, 'address') || Object.hasOwn(patch, 'mode')) this.endpointRevision++;
         if (reconnect) await this.start();
         return this.snapshot();
       } finally { this.busy = false; }
@@ -291,11 +293,21 @@ export class FlowBridgeManager {
         for (const address of candidates) {
           if (!current() || this.active || this.busy) return;
           if (this.now() >= deadline) { expired = true; return; }
-          const previous = { ...this.settings };
-          try { await this.queueConnection({ address, mode: this.settings.mode }, false); return; }
+          const previous = { address: this.settings.address, mode: this.settings.mode };
+          const attempted = { address: parseNetworkEndpoint(address, previous.mode)!.address, mode: previous.mode };
+          const endpointRevision = this.endpointRevision;
+          try { await this.queueConnection(attempted, false); return; }
           catch (error) {
-            if (this.active || !current()) return;
-            this.store.setManagedState(KEY, previous); this.settings = previous;
+            if (this.active) return;
+            // An attempt owns only its endpoint change. Keep newer preferences
+            // and never restore over a manual endpoint or a cancelled run.
+            await this.enqueue(async () => {
+              if (!this.active && this.endpointRevision === endpointRevision && this.settings.address === attempted.address && this.settings.mode === attempted.mode && attempted.address !== previous.address) {
+                const restored = { ...this.settings, address: previous.address };
+                this.store.setManagedState(KEY, restored); this.settings = restored;
+              }
+            });
+            if (!current()) return;
             if (error instanceof NetworkAuthorizationRequired) return;
           }
         }

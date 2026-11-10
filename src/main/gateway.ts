@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
 import type { Socket } from 'node:net';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
-import { GatewayError, ResponsesCollector, SseFrames, isObject, sseData, type Json } from './gateway-sse';
+import { GatewayError, ResponsesCollector, SseFrames, SseCompletion, assertSuccessEvent, isObject, sseData, sseEventType, type Json } from './gateway-sse';
 import { copilotCodexEvents, copilotCodexJson } from './copilot-codex-responses';
 import { prepareUpstream } from './oauth';
 import { Store, validateUpstreamUrl } from './store';
@@ -63,33 +63,67 @@ function aliasResponse(value: unknown, alias: string): unknown {
   if (isObject(result.response)) result.response = aliasResponse(result.response, alias);
   return result;
 }
-function readBody(request: IncomingMessage): Promise<Json> {
+function readBody(request: IncomingMessage, response: ServerResponse): Promise<Json> {
   return new Promise((resolve, reject) => {
     let size = 0; let settled = false; const chunks: Buffer[] = [];
-    const fail = (error: Error) => { if (!settled) { settled = true; reject(error); } };
-    request.on('data', (chunk: Buffer) => {
+    const cleanup = () => {
+      request.removeListener('data', onData); request.removeListener('end', onEnd);
+      request.removeListener('close', onClose); request.removeListener('error', onError);
+    };
+    const fail = (error: Error) => {
       if (settled) return;
+      settled = true; chunks.length = 0; cleanup();
+      // A rejected upload may still emit a transport error while the 413 closes.
+      const ignore = () => {};
+      request.once('error', ignore);
+      request.once('close', () => request.removeListener('error', ignore));
+      reject(error);
+    };
+    const onData = (chunk: Buffer) => {
       size += chunk.length;
-      if (size > BODY_LIMIT) { chunks.length = 0; fail(new GatewayError(413, '请求体超过 8 MiB。')); return; }
+      if (size > BODY_LIMIT) {
+        request.pause();
+        // Do not drain an unbounded upload or reuse its connection. The HTTP
+        // server closes gracefully after flushing the controlled error reply.
+        response.shouldKeepAlive = false; response.setHeader('connection', 'close');
+        fail(new GatewayError(413, '请求体超过 8 MiB。'));
+        return;
+      }
       chunks.push(chunk);
-    });
-    request.once('end', () => {
+    };
+    const onEnd = () => {
       if (settled) return;
-      settled = true;
+      settled = true; cleanup();
       try { const result: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8')); if (!isObject(result)) throw new Error(); resolve(result); } catch { reject(new GatewayError(400, '请求体必须是 JSON 对象。')); }
-    });
-    request.once('aborted', () => fail(new GatewayError(499, '客户端已断开。')));
-    request.once('error', () => fail(new GatewayError(400, '无法读取请求体。')));
+    };
+    const onClose = () => { if (!request.complete) fail(new GatewayError(499, '客户端已断开。')); };
+    const onError = () => fail(new GatewayError(400, '无法读取请求体。'));
+    request.on('data', onData); request.once('end', onEnd);
+    request.once('close', onClose); request.once('error', onError);
   });
 }
 
 function mappedSse(frame: string, alias: string): string {
-  try {
-    const data = sseData(frame);
-    if (!isObject(data) || !(typeof data.model === 'string' || isObject(data.response) && typeof data.response.model === 'string')) return `${frame}\n\n`;
-    const other = frame.split(/\r\n|\n|\r/).filter(line => !line.startsWith('data:'));
-    return [...other, `data: ${JSON.stringify(aliasResponse(data, alias))}`, '', ''].join('\n');
-  } catch { return `${frame}\n\n`; } // Streaming preserves upstream events, including errors.
+  const data = sseData(frame);
+  if (!isObject(data) || !(typeof data.model === 'string' || isObject(data.response) && typeof data.response.model === 'string')) return `${frame}\n\n`;
+  const other = frame.split(/\r\n|\n|\r/).filter(line => !line.startsWith('data:'));
+  return [...other, `data: ${JSON.stringify(aliasResponse(data, alias))}`, '', ''].join('\n');
+}
+
+function validatedSse(protocol: 'responses' | 'chat-completions', alias: string, observe: (value: unknown) => void): TransformStream<Uint8Array, Uint8Array> {
+  const frames = new SseFrames(), completion = new SseCompletion(protocol), encoder = new TextEncoder();
+  const emit = (frame: string, output: TransformStreamDefaultController<Uint8Array>) => output.enqueue(encoder.encode(mappedSse(frame, alias)));
+  const accept = (frame: string, output: TransformStreamDefaultController<Uint8Array>) => {
+    observe(sseData(frame));
+    for (const ready of completion.add(frame)) emit(ready, output);
+  };
+  return new TransformStream({
+    transform(chunk, output) { for (const frame of frames.feed(chunk)) accept(frame, output); },
+    flush(output) {
+      for (const frame of frames.feed(new Uint8Array(), true)) accept(frame, output);
+      for (const frame of completion.finish()) emit(frame, output);
+    },
+  });
 }
 
 async function write(response: ServerResponse, data: string | Uint8Array, signal?: AbortSignal): Promise<void> {
@@ -147,12 +181,51 @@ async function limitedText(response: Response, max = 32 * 1024 * 1024): Promise<
   return Buffer.concat(chunks).toString('utf8');
 }
 
+/** Observe transport activity without adding an eager read loop. Cancel the
+ * raw reader directly even if a later transform is blocked by client pressure. */
+function activeBody(body: ReadableStream<Uint8Array>, signal: AbortSignal, activity: () => void): ReadableStream<Uint8Array> {
+  const reader = body.getReader();
+  let ended = false;
+  let output: ReadableStreamDefaultController<Uint8Array>;
+  const cleanup = () => signal.removeEventListener('abort', onAbort);
+  const cancel = async (reason?: unknown) => {
+    if (ended) return;
+    ended = true; cleanup();
+    try { await reader.cancel(reason); }
+    finally { reader.releaseLock(); }
+  };
+  const onAbort = () => {
+    if (ended) return;
+    output.error(signal.reason);
+    void cancel(signal.reason).catch(() => {});
+  };
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      output = controller; signal.addEventListener('abort', onAbort, { once: true });
+      if (signal.aborted) onAbort();
+    },
+    async pull(controller) {
+      try {
+        const item = await reader.read();
+        if (ended) return;
+        if (item.done) { ended = true; cleanup(); reader.releaseLock(); controller.close(); }
+        else { if (item.value.byteLength) activity(); controller.enqueue(item.value); }
+      } catch (error) {
+        if (!ended) { ended = true; cleanup(); reader.releaseLock(); controller.error(error); }
+      }
+    },
+    cancel,
+  });
+}
+
 /** Read the first validated event before committing HTTP success, then forward
  * every delta with backpressure. Protocol transforms retain only terminal data. */
 async function sendEventStream(reader: ReadableStreamDefaultReader<Uint8Array>, response: ServerResponse, status: number, signal: AbortSignal, maxBytes?: number): Promise<void> {
   let item = await reader.read();
+  while (!item.done && !item.value?.byteLength) item = await reader.read();
+  if (item.done) throw new GatewayError(502, '上游流式响应为空。');
   response.statusCode = status; response.setHeader('content-type', 'text/event-stream; charset=utf-8');
-  response.setHeader('cache-control', 'no-cache'); response.setHeader('x-accel-buffering', 'no'); response.flushHeaders();
+  response.setHeader('cache-control', 'no-cache'); response.setHeader('x-accel-buffering', 'no');
   let bytes = 0;
   while (true) { if (item.value) { bytes += item.value.byteLength; if (maxBytes && bytes > maxBytes) throw new JetBrainsChatError('上游响应超过 32 MiB，请缩小输出后重试。'); await write(response, item.value, signal); } if (item.done) break; item = await reader.read(); }
   response.end();
@@ -360,7 +433,7 @@ export class Gateway {
         || completion && !isJetBrainsTool(route.tool)) throw new GatewayError(404, '接口不存在。');
       if (anthropic && route.tool && route.tool !== 'claude-code'
         || route.tool === 'claude-code' && !anthropic) throw new GatewayError(404, '此工具不使用该协议入口。');
-      const body = await readBody(request);
+      const body = await readBody(request, response);
       if (body.stream !== undefined && typeof body.stream !== 'boolean') throw new GatewayError(400, 'stream 必须是布尔值。');
       const binding = route.tool ? this.store.listBindings().find(item => item.id === route.tool) : undefined;
       if (route.tool && !binding?.enabled) throw new GatewayError(403, '此工具尚未启用。');
@@ -448,7 +521,7 @@ export class Gateway {
     this.controllerProviders.set(controller, provider.id);
     const disconnect = () => { if (!response.writableEnded) controller.abort(); };
     response.once('close', disconnect);
-    const timeout = setTimeout(() => controller.abort(), this.options.timeoutMs ?? 600_000);
+    const timeout = setTimeout(() => controller.abort(new GatewayError(504, '上游长时间没有返回数据。')), this.options.timeoutMs ?? 600_000);
     timeout.unref();
     let upstream: Response | undefined;
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
@@ -471,7 +544,12 @@ export class Gateway {
       headers.set('content-type', 'application/json');
       upstream = await (this.options.fetch ?? fetch)(prepared.url, { method: 'POST', headers, body: JSON.stringify(prepared.body), signal: controller.signal, redirect: 'manual' });
       }
-      if (controller.signal.aborted) throw new GatewayError(response.destroyed ? 499 : 504, '请求已取消或超时。');
+      if (controller.signal.aborted) throw controller.signal.reason ?? new GatewayError(response.destroyed ? 499 : 504, '请求已取消或超时。');
+      if (upstream.body) {
+        // Count nonempty raw chunks, including heartbeats, before transforms.
+        const body = activeBody(upstream.body, controller.signal, () => timeout.refresh());
+        upstream = new Response(body, { status: upstream.status, statusText: upstream.statusText, headers: upstream.headers });
+      }
       const secrets = [secret.apiKey, secret.accessToken, secret.refreshToken, headers.get('authorization')?.replace(/^Bearer /i, ''), headers.get('x-api-key')].filter((item): item is string => Boolean(item));
       if (!upstream.ok) {
         if (completionBaseUrl) {
@@ -569,7 +647,16 @@ export class Gateway {
         if (!upstream.body) throw new GatewayError(502, '上游流式响应为空。');
         reader = upstream.body.getReader();
         const frames = new SseFrames(); const collector = new ResponsesCollector();
-        while (true) { const item = await reader.read(); for (const frame of frames.feed(item.value ?? new Uint8Array(), item.done)) { const value = sseData(frame); observe(value); collector.add(value); } if (item.done) break; }
+        while (true) {
+          const item = await reader.read();
+          for (const frame of frames.feed(item.value ?? new Uint8Array(), item.done)) {
+            const data = sseData(frame), type = sseEventType(frame);
+            if (type) assertSuccessEvent(isObject(data) ? data : {}, type);
+            const value = isObject(data) && data.type === undefined && type ? { ...data, type } : data;
+            observe(value); collector.add(value);
+          }
+          if (item.done) break;
+        }
         jsonResponse(response, upstream.status, collector.result(model.alias));
       } else if (stream) {
         if (jetBrains || provider.nativeAdapter === 'jetbrains-ide' && path.endsWith('/chat/completions')) {
@@ -584,33 +671,17 @@ export class Gateway {
           reader = source.pipeThrough(createJetBrainsChatStream(model.alias, sse ? observe : undefined), { signal: controller.signal }).getReader();
           await sendEventStream(reader, response, upstream.status, controller.signal, 32 * 1024 * 1024); return;
         }
-        if (provider.nativeAdapter === 'jetbrains-ide' && sse) {
-          // Native protocol bridges can reject their first upstream event. Wait
-          // for it before sending HTTP 200, and retain the existing alias map.
-          if (!upstream.body) throw new GatewayError(502, 'JetBrains 上游流式响应为空。');
-          const frames = new SseFrames(), encoder = new TextEncoder();
-          const mapped = new TransformStream<Uint8Array, Uint8Array>({
-            transform(chunk, output) { for (const frame of frames.feed(chunk)) { observe(sseData(frame)); output.enqueue(encoder.encode(mappedSse(frame, model.alias))); } },
-            flush(output) { for (const frame of frames.feed(new Uint8Array(), true)) { observe(sseData(frame)); output.enqueue(encoder.encode(mappedSse(frame, model.alias))); } },
-          });
-          reader = upstream.body.pipeThrough(mapped, { signal: controller.signal }).getReader();
-          await sendEventStream(reader, response, upstream.status, controller.signal, 32 * 1024 * 1024); return;
+        if (sse) {
+          if (!upstream.body) throw new GatewayError(502, '上游流式响应为空。');
+          reader = upstream.body.pipeThrough(validatedSse(model.wireApi === 'responses' ? 'responses' : 'chat-completions', model.alias, observe), { signal: controller.signal }).getReader();
+          await sendEventStream(reader, response, upstream.status, controller.signal, provider.nativeAdapter === 'jetbrains-ide' ? 32 * 1024 * 1024 : undefined);
+        } else {
+          let value: unknown;
+          try { value = JSON.parse(await limitedText(upstream)); } catch (error) { if (error instanceof GatewayError) throw error; throw new GatewayError(502, '上游成功响应不是有效 JSON。'); }
+          if (!isObject(value)) throw new GatewayError(502, '上游成功响应不是 JSON 对象。');
+          assertSuccessEvent(value); observe(value);
+          jsonResponse(response, upstream.status, aliasResponse(value, model.alias));
         }
-        response.statusCode = upstream.status;
-        response.setHeader('content-type', upstream.headers.get('content-type') ?? 'application/octet-stream');
-        response.setHeader('cache-control', 'no-cache');
-        if (sse) response.setHeader('x-accel-buffering', 'no');
-        response.flushHeaders();
-        if (upstream.body) {
-          reader = upstream.body.getReader(); const frames = new SseFrames();
-          while (true) {
-            const item = await reader.read();
-            if (sse) for (const frame of frames.feed(item.value ?? new Uint8Array(), item.done)) { try { observe(sseData(frame)); } catch { /* invalid frames still pass through unchanged */ } await write(response, mappedSse(frame, model.alias), controller.signal); }
-            else if (item.value) await write(response, item.value, controller.signal);
-            if (item.done) break;
-          }
-        }
-        response.end();
       } else {
         const raw = await limitedText(upstream);
         let value: unknown;

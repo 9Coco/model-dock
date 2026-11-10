@@ -1,5 +1,7 @@
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
-import { createHash, randomUUID } from 'node:crypto';
+import { migrateLegacyConfigBackups } from './config-journal';
+import { privatePathIdentity, replacePrivateFile } from './private-file';
+import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { isUtf8 } from 'node:buffer';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -341,11 +343,11 @@ interface Change { file: string; original: string | null; content: string | null
 interface Pending { version: 1 | 2; tool: JetBrainsToolId; target: string; pending: { previous: History | null; next: History | null; changes: Change[] } }
 function record(value: unknown): value is Record<string, any> { return !!value && typeof value === 'object' && !Array.isArray(value); }
 function validValue(value: unknown): value is Value { return record(value) && typeof value.present === 'boolean' && Object.keys(value).every(key => ['present', 'value'].includes(key)) && (value.present ? typeof value.value === 'string' : value.value === undefined); }
-export function jetBrainsHistoryKey(target: string, tool: JetBrainsToolId): string { return `tool-config:${tool}:${createHash('sha256').update(resolve(target)).digest('hex')}`; }
+export function jetBrainsHistoryKey(target: string, tool: JetBrainsToolId): string { return `tool-config:${tool}:${createHash('sha256').update(privatePathIdentity(target)).digest('hex')}`; }
 // 修改点：v1 保留原来的三文件恢复语义；v2 只恢复有记录的字段，升级时不推测旧版未托管的补全原值。
 function validateHistory(value: unknown, tool: JetBrainsToolId, target: string): History | null {
   if (value === null) return null;
-  if (!record(value) || ![1, 2].includes(value.version) || value.tool !== tool || value.target !== target || !Array.isArray(value.files)
+  if (!record(value) || ![1, 2].includes(value.version) || value.tool !== tool || (typeof value.target !== 'string' || privatePathIdentity(value.target) !== privatePathIdentity(target)) || !Array.isArray(value.files)
     || value.files.length < legacySpecs.length || value.files.length > specs.length || value.version === 1 && value.files.length !== legacySpecs.length) fail('恢复记录无效');
   if (value.completionKeyIdentity !== undefined && (value.version !== 2 || typeof value.completionKeyIdentity !== 'string' || !value.completionKeyIdentity.length || value.completionKeyIdentity.length > 1024 || /[\x00-\x1f\x7f]/.test(value.completionKeyIdentity))) fail('AI 补全密钥身份恢复记录无效');
   const names = new Set<string>();
@@ -370,11 +372,10 @@ function historyStore(store: Partial<JetBrainsHistoryStore>): JetBrainsHistorySt
   if (!store.getManagedState || !store.setManagedState || !store.createManagedBackup) fail('同步需要加密恢复记录与加密备份存储');
   return store as JetBrainsHistoryStore;
 }
-function readHistory(store: ReturnType<typeof historyStore>, tool: JetBrainsToolId, target: string): History | null | Pending {
-  const value = store.getManagedState<unknown>(jetBrainsHistoryKey(target, tool), null);
+function validateRecord(value: unknown, tool: JetBrainsToolId, target: string): History | null | Pending {
   if (!record(value) || !Object.hasOwn(value, 'pending')) return validateHistory(value, tool, target);
   const transactionSpecs = value.version === 1 ? legacySpecs : specs;
-  if (![1, 2].includes(value.version) || value.tool !== tool || value.target !== target || !record(value.pending) || !Array.isArray(value.pending.changes) || value.pending.changes.length > transactionSpecs.length) fail('事务恢复记录无效');
+  if (![1, 2].includes(value.version) || value.tool !== tool || (typeof value.target !== 'string' || privatePathIdentity(value.target) !== privatePathIdentity(target)) || !record(value.pending) || !Array.isArray(value.pending.changes) || value.pending.changes.length > transactionSpecs.length) fail('事务恢复记录无效');
   validateHistory(value.pending.previous, tool, target); validateHistory(value.pending.next, tool, target);
   const names = new Set<string>();
   for (const change of value.pending.changes) {
@@ -383,12 +384,24 @@ function readHistory(store: ReturnType<typeof historyStore>, tool: JetBrainsTool
   }
   return value as unknown as Pending;
 }
+function readHistory(store: ReturnType<typeof historyStore>, tool: JetBrainsToolId, target: string): History | null | Pending {
+  const key = jetBrainsHistoryKey(target, tool);
+  let value = store.getManagedState<unknown>(key, null);
+  const legacyKey = `tool-config:${tool}:${createHash('sha256').update(resolve(target)).digest('hex')}`;
+  if (process.platform === 'win32' && legacyKey !== key) {
+    const legacy = store.getManagedState<unknown>(legacyKey, null);
+    if (legacy !== null) {
+      validateRecord(legacy, tool, target); validateRecord(value, tool, target);
+      store.createManagedBackup('jetbrains-key-migration', { version: 1, key: legacyKey, history: legacy });
+      if (value === null) { store.setManagedState(key, legacy); value = legacy; }
+      store.setManagedState(legacyKey, null);
+    }
+  }
+  return validateRecord(value, tool, target);
+}
 function replaceFile(path: string, text: string | null): void {
-  safeDirectory(dirname(path)); if (text === null) { if (metadata(path)) unlinkSync(path); return; }
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const temporary = `${path}.modeldock-${randomUUID()}.tmp`;
-  try { writeFileSync(temporary, text, { mode: 0o600, flag: 'wx' }); renameSync(temporary, path); }
-  finally { if (existsSync(temporary)) unlinkSync(temporary); }
+  safeDirectory(dirname(path));
+  replacePrivateFile(path, text);
 }
 function stopped(tool: JetBrainsToolId, home: string, options: JetBrainsConfigOptions, target?: string): JetBrainsConfigStatus {
   const status = jetBrainsStatus(tool, home, { ...options, refreshProcessEvidence: true });
@@ -408,15 +421,10 @@ function recover(store: ReturnType<typeof historyStore>, tool: JetBrainsToolId, 
   store.setManagedState(jetBrainsHistoryKey(target, tool), previous); return previous;
 }
 function transact(store: ReturnType<typeof historyStore>, tool: JetBrainsToolId, target: string, backups: string, before: History | null, after: History | null, changes: Change[], home: string, options: JetBrainsConfigOptions): string {
+  const legacyBackup = new RegExp(`^${tool}-[0-9]+-[a-f0-9-]{36}-(?:${specs.map(spec => spec.file.replaceAll('.', '\\.')).join('|')})\\.bak$`);
+  migrateLegacyConfigBackups(store, backups, legacyBackup, 'jetbrains-sync-legacy');
   const changed = changes.filter(change => change.original !== change.content), key = jetBrainsHistoryKey(target, tool);
   if (!changed.length && JSON.stringify(before) === JSON.stringify(after)) return target;
-  safeDirectory(backups); mkdirSync(backups, { recursive: true, mode: 0o700 });
-  const stamp = `${Date.now()}-${randomUUID()}`;
-  for (const change of changed) if (change.original !== null) {
-    const backup = join(backups, `${tool}-${stamp}-${change.file}.bak`);
-    writeFileSync(backup, change.original, { mode: 0o600, flag: 'wx' }); chmodSync(backup, 0o600);
-    if (readFileSync(backup, 'utf8') !== change.original) fail('备份验证失败');
-  }
   const journal: Pending = { version: 2, tool, target, pending: { previous: before, next: after, changes: changed } };
   if (Buffer.byteLength(JSON.stringify(journal), 'utf8') > 7 * 1024 * 1024) fail('事务记录过大');
   store.createManagedBackup('jetbrains-sync', journal);

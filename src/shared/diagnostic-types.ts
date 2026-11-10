@@ -2,6 +2,7 @@
 export const DIAGNOSTIC_MESSAGES = {
   'app.start_failed': '应用启动失败。',
   'app.exit': '应用正在退出。',
+  'app.cleanup_failed': '本地资源清理失败，继续退出应用。',
   'renderer.load_failed': '界面加载失败。',
   'renderer.crashed': '界面进程意外退出。',
   'renderer.unresponsive': '界面暂时没有响应。',

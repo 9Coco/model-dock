@@ -156,6 +156,23 @@ describe('independent Copilot CLI model registry configuration', () => {
     expect(() => f.apply()).toThrow('synthetic state failure'); expect(f.files()).toEqual([null, null]); expect(f.store.getManagedState(copilotCliHistoryKey(f.targets.providersPath), null)).toBeNull();
   });
 
+  it.each([0, 1])('recovers an interrupted transaction at file %s before reading the next restore baseline', index => {
+    const f = fixture(); f.write(f.targets.settingsPath, '// user comment\n{"model":"original"}'); f.apply();
+    const journal = structuredClone(f.journals[0]) as any;
+    journal.files.forEach((file: any) => { if (file.before === null) rmSync(file.path, { force: true }); else f.write(file.path, file.before); });
+    for (let committed = 0; committed <= index; committed++) f.write(journal.files[committed].path, journal.files[committed].after);
+    f.states.set(copilotCliHistoryKey(f.targets.providersPath), journal); f.restore();
+    expect(existsSync(f.targets.providersPath)).toBe(false); expect(readFileSync(f.targets.settingsPath, 'utf8')).toBe('// user comment\n{"model":"original"}');
+    expect(f.store.getManagedState(copilotCliHistoryKey(f.targets.providersPath), null)).toBeNull();
+  });
+
+  it('keeps interrupted ownership pending when a target has an external edit', () => {
+    const f = fixture(); f.apply(); const journal = structuredClone(f.journals[0]) as any;
+    f.states.set(copilotCliHistoryKey(f.targets.providersPath), journal); f.write(f.targets.settingsPath, { model: 'external' });
+    const before = f.files(); expect(() => f.restore()).toThrow('外部修改'); expect(f.files()).toEqual(before);
+    expect(f.store.getManagedState(copilotCliHistoryKey(f.targets.providersPath), null)).toEqual(journal);
+  });
+
   it('honors independent absolute home and registry overrides while isolating fixture homes from environment', () => {
     const f = fixture(); vi.stubEnv('COPILOT_HOME', join(f.root, 'environment-home')); vi.stubEnv('COPILOT_PROVIDERS_CONFIG', join(f.root, 'environment-registry.json'));
     expect(copilotCliConfigDirectory(f.root)).toBe(join(f.root, '.copilot'));

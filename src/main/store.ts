@@ -1,6 +1,6 @@
 import initSqlJs, { type Database, type SqlJsStatic } from 'sql.js';
 import { createRequire } from 'node:module';
-import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync, chmodSync } from 'node:fs';
+import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync, chmodSync, openSync, closeSync, fsyncSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -62,7 +62,7 @@ export class Store {
   private gatewayPort = 18181;
   private closed = false;
   private readonly providerRemovals = new Map<string, ProviderRemovalData>();
-  private constructor(private db: Database, readonly dataDir: string, private codec: SecretCodec) {}
+  private constructor(private db: Database, readonly dataDir: string, private codec: SecretCodec, private SQL: SqlJsStatic) {}
 
   static async create(dataDir: string, codec: SecretCodec = plainCodec): Promise<Store> {
     mkdirSync(dataDir, { recursive: true, mode: 0o700 });
@@ -72,34 +72,36 @@ export class Store {
     const SQL = await sqlPromise;
     const filename = join(dataDir, 'modeldock.sqlite');
     const db = existsSync(filename) ? new SQL.Database(readFileSync(filename)) : new SQL.Database();
-    const store = new Store(db, dataDir, codec);
-    db.run(`PRAGMA foreign_keys=ON;
+    const store = new Store(db, dataDir, codec, SQL);
+    try {
+      db.run(`PRAGMA foreign_keys=ON;
       CREATE TABLE IF NOT EXISTS providers(id TEXT PRIMARY KEY,name TEXT NOT NULL,kind TEXT NOT NULL,base_url TEXT NOT NULL,enabled INTEGER NOT NULL,auth_status TEXT NOT NULL,note TEXT NOT NULL,preset_id TEXT NOT NULL DEFAULT 'custom',messages_auth TEXT NOT NULL DEFAULT 'bearer',claude_base_url TEXT NOT NULL DEFAULT '',trae_relay_mode TEXT);
       CREATE TABLE IF NOT EXISTS secrets(provider_id TEXT PRIMARY KEY REFERENCES providers(id) ON DELETE CASCADE,ciphertext TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS models(id TEXT PRIMARY KEY,provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,upstream_id TEXT NOT NULL,alias TEXT NOT NULL UNIQUE,display_name TEXT NOT NULL,wire_api TEXT NOT NULL,context_window INTEGER NOT NULL,tools INTEGER NOT NULL,vision INTEGER NOT NULL,enabled INTEGER NOT NULL,reasoning_efforts TEXT NOT NULL DEFAULT '[]',default_reasoning_effort TEXT,specs_json TEXT NOT NULL DEFAULT '{}');
       CREATE TABLE IF NOT EXISTS bindings(id TEXT PRIMARY KEY,name TEXT NOT NULL,enabled INTEGER NOT NULL,model_ids TEXT NOT NULL,default_model_id TEXT NOT NULL,note TEXT NOT NULL,mode TEXT NOT NULL DEFAULT 'aggregate',provider_ids TEXT,model_selection TEXT,vscode_sync_scope TEXT NOT NULL DEFAULT 'managed',copilot_sync_scope TEXT NOT NULL DEFAULT 'managed',dsh_sync_scope TEXT NOT NULL DEFAULT 'managed',claude_disable_telemetry INTEGER NOT NULL DEFAULT 1,connection_choices TEXT);
       CREATE TABLE IF NOT EXISTS logs(id TEXT PRIMARY KEY,time TEXT NOT NULL,alias TEXT NOT NULL,provider_name TEXT NOT NULL,endpoint TEXT NOT NULL,status INTEGER NOT NULL,duration_ms INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);`);
-    store.migrateSchema();
-    if (!store.one("SELECT value FROM settings WHERE key='initialized'")) {
-      // Existing databases keep their accounts exactly as stored. Templates are
-      // seeded only for an empty, never-initialized store.
-      if (!store.one('SELECT id FROM providers LIMIT 1')) for (const preset of providerPresets.filter(p => p.id !== 'custom' && p.category === 'api')) {
-        db.run('INSERT INTO providers(id,name,kind,base_url,enabled,auth_status,note,preset_id,messages_auth) VALUES(?,?,?,?,?,?,?,?,?)', [preset.id, preset.name, preset.kind, preset.baseUrl, 1, 'missing', preset.note, preset.id, preset.id === 'anthropic' ? 'api-key' : 'bearer']);
+      store.migrateSchema();
+      if (!store.one("SELECT value FROM settings WHERE key='initialized'")) {
+        // Existing databases keep their accounts exactly as stored. Templates are
+        // seeded only for an empty, never-initialized store.
+        if (!store.one('SELECT id FROM providers LIMIT 1')) for (const preset of providerPresets.filter(p => p.id !== 'custom' && p.category === 'api')) {
+          db.run('INSERT INTO providers(id,name,kind,base_url,enabled,auth_status,note,preset_id,messages_auth) VALUES(?,?,?,?,?,?,?,?,?)', [preset.id, preset.name, preset.kind, preset.baseUrl, 1, 'missing', preset.note, preset.id, preset.id === 'anthropic' ? 'api-key' : 'bearer']);
+        }
+        db.run('INSERT INTO settings(key,value) VALUES(?,?)', ['initialized', '1']);
       }
-      db.run('INSERT INTO settings(key,value) VALUES(?,?)', ['initialized', '1']);
-    }
-    // 修改点：旧版其他工具允许 direct 多入口，转为等价的 auto 元数据；不改外部配置或所选来源。
-    for (const row of store.rows("SELECT id,provider_ids FROM bindings WHERE mode='direct'")) {
-      if (!Object.hasOwn(TOOL_NAMES, String(row.id)) || row.id === 'codex' || row.id === 'claude-code') continue;
-      const ids = row.provider_ids === null ? [] : JSON.parse(String(row.provider_ids));
-      if (Array.isArray(ids) && ids.length > 1) db.run("UPDATE bindings SET mode='auto' WHERE id=?", [String(row.id)]);
-    }
-    for (const [tool, name] of Object.entries(TOOL_NAMES)) db.run('INSERT OR IGNORE INTO bindings(id,name,enabled,model_ids,default_model_id,note,mode,provider_ids,vscode_sync_scope,copilot_sync_scope,dsh_sync_scope) VALUES(?,?,?,?,?,?,?,?,?,?,?)', [tool, name, 0, '[]', '', '', isJetBrainsTool(tool) ? 'aggregate' : 'direct', '[]', tool === 'vscode' ? 'selected' : 'managed', tool === 'copilot' ? 'selected' : 'managed', tool === 'dsh' ? 'selected' : 'managed']);
-    store.migrateSingleEntryBindings();
-    if (!store.one("SELECT value FROM settings WHERE key='gateway_key'")) db.run('INSERT INTO settings(key,value) VALUES(?,?)', ['gateway_key', codec.encrypt(store.newKey())]);
-    store.persist();
-    return store;
+      // 修改点：旧版其他工具允许 direct 多入口，转为等价的 auto 元数据；不改外部配置或所选来源。
+      for (const row of store.rows("SELECT id,provider_ids FROM bindings WHERE mode='direct'")) {
+        if (!Object.hasOwn(TOOL_NAMES, String(row.id)) || row.id === 'codex' || row.id === 'claude-code') continue;
+        const ids = row.provider_ids === null ? [] : JSON.parse(String(row.provider_ids));
+        if (Array.isArray(ids) && ids.length > 1) db.run("UPDATE bindings SET mode='auto' WHERE id=?", [String(row.id)]);
+      }
+      for (const [tool, name] of Object.entries(TOOL_NAMES)) db.run('INSERT OR IGNORE INTO bindings(id,name,enabled,model_ids,default_model_id,note,mode,provider_ids,vscode_sync_scope,copilot_sync_scope,dsh_sync_scope) VALUES(?,?,?,?,?,?,?,?,?,?,?)', [tool, name, 0, '[]', '', '', isJetBrainsTool(tool) ? 'aggregate' : 'direct', '[]', tool === 'vscode' ? 'selected' : 'managed', tool === 'copilot' ? 'selected' : 'managed', tool === 'dsh' ? 'selected' : 'managed']);
+      store.migrateSingleEntryBindings();
+      if (!store.one("SELECT value FROM settings WHERE key='gateway_key'")) db.run('INSERT INTO settings(key,value) VALUES(?,?)', ['gateway_key', codec.encrypt(store.newKey())]);
+      store.persist();
+      return store;
+    } catch (error) { try { db.close(); } catch { /* Preserve the initialization failure. */ } throw error; }
   }
 
   private migrateSchema(): void {
@@ -174,14 +176,47 @@ export class Store {
     // sql.js export closes/reopens the connection, which resets PRAGMA state.
     const bytes = this.db.export();
     this.db.run('PRAGMA foreign_keys=ON');
-    writeFileSync(temp, bytes, { mode: 0o600 });
-    if (process.platform !== 'win32') chmodSync(temp, 0o600);
-    renameSync(temp, filename);
+    let descriptor: number | undefined, failed = false;
+    try {
+      descriptor = openSync(temp, 'wx', 0o600);
+      writeFileSync(descriptor, bytes);
+      fsyncSync(descriptor);
+      closeSync(descriptor); descriptor = undefined;
+      renameSync(temp, filename);
+    } catch (error) { failed = true; throw error; }
+    finally {
+      let cleanupError: unknown; let cleanupFailed = false;
+      try { if (descriptor !== undefined) closeSync(descriptor); }
+      catch (error) { cleanupError = error; cleanupFailed = true; }
+      try { if (existsSync(temp)) unlinkSync(temp); }
+      catch (error) { if (!cleanupFailed) cleanupError = error; cleanupFailed = true; }
+      if (!failed && cleanupFailed) throw cleanupError;
+    }
   }
   private mutate<T>(action: () => T): T {
     if (this.closed) throw new Error('存储已关闭。');
+    const before = this.db.export();
+    this.db.run('PRAGMA foreign_keys=ON');
     this.db.run('BEGIN');
-    try { const result = action(); this.db.run('COMMIT'); this.persist(); return result; } catch (error) { try { this.db.run('ROLLBACK'); } catch { /* already committed */ } throw error; }
+    try { const result = action(); this.db.run('COMMIT'); this.persist(); return result; }
+    catch (error) {
+      // sql.js COMMIT changes memory only. A failed private-file replacement
+      // must restore that memory as well as leave the previous disk untouched.
+      try { this.db.run('ROLLBACK'); } catch { /* COMMIT may already have succeeded. */ }
+      let restored: Database | undefined;
+      try {
+        restored = new this.SQL.Database(before); restored.run('PRAGMA foreign_keys=ON');
+        const failed = this.db; this.db = restored; restored = undefined;
+        try { failed.close(); } catch { /* The restored database is already authoritative. */ }
+      } catch {
+        try { restored?.close(); } catch { /* Preserve the original mutation failure. */ }
+        // If even reconstruction fails, prevent a later close/write from
+        // persisting the failed in-memory mutation over the last good file.
+        this.closed = true;
+        try { this.db.close(); } catch { /* The previous disk file remains authoritative. */ }
+      }
+      throw error;
+    }
   }
   private provider(row: Record<string, unknown>): Provider {
     const relayMode = row.trae_relay_mode === 'managed' ? 'managed' : 'manual';
@@ -316,31 +351,21 @@ export class Store {
       return saved;
     });
   }
-  /** Import-only atomic save: stage in a cloned database and swap memory only
-   * after the private replacement file has been successfully renamed. */
+  /** Provider, credential and provenance share the same durable mutation. */
   async saveRelayClientImport(input: ProviderInput, metadata: unknown, expected?: { provider: Provider; apiKey?: string }): Promise<Provider> {
-    const SQL = await sqlPromise!;
+    await sqlPromise!;
     if (this.closed) throw new Error('存储已关闭。');
     if (input.kind !== 'openai-compatible' || !['trae-cn-relay', 'jetbrains-central'].includes(input.presetId ?? '')) throw new Error('反代导入来源无效。');
     if (expected && (!isDeepStrictEqual(this.getProvider(expected.provider.id), expected.provider) || this.getSecret(expected.provider.id)?.apiKey !== expected.apiKey)) throw new Error('供应商已被修改，请重新导入。');
     if (!input.id && this.listProviders().some(provider => providerIdentity(provider) === providerIdentity(input))) throw new Error('供应商列表已变动，请重新导入。');
     const encoded = JSON.stringify(metadata);
     if (!encoded || Buffer.byteLength(encoded) > 64 * 1024) throw new Error('客户端导入来源信息无效。');
-    const original = this.db, bytes = original.export(); original.run('PRAGMA foreign_keys=ON');
-    const staged = new SQL.Database(bytes); staged.run('PRAGMA foreign_keys=ON'); this.db = staged;
-    let saved: Provider;
-    try {
-      saved = this.saveProvider(input, provider => {
-        this.db.run('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', [this.managedKey(`auth-metadata:${provider.id}`), this.codec.encrypt(encoded)]);
-        // Import can change the native relay's active account without changing
-        // its URL or key. Do not carry a previous account's quota into that view.
-        this.db.run('DELETE FROM settings WHERE key=?', [this.managedKey(`auth-usage:${provider.id}`)]);
-      });
-    } catch (error) {
-      this.db = original; staged.close(); throw error;
-    }
-    try { original.close(); } catch { /* The staged database and disk already committed; cleanup cannot undo it. */ }
-    return saved;
+    return this.saveProvider(input, provider => {
+      this.db.run('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', [this.managedKey(`auth-metadata:${provider.id}`), this.codec.encrypt(encoded)]);
+      // Import can change the native relay's active account without changing
+      // its URL or key. Do not carry a previous account's quota into that view.
+      this.db.run('DELETE FROM settings WHERE key=?', [this.managedKey(`auth-usage:${provider.id}`)]);
+    });
   }
   private providerModelCount(providerId: string): number { return Number(this.one('SELECT COUNT(*) AS count FROM models WHERE provider_id=?', [providerId])?.count ?? 0); }
   private rankDuplicateProviders(providers: Provider[]): Provider[] {

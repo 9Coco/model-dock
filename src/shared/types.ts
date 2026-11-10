@@ -301,7 +301,7 @@ export interface ModelDockApi extends FlowBridgeApi {
   mcpPreview(tool: ToolId): Promise<McpConfigPreview>;
   mcpApply(tool: ToolId, expectedFingerprint?: string): Promise<McpApplyResult>;
   skillsList(): Promise<SkillSnapshot>;
-  skillsImportLocal(path?: string): Promise<ManagedSkill | null>;
+  skillsImportLocal(): Promise<ManagedSkill | null>;
   skillsImportRepository(input: SkillRepositoryInput): Promise<SkillImportResult>;
   skillsScan(tool: ToolId): Promise<SkillImportResult>;
   skillsDeploy(id: string, tool: ToolId, enabled: boolean): Promise<ManagedSkill>;

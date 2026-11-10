@@ -1,14 +1,15 @@
-import { lstatSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
-import { randomUUID, createHash } from 'node:crypto';
+import { replacePrivateFile } from './private-file';
+import { lstatSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import type { ToolBinding, ToolId } from '../shared/types';
 import { isJetBrainsTool } from '../shared/jetbrains';
 import { codexHistoryKey } from './adapters';
-import { claudeConfigDirectory, claudeHistoryKey } from './claude-config';
-import { junieConfigTargets, junieHistoryKey, replaceJunieConfigFile } from './junie-config';
-import { copilotCliConfigTargets, copilotCliHistoryKey, replaceCopilotCliConfigFile } from './copilot-cli-config';
+import { claudeConfigDirectory, claudeHistoryKey, recoverClaudeConfig } from './claude-config';
+import { junieConfigTargets, junieHistoryKey, recoverJunieConfig, replaceJunieConfigFile } from './junie-config';
+import { copilotCliConfigTargets, copilotCliHistoryKey, recoverCopilotCliConfig, replaceCopilotCliConfigFile } from './copilot-cli-config';
 import { openCodeConfigDirectory } from './opencode-paths';
 import { DSH_LEGACY_SCRIPT } from './dsh-runtime';
 import { copilotSyncUndoKey, copilotSyncUndoStatus, undoCopilotDesktop, type CopilotSyncOptions } from './copilot-sync';
@@ -77,17 +78,13 @@ function read(path: string): SnapshotFile {
   let info: ReturnType<typeof lstatSync>;
   try { info = lstatSync(path); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { path, content: null, mode: 0o600 }; throw error; }
-  if (info.isSymbolicLink() || !info.isFile() || info.size > maximumFileSize) fail('invalid');
+  if (info.isSymbolicLink() || !info.isFile() || info.nlink !== 1 || info.size > maximumFileSize) fail('invalid');
   return { path, content: readFileSync(path, 'utf8'), mode: info.mode & 0o777 };
 }
 function matches(file: SnapshotFile): boolean { return read(file.path).content === file.content; }
-function replaceFile(path: string, content: string | null, mode: number): void {
+function replaceFile(path: string, content: string | null, _mode: number): void {
   safeDirectory(dirname(path));
-  if (content === null) { if (read(path).content !== null) unlinkSync(path); return; }
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const temporary = `${path}.modeldock-undo-${randomUUID()}.tmp`;
-  try { writeFileSync(temporary, content, { mode, flag: 'wx' }); renameSync(temporary, path); }
-  finally { try { unlinkSync(temporary); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; } }
+  replacePrivateFile(path, content);
 }
 export function toolSyncUndoKey(tool: ToolId): string { return `tool-sync-undo:${tool}`; }
 
@@ -204,6 +201,12 @@ export class ToolSyncUndoManager {
         }
         return result;
       }
+      // Recover an interrupted explicit adapter transaction before capturing
+      // the next undo baseline; partial output must not become user-owned input.
+      const home = this.options.homeDirectory ?? homedir();
+      if (tool === 'claude-code') recoverClaudeConfig(this.store, home, { claudeConfigDir: this.options.claudeConfigDir });
+      if (tool === 'junie') recoverJunieConfig(this.store, home, { junieHome: this.options.junieHome });
+      if (tool === 'copilot-cli') recoverCopilotCliConfig(this.store, home, { copilotHome: this.options.copilotCliHome, providersConfig: this.options.copilotCliProvidersConfig });
       const targets = this.targets(tool), beforeFiles = targets.paths.map(read), beforeStates = this.states(targets.stateKeys);
       try { this.store.createManagedBackup('tool-sync-undo', { version: 1, tool, beforeBinding: before, beforeFiles, beforeStates }); }
       catch { fail('storage'); }

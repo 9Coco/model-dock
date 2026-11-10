@@ -1,5 +1,6 @@
-import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
-import { createHash, randomUUID } from 'node:crypto';
+import { replacePrivateFile } from './private-file';
+import { existsSync, lstatSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { isMap, isSeq, parseDocument, Document, YAMLSeq, type YAMLMap, type Node } from 'yaml';
 import { isDeepStrictEqual } from 'node:util';
@@ -217,11 +218,7 @@ export function dshPatchPreview(plan: DshPlan): string {
 }
 function replaceAtomic(path: string, content: string | null) {
   safeDirectoryTree(dirname(path));
-  if (content === null) { if (existsSync(path)) unlinkSync(path); return; }
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const temporary = `${path}.modeldock-${randomUUID()}.tmp`;
-  try { writeFileSync(temporary, content, { mode: 0o600, flag: 'wx' }); renameSync(temporary, path); }
-  finally { if (existsSync(temporary)) unlinkSync(temporary); }
+  replacePrivateFile(path, content);
 }
 function readHistory(value: unknown, target: string): History {
   if (value === null) return { version: 3, target, syncScope: 'managed', originalRows: {}, installedRows: {}, originalRefs: {}, installedRefs: {}, suppressedRows: {}, baselineProviders: {} };

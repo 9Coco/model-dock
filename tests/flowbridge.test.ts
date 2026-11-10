@@ -44,6 +44,25 @@ describe('FlowBridge integration', () => {
     expect(f.attempts).toEqual([saved]);
     await f.manager.shutdown();
   });
+  it.each([false, true])('preserves a concurrent preference save after an automatic attempt fails (explicit endpoint: %s)', async explicitEndpoint => {
+    const saved = 'http://192.0.2.20:38473', discovered = 'http://192.0.2.21:38473';
+    const f = fixture('linux', async () => [discovered]);
+    await f.manager.save({ address: saved, autoConnect: true }); f.rejectAddress(discovered);
+    const internal = f.manager as unknown as { queueConnection: (upstream: { address: string; mode: 'http' | 'global' } | undefined, allowInstall: boolean) => Promise<unknown> };
+    const connect = internal.queueConnection.bind(f.manager);
+    vi.spyOn(internal, 'queueConnection').mockImplementation(async (upstream, allowInstall) => {
+      try { return await connect(upstream, allowInstall); }
+      catch (error) {
+        // Deterministically place the user save after connection cleanup but
+        // before the automatic attempt's rejection handler restores its endpoint.
+        await f.manager.save({ showMiniOnStart: true, ...(explicitEndpoint ? { address: discovered } : {}) });
+        throw error;
+      }
+    });
+    await f.manager.autoConnect();
+    expect(f.manager.snapshot().settings).toMatchObject({ address: explicitEndpoint ? discovered : saved, showMiniOnStart: true, autoConnect: true });
+    expect(f.attempts).toEqual([discovered]); await f.manager.shutdown();
+  });
   it('can enable automatic discovery without a saved address and waits for the network to become ready', async () => {
     vi.useFakeTimers();
     let discovery = 0;
