@@ -185,6 +185,11 @@ class BridgeTests(unittest.TestCase):
         self.session.disconnect()
         self.session.access.call.assert_called_with('stop')
         self.assertFalse(marker.exists())
+        marker.write_text('{"version":2}')
+        self.session.disconnect(allow_install=True)
+        self.session.access.open.assert_called_with(True, recovery=True)
+        self.session.access.call.assert_called_with('stop')
+        self.assertFalse(marker.exists())
     def test_successful_stop_clears_only_owned_marker(self):
         marker=Path(self.directory.name)/'global-lease.json';marker.write_text('{}')
         retained=Path(self.directory.name)/'preserved.txt';retained.write_text('unrelated')

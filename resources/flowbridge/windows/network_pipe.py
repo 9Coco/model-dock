@@ -6,6 +6,10 @@ import os
 import re
 import time
 
+# CreateFileW also checks FILE_READ_ATTRIBUTES when opening the client end.
+# Exclude FILE_CREATE_PIPE_INSTANCE (0x4), WRITE_DAC and WRITE_OWNER.
+CLIENT_ACCESS = 0x120083
+
 
 def pipe_name(sid):
     if not re.fullmatch(r'S-1-(?:[0-9]+-){1,14}[0-9]+', sid):
@@ -51,7 +55,7 @@ def open_client(sid):
     create = api(kernel, 'CreateFileW', w.HANDLE, w.LPCWSTR, w.DWORD, w.DWORD, c.c_void_p,
                  w.DWORD, w.DWORD, w.HANDLE)
     # Individual data rights, READ_CONTROL and SYNCHRONIZE. Never impersonate the client.
-    handle = create(pipe_name(sid), 0x120003, 0, None, 3, 0x100000, None)
+    handle = create(pipe_name(sid), CLIENT_ACCESS, 0, None, 3, 0x100000, None)
     if handle == c.c_void_p(-1).value:
         raise c.WinError(c.get_last_error())
     try:
@@ -67,7 +71,7 @@ def accept_client(sid):
     name = pipe_name(sid)
     # The user may exchange data but cannot create another pipe instance or change its ACL.
     # The explicit medium label permits writes from the ordinary desktop process.
-    sddl = f'O:SYG:SYD:P(A;;GA;;;SY)(A;;0x120003;;;{sid})S:(ML;;NW;;;ME)'
+    sddl = f'O:SYG:SYD:P(A;;GA;;;SY)(A;;0x{CLIENT_ACCESS:x};;;{sid})S:(ML;;NW;;;ME)'
     return _accept(name, sddl)
 
 

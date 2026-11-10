@@ -169,18 +169,19 @@ export class FlowBridgeManager {
       throw error instanceof Error ? error : new Error(this.message);
     }
   }
-  disconnect(): Promise<FlowBridgeSnapshot> {
+  disconnect(manualRecovery = false): Promise<FlowBridgeSnapshot> {
+    const repair = manualRecovery && this.options.platform === 'win32' && this.active && this.state === 'error';
     this.cancel = true;
     if (this.engine) void this.engine.request('cancel').catch(() => {});
-    return this.enqueue(async () => { this.busy = true; try { await this.stop(); return this.snapshot(); } finally { this.busy = false; } });
+    return this.enqueue(async () => { this.busy = true; try { await this.stop(repair); return this.snapshot(); } finally { this.busy = false; } });
   }
-  private async stop() {
+  private async stop(allowInstall = false) {
     if (this.timer) clearInterval(this.timer); this.timer = undefined;
     if (!this.active) { this.state = 'idle'; this.message = ''; return; }
     this.options.suspendHttpRelay?.();
     this.state = 'disconnecting'; this.message = '正在恢复网络设置…';
     try {
-      this.current = status(await this.getEngine().request<NetworkEngineStatus>('disconnect', { recover: this.active, settings: this.settings }));
+      this.current = status(await this.getEngine().request<NetworkEngineStatus>('disconnect', { recover: this.active, settings: this.settings, allowInstall }));
       if (!this.current.cleanupConfirmed || this.current.running) throw new Error('网络清理尚未确认。请再次点击「恢复网络」。');
       await this.options.setHttpRelay?.(null);
       this.store.setManagedState(LEASE, false); this.active = false;

@@ -124,12 +124,14 @@ class NetworkSession:
             'localPort':self.port, 'uploadBytes':raw.get('upload_bytes',0),
             'downloadBytes':raw.get('download_bytes',0), 'connections':raw.get('active_connections',0),
             'message':(raw.get('last_error','') or self.desktop.last_warning)[:500]}
-    def recover_global(self):
+    def recover_global(self, allow_install=False):
         marker = self.directory / 'global-lease.json'
         if not marker.exists() or self.controller is not None: return
         if sys.platform == 'win32':
             record = json.loads(marker.read_text('utf-8'))
             if record == {'version': 2}:
+                if allow_install:
+                    self.access.open(True, recovery=True)
                 if self.access.call('stop') is not True:
                     raise RuntimeError('尚未确认上次网络会话已恢复。')
                 marker.unlink()
@@ -161,7 +163,7 @@ class NetworkSession:
             self._linux_recovery.recover_previous()
         marker.unlink()
         self._linux_recovery = None
-    def disconnect(self):
+    def disconnect(self, allow_install=False):
         self.check_cancel.cancel()
         if self.controller is not None:
             # A lost metrics pipe must not block the separate stop/recovery command.
@@ -173,7 +175,7 @@ class NetworkSession:
         # and resources for retry if any part of cleanup cannot be confirmed.
         self.desktop.recover_pending()
         self.desktop.restore()
-        self.recover_global()
+        self.recover_global(allow_install)
         if self.controller is not None:
             self.controller.close()
             if not self.controller.cleanup_confirmed: raise RuntimeError('尚未确认路由清理完成，请重试断开。')
@@ -275,7 +277,7 @@ def main():
                     cleanup_on_exit = True
                 if method=='connect':
                     result = network.connect(request['settings'], request.get('allowInstall') is True)
-                elif method=='disconnect': result = network.disconnect()
+                elif method=='disconnect': result = network.disconnect(request.get('allowInstall') is True)
                 elif method=='snapshot': result = network.snapshot()
                 elif method=='localProxies' and sys.platform == 'win32':
                     from windows.local_proxy import discover_local_proxies

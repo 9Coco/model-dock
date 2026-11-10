@@ -61,7 +61,7 @@ export class FlowBridgeEngine implements NetworkEngine {
     if (this.pending.size >= 16) return Promise.reject(new Error('网络操作仍在进行，请稍后重试。'));
     return new Promise<T>((resolve, reject) => {
       const connectTimeout = args.allowInstall === true ? 300_000 : 150_000;
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('网络操作超时，清理状态未知；请重试断开。')); }, method === 'connect' ? connectTimeout : 65_000);
+      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('网络操作超时，清理状态未知；请重试断开。')); }, method === 'connect' || args.allowInstall === true ? connectTimeout : 65_000);
       this.pending.set(id, { resolve, reject, timer });
       child.stdin.write(JSON.stringify({ id, method, ...args }) + '\n');
     });
