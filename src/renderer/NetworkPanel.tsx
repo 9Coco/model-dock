@@ -53,7 +53,8 @@ export function NetworkPreferences({ api, snapshot, onChanged, notify }: Network
     await onChanged();
   });
   return <section className="settings-section"><h2 className="settings-heading">网络接管</h2><div className="panel">
-    <div className="settings-row"><div className="settings-row-copy"><strong>随 ModelDock 自动连接</strong><small>默认关闭。上游未就绪时最多等待两分钟；登录启动沿用上方 ModelDock 开关。</small></div><Toggle label="随 ModelDock 自动连接网络" checked={snapshot.settings.autoConnect} disabled={!!busy} onChange={autoConnect => void save({ autoConnect })} /></div>
+    <div className="settings-row"><div className="settings-row-copy"><strong>随 ModelDock 自动连接</strong><small>上游未就绪时最多等待两分钟；手动断开会取消本次自动重试。登录启动沿用上方 ModelDock 开关。</small></div><Toggle label="随 ModelDock 自动连接网络" checked={snapshot.settings.autoConnect} disabled={!!busy} onChange={autoConnect => void save({ autoConnect })} /></div>
+    <div className="settings-row"><div className="settings-row-copy"><strong>启动时自动查找代理</strong><small>先查找当前热点或本机代理，再按已选模式连接；保留现有端口，地址为空时使用 38473。查找失败时重试已保存的地址。</small></div><Toggle label="启动时自动查找代理" checked={snapshot.settings.autoDiscover} disabled={!!busy} onChange={autoDiscover => void save({ autoDiscover })} /></div>
     <div className="settings-row"><div className="settings-row-copy"><strong>启动时显示网速小窗</strong><small>使用同一个 ModelDock 进程和网络会话。</small></div><Toggle label="启动时显示网速小窗" checked={snapshot.settings.showMiniOnStart} disabled={!!busy} onChange={showMiniOnStart => void save({ showMiniOnStart })} /></div>
     {snapshot.platform === 'win32' && <div className="settings-row"><div className="settings-row-copy"><strong>全局模式解析</strong><small>快速解析保留虚拟地址映射；兼容解析经同一代理使用 DoH。保存后，已连接会话会先断开再重连。</small></div><select aria-label="全局模式解析" value={snapshot.settings.dnsMode} disabled={!!busy} onChange={e => void save({ dnsMode: e.target.value as 'fast' | 'compatible' })}><option value="fast">快速解析</option><option value="compatible">兼容解析</option></select></div>}
   </div></section>;

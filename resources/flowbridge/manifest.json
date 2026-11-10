@@ -328,8 +328,8 @@
       "sha256": "f58d0bd8a4608df9d64f77059b76f4fbaca6bde409c74817ac555acf4023c4d1"
     },
     {
-      "source": "termux/\u9a8c\u8bc1\u8bb0\u5f55.txt",
-      "path": "termux/\u9a8c\u8bc1\u8bb0\u5f55.txt",
+      "source": "termux/验证记录.txt",
+      "path": "termux/验证记录.txt",
       "upstreamSha256": "afd8a0c0e38f2c41ee5c97124ce962ec5a09a785af2983ca8b248baa268417cf",
       "sha256": "afd8a0c0e38f2c41ee5c97124ce962ec5a09a785af2983ca8b248baa268417cf"
     }
@@ -339,8 +339,8 @@
       "source": "https://github.com/9Coco/model-dock/blob/7ea8d51e40b18b23c85eab905b7b6b421632b218/resources/flowbridge/bridge.py",
       "path": "resources/flowbridge/bridge.py",
       "upstreamSha256": "1ea86b5d63bc6189e04ef790e38de0f85b6794c2ff830539eb36caca8f738cf8",
-      "sha256": "59acd92b13c3de80b4786da523a3cace3481b472d1349cfb15cac7a12e4bddf1",
-      "changes": "Escape non-ASCII protocol output, expose read-only Windows proxy discovery, and restore on EOF only after session control requests. Delegate Windows global sessions to the protected demand-start task and preserve legacy recovery. Restore stale Linux sessions via the preauthorized socket and retain pending recovery for retry. Detect standalone FlowBridge TUN conflicts on the actual Linux upstream route and retry transient startup probes once, switching targets only for target-specific failures. Use the current recovery button label. Allow task repair during explicit Windows recovery."
+      "sha256": "79e416d900b7614e41121487574a3d48563042ecdc56c8171136a824205f65ec",
+      "changes": "Escape non-ASCII protocol output, expose read-only Windows proxy discovery, and restore on EOF only after session control requests. Delegate Windows global sessions to the protected demand-start task and preserve legacy recovery. Restore stale Linux sessions via the preauthorized socket and retain pending recovery for retry. Detect standalone FlowBridge TUN conflicts on the actual Linux upstream route and retry transient startup probes once, switching targets only for target-specific failures. Use the current recovery button label. Allow task repair during explicit Windows recovery. Automatic Linux global startup requires an existing grant and never opens initial authorization."
     },
     {
       "source": "https://github.com/9Coco/model-dock/blob/7ea8d51e40b18b23c85eab905b7b6b421632b218/resources/flowbridge/tools/fetch_python.py",

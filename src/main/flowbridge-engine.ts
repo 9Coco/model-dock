@@ -49,7 +49,7 @@ export class FlowBridgeEngine implements NetworkEngine {
           if (value.ok === true) pending.resolve(value.result);
           else {
             const message = typeof value.message === 'string' ? value.message.slice(0, 500) : '网络操作失败。';
-            pending.reject(value.code === 'WINDOWS_NETWORK_AUTH_REQUIRED' ? new NetworkAuthorizationRequired(message) : new Error(message));
+            pending.reject(['WINDOWS_NETWORK_AUTH_REQUIRED', 'NETWORK_AUTH_REQUIRED'].includes(value.code) ? new NetworkAuthorizationRequired(message) : new Error(message));
           }
         } catch { child.stdin.end(); fail(); return; }
       }

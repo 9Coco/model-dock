@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { FlowBridgeManager, validateNetworkSettings } from '../src/main/flowbridge';
+import { FlowBridgeManager, validateNetworkSettings, type FlowBridgeOptions } from '../src/main/flowbridge';
 import { FlowBridgeEngine, NetworkAuthorizationRequired, type NetworkEngine } from '../src/main/flowbridge-engine';
 import { DEFAULT_FLOWBRIDGE, type NetworkEngineStatus } from '../src/shared/flowbridge-types';
 import { Store } from '../src/main/store';
@@ -10,20 +10,107 @@ const folders: string[] = [];
 const temporary = () => { const path = mkdtempSync(join(tmpdir(), 'modeldock-network-test-')); folders.push(path); return path; };
 afterEach(() => { vi.useRealTimers(); for (const path of folders.splice(0)) rmSync(path, { recursive: true, force: true }); });
 const stopped = (): NetworkEngineStatus => ({ running: false, cleanupConfirmed: true, localPort: null, uploadBytes: 0, downloadBytes: 0, connections: 0, message: '' });
-function fixture(platform = 'linux') {
+function fixture(platform = 'linux', discoverCandidates: FlowBridgeOptions['discoverCandidates'] = async () => []) {
   const values = new Map<string, unknown>(), calls: string[] = [];
   const memory = { getManagedState<T>(k: string, v: T): T { return structuredClone(values.get(k) ?? v) as T; }, setManagedState(k: string, v: unknown) { values.set(k, structuredClone(v)); } };
   let stopFails = false, connectFails = false, failExit: () => void = () => {}, release: (() => void) | undefined;
-  const engine: NetworkEngine = { async request<T>(method: string) {
+  const attempts: string[] = [], rejected = new Set<string>();
+  const engine: NetworkEngine = { async request<T>(method: string, args?: Record<string, unknown>) {
     calls.push(method);
     if (method === 'disconnect' && stopFails) throw new Error('cleanup failed');
-    if (method === 'connect') { if (connectFails) throw new Error('UDP preflight rejected'); if (release) await new Promise<void>(resolve => { release = resolve; }); return { ...stopped(), running: true, cleanupConfirmed: false, localPort: 30000 } as T; }
+    if (method === 'connect') { const address = (args?.settings as { address: string }).address; attempts.push(address); if (connectFails || rejected.has(address)) throw new Error('UDP preflight rejected'); if (release) await new Promise<void>(resolve => { release = resolve; }); return { ...stopped(), running: true, cleanupConfirmed: false, localPort: 30000 } as T; }
     return stopped() as T;
   }, async close() { calls.push('close'); } };
-  const manager = new FlowBridgeManager(memory, { platform, dataDir: temporary(), gatewayPort: () => 18181, engine: (_progress, exit) => { failExit = exit; return engine; } });
-  return { manager, memory, values, calls, failStop(value = true) { stopFails = value; }, failConnect() { connectFails = true; }, crash() { failExit(); }, hold() { release = () => {}; }, release() { release?.(); } };
+  const manager = new FlowBridgeManager(memory, { platform, dataDir: temporary(), gatewayPort: () => 18181, discoverCandidates, engine: (_progress, exit) => { failExit = exit; return engine; } });
+  return { manager, memory, values, calls, attempts, rejectAddress(address: string) { rejected.add(address); }, failStop(value = true) { stopFails = value; }, failConnect() { connectFails = true; }, crash() { failExit(); }, hold() { release = () => {}; }, release() { release?.(); } };
 }
 describe('FlowBridge integration', () => {
+  it('discovers the changed upstream at startup and remembers only the connected endpoint', async () => {
+    const found = ['socks5://192.0.2.21:38473', 'socks5://192.0.2.22:38473'];
+    const f = fixture('linux', async settings => { expect(settings.mode).toBe('global'); return found; });
+    await f.manager.save({ address: 'socks5://192.0.2.20:38473', mode: 'global', autoConnect: true });
+    f.rejectAddress(found[0]);
+    await f.manager.autoConnect();
+    expect(f.attempts).toEqual(found);
+    expect(f.calls).toEqual(['connect', 'disconnect', 'connect']);
+    expect(f.manager.snapshot()).toMatchObject({ state: 'connected', settings: { address: found[1], mode: 'global', autoConnect: true, autoDiscover: true } });
+    await f.manager.shutdown();
+  });
+  it('prefers the saved endpoint only when it is still discovered, and does not switch the selected protocol', async () => {
+    const saved = 'socks5://192.0.2.20:38473';
+    const f = fixture('linux', async () => ['http://192.0.2.20:38473', 'socks5://192.0.2.21:38473', saved]);
+    await f.manager.save({ address: saved, mode: 'global', autoConnect: true });
+    await f.manager.autoConnect();
+    expect(f.attempts).toEqual([saved]);
+    await f.manager.shutdown();
+  });
+  it('can enable automatic discovery without a saved address and waits for the network to become ready', async () => {
+    vi.useFakeTimers();
+    let discovery = 0;
+    const f = fixture('linux', async () => ++discovery < 2 ? [] : ['http://192.0.2.22:38473']);
+    await f.manager.save({ autoConnect: true });
+    const startup = f.manager.autoConnect();
+    await vi.advanceTimersByTimeAsync(3000);
+    await startup;
+    expect(discovery).toBe(2);
+    expect(f.manager.snapshot()).toMatchObject({ state: 'connected', settings: { address: 'http://192.0.2.22:38473' } });
+    await f.manager.shutdown();
+    expect(() => validateNetworkSettings({ address: '', autoConnect: true, autoDiscover: false }, { ...DEFAULT_FLOWBRIDGE }, 'linux', 18181)).toThrow('自动查找');
+  });
+  it('retains legacy fixed-address autoconnect behavior until the discovery preference is changed', async () => {
+    const { values, memory } = fixture();
+    values.set('network.flowbridge.v1', { address: 'http://192.0.2.20:38473', mode: 'http', dnsMode: 'fast', autoConnect: true, showMiniOnStart: false });
+    const discover = vi.fn(async () => ['http://192.0.2.21:38473']);
+    const manager = new FlowBridgeManager(memory, { platform: 'linux', dataDir: temporary(), gatewayPort: () => 18181, discoverCandidates: discover,
+      engine: () => ({ async request<T>(method: string) { return (method === 'connect' ? { ...stopped(), running: true, cleanupConfirmed: false, localPort: 30000 } : stopped()) as T; }, async close() {} }) });
+    await manager.autoConnect();
+    expect(discover).not.toHaveBeenCalled();
+    expect(manager.snapshot().settings.autoDiscover).toBe(false);
+    await manager.shutdown();
+  });
+  it('does not reconnect after a manual disconnect while discovery is still pending', async () => {
+    let found!: (value: string[]) => void;
+    const f = fixture('linux', () => new Promise(resolve => { found = resolve; }));
+    await f.manager.save({ autoConnect: true });
+    const startup = f.manager.autoConnect();
+    const stoppedByUser = f.manager.disconnect();
+    found(['http://192.0.2.20:38473']);
+    await Promise.all([startup, stoppedByUser]);
+    expect(f.calls).toEqual([]);
+    expect(f.manager.snapshot()).toMatchObject({ state: 'idle', settings: { address: '' } });
+    await f.manager.shutdown();
+  });
+  it('cancels an automatic retry immediately when settings are saved manually', async () => {
+    vi.useFakeTimers();
+    const discover = vi.fn(async () => []);
+    const f = fixture('linux', discover);
+    await f.manager.save({ autoConnect: true });
+    const startup = f.manager.autoConnect();
+    await vi.advanceTimersByTimeAsync(0);
+    await f.manager.save({ address: 'http://192.0.2.30:38473' });
+    await startup;
+    await vi.advanceTimersByTimeAsync(9000);
+    expect(discover).toHaveBeenCalledTimes(1);
+    expect(f.calls).toEqual([]);
+    expect(f.manager.snapshot().settings.address).toBe('http://192.0.2.30:38473');
+    await f.manager.shutdown();
+  });
+  it('shares repeated startup requests and stops looking after the bounded startup window', async () => {
+    vi.useFakeTimers();
+    const discover = vi.fn(async () => []);
+    const f = fixture('linux', discover);
+    await f.manager.save({ autoConnect: true });
+    const first = f.manager.autoConnect(), second = f.manager.autoConnect();
+    expect(first).toBe(second);
+    await vi.advanceTimersByTimeAsync(120_000);
+    await first;
+    expect(discover).toHaveBeenCalledTimes(40);
+    await vi.advanceTimersByTimeAsync(9000);
+    expect(discover).toHaveBeenCalledTimes(40);
+    expect(f.manager.snapshot().message).toContain('等待已结束');
+    expect(f.calls).toEqual([]);
+    await f.manager.shutdown();
+  });
   it('measures through the active listener and only uses the saved upstream directly after cleanup', async () => {
     const f = fixture();
     const address = 'socks5://192.0.2.30:38473';

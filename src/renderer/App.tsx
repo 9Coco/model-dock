@@ -111,7 +111,7 @@ const authStageLabels: Record<NonNullable<AuthProgress['stage']>, string> = { 'd
 export default function App({ initialSettings }: { initialSettings?: SettingsSnapshot }) {
   const bridge = typeof window !== 'undefined' ? window.modelDock : undefined;
   const [preferences, setPreferences] = useState<SettingsSnapshot | null>(initialSettings ?? null);
-  const [page, setPage] = useState<Page>('service');
+  const [page, setPage] = useState<Page>('network');
   const [serviceTab, setServiceTab] = useState<ServiceTab>('interface');
   const [selectedTool, setSelectedTool] = useState<ToolId>('codex');
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null);
@@ -1069,7 +1069,9 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
       <main className="main-content">
         {(!bridge || loadError) && <div className="bridge-banner"><Unplug size={17} /><span>{!bridge ? '当前为界面预览。桌面桥未连接，未读取任何本机账号或模型。' : `暂时无法读取本机配置：${loadError}`}</span>{!!bridge && <button onClick={() => void refresh()}>重试<RefreshCw size={13} /></button>}</div>}
         {page === 'auth' && <AuthPanel onImportGo={() => importGo(freshProvider('opencode-go'))} onConfirmRemoveSource={removeLocalSubscription} configuredProviders={data.providers} onRemoveSource={provider => deleteProvider(provider, true)} importRequest={relayImportRequest} onImportRequestHandled={consumeRelayImportRequest} platform={preferences?.platform} onAddSubscription={() => setProviderDraft(freshProvider('codex-subscription'))} refreshRevision={authRefreshRevision} api={bridge} notify={notify} onChanged={refresh} onManageProvider={id => { const provider = data.providers.find(item => item.id === id); if (provider) editProvider(provider); }} onAddRelay={requestAccountImport} onCopilotLogin={loginCopilot} onLogin={id => run('auth-center-login', async () => { const latest = await bridge!.snapshot(); setSnapshot(latest); const provider = latest.providers.find(item => item.id === id); if (!provider) throw new Error('账号来源不存在，请刷新。'); await login(provider); })} />}
-        {page === 'network' && <NetworkWorkspace api={bridge} snapshot={runtime.snapshot?.network} error={runtime.error} onChanged={runtime.refresh} notify={notify} />}
+        <div className="network-page" hidden={page !== 'network'}>
+          <NetworkWorkspace api={bridge} snapshot={runtime.snapshot?.network} error={runtime.error} onChanged={runtime.refresh} notify={notify} />
+        </div>
         {page === 'settings' && <SettingsPanel api={bridge} network={runtime.snapshot?.network} onNetworkChanged={runtime.refresh} snapshot={preferences} onSave={savePreferences} notify={notify} dataDir={data.dataDir} version={data.version} providers={data.providers} models={data.models} />}
 
         {page === 'tools' && <div className={`tool-workspace ${currentSingleEntry ? 'single-entry-workspace' : currentAggregate ? 'with-model-sidebar' : ''}`} data-tool-workspace={selectedTool}>
