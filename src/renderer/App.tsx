@@ -1,3 +1,4 @@
+import { ModelListViewport } from './ModelListViewport';
 import { GatewayControls } from './GatewayControls';
 import { NetworkWorkspace } from './NetworkPanel';
 import { ServiceWorkspace, type ServiceTab } from './ServiceWorkspace';
@@ -1030,9 +1031,9 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
       </div>
     </article>;
   };
-  const modelTable = (models: Model[]) => <div className="table-scroll"><table className="models-table">
+  const modelTable = (models: Model[]) => <ModelListViewport key={models[0]?.providerId} models={models}>{visible => <table className="models-table">
     <thead><tr><th>聚合模型名称 / 接口 ID</th><th>供应商 / 调用模型名称</th><th>接口</th><th>上下文</th><th>能力</th><th>启用</th><th><span className="sr-only">操作</span></th></tr></thead>
-    <tbody>{models.map(model => <tr key={model.id} data-model-id={model.id} tabIndex={0} aria-haspopup="menu">
+    <tbody>{visible.map(model => <tr key={model.id} data-model-id={model.id} tabIndex={0} aria-haspopup="menu">
       <td><div className="model-name"><span className="model-icon"><Box size={17} /></span><div><strong>{modelLabel(model)}</strong><CopyValue value={model.alias} label={`聚合模型名称 ${model.alias}`} onCopy={copy} /></div></div></td>
       <td><div className="table-provider"><strong>{data.providers.find(provider => provider.id === model.providerId)?.name ?? '供应商已移除'}</strong><CopyValue value={consumerModelId(model)} label={`调用模型名称 ${model.alias}`} onCopy={copy} /></div></td>
       <td><span className="protocol-tag">{protocolLabel(model)}</span></td><td><span className="context-tag">{contextLabel(model.contextWindow)}</span></td>
@@ -1040,7 +1041,7 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
       <td><Toggle checked={model.enabled} onChange={enabled => void toggleModel(model, enabled)} label={`${model.enabled ? '停用' : '启用'} ${model.alias}`} disabled={busy[`model-${model.id}`]} /></td>
       <td><div className="row-actions"><button data-action="edit-model" className="icon-button" aria-label={`编辑 ${model.alias}`} title="编辑模型" onClick={() => editModel(model)}><Pencil size={14} /></button><button className="icon-button danger-icon" aria-label={`删除 ${model.alias}`} title="删除模型" onClick={() => deleteModel(model)}><Trash2 size={14} /></button></div></td>
     </tr>)}</tbody>
-  </table></div>;
+  </table>}</ModelListViewport>;
 
   const toolProviderSelection = <section className="tool-provider-selection" data-aggregate-internal-sources={currentSingleEntry && currentAggregate ? selectedTool : undefined}>
           <div className="section-heading tool-source-heading"><h2>{currentSingleEntry ? '内部供应商' : '可用供应商'}<span className="count-tag">{data.providers.length}</span></h2><div className="tool-source-batch-actions">{!currentSingleProvider && <button className="button small secondary" data-action="select-all-tool-providers" disabled={!bridge || currentToolBusy || !availableToolProviderIds.length} title="选择全部已启用、有凭据且有可用模型的来源，包含搜索结果外的来源" onClick={() => void saveInlineBinding(selectedTool, availableToolProviderIds)}><CheckCheck size={14} />全选可用</button>}<button className="button small secondary" data-action="clear-tool-providers" disabled={!bridge || currentToolBusy || (!currentSourceIds.length && !currentCanClear)} title="清空当前工具的选择及对应配置，包含搜索结果外的来源；保留全局供应商和模型" onClick={() => void saveInlineBinding(selectedTool, [])}><X size={14} />清空选择</button></div><label className="search-box"><Search size={15} /><input aria-label="搜索供应商" placeholder="搜索供应商" value={search} onChange={event => setSearch(event.target.value)} /></label></div>

@@ -25,6 +25,10 @@ export async function verifyProviderManagement(window: BrowserWindow, store: Sto
   const model = store.saveModel({ providerId: provider.id, upstreamId: 'native-ui-model', alias: 'visible-ui-alias', displayName: '界面验证模型', wireApi: 'chat-completions', contextWindow: 64000, tools: true, vision: false, enabled: true });
   store.saveModel({ providerId: other.id, upstreamId: 'native-ui-second', alias: 'visible-ui-second', displayName: '备用验证模型', wireApi: 'responses', contextWindow: 64000, tools: true, vision: false, enabled: true });
   store.saveModel({ providerId: subscription.id, upstreamId: 'native-ui-subscription', alias: 'visible-ui-subscription', displayName: '订阅验证模型', wireApi: 'responses', contextWindow: 64000, tools: true, vision: false, enabled: true });
+  const longList = Array.from({ length: 18 }, (_, index) => {
+    const alias = 'published-ui-model-' + String(index + 1).padStart(2, '0');
+    return store.saveModel({ providerId: subscription.id, upstreamId: alias, alias, displayName: alias, wireApi: 'chat-completions', contextWindow: 64000, tools: true, vision: false, enabled: true });
+  });
   const originalBindings = store.listBindings();
   const originalSize = window.getSize(), originalMinimum = window.getMinimumSize();
   const evaluate = <T>(source: string): Promise<T> => window.webContents.executeJavaScript(source) as Promise<T>;
@@ -149,6 +153,18 @@ export async function verifyProviderManagement(window: BrowserWindow, store: Sto
     await waitFor(`!!document.querySelector('[data-subscription-connection="${subscription.id}"]')`, 'subscription local connection');
     await assertClipboard(`[data-subscription-connection="${subscription.id}"] [data-action="copy-key"]`, store.gatewayKey());
     await revealAndHide(`[data-subscription-connection="${subscription.id}"]`, store.gatewayKey());
+    const list = '.subscription-local-models';
+    await evaluate(`document.querySelector('${list}').scrollIntoView({block:'center'})`);
+    assert.ok(await evaluate<boolean>(`(() => { const s = document.querySelector('${list} .model-list-scroll'); s.scrollTop = s.scrollHeight; return s.clientHeight <= 320 && s.scrollTop > 0 && getComputedStyle(s.querySelector('th')).position === 'sticky'; })()`));
+    await evaluate(`document.querySelector('${list} .model-list-scroll').scrollTop = 0`);
+    writeFileSync(join(outputDir, 'published-model-list.png'), await captureUi());
+    const pickModel = (id: string) => evaluate(`(() => { const s = document.querySelector('${list} select'); s.value = ${JSON.stringify(id)}; s.dispatchEvent(new Event('change', {bubbles:true})); })()`);
+    const last = longList[longList.length - 1];
+    await pickModel(last.id);
+    await waitFor(`document.querySelectorAll('${list} tbody tr').length === 1`, 'model dropdown filters long list');
+    await assertClipboard(`${list} [data-subscription-model="${last.id}"] [data-action="copy-value"]`, last.alias);
+    await pickModel('');
+    await waitFor(`document.querySelectorAll('${list} tbody tr').length === ${longList.length + 1}`, 'all models restored');
     assert.equal(await evaluate<boolean>(`document.querySelector('[data-subscription-connection="${subscription.id}"]').textContent.includes(${JSON.stringify(subscription.baseUrl)})`), false, 'Subscription connection shows local invocation parameters');
     const denied = await evaluate<boolean>(`window.modelDock.revealProviderKey(${JSON.stringify(subscription.id)}).then(()=>false,()=>true)`);
     assert.equal(denied, true, 'Subscription authorization is rejected at the main-process boundary');

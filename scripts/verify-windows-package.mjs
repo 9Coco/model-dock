@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { extractFile, getRawHeader, listPackage, statFile } from '@electron/asar';
@@ -112,6 +113,16 @@ function verifyPackage(directory) {
   assert(readOrdinaryFile(join(networkOutput, 'windows/network_access.py')).toString('utf8').includes("PAYLOAD_SHA256 = '" + digest(payload) + "'"), 'Network task payload manifest differs from the pinned version.');
   for (const [name, hash] of Object.entries(JSON.parse(payload))) {
     assert(digest(readOrdinaryFile(join(networkOutput, name))) === hash, 'Network task payload checksum mismatch: ' + name);
+  }
+  if (process.platform === 'win32') {
+    const stage = mkdtempSync(join(tmpdir(), 'modeldock-install-check-'));
+    try {
+      const powershell = join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+      execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
+        join(root, 'scripts/verify-windows-install.ps1'), networkOutput, stage], { stdio: 'inherit', windowsHide: true });
+    } finally {
+      rmSync(stage, { recursive: true, force: true });
+    }
   }
   for (const name of readdirSync(join(networkSource, 'python'))) verifyNetworkFile(join('python', name));
   const core = JSON.parse(readOrdinaryFile(join(networkSource, 'tools/windows-core.json')).toString('utf8'));

@@ -159,3 +159,11 @@ build 26300，目录包使用 Electron 44.5.1、嵌入式 CPython 3.12.10 和 si
 Linux 完整安装仅需一个 `model-dock` deb。Windows 完整目录保留 flowbridge/python、
 core、Wintun 与许可证。源码包与二进制一同提供，构建不安装或启动系统网络服务。Windows
 cloud 构建必须标为交叉目录构建，不宣称原生执行验证。
+
+## 0.4.15 Windows x64 原生验证（2026-11-10）
+
+Windows 目录包使用嵌入式 Python 启动生产网络组件。真实本机 SOCKS5 上游通过了 TCP 和 UDP/DNS 预检。首次手动授权安装了当前账户的网络任务。更新控制管道权限后，普通用户进程成功验证任务的 SYSTEM 身份并收到了启动进度。
+
+独立 FlowBridge 持有全局接管锁时，ModelDock 拒绝启动第二个 TUN。断开独立 FlowBridge 后，ModelDock 复用已安装的任务，启动 Wintun 和接管路由。系统 HTTPS 路径和会话本地代理路径访问 GitHub 均返回 HTTP 200。正常断开后，TUN 停止、接管路由归零，WeakHostSend 和当前用户 WinINET 代理设置均与连接前一致。
+
+本轮未测重启后自动连接、强杀进程后的恢复、手机热点和 Linux 原生接管。

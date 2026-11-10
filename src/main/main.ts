@@ -808,7 +808,7 @@ function registerIpc() {
   handle('networkSnapshot', () => network.snapshot());
   handle('saveNetworkSettings', (patch, options) => network.save(patch, options));
   handle('connectNetwork', upstream => network.connect(upstream));
-  handle('disconnectNetwork', () => network.disconnect());
+  handle('disconnectNetwork', () => network.disconnect(true));
   let measuringSpeed = false;
   let speedProxy = '';
   async function withSpeedProbe<T>(address: string, run: (probe: Electron.Session) => Promise<T>): Promise<T> {

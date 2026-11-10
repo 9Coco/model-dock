@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # $source, $sid and $digest are supplied as data to this one-time installer.
 $ErrorActionPreference = 'Stop'
+$failureCode = 20 # Only return fixed installation stages to the desktop process.
+trap { exit $failureCode }
 $env:PSModulePath = [IO.Path]::Combine($PSHOME, 'Modules')
 if ($sid -notmatch '^S-1-(\d+-){1,14}\d+$' -or $digest -notmatch '^[0-9a-f]{64}$') { throw 'Invalid install identity' }
 $account = [Security.Principal.SecurityIdentifier]::new($sid)
@@ -16,15 +18,30 @@ function ProtectedDirectory($path, $public) {
         throw 'Unexpected network directory permissions'
     }
 }
-function Digest($bytes) {
+function Digest($content) {
     $sha = [Security.Cryptography.SHA256]::Create()
-    try { return [BitConverter]::ToString($sha.ComputeHash($bytes)).Replace('-', '').ToLowerInvariant() }
+    try { return [BitConverter]::ToString($sha.ComputeHash($content)).Replace('-', '').ToLowerInvariant() }
     finally { $sha.Dispose() }
+}
+function Copy-NetworkPayload($files, $source, $stage) {
+    foreach ($file in $files.PSObject.Properties) {
+        # Versioned directories and extensions both use dots between nonempty name parts.
+        if ($file.Name -notmatch '\A[a-z0-9_-]+(?:[./][a-z0-9_-]+)*\z' -or $file.Value -notmatch '\A[0-9a-f]{64}\z') {
+            throw 'Invalid network payload entry'
+        }
+        $dest = Join-Path $stage $file.Name
+        [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($dest))
+        [IO.File]::Copy((Join-Path $source $file.Name), $dest)
+        $stream = [IO.File]::OpenRead($dest)
+        try { if ((Digest $stream) -ne $file.Value) { throw 'Network payload checksum mismatch' } }
+        finally { $stream.Dispose() }
+    }
 }
 
 $manifest = [IO.File]::ReadAllBytes((Join-Path $source 'windows/network-payload.json'))
 if ((Digest $manifest) -ne $digest) { throw 'Network manifest checksum mismatch' }
 $files = [Text.Encoding]::UTF8.GetString($manifest) | ConvertFrom-Json
+$failureCode = 21
 $base = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'ModelDock.Network'
 ProtectedDirectory $base $true
 $owner = Join-Path $base $account.Value
@@ -35,13 +52,9 @@ if (![IO.Directory]::Exists($target)) {
     $stage = Join-Path $owner ([Guid]::NewGuid().ToString('N'))
     ProtectedDirectory $stage $true
     try {
-        foreach ($file in $files.PSObject.Properties) {
-            if ($file.Name -notmatch '^([a-zA-Z0-9_-]+/)*[a-zA-Z0-9_][a-zA-Z0-9_.-]*$' -or $file.Value -notmatch '^[0-9a-f]{64}$') { throw 'Invalid network payload entry' }
-            $dest = Join-Path $stage $file.Name
-            [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($dest))
-            [IO.File]::Copy((Join-Path $source $file.Name), $dest)
-            if ((Get-FileHash -Algorithm SHA256 -LiteralPath $dest).Hash -ne $file.Value) { throw 'Network payload checksum mismatch' }
-        }
+        $failureCode = 22
+        Copy-NetworkPayload $files $source $stage
+        $failureCode = 21
         [IO.Directory]::Move($stage, $target)
     } finally {
         # Only this installer creates files in its unique, protected staging directory.
@@ -49,6 +62,7 @@ if (![IO.Directory]::Exists($target)) {
     }
 }
 ProtectedDirectory $target $true
+$failureCode = 23
 $service = New-Object -ComObject 'Schedule.Service'
 $service.Connect()
 $folder = $service.GetFolder('\')

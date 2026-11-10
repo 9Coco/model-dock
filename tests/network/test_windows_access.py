@@ -54,19 +54,26 @@ class AccessTests(unittest.TestCase):
         self.pipe.assert_not_called()
 
     def test_recovery_reuses_only_the_known_compatible_protected_worker(self):
-        previous = access.COMPATIBLE_PREDECESSOR[access.PAYLOAD_SHA256]
+        previous = access.RECOVERY_PREDECESSORS[0]
         stream = self.pipe.return_value = Mock()
         self.pipe.side_effect = None
         stream.readline.return_value = b'{"result":true}\n'
         self.state.side_effect = lambda sid, digest: 'ready' if digest == previous else 'outdated'
         self.assertTrue(access.NetworkAccess(Mock()).call('stop'))
         stream.write.assert_called_once_with(b'{"method": "stop"}\n')
+        with self.assertRaises(access.AuthorizationRequired):
+            access.NetworkAccess(Mock()).open(False)
         self.state.side_effect = None
         self.state.return_value = 'outdated'
         with self.assertRaises(access.AuthorizationRequired):
             access.NetworkAccess(Mock()).call('stop')
         self.install.assert_not_called()
         self.run_task.assert_called_once()
+
+    def test_manual_repair_upgrades_the_old_pipe_before_recovery(self):
+        self.state.return_value = 'outdated'
+        access.NetworkAccess(Mock()).open(True, recovery=True)
+        self.install.assert_called_once_with(SID, access.PAYLOAD_SHA256)
 
     def test_disabled_or_foreign_task_is_never_replaced(self):
         for state in ('disabled', 'conflict'):
@@ -131,7 +138,9 @@ class NativePipeTests(unittest.TestCase):
                 failures = []
                 def server():
                     try:
-                        with network_pipe._accept(name, 'D:P(A;;GA;;;OW)(A;;GA;;;SY)') as stream:
+                        # Full owner access masks CreateFileW's FILE_READ_ATTRIBUTES check.
+                        user = access.user_sid()
+                        with network_pipe._accept(name, f'D:P(A;;GA;;;SY)(A;;0x{network_pipe.CLIENT_ACCESS:x};;;{user})') as stream:
                             if trusted:
                                 received.append(stream.readline(128))
                                 stream.write(b'ack\n')
