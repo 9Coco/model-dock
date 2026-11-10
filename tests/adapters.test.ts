@@ -786,6 +786,24 @@ ${JSON.stringify(foreign)} // keep final-array note
     const managed = { ...native, listBindings: () => native.listBindings().map(binding => ({ ...binding, dshSyncScope: 'managed' as const })) };
     expect(buildDshPlan(managed, 19191).legacyDispatch).toBeUndefined();
   });
+  it.each(['auto', 'aggregate'] as const)('exports supplier-first Copilot picker labels with a single ModelDock attribution in %s mode', mode => {
+    const native = nativeFixture();
+    Object.assign(native.providers[2], { kind: 'openai-compatible', presetId: 'jetbrains-central', nativeAdapter: 'jetbrains-central', name: 'JetBrains AI · IDE 导入' });
+    native.providers[0].name = '我的 API 订阅';
+    native.catalog[2].displayName = 'GPT-6 Astra';
+    const binding = { ...native.listBindings().find(binding => binding.id === 'copilot')!, mode };
+    const plan = () => buildCopilotDesktopPlan(native, 19191, false, binding);
+    const initial = plan();
+    expect(initial.providers).toHaveLength(mode === 'aggregate' ? 1 : 3);
+    expect(initial.providers.every(provider => provider.name === 'ModelDock')).toBe(true);
+    const labels = () => plan().providers.flatMap(provider => provider.models.map(model => model.displayName));
+    expect(labels()).toEqual(['我的 API 订阅 - 同名模型', 'API 套餐 B - 同名模型', 'JetBrains AI - GPT-6 Astra']);
+    native.providers[2].name += ' 2';
+    expect(labels()).toContain('JetBrains AI 2 - GPT-6 Astra');
+    native.providers[2].name = '团队订阅';
+    expect(labels()).toContain('团队订阅 - GPT-6 Astra');
+  });
+
   it('keeps native Copilot IDs stable across renames and key rotation, namespacing profiles and allowing duplicate upstream IDs as separate aliases', () => {
     const native = { ...nativeFixture(['provider-a']), dataDir: 'C:/fixtures/modeldock-a' };
     native.catalog.push({ ...native.catalog[0], id: 'variant', alias: 'variant-alias' });

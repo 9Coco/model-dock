@@ -464,6 +464,8 @@ VS Code 工具页的「仅保留所选供应商」默认开启。同步会先备
 
 先启动 GitHub Copilot 桌面应用，再在 ModelDock 勾选来源或改变「ModelDock 首选模型」，会自动同步供应商与模型，无需退出或重启 Copilot。关闭聚合时只使用一家来源，API 直连上游并使用对应 API Key 和真实模型 ID；开启聚合时所有来源注册为一个本机供应商分组，使用本地连接密钥和模型别名。订阅授权经本机入口管理，OAuth 凭据留在 ModelDock。不同来源可注册相同模型 ID，每条模型独立配置 Chat Completions / Responses；稳定 UUID 用于识别本资料目录下的托管项。
 
+Copilot app 的模型选择器按「供应商 - 模型 · ModelDock」显示，例如「JetBrains AI - GPT-6 Astra · ModelDock」。已有来源点「重新同步」即可更新名称。
+
 Copilot 默认开启「仅保留所选供应商」，同步会先备份，再清理未选中的自定义来源，包括此前手工添加的套餐；全部清空会清理所有自定义来源。关闭这个选项则只更新 ModelDock 托管项，保留其他自定义来源。GitHub 内置模型、账号和 MCP 不删除；聊天正文保留，被删除来源与旧会话的关联可能由 Copilot 解除。首选模型是 ModelDock 的配置偏好，不主动切换已打开聊天；同步后请在 Copilot app 的模型选择器中选择。
 
 连接使用当前 Copilot 资料目录（默认 `~/.copilot`，可由 `COPILOT_HOME` 指定）内的运行实例信息，只访问本机原生接口。ModelDock 不直接编辑 `data.db`，也不复制整个数据库或对话记录。Windows 清理旧来源前只按其明确 UUID 备份两个 Copilot 供应商凭据目标的原始字节，不解码、展示或枚举其他应用与账号凭据；备份立即加密保存。Linux 1.1.27 使用 Secret Service 精确备份两个 BYOK 项的原始字节、属性、标签、内容类型和集合，恢复时保留原先不存在的目标；备份由 ModelDock 加密保存。锁定的钥匙串、重复匹配或缺少系统 python3-secretstorage 时拒绝清理；恢复时发现凭据已移到其他集合会在写入前停止并保留恢复记录，错误给出具体原因。其他未适配平台仍拒绝清理。`modeldock-copilot-desktop.json` 预览 / 导出仅供检查同步计划。

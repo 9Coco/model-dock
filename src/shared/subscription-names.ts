@@ -17,23 +17,24 @@ const legacyNames: Record<AuthAccountKind, readonly string[]> = {
 /** A display alias for exact historical defaults only. Stored names, custom
  * labels and API suppliers remain untouched, including names containing one
  * of these brand names as only part of a longer label. */
-export function subscriptionDisplayName(provider: Pick<Provider, 'name' | 'kind' | 'presetId'>): string {
+export function subscriptionDisplayName(provider: Pick<Provider, 'name' | 'kind' | 'presetId'>, format: 'full' | 'short' = 'full'): string {
   const kind: AuthAccountKind | undefined = provider.kind === 'codex' && (!provider.presetId || provider.presetId === 'codex-subscription') ? 'codex'
     : provider.kind === 'grok' && (!provider.presetId || provider.presetId === 'grok-build') ? 'grok'
       : provider.kind === 'copilot' && (!provider.presetId || provider.presetId === 'copilot-subscription') ? 'copilot'
         : provider.kind === 'openai-compatible' && (provider.presetId === 'trae-cn-relay' || provider.presetId === 'jetbrains-central') ? provider.presetId : undefined;
   if (!kind) return provider.name;
+  const canonical = format === 'short' ? SUBSCRIPTION_NAMES[kind].replace(/ 订阅$/, '') : SUBSCRIPTION_NAMES[kind];
   for (const legacy of legacyNames[kind]) {
-    if (provider.name === legacy) return SUBSCRIPTION_NAMES[kind];
+    if (provider.name === legacy) return canonical;
     if (provider.name.startsWith(legacy + ' ')) {
       const suffix = provider.name.slice(legacy.length + 1);
-      if (/^[1-9]\d*$/.test(suffix)) return `${SUBSCRIPTION_NAMES[kind]} ${suffix}`;
+      if (/^[1-9]\d*$/.test(suffix)) return `${canonical} ${suffix}`;
     }
   }
   const accountPrefix = kind === 'codex' ? 'ChatGPT / OpenAI 账号 ' : kind === 'grok' ? 'xAI / Grok 账号 ' : undefined;
   if (accountPrefix && provider.name.startsWith(accountPrefix)) {
     const suffix = provider.name.slice(accountPrefix.length);
-    if (/^[1-9]\d*$/.test(suffix)) return `${SUBSCRIPTION_NAMES[kind]} ${suffix}`;
+    if (/^[1-9]\d*$/.test(suffix)) return `${canonical} ${suffix}`;
   }
   return provider.name;
 }

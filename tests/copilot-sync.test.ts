@@ -267,7 +267,9 @@ describe('running Copilot app synchronization and encrypted ownership recovery',
     expect(f.app.providers.has(A)).toBe(true); expect(f.app.models.has(MA)).toBe(true); expect(f.app.secrets.get(A)).toBe('PRIVATE_OLD_KEY'); expect(f.store.state()).toEqual(old);
   });
   it.each(['empty-models', 'first-model-chat'] as const)('restores the actual provider default protocol independently of the model list: %s', async variant => {
-    const f = fixture(); await f.apply(makePlan());
+    const f = fixture(), initial = makePlan();
+    initial.providers[0].name = 'ModelDock';
+    await f.apply(initial);
     if (variant === 'empty-models') f.app.models.delete(MA); else f.app.models.get(MA)!.wireApiOverride = 'completions';
     const before = structuredClone({ provider: f.app.providers.get(A), models: [...f.app.models.values()].filter(model => model.providerId === A) });
     let failed = false; f.app.failAfterMutation = true; f.app.failNext = body => { if (!failed && body.type === 'upsert_model_provider' && body.provider.id === A) { failed = true; return true; } return false; };
@@ -363,6 +365,27 @@ describe('explicit Copilot single-step undo through native registry and opaque c
     const undo = (commit?: () => void) => undoCopilotDesktop(f.store, home, options, commit);
     return { ...f, options, apply, undo };
   }
+  it('renames existing providers in place to the same picker source and undoes the label-only sync', async () => {
+    const f = setup(), legacy = makePlan();
+    legacy.providers.push(...makePlan(B, MB, 'PRIVATE_SECOND_KEY').providers);
+    await f.apply(legacy, 'managed');
+    const providers = structuredClone(f.app.providers), models = structuredClone(f.app.models), secrets = structuredClone(f.app.secrets);
+    const next = structuredClone(legacy);
+    for (const provider of next.providers) {
+      provider.models[0].displayName = `${provider.name} - Original model`;
+      provider.name = 'ModelDock';
+    }
+    await f.apply(next, 'managed');
+    for (const provider of next.providers) {
+      expect(f.app.providers.get(provider.id)?.name).toBe('ModelDock');
+      expect(f.app.models.get(provider.models[0].id)).toMatchObject({ providerId: provider.id, modelId: 'same-model', displayName: provider.models[0].displayName });
+    }
+    expect(f.app.secrets).toEqual(secrets);
+    await f.undo();
+    expect(f.app.providers).toEqual(providers);
+    expect(f.app.models).toEqual(models);
+    expect(f.app.secrets).toEqual(secrets);
+  });
   it('restores removed foreign custom metadata and original opaque keys while retaining GitHub account state', async () => {
     const f = setup(), before = structuredClone({ providers: [...f.app.providers], models: [...f.app.models], secrets: [...f.app.secrets] });
     await f.apply(makePlan()); expect(f.app.providers.has(FOREIGN)).toBe(false);
