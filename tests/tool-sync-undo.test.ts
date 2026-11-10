@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { parse as parseJsonc } from 'jsonc-parser';
@@ -157,6 +157,24 @@ describe('explicit single-step tool synchronization undo', () => {
     f.activate(); await f.manager.run('claude-code', f.oldBinding, () => applyClaudeConfig(f.store, join(f.root, 'backups'), f.root));
     expect(readFileSync(target, 'utf8')).toContain('127.0.0.1'); expect(f.store.getManagedState(claudeHistoryKey(target), null)).not.toBeNull();
     await f.manager.undo('claude-code'); expect(readFileSync(target, 'utf8')).toBe(original); expect(f.store.getManagedState(claudeHistoryKey(target), null)).toBeNull();
+  });
+  it('recovers an interrupted Claude adapter transaction before capturing a new undo baseline', async () => {
+    const f = fixture('claude-code'), target = join(f.root, '.claude', 'settings.json'), original = '{"model":"original","future":true}';
+    f.write(target, original); f.activate(); applyClaudeConfig(f.store, join(f.root, 'backups'), f.root);
+    const pending = f.backups.map(text => JSON.parse(Buffer.from(text, 'base64').toString('utf8'))).find(value => value.modeldockPending === 1);
+    expect(pending).toBeDefined(); f.states.set(claudeHistoryKey(target), pending);
+    f.model.alias = 'updated-alias';
+    await f.manager.run('claude-code', f.oldBinding, () => applyClaudeConfig(f.store, join(f.root, 'backups'), f.root));
+    const checkpoint = f.store.getManagedState<any>(toolSyncUndoKey('claude-code'), null);
+    expect(checkpoint.beforeFiles[0].content).toBe(original); expect(checkpoint.beforeStates[0].value).toBeNull();
+    await f.manager.undo('claude-code'); expect(readFileSync(target, 'utf8')).toBe(original); expect(f.states.get(claudeHistoryKey(target))).toBeNull();
+  });
+  it('keeps restored credentials private even when the original file permissions were permissive', async () => {
+    const f = fixture('claude-code'), target = join(f.root, '.claude', 'settings.json'), original = '{"env":{"ANTHROPIC_AUTH_TOKEN":"SYNTHETIC_OLD_KEY"}}';
+    f.write(target, original); chmodSync(target, 0o644); f.activate();
+    await f.manager.run('claude-code', f.oldBinding, () => applyClaudeConfig(f.store, join(f.root, 'backups'), f.root));
+    await f.manager.undo('claude-code'); expect(readFileSync(target, 'utf8')).toBe(original);
+    if (process.platform !== 'win32') expect(statSync(target).mode & 0o777).toBe(0o600);
   });
   it('restores DSH patch and opaque credential references without touching sessions or account authorization', async () => {
     const f = fixture('dsh'), dshHome = join(f.root, '.dsh'), patch = join(dshHome, 'cordis.patch.yml'), credentials = join(dshHome, '.credentials.yaml');

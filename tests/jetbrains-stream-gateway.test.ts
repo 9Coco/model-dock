@@ -280,11 +280,11 @@ describe('JetBrains Chat streaming HTTP contract', () => {
     const result = await readHttp(f.url('rider'), f.headers, input()); assertHttpFailure(result);
   });
 
-  it('leaves ordinary and VS Code scoped Chat passthrough unchanged', async () => {
-    const f = await fixture('chat-completions', async (request, response) => { await bodyOf(request); response.setHeader('content-type', 'text/event-stream'); response.end(sse({ model: 'synthetic-upstream-model', choices: [{ delta: { content: 'LEGACY_SYNTHETIC' } }] }) + sse('[DONE]')); });
+  it('preserves valid ordinary and VS Code scoped Chat passthrough', async () => {
+    const f = await fixture('chat-completions', async (request, response) => { await bodyOf(request); response.setHeader('content-type', 'text/event-stream'); response.end(sse({ model: 'synthetic-upstream-model', choices: [{ delta: { content: 'LEGACY_SYNTHETIC' } }] }) + sse({ choices: [{ delta: {}, finish_reason: 'stop' }] }) + sse('[DONE]')); });
     for (const tool of [undefined, 'vscode']) {
       const result = await readHttp(f.url(tool), f.headers, input()); expect(result).toMatchObject({ status: 200, complete: true, aborted: false, errors: [] });
-      expect(chunksOf(result.text)).toEqual([{ model: 'synthetic-local-model', choices: [{ delta: { content: 'LEGACY_SYNTHETIC' } }] }, '[DONE]']);
+      expect(chunksOf(result.text)).toEqual([{ model: 'synthetic-local-model', choices: [{ delta: { content: 'LEGACY_SYNTHETIC' } }] }, { choices: [{ delta: {}, finish_reason: 'stop' }] }, '[DONE]']);
     }
   });
 

@@ -11,7 +11,7 @@ const roots: string[] = [];
 afterEach(() => { vi.restoreAllMocks(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'modeldock-claude-config-')); roots.push(root);
-  const target = join(root, '.claude', 'settings.json'), backups = join(root, 'backups'), states = new Map<string, unknown>();
+  const target = join(root, '.claude', 'settings.json'), backups = join(root, 'backups'), states = new Map<string, unknown>(), journals: any[] = [];
   const provider: Provider = { id: 'api-source', name: 'Fixture Messages', kind: 'openai-compatible', baseUrl: 'https://messages.fixture/anthropic/v1/', enabled: true, hasSecret: true, authStatus: 'ready', note: '' };
   const model: Model = { id: 'model', providerId: provider.id, upstreamId: 'real-upstream-id', alias: 'local-alias-never-export', displayName: 'Fixture model', wireApi: 'messages', contextWindow: 32000, tools: true, vision: true, enabled: true };
   const binding: ToolBinding = { id: 'claude-code', name: 'Claude Code', note: '', enabled: true, mode: 'direct', providerIds: [provider.id], modelSelection: 'all', modelIds: [], defaultModelId: model.id };
@@ -26,12 +26,12 @@ function fixture() {
     gatewayKey: () => 'SYNTHETIC_GATEWAY_KEY',
     getManagedState: <T>(key: string, fallback: T): T => structuredClone(states.has(key) ? states.get(key) as T : fallback),
     setManagedState: vi.fn((key: string, value: unknown) => { states.set(key, structuredClone(value)); }),
-    createManagedBackup: () => join(backups, 'synthetic-private.enc'),
+    createManagedBackup: vi.fn((_kind: string, value: unknown) => { journals.push(structuredClone(value)); return join(backups, 'synthetic-private.enc'); }),
   };
   const write = (path: string, value: string | object) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, typeof value === 'string' ? value : JSON.stringify(value)); };
   const apply = (options = {}) => applyClaudeConfig(store, backups, root, options);
   const read = (path = target) => JSON.parse(readFileSync(path, 'utf8')) as any;
-  return { root, target, backups, states, store, model, models, binding, provider, providers, write, apply, read };
+  return { root, target, backups, states, journals, store, model, models, binding, provider, providers, write, apply, read };
 }
 
 describe('Claude Code native BYOK configuration', () => {
@@ -187,8 +187,8 @@ describe('Claude Code native BYOK configuration', () => {
     expect(value.env.KEEP).toBe('original'); expect(value.env.ANTHROPIC_AUTH_TOKEN).toBe('SYNTHETIC_SECRET_API_KEY');
     for (const key of ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_CUSTOM_HEADERS', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY']) expect(value.env).not.toHaveProperty(key);
     expect(value).not.toHaveProperty('apiKeyHelper'); expect(readFileSync(login, 'utf8')).toBe('SYNTHETIC_NATIVE_LOGIN');
-    const backup = join(f.backups, readdirSync(f.backups)[0]); expect(readFileSync(backup, 'utf8')).toBe(originalRaw);
-    if (process.platform !== 'win32') { expect(statSync(f.target).mode & 0o777).toBe(0o600); expect(statSync(backup).mode & 0o777).toBe(0o600); }
+    expect(f.journals[0].files[0].before).toBe(originalRaw); expect(existsSync(f.backups)).toBe(false);
+    if (process.platform !== 'win32') expect(statSync(f.target).mode & 0o777).toBe(0o600);
     const history = f.store.getManagedState<any>(claudeHistoryKey(f.target), null);
     expect(history.fields['env.ANTHROPIC_API_KEY'].before.value).toBe('SYNTHETIC_OLD_KEY'); expect(history.fields['env.ANTHROPIC_AUTH_TOKEN'].applied.value).toBe('SYNTHETIC_SECRET_API_KEY');
   });
@@ -231,7 +231,7 @@ describe('Claude Code native BYOK configuration', () => {
     const manual = f.read(); manual.env.ANTHROPIC_AUTH_TOKEN = 'SYNTHETIC_MANUAL_TOKEN'; manual.model = 'manual-model'; f.write(f.target, manual);
     restoreClaudeOfficialConfig(f.store, f.backups, f.root);
     expect(f.read()).toEqual({ model: 'manual-model', permissions: { allow: ['Read'] }, env: { KEEP: 'keep', ANTHROPIC_AUTH_TOKEN: 'SYNTHETIC_MANUAL_TOKEN', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' } });
-    expect(f.store.getManagedState(claudeHistoryKey(f.target), null)).toBeNull(); expect(readdirSync(f.backups).some(name => name.startsWith('claude-code-official-'))).toBe(true);
+    expect(f.store.getManagedState(claudeHistoryKey(f.target), null)).toBeNull(); expect(f.journals).toHaveLength(2); expect(existsSync(f.backups)).toBe(false);
   });
   it('does not create files or alter unrelated existing settings when no source/history is active', () => {
     const f = fixture(); f.binding.enabled = false; f.binding.providerIds = [];
@@ -361,13 +361,33 @@ describe('Claude Code native BYOK configuration', () => {
     const f = fixture(); f.write(f.target, { env: { KEEP: 'original' } });
     expect(() => f.apply({ beforeCommit: () => f.write(f.target, { env: { KEEP: 'external' } }) })).toThrow('其他程序');
     expect(f.read()).toEqual({ env: { KEEP: 'external' } }); expect(f.states.size).toBe(0);
-    expect(JSON.parse(readFileSync(join(f.backups, readdirSync(f.backups)[0]), 'utf8')).env.KEEP).toBe('original');
+    expect(JSON.parse(f.journals[0].files[0].before).env.KEEP).toBe('original'); expect(existsSync(f.backups)).toBe(false);
   });
   it('rolls the ownership record back when state persistence fails after mutation', () => {
     const f = fixture(); f.write(f.target, { env: { KEEP: 'original' } }); const original = readFileSync(f.target, 'utf8');
     f.store.setManagedState.mockImplementationOnce((key, value) => { f.states.set(key, structuredClone(value)); throw new Error('SYNTHETIC_STATE_FAILURE'); });
     expect(() => f.apply()).toThrow('SYNTHETIC_STATE_FAILURE'); expect(readFileSync(f.target, 'utf8')).toBe(original); expect(f.store.getManagedState(claudeHistoryKey(f.target), null)).toBeNull();
-    expect(readdirSync(f.backups)).toHaveLength(1);
+    expect(f.journals).toHaveLength(1); expect(existsSync(f.backups)).toBe(false);
+  });
+  it('recovers a durable interrupted write before reading the next apply baseline', () => {
+    const f = fixture(); f.write(f.target, { model: 'original', env: { KEEP: 'keep' } }); const original = readFileSync(f.target, 'utf8'); f.apply();
+    const journal = structuredClone(f.journals[0]); f.states.set(claudeHistoryKey(f.target), journal);
+    f.model.upstreamId = 'second-model'; f.apply();
+    expect(f.store.getManagedState<any>(claudeHistoryKey(f.target), null).fields.model.before.value).toBe('original');
+    f.binding.enabled = false; f.apply(); expect(f.read()).toEqual({ model: 'original', env: { KEEP: 'keep', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' } });
+    expect(f.journals[1].files[0].before).toBe(original);
+  });
+  it('refuses recovery of a pending write after an external edit without taking ownership of it', () => {
+    const f = fixture(); f.apply(); const journal = structuredClone(f.journals[0]);
+    f.states.set(claudeHistoryKey(f.target), journal); f.write(f.target, { model: 'external' });
+    expect(() => f.apply()).toThrow('外部修改'); expect(f.read()).toEqual({ model: 'external' }); expect(f.states.get(claudeHistoryKey(f.target))).toEqual(journal);
+  });
+  it('migrates only recognized old plaintext backups through the encrypted store', () => {
+    const f = fixture(), old = join(f.backups, 'claude-code-official-123-deadbeef.bak'), foreign = join(f.backups, 'user-important.bak');
+    f.write(old, 'SYNTHETIC_OLD_KEY'); f.write(foreign, 'keep'); f.apply();
+    expect(existsSync(old)).toBe(false); expect(readFileSync(foreign, 'utf8')).toBe('keep');
+    expect(f.journals[0]).toEqual({ version: 1, filename: 'claude-code-official-123-deadbeef.bak', content: 'SYNTHETIC_OLD_KEY' });
+    expect(f.store.createManagedBackup).toHaveBeenCalledWith('claude-config-legacy', f.journals[0]);
   });
   it('rejects an adapter without secure restoration-state storage before writing a key', () => {
     const f = fixture(), store: ClaudeConfigStore = { listModels: f.store.listModels, listBindings: f.store.listBindings, listProviders: f.store.listProviders, getSecret: f.store.getSecret, gatewayKey: f.store.gatewayKey };

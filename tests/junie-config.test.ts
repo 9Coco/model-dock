@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { applyJunieConfig, buildJunieConfig, junieConfigDirectory, junieConfigTargets, junieHistoryKey, restoreJunieOfficialConfig, type JunieConfigOptions } from '../src/main/junie-config';
 import { JUNIE_ACP_NAME } from '../src/main/junie-acp';
+import * as privateFiles from '../src/main/private-file';
 import type { Model, Provider, ToolBinding } from '../src/shared/types';
 
 const roots: string[] = [];
@@ -154,6 +155,48 @@ describe('Junie CLI and IDE custom profile configuration', () => {
     f.store.setManagedState.mockImplementationOnce(() => { throw new Error('synthetic state failure'); });
     expect(() => f.apply()).toThrow('synthetic state failure'); expect(f.files()).toEqual([null, null, null]);
     expect(f.store.getManagedState(junieHistoryKey(f.targets.configPath), null)).toBeNull();
+  });
+
+  it.each([1, 2, 0])('recovers an interrupted first transaction at file %s before reading the next restore baseline', index => {
+    const f = fixture(); f.write(f.targets.configPath, { model: 'original', future: true }); f.apply();
+    const journal = structuredClone(f.journals[0]) as any;
+    journal.files.forEach((file: any) => { if (file.before === null) rmSync(file.path, { force: true }); else f.write(file.path, file.before); });
+    for (const committed of [1, 2, 0]) {
+      f.write(journal.files[committed].path, journal.files[committed].after);
+      if (committed === index) break;
+    }
+    f.states.set(junieHistoryKey(f.targets.configPath), journal); f.restore();
+    expect(f.read(f.targets.configPath)).toEqual({ model: 'original', future: true });
+    expect(existsSync(f.targets.profilePath)).toBe(false); expect(existsSync(f.targets.acpPath)).toBe(false);
+    expect(f.store.getManagedState(junieHistoryKey(f.targets.configPath), null)).toBeNull();
+  });
+
+  it('keeps interrupted ownership pending and preserves every file if one target has an external edit', () => {
+    const f = fixture(); f.apply(); const journal = structuredClone(f.journals[0]) as any;
+    f.states.set(junieHistoryKey(f.targets.configPath), journal); f.write(f.targets.configPath, { model: 'external' });
+    const before = f.files(); expect(() => f.restore()).toThrow('外部修改'); expect(f.files()).toEqual(before);
+    expect(f.store.getManagedState(junieHistoryKey(f.targets.configPath), null)).toEqual(journal);
+  });
+
+  it.each(['before', 'after'] as const)('keeps a valid default/profile pair when the first crash-recovery write fails %s replacement', failure => {
+    const f = fixture(); f.write(f.targets.configPath, { model: 'original', future: true }); f.apply();
+    const journal = structuredClone(f.journals[0]) as any;
+    expect(journal.order).toEqual([1, 2, 0]); f.states.set(junieHistoryKey(f.targets.configPath), journal);
+    const replace = privateFiles.replacePrivateFile, attempted: string[] = [];
+    const spy = vi.spyOn(privateFiles, 'replacePrivateFile').mockImplementation((path, content) => {
+      attempted.push(path);
+      if (failure === 'after') replace(path, content);
+      throw new Error('SYNTHETIC_FIRST_RECOVERY_WRITE_FAILURE');
+    });
+    try {
+      expect(() => f.restore()).toThrow('SYNTHETIC_FIRST_RECOVERY_WRITE_FAILURE');
+      expect(attempted).toEqual([f.targets.configPath]);
+      expect(f.read(f.targets.configPath).model).toBe(failure === 'before' ? 'custom:modeldock' : 'original');
+      expect(existsSync(f.targets.profilePath)).toBe(true); expect(existsSync(f.targets.acpPath)).toBe(true);
+      expect(f.states.get(junieHistoryKey(f.targets.configPath))).toEqual(journal);
+    } finally { spy.mockRestore(); }
+    f.restore(); expect(f.read(f.targets.configPath)).toEqual({ model: 'original', future: true });
+    expect(existsSync(f.targets.profilePath)).toBe(false); expect(existsSync(f.targets.acpPath)).toBe(false);
   });
 
   it('honors an explicit JUNIE_HOME without borrowing the real home and rejects directory links', () => {

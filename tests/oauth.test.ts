@@ -483,6 +483,59 @@ describe('Grok OAuth alignment and credential replacement safety (mock HTTP only
     expect(store.getSecret('grok')).toEqual(replacement); expect(store.getProvider('grok')?.authStatus).toBe('ready'); expect(store.writes).toBe(2);
   });
 
+  it.each([true, false])('rereads a rotated same-account credential after invalid_grant (already fresh: %s)', async fresh => {
+    const old: ProviderSecret = { accessToken: 'OLD_PRIVATE_ACCESS', refreshToken: 'OLD_PRIVATE_REFRESH', accountId: 'same-account', expiresAt: Date.now() - 1, tokenEndpoint: 'https://auth.x.ai/token' };
+    ready(old);
+    let release!: (response: Response) => void;
+    const fetcher = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const token = new URLSearchParams(String(init?.body)).get('refresh_token');
+      if (token === old.refreshToken) return await new Promise<Response>(resolve => { release = resolve; });
+      expect(token).toBe('ROTATED_PRIVATE_REFRESH');
+      return json({ access_token: 'RETRIED_PRIVATE_ACCESS', refresh_token: 'LATEST_PRIVATE_REFRESH', expires_in: 3600 });
+    });
+    manager = new OAuthManager(store, { openExternal, fetch: fetcher as typeof fetch });
+    const request = manager.prepareRequest(grok, '/responses', {});
+    const replacement = { ...old, accessToken: 'REPLACED_PRIVATE_ACCESS', refreshToken: 'ROTATED_PRIVATE_REFRESH', expiresAt: Date.now() + (fresh ? 3_600_000 : -1) };
+    store.setSecret('grok', replacement);
+    release(json({ error: 'invalid_grant', error_description: 'PRIVATE_REJECTED_REFRESH' }, 400));
+    expect((await request).headers.Authorization).toBe(`Bearer ${fresh ? replacement.accessToken : 'RETRIED_PRIVATE_ACCESS'}`);
+    expect(fetcher).toHaveBeenCalledTimes(fresh ? 1 : 2);
+    expect(store.getSecret('grok')?.refreshToken).toBe(fresh ? replacement.refreshToken : 'LATEST_PRIVATE_REFRESH');
+    expect(store.getProvider('grok')?.authStatus).toBe('ready');
+  });
+
+  it('does not retry invalid_grant across an account switch', async () => {
+    const old: ProviderSecret = { accessToken: 'OLD_PRIVATE_ACCESS', refreshToken: 'OLD_PRIVATE_REFRESH', accountId: 'old-account', expiresAt: Date.now() - 1, tokenEndpoint: 'https://auth.x.ai/token' };
+    ready(old);
+    let release!: (response: Response) => void;
+    const fetcher = vi.fn(async () => await new Promise<Response>(resolve => { release = resolve; }));
+    manager = new OAuthManager(store, { openExternal, fetch: fetcher as typeof fetch });
+    const request = manager.prepareRequest(grok, '/responses', {});
+    const rejected = expect(request).rejects.toMatchObject({ name: 'AbortError' });
+    const replacement = { ...old, accountId: 'other-account', accessToken: 'OTHER_PRIVATE_ACCESS', refreshToken: 'OTHER_PRIVATE_REFRESH' };
+    store.setSecret('grok', replacement);
+    release(json({ error: 'invalid_grant' }, 400));
+    await rejected;
+    expect(fetcher).toHaveBeenCalledOnce(); expect(store.getSecret('grok')).toEqual(replacement);
+  });
+
+  it('retries a superseded invalid_grant at most once and then requests login without exposing tokens', async () => {
+    const old: ProviderSecret = { accessToken: 'OLD_PRIVATE_ACCESS', refreshToken: 'OLD_PRIVATE_REFRESH', accountId: 'same-account', expiresAt: Date.now() - 1, tokenEndpoint: 'https://auth.x.ai/token' };
+    ready(old);
+    let release!: (response: Response) => void;
+    const fetcher = vi.fn(async () => fetcher.mock.calls.length === 1
+      ? await new Promise<Response>(resolve => { release = resolve; })
+      : json({ error: 'invalid_grant', error_description: 'LATEST_PRIVATE_REFRESH' }, 400));
+    manager = new OAuthManager(store, { openExternal, fetch: fetcher as typeof fetch });
+    const failure = manager.prepareRequest(grok, '/responses', {}).then(() => '', error => String(error));
+    store.setSecret('grok', { ...old, refreshToken: 'LATEST_PRIVATE_REFRESH' });
+    release(json({ error: 'invalid_grant' }, 400));
+    const message = await failure;
+    expect(message).toContain('重新登录'); expect(message).not.toContain('PRIVATE_');
+    expect(fetcher).toHaveBeenCalledTimes(2); expect(store.getProvider('grok')?.authStatus).toBe('error');
+    expect(store.getSecret('grok')?.refreshToken).toBe('LATEST_PRIVATE_REFRESH');
+  });
+
   it.each(['network', 'timeout', '429', '503'] as const)('keeps the existing ready authorization and its secrets after a transient %s refresh failure', async scenario => {
     const old: ProviderSecret = { accessToken: 'OLD_PRIVATE_ACCESS', refreshToken: 'OLD_PRIVATE_REFRESH', idToken: jwt({ sub: 'grok-account' }), expiresAt: Date.now() + 30_000, tokenEndpoint: 'https://auth.x.ai/token' };
     ready(old);

@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync, chmodSync } from 'node:fs';
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, chmodSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -14,6 +14,7 @@ import { restoreJunieOfficialConfig } from './junie-config';
 import { restoreCopilotCliOfficialConfig } from './copilot-cli-config';
 import { isJetBrainsTool } from '../shared/jetbrains';
 import { restoreJetBrainsConfig, type JetBrainsConfigOptions } from './jetbrains-config';
+import { replacePrivateFile } from './private-file';
 
 export interface ToolRestoreStore extends DshConfigStore {}
 export interface ToolRestoreOptions {
@@ -61,12 +62,8 @@ function currentMatches(change: FileChange, content = change.original): boolean 
   return content === null ? !existsSync(change.path) : existsSync(change.path) && readConfig(change.path) === content;
 }
 function replaceFile(path: string, content: string | null) {
-  if (content === null) { if (existsSync(path)) unlinkSync(path); return; }
   safeDirectory(dirname(path));
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const temporary = `${path}.modeldock-${randomUUID()}.tmp`;
-  try { writeFileSync(temporary, content, { mode: 0o600, flag: 'wx' }); renameSync(temporary, path); }
-  finally { if (existsSync(temporary)) unlinkSync(temporary); }
+  replacePrivateFile(path, content);
 }
 function ownsCatalog(text: string): boolean {
   try {

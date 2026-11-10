@@ -1,6 +1,6 @@
-import { accessSync, chmodSync, closeSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { accessSync, chmodSync, closeSync, constants, copyFileSync, existsSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
-import { homedir } from 'node:os';
+import { homedir, hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { parse as parseToml, stringify as stringifyToml } from '@iarna/toml';
 import { parse as parseJsonc, modify, applyEdits, type ParseError } from 'jsonc-parser';
@@ -9,6 +9,104 @@ import type { ToolId } from '../shared/types';
 import type { McpServer, McpServerInput, McpTransport, McpImportResult, McpConfigPreview, McpApplyResult } from '../shared/mcp-types';
 import { MCP_SECRET_PLACEHOLDER } from '../shared/mcp-types';
 import { openCodeConfigDirectory } from './opencode-paths';
+
+interface ConfigLock { path: string; contents: string; device: number; inode: number }
+function finishCleanup(failed: boolean, actions: (() => void)[]) {
+  let cleanupError: unknown; let cleanupFailed = false;
+  for (const action of actions) try { action(); }
+  catch (error) { if (!cleanupFailed) cleanupError = error; cleanupFailed = true; }
+  if (!failed && cleanupFailed) throw cleanupError;
+}
+const locked = () => new Error('此配置正在由其他 ModelDock 操作写入，或旧锁的持有者无法安全确认，请稍后重试。');
+function readLock(path: string): ConfigLock | undefined {
+  try {
+    const info = lstatSync(path);
+    if (!info.isFile() || info.isSymbolicLink() || info.size > 4096) throw locked();
+    const contents = readFileSync(path, 'utf8'), after = lstatSync(path);
+    if (info.dev !== after.dev || info.ino !== after.ino) return undefined;
+    return { path, contents, device: info.dev, inode: info.ino };
+  } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw error; }
+}
+function sameLock(left: ConfigLock, right: ConfigLock | undefined): boolean {
+  return !!right && left.device === right.device && left.inode === right.inode && left.contents === right.contents;
+}
+function releaseLock(lock: ConfigLock) {
+  if (sameLock(lock, readLock(lock.path))) unlinkSync(lock.path);
+}
+function deadLock(lock: ConfigLock): boolean {
+  let owner: { version?: unknown; pid?: unknown; host?: unknown; token?: unknown; createdAt?: unknown };
+  try { owner = JSON.parse(lock.contents); } catch { return false; }
+  if (!owner || owner.version !== 1 || !Number.isSafeInteger(owner.pid) || Number(owner.pid) <= 0 || owner.host !== hostname() || typeof owner.token !== 'string' || !/^[\da-f-]{36}$/.test(owner.token) || typeof owner.createdAt !== 'number' || owner.createdAt <= 0 || owner.createdAt > Date.now() + 60_000) return false;
+  try { process.kill(Number(owner.pid), 0); return false; }
+  catch (error) { return (error as NodeJS.ErrnoException).code === 'ESRCH'; }
+}
+function ownerFile(path: string, contents: string): string {
+  const temporary = path + `.owner-${randomUUID()}.tmp`;
+  let descriptor: number | undefined;
+  try {
+    descriptor = openSync(temporary, 'wx', 0o600);
+    writeFileSync(descriptor, contents); fsyncSync(descriptor);
+    const closing = descriptor; descriptor = undefined; closeSync(closing);
+    return temporary;
+  } catch (error) {
+    finishCleanup(true, [() => { if (descriptor !== undefined) closeSync(descriptor); }, () => { if (existsSync(temporary)) unlinkSync(temporary); }]);
+    throw error;
+  }
+}
+function claimLock(path: string, contents: string): ConfigLock | undefined {
+  const temporary = ownerFile(path, contents);
+  let failed = false, published: ConfigLock | undefined;
+  try {
+    // Publish complete metadata atomically; a crash cannot leave an empty lock.
+    try { linkSync(temporary, path); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'EEXIST') return undefined; throw error; }
+    published = readLock(path)!; return published;
+  } catch (error) { failed = true; throw error; }
+  finally {
+    try { finishCleanup(failed, [() => unlinkSync(temporary)]); }
+    catch (error) {
+      finishCleanup(true, [() => { if (published) releaseLock(published); }]);
+      throw error;
+    }
+  }
+}
+function acquireConfigLock(path: string): ConfigLock {
+  const contents = JSON.stringify({ version: 1, pid: process.pid, host: hostname(), token: randomUUID(), createdAt: Date.now() });
+  for (let retry = 0; retry < 4; retry++) {
+    const direct = claimLock(path, contents);
+    if (direct) return direct;
+    const root = readLock(path);
+    if (!root) continue;
+    const predecessors: ConfigLock[] = [], seen = new Set<string>();
+    let previous = root;
+    for (let depth = 0; depth < 32; depth++) {
+      if (!deadLock(previous)) throw locked();
+      predecessors.push(previous);
+      const successor = path + '.' + createHash('sha256').update(previous.contents).digest('hex').slice(0, 32);
+      if (seen.has(successor)) throw locked();
+      seen.add(successor);
+      const acquired = claimLock(successor, contents);
+      if (!acquired) { const next = readLock(successor); if (!next) break; previous = next; continue; }
+      try {
+        // Every contender for a dead owner uses the same successor. Recheck
+        // the root after winning so an old traversal cannot bypass a new owner.
+        if (!sameLock(root, readLock(path))) break;
+        const replacement = ownerFile(path, contents);
+        let promotionFailed = false;
+        try { renameSync(replacement, path); }
+        catch (error) { promotionFailed = true; throw error; }
+        finally { finishCleanup(promotionFailed, [() => { if (existsSync(replacement)) unlinkSync(replacement); }]); }
+        const canonical = readLock(path)!;
+        // The live root now blocks new traversals; remove only observed dead
+        // predecessors. Older traversals must recheck the changed root.
+        try { for (const stale of predecessors.slice(1)) if (sameLock(stale, readLock(stale.path))) unlinkSync(stale.path); }
+        catch (error) { finishCleanup(true, [() => releaseLock(canonical)]); throw error; }
+        return canonical;
+      } finally { try { releaseLock(acquired); } catch { /* A live canonical owner still prevents another writer. */ } }
+    }
+  }
+  throw locked();
+}
 
 /** The store encrypts this JSON. No native credential values cross the preload bridge. */
 export interface McpStore {
@@ -398,9 +496,8 @@ export class McpManager {
   apply(tool: ToolId, expectedFingerprint?: string): McpApplyResult {
     if (tool === 'dsh') throw new Error('DSH 暂仅支持导出，未修改任何工具配置。');
     const filename = this.path(tool); mkdirSync(dirname(filename), { recursive: true });
-    const lockPath = filename + '.modeldock.lock'; let lock: number;
-    try { lock = openSync(lockPath, 'wx', 0o600); } catch { throw new Error('此配置正在由其他 ModelDock 操作写入，请稍后重试。'); }
-    let temporary = ''; let backupPath: string | undefined;
+    const lock = acquireConfigLock(filename + '.modeldock.lock');
+    let temporary = ''; let backupPath: string | undefined; let failed = false;
     try {
       const plan = this.plan(tool);
       if (expectedFingerprint && expectedFingerprint !== plan.fingerprint) throw new Error('配置或全局目录在预览后发生变化，请重新预览。');
@@ -432,8 +529,9 @@ export class McpManager {
       catch (error) { plan.state.managed[tool] = previous; this.put(plan.state); throw error; }
       return { tool, filename, backupPath, changed: true, count: Object.keys(plan.desired).length };
     } catch (error) {
+      failed = true;
       if (error instanceof Error && !('code' in error)) throw error;
       throw new Error('MCP 配置写入失败，请检查目录和文件权限；原配置已保留。');
-    } finally { if (temporary && existsSync(temporary)) unlinkSync(temporary); closeSync(lock); if (existsSync(lockPath)) unlinkSync(lockPath); }
+    } finally { finishCleanup(failed, [() => { if (temporary && existsSync(temporary)) unlinkSync(temporary); }, () => releaseLock(lock)]); }
   }
 }

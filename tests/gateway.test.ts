@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
+import { createServer, request as httpRequest, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
 import { once } from 'node:events';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -138,7 +138,7 @@ describe('loopback gateway', () => {
       } else if (body.stream) {
         res.setHeader('content-type', 'text/event-stream');
         const usage = { prompt_tokens: 20, completion_tokens: 8, prompt_tokens_details: { cached_tokens: 3 } };
-        res.end(event({ model: 'vendor-real-id', choices: [{ delta: { content: 'private answer' } }] }) + event({ usage }) + event({ usage }) + 'data: [DONE]\n\n');
+        res.end(event({ model: 'vendor-real-id', choices: [{ delta: { content: 'private answer' } }] }) + event({ choices: [{ delta: {}, finish_reason: 'stop' }] }) + event({ usage }) + event({ usage }) + 'data: [DONE]\n\n');
       } else {
         res.setHeader('content-type', 'application/json');
         res.end(JSON.stringify({ model: 'vendor-real-id', choices: [{ message: { content: 'private answer' } }], usage: { prompt_tokens: 10, completion_tokens: 7, prompt_tokens_details: { cached_tokens: 2 } } }));
@@ -365,6 +365,124 @@ describe('loopback gateway', () => {
     const timed = await fixture(timeoutMock.url, 'chat-completions', { timeoutMs: 30 });
     const timeoutResponse = await fetch(`${timed.url}/chat/completions`, { method: 'POST', headers: timed.headers, body: JSON.stringify({ model: timed.model.alias, messages: [] }) });
     expect(timeoutResponse.status).toBe(504);
+  });
+
+  it.each([
+    ['chat-completions', 'data: {invalid}\n\n'],
+    ['chat-completions', event({ error: { message: 'PRIVATE_FAILURE' } })],
+    ['responses', event({ type: 'error', message: 'PRIVATE_FAILURE' })],
+    ['responses', event({ type: 'response.failed', response: { status: 'failed' } })],
+    ['responses', event({ type: 'response.incomplete', response: { status: 'incomplete' } })],
+    ['responses', ': keepalive\n\n'],
+    ['responses', 'event: error\ndata: {"message":"PRIVATE_FAILURE"}\n\n'],
+    ['chat-completions', ''],
+    ['chat-completions', 'data: [DONE]\n\n'],
+  ] as const)('returns 502 before output for invalid or unsuccessful %s streams', async (wire, payload) => {
+    const f = await fixture('https://synthetic.invalid/v1', wire, { fetch: async () => new Response(payload, { headers: { 'content-type': 'text/event-stream' } }) });
+    const reply = await fetch(`${f.url}/${wire === 'responses' ? 'responses' : 'chat/completions'}`, { method: 'POST', headers: f.headers, body: JSON.stringify({ model: f.model.alias, stream: true }) });
+    expect(reply.status).toBe(502);
+    expect(await reply.text()).not.toContain('PRIVATE_FAILURE');
+    expect(f.gateway.status().lastSuccessfulRequestAt).toBeUndefined();
+  });
+
+  it.each(['chat-completions', 'responses'] as const)('destroys partial %s streams on invalid JSON, errors and missing terminal events without emitting success', async wire => {
+    for (const ending of ['invalid', 'error', 'incomplete', 'eof', 'late-error']) {
+      let source!: ReadableStreamDefaultController<Uint8Array>;
+      let cancelled = false;
+      const f = await fixture('https://synthetic.invalid/v1', wire, { fetch: async () => new Response(new ReadableStream<Uint8Array>({ start(controller) { source = controller; }, cancel() { cancelled = true; } }), { headers: { 'content-type': 'text/event-stream' } }) });
+      const pending = fetch(`${f.url}/${wire === 'responses' ? 'responses' : 'chat/completions'}`, { method: 'POST', headers: f.headers, body: JSON.stringify({ model: f.model.alias, stream: true }) });
+      await expect.poll(() => !!source).toBe(true);
+      const initial = wire === 'responses' ? { type: 'response.output_text.delta', delta: 'partial answer' } : { choices: [{ index: 0, delta: { content: 'partial answer' } }] };
+      source.enqueue(Buffer.from(event(initial)));
+      const reply = await pending, reader = reply.body!.getReader();
+      expect(reply.status).toBe(200);
+      const first = new TextDecoder().decode((await reader.read()).value);
+      expect(first).toContain('partial answer');
+      const terminal = wire === 'responses' ? event({ type: 'response.completed', response: { status: 'completed', output: [] } }) : event({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }) + 'data: [DONE]\n\n';
+      if (ending === 'late-error') source.enqueue(Buffer.from(terminal));
+      if (ending !== 'eof') source.enqueue(Buffer.from(ending === 'invalid' ? 'data: {invalid}\n\n' : event({ type: ending === 'incomplete' ? 'response.incomplete' : 'error', error: { message: 'PRIVATE_FAILURE' } })));
+      if (ending === 'eof') source.close();
+      let output = first;
+      await expect((async () => { while (true) { const part = await reader.read(); if (part.done) break; output += new TextDecoder().decode(part.value); } })()).rejects.toThrow();
+      expect(output).not.toMatch(/\[DONE\]|response.completed|finish_reason|PRIVATE_FAILURE/);
+      await expect.poll(() => f.store.logs().at(0)?.status).toBe(502);
+      expect(f.gateway.status().lastSuccessfulRequestAt).toBeUndefined();
+      if (ending !== 'eof') await expect.poll(() => cancelled).toBe(true);
+    }
+  });
+
+  it('rejects named Responses errors during non-stream collection and cancels an oversized cumulative reply', async () => {
+    for (const payload of ['event: error\ndata: {"message":"PRIVATE_FAILURE"}\n\n', 'event: response.failed\ndata: {"response":{"status":"failed"}}\n\n']) {
+      const f = await fixture('https://synthetic.invalid/v1', 'responses', { fetch: async () => new Response(payload, { headers: { 'content-type': 'text/event-stream' } }) });
+      const reply = await fetch(`${f.url}/responses`, { method: 'POST', headers: f.headers, body: JSON.stringify({ model: f.model.alias, stream: false }) });
+      expect(reply.status).toBe(502); expect(await reply.text()).not.toContain('PRIVATE_FAILURE');
+    }
+    let count = 0, cancelled = false;
+    const payload = Buffer.from(event({ type: 'response.output_text.delta', delta: 'x'.repeat(1024 * 1024) }));
+    const f = await fixture('https://synthetic.invalid/v1', 'responses', { fetch: async () => new Response(new ReadableStream<Uint8Array>({
+      pull(controller) { count++; controller.enqueue(payload); }, cancel() { cancelled = true; },
+    }), { headers: { 'content-type': 'text/event-stream' } }) });
+    const reply = await fetch(`${f.url}/responses`, { method: 'POST', headers: f.headers, body: JSON.stringify({ model: f.model.alias, stream: false }) });
+    expect(reply.status).toBe(502); expect((await reply.json()).error.message).toContain('32 MiB');
+    expect(cancelled).toBe(true); expect(count).toBeLessThan(36);
+  });
+
+  it.each(['{invalid}', JSON.stringify({ error: { message: 'PRIVATE_FAILURE' } }), JSON.stringify({ object: 'response', status: 'failed' })])('rejects an unsuccessful non-SSE reply to a streaming request', async payload => {
+    const f = await fixture('https://synthetic.invalid/v1', 'chat-completions', { fetch: async () => new Response(payload, { headers: { 'content-type': 'application/json' } }) });
+    const response = await fetch(`${f.url}/chat/completions`, { method: 'POST', headers: f.headers, body: JSON.stringify({ model: f.model.alias, stream: true }) });
+    expect(response.status).toBe(502);
+    expect(await response.text()).not.toContain('PRIVATE_FAILURE');
+  });
+
+  it('bounds reads under downstream backpressure and aborts an idle paused client without waiting forever for drain', async () => {
+    let pulls = 0, cancelled = false;
+    const payload = Buffer.from(event({ choices: [{ delta: { content: 'x'.repeat(256 * 1024) } }] }));
+    const f = await fixture('https://synthetic.invalid/v1', 'chat-completions', { timeoutMs: 150, fetch: async () => new Response(new ReadableStream<Uint8Array>({
+      pull(controller) { pulls++; controller.enqueue(payload); }, cancel() { cancelled = true; },
+    }), { headers: { 'content-type': 'text/event-stream' } }) });
+    await new Promise<void>((resolve, reject) => {
+      const request = httpRequest(`${f.url}/chat/completions`, { method: 'POST', headers: f.headers }, response => {
+        response.on('error', () => {}); response.pause(); resolve();
+      });
+      request.on('error', reject); request.end(JSON.stringify({ model: f.model.alias, stream: true }));
+      cleanups.push(() => { request.destroy(); });
+    });
+    await expect.poll(() => cancelled, { timeout: 2000 }).toBe(true);
+    expect(pulls).toBeLessThan(128);
+    await expect.poll(() => f.store.logs().at(0)?.status).toBe(504);
+  });
+
+  it('keeps an active stream alive beyond the idle interval and expires only after real body activity stops', async () => {
+    let source!: ReadableStreamDefaultController<Uint8Array>;
+    const f = await fixture('https://synthetic.invalid/v1', 'responses', { timeoutMs: 180, fetch: async () => new Response(new ReadableStream<Uint8Array>({ start(controller) { source = controller; } }), { headers: { 'content-type': 'text/event-stream' } }) });
+    const pending = fetch(`${f.url}/responses`, { method: 'POST', headers: f.headers, body: JSON.stringify({ model: f.model.alias, stream: true }) });
+    await expect.poll(() => !!source).toBe(true);
+    for (let i = 0; i < 5; i++) { source.enqueue(Buffer.from(': heartbeat\n\n')); await new Promise(resolve => setTimeout(resolve, 65)); }
+    source.enqueue(Buffer.from(event({ type: 'response.output_text.delta', delta: 'alive after total deadline' })));
+    const reply = await pending;
+    const reader = reply.body!.getReader();
+    expect(new TextDecoder().decode((await reader.read()).value)).toContain('alive after total deadline');
+    await expect(reader.read()).rejects.toThrow();
+    await expect.poll(() => f.store.logs().at(0)?.status).toBe(504);
+  });
+
+  it('returns 413 and closes an unfinished oversized upload without waiting to drain it or calling upstream', async () => {
+    let calls = 0;
+    const f = await fixture('https://synthetic.invalid/v1', 'chat-completions', { fetch: async () => { calls++; return Response.json({}); } });
+    const result = await new Promise<{ status: number | undefined; connection: string | undefined; body: string }>((resolve, reject) => {
+      const request = httpRequest(`${f.url}/chat/completions`, { method: 'POST', headers: f.headers }, response => {
+        let body = ''; response.setEncoding('utf8'); response.on('data', part => body += part);
+        response.on('end', () => resolve({ status: response.statusCode, connection: response.headers.connection, body }));
+      });
+      request.once('error', reject);
+      request.write(Buffer.alloc(8 * 1024 * 1024 + 64 * 1024, 97));
+      // Deliberately leave the chunked upload unfinished.
+      cleanups.push(() => { request.destroy(); });
+    });
+    expect(result).toMatchObject({ status: 413, connection: 'close' });
+    expect(result.body).toContain('8 MiB');
+    expect(calls).toBe(0);
+    expect((await fetch(`${f.url}/models`, { headers: f.headers })).status).toBe(200);
   });
 
   it('refuses a provider that resolves to this gateway and refuses an occupied startup port', async () => {

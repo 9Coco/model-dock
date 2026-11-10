@@ -1,6 +1,7 @@
-import { chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
-import { createHash, randomUUID } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
+import { replacePrivateFile } from './private-file';
+import { recoverConfigJournal, transactConfigFiles } from './config-journal';
+import { lstatSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import type { ConfigPreview, Model, Provider, ProviderSecret, ToolBinding } from '../shared/types';
@@ -148,8 +149,7 @@ function entryValid(value: unknown): value is EntryValue {
   return object(value) && typeof value.present === 'boolean' && Object.keys(value).every(key => key === 'present' || key === 'value')
     && (value.present ? object(value.value) : value.value === undefined);
 }
-function history(store: HistoryStore, configPath: string, profilePath: string, acpPath: string): History | null {
-  const value = store.getManagedState<unknown>(junieHistoryKey(configPath), null);
+function validateHistory(value: unknown, configPath: string, profilePath: string, acpPath: string): History | null {
   if (value === null) return null;
   if (!object(value) || value.version !== 1 || value.configPath !== configPath || value.profilePath !== profilePath || value.acpPath !== acpPath || typeof value.configWasPresent !== 'boolean' || typeof value.acpWasPresent !== 'boolean' || typeof value.acpAgentsWasPresent !== 'boolean'
     || !valueValid(value.beforeModel) || !valueValid(value.appliedModel) || value.appliedModel.value !== profileId || value.appliedModel.present !== true
@@ -162,65 +162,25 @@ function historyStore(store: JunieHistoryStore): HistoryStore {
   if (!store.getManagedState || !store.setManagedState || !store.createManagedBackup) throw new Error('Junie 同步需要安全的配置恢复记录和加密备份，未修改原文件。');
   return store as HistoryStore;
 }
-const retryWait = new Int32Array(new SharedArrayBuffer(4));
-function retry(operation: () => void): void {
-  for (let attempt = 0; ; attempt++) try { operation(); return; }
-  catch (error) {
-    if (process.platform !== 'win32' || attempt >= 5 || !['EPERM', 'EBUSY', 'EACCES'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
-    Atomics.wait(retryWait, 0, 0, (attempt + 1) * 10);
-  }
-}
-let windowsSid: string | undefined;
-function protect(path: string): void {
-  if (process.platform !== 'win32') { chmodSync(path, 0o600); return; }
-  windowsSid ??= execFileSync('whoami.exe', ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8', windowsHide: true }).match(/S-1-\d+(?:-\d+)+/)?.[0];
-  if (!windowsSid) throw new Error('无法确认 Junie 配置的本机用户权限。');
-  execFileSync('icacls.exe', [path, '/inheritance:r', '/grant:r', `*${windowsSid}:F`, '/grant:r', '*S-1-5-18:F'], { windowsHide: true, stdio: 'pipe' });
-}
 function replace(path: string, content: string | null): void {
   safeDirectory(dirname(path));
-  if (content === null) { if (info(path)) retry(() => unlinkSync(path)); return; }
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const temporary = `${path}.modeldock-${randomUUID()}.tmp`;
-  try { writeFileSync(temporary, content, { mode: 0o600, flag: 'wx' }); protect(temporary); retry(() => renameSync(temporary, path)); }
-  finally { if (info(temporary)) retry(() => unlinkSync(temporary)); }
+  replacePrivateFile(path, content);
 }
-/** Unified undo must preserve the same private credential-file permissions. */
-export function replaceJunieConfigFile(path: string, content: string | null): void {
-  read(path);
-  replace(path, content);
+/** Unified undo preserves the same private credential-file permissions. */
+export function replaceJunieConfigFile(path: string, content: string | null): void { read(path); replace(path, content); }
+function history(store: HistoryStore, configPath: string, profilePath: string, acpPath: string): History | null {
+  return recoverConfigJournal(store, junieHistoryKey(configPath), [configPath, profilePath, acpPath], value => validateHistory(value, configPath, profilePath, acpPath), read, replace);
+}
+export function recoverJunieConfig(store: JunieHistoryStore, homeDirectory = homedir(), options: JunieConfigOptions = {}): void {
+  const { configPath, profilePath, acpPath } = junieConfigTargets(homeDirectory, options);
+  history(historyStore(store), configPath, profilePath, acpPath);
 }
 function transact(store: HistoryStore, beforeFiles: FileState[], afterFiles: FileState[], before: History | null, after: History | null, options: JunieConfigOptions): string {
-  const target = beforeFiles[0].path, key = junieHistoryKey(target);
-  if (equal(beforeFiles, afterFiles) && equal(before, after)) return target;
-  store.createManagedBackup('junie-config', { version: 1, files: beforeFiles, history: before });
-  const written: number[] = [];
-  let stateTouched = false;
-  try {
-    options.beforeCommit?.();
-    if (beforeFiles.some(file => read(file.path) !== file.content) || !equal(history(store, beforeFiles[0].path, beforeFiles[1].path, beforeFiles[2].path), before)) throw new Error('Junie 配置刚被其他程序修改，请重新预览后同步。');
-    stateTouched = true; store.setManagedState(key, after);
-    // Profile first: a new default must never point at a profile not yet written.
-    for (const index of [1, 2, 0]) {
-      const desired = afterFiles[index], previous = beforeFiles[index];
-      if (desired.content === previous.content) continue;
-      if (read(previous.path) !== previous.content) throw new Error('Junie 配置刚被其他程序修改，请重新同步。');
-      replace(desired.path, desired.content); written.push(index);
-      if (read(desired.path) !== desired.content) throw new Error('Junie 配置写入验证失败。');
-      options.afterFileCommit?.(index, desired.path);
-    }
-    if (afterFiles.some(file => read(file.path) !== file.content)) throw new Error('Junie 配置写入后被外部修改。');
-    return target;
-  } catch (error) {
-    try {
-      for (const index of written.reverse()) {
-        if (read(afterFiles[index].path) !== afterFiles[index].content) throw new Error('外部配置已变化。');
-        replace(beforeFiles[index].path, beforeFiles[index].content);
-      }
-      if (stateTouched) store.setManagedState(key, before);
-    } catch { throw new Error('Junie 同步未完成，回滚遇到外部修改或存储错误；加密备份已保留。'); }
-    throw error;
-  }
+  const target = beforeFiles[0].path;
+  transactConfigFiles({ store, key: junieHistoryKey(target), kind: 'junie-config', before, after,
+    files: beforeFiles.map((file, index) => ({ path: file.path, before: file.content, after: afterFiles[index].content })),
+    read, write: replace, order: [1, 2, 0], beforeCommit: options.beforeCommit, afterFileCommit: options.afterFileCommit });
+  return target;
 }
 function restore(store: HistoryStore, homeDirectory: string, options: JunieConfigOptions): string {
   const { configPath, profilePath, acpPath } = junieConfigTargets(homeDirectory, options);
@@ -248,7 +208,8 @@ export function applyJunieConfig(store: JunieConfigStore, _backups: string, home
   const command = options.junieCommand ?? resolveJunieCommand(homeDirectory);
   if (!command) throw new Error('未找到支持的 Junie CLI 启动程序，请先安装 Junie CLI，再同步终端和 IDE 配置。');
   const { configPath, profilePath, acpPath } = junieConfigTargets(homeDirectory, options);
-  const original = read(configPath), oldProfile = read(profilePath), acp = read(acpPath), config = parseConfig(original), before = history(state, configPath, profilePath, acpPath);
+  const before = history(state, configPath, profilePath, acpPath);
+  const original = read(configPath), oldProfile = read(profilePath), acp = read(acpPath), config = parseConfig(original);
   if (oldProfile !== null && !before) throw new Error('Junie 的 modeldock.json 已存在且不属于 ModelDock，未覆盖原文件。');
   if (before && oldProfile !== before.appliedProfile) throw new Error('Junie 受管模型已被外部修改，未覆盖新修改。');
   const currentAcp = readJunieAcpEntry(acp);

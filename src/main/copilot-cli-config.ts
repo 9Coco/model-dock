@@ -1,6 +1,7 @@
-import { chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
-import { createHash, randomUUID } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
+import { replacePrivateFile } from './private-file';
+import { recoverConfigJournal, transactConfigFiles } from './config-journal';
+import { lstatSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { applyEdits, createScanner, modify, parse as parseJsonc, SyntaxKind, type ParseError } from 'jsonc-parser';
@@ -182,8 +183,7 @@ function historyStore(store: CopilotCliHistoryStore): HistoryStore {
   if (!store.getManagedState || !store.setManagedState || !store.createManagedBackup) throw new Error('Copilot CLI 同步需要安全恢复记录和加密备份，未修改原文件。');
   return store as HistoryStore;
 }
-function history(store: HistoryStore, providersPath: string, settingsPath: string): History | null {
-  const value = store.getManagedState<unknown>(copilotCliHistoryKey(providersPath), null);
+function validateHistory(value: unknown, providersPath: string, settingsPath: string): History | null {
   if (value === null) return null;
   if (!object(value) || value.version !== 1 || value.providersPath !== providersPath || value.settingsPath !== settingsPath
     || typeof value.providersWasPresent !== 'boolean' || typeof value.settingsWasPresent !== 'boolean'
@@ -194,60 +194,25 @@ function history(store: HistoryStore, providersPath: string, settingsPath: strin
     || Buffer.byteLength(JSON.stringify(value), 'utf8') > 6 * 1024 * 1024) throw new Error('Copilot CLI 配置恢复记录无效，未修改原文件。');
   return value as unknown as History;
 }
-const retryWait = new Int32Array(new SharedArrayBuffer(4));
-function retry(operation: () => void): void {
-  for (let attempt = 0; ; attempt++) try { operation(); return; } catch (error) {
-    if (process.platform !== 'win32' || attempt >= 5 || !['EPERM', 'EBUSY', 'EACCES'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
-    Atomics.wait(retryWait, 0, 0, (attempt + 1) * 10);
-  }
-}
-let windowsSid: string | undefined;
-function protect(path: string): void {
-  if (process.platform !== 'win32') { chmodSync(path, 0o600); return; }
-  windowsSid ??= execFileSync('whoami.exe', ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8', windowsHide: true }).match(/S-1-\d+(?:-\d+)+/)?.[0];
-  if (!windowsSid) throw new Error('无法确认 Copilot CLI 配置的本机用户权限。');
-  execFileSync('icacls.exe', [path, '/inheritance:r', '/grant:r', `*${windowsSid}:F`, '/grant:r', '*S-1-5-18:F'], { windowsHide: true, stdio: 'pipe' });
-}
 function replace(path: string, content: string | null): void {
   safeDirectory(dirname(path));
-  if (content === null) { if (info(path)) retry(() => unlinkSync(path)); return; }
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const temporary = `${path}.modeldock-${randomUUID()}.tmp`;
-  try { writeFileSync(temporary, content, { mode: 0o600, flag: 'wx' }); protect(temporary); retry(() => renameSync(temporary, path)); }
-  finally { if (info(temporary)) retry(() => unlinkSync(temporary)); }
+  replacePrivateFile(path, content);
 }
 /** Unified undo preserves the same private credential-file permissions. */
 export function replaceCopilotCliConfigFile(path: string, content: string | null): void { read(path); replace(path, content); }
+function history(store: HistoryStore, providersPath: string, settingsPath: string): History | null {
+  return recoverConfigJournal(store, copilotCliHistoryKey(providersPath), [providersPath, settingsPath], value => validateHistory(value, providersPath, settingsPath), read, replace);
+}
+export function recoverCopilotCliConfig(store: CopilotCliHistoryStore, homeDirectory = homedir(), options: CopilotCliConfigOptions = {}): void {
+  const { providersPath, settingsPath } = copilotCliConfigTargets(homeDirectory, options);
+  history(historyStore(store), providersPath, settingsPath);
+}
 function transact(store: HistoryStore, beforeFiles: FileState[], afterFiles: FileState[], before: History | null, after: History | null, options: CopilotCliConfigOptions): string {
-  const target = beforeFiles[0].path, key = copilotCliHistoryKey(target);
-  if (isDeepStrictEqual(beforeFiles, afterFiles) && isDeepStrictEqual(before, after)) return target;
-  store.createManagedBackup('copilot-cli-config', { version: 1, files: beforeFiles, history: before });
-  const written: number[] = []; let stateTouched = false;
-  try {
-    options.beforeCommit?.();
-    if (beforeFiles.some(file => read(file.path) !== file.content) || !isDeepStrictEqual(history(store, beforeFiles[0].path, beforeFiles[1].path), before)) throw new Error('Copilot CLI 配置刚被其他程序修改，请重新预览后同步。');
-    stateTouched = true; store.setManagedState(key, after);
-    // Registry first: a new default never points at models not yet written.
-    for (const index of [0, 1]) {
-      const desired = afterFiles[index], previous = beforeFiles[index];
-      if (desired.content === previous.content) continue;
-      if (read(previous.path) !== previous.content) throw new Error('Copilot CLI 配置刚被其他程序修改，请重新同步。');
-      replace(desired.path, desired.content); written.push(index);
-      if (read(desired.path) !== desired.content) throw new Error('Copilot CLI 配置写入验证失败。');
-      options.afterFileCommit?.(index, desired.path);
-    }
-    if (afterFiles.some(file => read(file.path) !== file.content)) throw new Error('Copilot CLI 配置写入后被外部修改。');
-    return target;
-  } catch (error) {
-    try {
-      for (const index of written.reverse()) {
-        if (read(afterFiles[index].path) !== afterFiles[index].content) throw new Error('外部配置已变化。');
-        replace(beforeFiles[index].path, beforeFiles[index].content);
-      }
-      if (stateTouched) store.setManagedState(key, before);
-    } catch { throw new Error('Copilot CLI 同步未完成，回滚遇到外部修改或存储错误；加密备份已保留。'); }
-    throw error;
-  }
+  const target = beforeFiles[0].path;
+  transactConfigFiles({ store, key: copilotCliHistoryKey(target), kind: 'copilot-cli-config', before, after,
+    files: beforeFiles.map((file, index) => ({ path: file.path, before: file.content, after: afterFiles[index].content })),
+    read, write: replace, order: [0, 1], beforeCommit: options.beforeCommit, afterFileCommit: options.afterFileCommit });
+  return target;
 }
 function restore(store: HistoryStore, homeDirectory: string, options: CopilotCliConfigOptions): string {
   const { providersPath, settingsPath } = copilotCliConfigTargets(homeDirectory, options), before = history(store, providersPath, settingsPath);
@@ -265,7 +230,8 @@ export function applyCopilotCliConfig(store: CopilotCliConfigStore, _backups: st
   const state = historyStore(store), selected = selection(store, true, options.port ?? 18181);
   if (!selected) return restore(state, homeDirectory, options);
   const { providersPath, settingsPath } = copilotCliConfigTargets(homeDirectory, options);
-  const original = read(providersPath), settings = read(settingsPath), registry = parse(original), config = parse(settings, true), before = history(state, providersPath, settingsPath);
+  const before = history(state, providersPath, settingsPath);
+  const original = read(providersPath), settings = read(settingsPath), registry = parse(original), config = parse(settings, true);
   const current = owned(registry);
   if (!before && (current.providers.length || current.models.length)) throw new Error('Copilot CLI 的 ModelDock 来源或模型已存在且不属于 ModelDock，未覆盖原配置。');
   if (before && !isDeepStrictEqual(current, before.appliedRegistry)) throw new Error('Copilot CLI 受管来源或模型已被外部修改，未覆盖新修改。');

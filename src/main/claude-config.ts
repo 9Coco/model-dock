@@ -1,5 +1,7 @@
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
-import { createHash, randomUUID } from 'node:crypto';
+import { replacePrivateFile } from './private-file';
+import { migrateLegacyConfigBackups, recoverConfigJournal, transactConfigFiles } from './config-journal';
+import { lstatSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import type { ConfigPreview, Model, Provider, ProviderSecret, ToolBinding } from '../shared/types';
@@ -17,16 +19,19 @@ export interface ClaudeConfigStore {
   gatewayKey(): string;
   getManagedState?<T>(key: string, fallback: T): T;
   setManagedState?(key: string, value: unknown): void;
+  createManagedBackup?(kind: string, value: unknown): string;
 }
 export interface ClaudeConfigHistoryStore {
   getManagedState<T>(key: string, fallback: T): T;
   setManagedState(key: string, value: unknown): void;
+  createManagedBackup(kind: string, value: unknown): string;
 }
 export interface ClaudeConfigOptions {
   claudeConfigDir?: string;
   port?: number;
   /** 修改点：仅供主进程事务测试，不能由渲染进程传入。 */
   beforeCommit?: () => void;
+  afterFileCommit?: (index: number, path: string) => void;
 }
 
 const maximumFileSize = 2 * 1024 * 1024;
@@ -138,7 +143,7 @@ function readFile(path: string): string | null {
   safeDirectory(dirname(path));
   const info = metadata(path);
   if (!info) return null;
-  if (info.isSymbolicLink() || !info.isFile() || info.size > maximumFileSize) throw new Error('Claude Code 配置文件类型或大小不受支持，未修改原文件。');
+  if (info.isSymbolicLink() || !info.isFile() || info.nlink !== 1 || info.size > maximumFileSize) throw new Error('Claude Code 配置文件类型或大小不受支持，未修改原文件。');
   return readFileSync(path, 'utf8');
 }
 function parseSettings(text: string | null): Settings {
@@ -156,8 +161,7 @@ function validValue(value: unknown): value is Value {
   return record(value) && typeof value.present === 'boolean' && Object.keys(value).every(key => key === 'present' || key === 'value')
     && (value.present ? value.value !== undefined : value.value === undefined);
 }
-function readHistory(store: ClaudeConfigHistoryStore, target: string): ClaudeHistory | null {
-  const value = store.getManagedState<unknown>(claudeHistoryKey(target), null);
+function validateHistory(value: unknown, target: string): ClaudeHistory | null {
   if (value === null) return null;
   if (!record(value) || value.version !== 1 || value.target !== target || typeof value.envWasPresent !== 'boolean' || !record(value.fields)
     || Object.entries(value.fields).some(([key, field]) => !allowedFields.has(key) || !record(field) || !validValue(field.before) || !validValue(field.applied)
@@ -177,44 +181,23 @@ function writeField(settings: Settings, field: string, value: Value): void {
   if (!target) return;
   if (value.present) (target as Record<string, unknown>)[key] = structuredClone(value.value); else delete target[key];
 }
-function matches(path: string, original: string | null): boolean { return readFile(path) === original; }
 function replaceFile(path: string, content: string | null): void {
-  if (content === null) { if (metadata(path)) unlinkSync(path); return; }
   safeDirectory(dirname(path));
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const temporary = `${path}.modeldock-${randomUUID()}.tmp`;
-  try { writeFileSync(temporary, content, { mode: 0o600, flag: 'wx' }); renameSync(temporary, path); }
-  finally { if (existsSync(temporary)) unlinkSync(temporary); }
+  replacePrivateFile(path, content);
 }
-function transact(store: ClaudeConfigHistoryStore, target: string, backups: string, original: string | null, output: string | null,
-  before: ClaudeHistory | null, after: ClaudeHistory | null, options: ClaudeConfigOptions, official: boolean): string {
-  const key = claudeHistoryKey(target), fileChanged = original !== output, stateChanged = JSON.stringify(before) !== JSON.stringify(after);
-  if (!fileChanged && !stateChanged) return target;
-  if (fileChanged && original !== null) {
-    safeDirectory(backups); mkdirSync(backups, { recursive: true, mode: 0o700 });
-    const backup = join(backups, `claude-code-${official ? 'official-' : ''}${Date.now()}-${randomUUID().slice(0, 8)}.bak`);
-    // 修改点：备份含用户 API Key，直接写入 0600，不能继承原配置的宽松权限。
-    writeFileSync(backup, original, { mode: 0o600, flag: 'wx' }); chmodSync(backup, 0o600);
-    if (readFileSync(backup, 'utf8') !== original) throw new Error('Claude Code 原配置备份验证失败，未修改原文件。');
-  }
-  let stateTouched = false, fileWritten = false;
-  try {
-    options.beforeCommit?.();
-    if (!matches(target, original) || JSON.stringify(readHistory(store, target)) !== JSON.stringify(before)) throw new Error('Claude Code 配置刚被其他程序修改，请重新预览后再同步。');
-    if (stateChanged) { stateTouched = true; store.setManagedState(key, after); }
-    if (fileChanged) { replaceFile(target, output); fileWritten = true; }
-    if (!matches(target, output)) throw new Error('Claude Code 配置写入验证失败。');
-    return target;
-  } catch (error) {
-    try {
-      if (fileWritten) {
-        if (!matches(target, output)) throw new Error('外部配置已经变化。');
-        replaceFile(target, original);
-      }
-      if (stateTouched) store.setManagedState(key, before);
-    } catch { throw new Error('Claude Code 同步未完成，回滚遇到外部修改或存储错误；原配置备份已保留。'); }
-    throw error;
-  }
+function readHistory(store: ClaudeConfigHistoryStore, target: string): ClaudeHistory | null {
+  return recoverConfigJournal(store, claudeHistoryKey(target), [target], value => validateHistory(value, target), readFile, replaceFile);
+}
+export function recoverClaudeConfig(store: ClaudeConfigHistoryStore, homeDirectory = homedir(), options: ClaudeConfigOptions = {}): void {
+  readHistory(store, join(claudeConfigDirectory(homeDirectory, options.claudeConfigDir), 'settings.json'));
+}
+function transact(store: ClaudeConfigHistoryStore, target: string, _backups: string, original: string | null, output: string | null,
+  before: ClaudeHistory | null, after: ClaudeHistory | null, options: ClaudeConfigOptions, _official: boolean): string {
+  migrateLegacyConfigBackups(store, _backups, /^claude-code-(?:official-)?[0-9]+-[a-f0-9]{8}\.bak$/, 'claude-config-legacy');
+  transactConfigFiles({ store, key: claudeHistoryKey(target), kind: 'claude-config', before, after,
+    files: [{ path: target, before: original, after: output }], read: readFile, write: replaceFile,
+    beforeCommit: options.beforeCommit, afterFileCommit: options.afterFileCommit });
+  return target;
 }
 function rollbackManaged(settings: Settings, history: ClaudeHistory | null, official: boolean): void {
   if (!history) return;
@@ -226,10 +209,11 @@ function rollbackManaged(settings: Settings, history: ClaudeHistory | null, offi
 }
 
 export function applyClaudeConfig(store: ClaudeConfigStore, backups: string, homeDirectory = homedir(), options: ClaudeConfigOptions = {}): string {
-  if (!store.getManagedState || !store.setManagedState) throw new Error('Claude Code 同步需要安全的配置恢复记录存储，未修改原文件。');
+  if (!store.getManagedState || !store.setManagedState || !store.createManagedBackup) throw new Error('Claude Code 同步需要安全的配置恢复记录存储，未修改原文件。');
   const stateStore = store as ClaudeConfigStore & ClaudeConfigHistoryStore;
   const target = join(claudeConfigDirectory(homeDirectory, options.claudeConfigDir), 'settings.json');
-  const selected = selection(store, true, options.port ?? 18181), original = readFile(target), settings = parseSettings(original), history = readHistory(stateStore, target);
+  const selected = selection(store, true, options.port ?? 18181), history = readHistory(stateStore, target);
+  const original = readFile(target), settings = parseSettings(original);
   if (!selected) {
     if (!history) return target;
     rollbackManaged(settings, history, false);
@@ -266,7 +250,8 @@ export function applyClaudeConfig(store: ClaudeConfigStore, backups: string, hom
 
 export function restoreClaudeOfficialConfig(store: ClaudeConfigHistoryStore, backups: string, homeDirectory = homedir(), options: ClaudeConfigOptions = {}): string {
   const target = join(claudeConfigDirectory(homeDirectory, options.claudeConfigDir), 'settings.json');
-  const original = readFile(target), settings = parseSettings(original), history = readHistory(store, target);
+  const history = readHistory(store, target);
+  const original = readFile(target), settings = parseSettings(original);
   if (!history) return target;
   // 修改点：官方还原清理仍托管的模型/路由，不重新激活历史第三方来源；隐私选择不变。
   rollbackManaged(settings, history, true);

@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
 import { applyConfig, buildConfig, connectionKey } from '../src/main/adapters';
 import { applyJetBrainsConfig, buildJetBrainsConfig, jetBrainsHistoryKey, jetBrainsStatus, restoreJetBrainsConfig, type JetBrainsConfigOptions } from '../src/main/jetbrains-config';
 import { restoreOfficialConfig } from '../src/main/tool-restore';
@@ -174,6 +175,33 @@ describe('Windows JetBrains installed profile and public process evidence', () =
 });
 
 describe('JetBrains AI Assistant explicit offline configuration', () => {
+  it('uses one Windows ownership key for path casing differences', () => {
+    vi.stubGlobal('process', { ...process, platform: 'win32' });
+    try { expect(jetBrainsHistoryKey('C:/Users/Fixture/Config/WebStorm2026.2', 'webstorm')).toBe(jetBrainsHistoryKey('c:/users/fixture/config/webstorm2026.2', 'webstorm')); }
+    finally { vi.unstubAllGlobals(); }
+  });
+  it('migrates a prior case-sensitive Windows ownership key before the next explicit write', () => {
+    const f = fixture(); f.seed(); f.apply();
+    const history = f.states.get(f.key), legacyKey = `tool-config:${f.tool}:${createHash('sha256').update(resolve(f.target)).digest('hex')}`;
+    vi.stubGlobal('process', { ...process, platform: 'win32' });
+    try {
+      const normalized = jetBrainsHistoryKey(f.target, f.tool);
+      expect(normalized).not.toBe(legacyKey); f.states.delete(normalized); f.states.set(legacyKey, history);
+      f.models[0].alias = 'changed-after-key-migration';
+      expect(() => f.apply({ beforeCommit: () => { throw new Error('SYNTHETIC_STOP_BEFORE_FILES'); } })).toThrow('SYNTHETIC_STOP_BEFORE_FILES');
+      expect(f.states.get(normalized)).toEqual(history); expect(f.states.get(legacyKey)).toBeNull();
+      expect(f.store.createManagedBackup).toHaveBeenCalledWith('jetbrains-key-migration', { version: 1, key: legacyKey, history });
+    } finally { vi.unstubAllGlobals(); }
+  });
+  it('moves recognized legacy plaintext backups into encrypted history while preserving other files', () => {
+    const f = fixture(); f.seed();
+    const filename = `webstorm-123-00000000-0000-0000-0000-000000000000-${fileNames[0]}.bak`;
+    const old = join(f.backups, filename), other = join(f.backups, 'user-important.bak');
+    f.write(old, 'SYNTHETIC_PREVIOUS_SETTINGS'); f.write(other, 'keep'); f.apply();
+    expect(existsSync(old)).toBe(false); expect(readFileSync(other, 'utf8')).toBe('keep');
+    expect(f.store.createManagedBackup).toHaveBeenCalledWith('jetbrains-sync-legacy', { version: 1, filename, content: 'SYNTHETIC_PREVIOUS_SETTINGS' });
+    expect(f.journals).toHaveLength(2);
+  });
   it.each(Object.keys(JETBRAINS_TOOLS) as JetBrainsToolId[])('finds the verified %s profile and exports only the local credential', tool => {
     const f = fixture(tool), status = jetBrainsStatus(tool, f.root, f.options);
     expect(status).toMatchObject({ configDir: f.target, version: '2026.2', foundProfile: true, running: 'stopped', canApply: true });
@@ -198,8 +226,8 @@ describe('JetBrains AI Assistant explicit offline configuration', () => {
     expect(f.read(2)).toContain('<option value="OpenAIAPI" />'); expect(f.read(2)).toContain('<!-- keep Google --> <option value="Google" />');
     expect(readFileSync(passwordFile, 'utf8')).toBe('SYNTHETIC_UNTOUCHED_PASSWORD_SAFE'); expect(f.store.gatewayKey).not.toHaveBeenCalled(); expect(f.store.getSecret).not.toHaveBeenCalled();
     expect(JSON.stringify(f.journals)).not.toContain('SYNTHETIC_LOCAL_KEY'); expect(f.store.createManagedBackup).toHaveBeenCalledWith('jetbrains-sync', expect.any(Object));
-    expect(readdirSync(f.backups)).toHaveLength(3);
-    expectModeOrInheritedWindowsAcl([...fileNames.map((_, index) => f.file(index)), ...readdirSync(f.backups).map(name => join(f.backups, name))], 0o600, f.root);
+    expect(existsSync(f.backups)).toBe(false); expect(f.journals).toHaveLength(1);
+    expectModeOrInheritedWindowsAcl(fileNames.map((_, index) => f.file(index)), 0o600, f.root);
   });
   it('restores exact preexisting XML bytes after repeated model updates', async () => {
     const f = fixture(); f.seed(); f.apply(); f.models[0].alias = 'updated-core'; f.models[0].tools = false; f.apply();
@@ -347,7 +375,7 @@ describe('JetBrains AI Assistant explicit offline configuration', () => {
   it('preserves a concurrent external edit and commits no ownership record', () => {
     const f = fixture(); f.seed(); const manual = f.originals[2].replace('Google', 'Manual');
     expect(() => f.apply({ beforeCommit: () => f.write(f.file(2), manual) })).toThrow('其他程序');
-    expect(f.read(0)).toBe(f.originals[0]); expect(f.read(1)).toBe(f.originals[1]); expect(f.read(2)).toBe(manual); expect(f.states.size).toBe(0); expect(readdirSync(f.backups)).toHaveLength(3);
+    expect(f.read(0)).toBe(f.originals[0]); expect(f.read(1)).toBe(f.originals[1]); expect(f.read(2)).toBe(manual); expect(f.states.size).toBe(0); expect(existsSync(f.backups)).toBe(false); expect(f.journals).toHaveLength(1);
   });
   it('rolls back all committed files after a write failure', () => {
     const f = fixture(); f.seed(); expect(() => f.apply({ afterFileCommit: () => { throw new Error('SYNTHETIC_WRITE_FAILURE'); } })).toThrow('SYNTHETIC_WRITE_FAILURE');
