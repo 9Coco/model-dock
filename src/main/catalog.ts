@@ -1,9 +1,13 @@
 import { isCopilotUpstream } from './copilot-provider';
+import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
+import { parameterRow } from './model-parameter-updates';
+import type { ParameterPreview } from '../shared/catalog-types';
 import type { Model, ModelInput, Provider, WireApi } from '../shared/types';
-import { isReasoningEffort, MODEL_SPEC_FIELDS, modelSpecs, sanitizeReasoningEfforts } from '../shared/types';
+import { isReasoningEffort, MODEL_SPEC_FIELDS, modelSpecs, REASONING_EFFORTS, sanitizeReasoningEfforts } from '../shared/types';
 import type { AddModelsResult, DiscoveredModel, DiscoveryErrorCategory, DiscoveryResult, ModelSelection } from '../shared/catalog-types';
 import { catalogAccessMessages } from '../shared/catalog-types';
-import { presetById } from '../shared/presets';
+import { OPENCODE_GO_BASE_URL, presetById } from '../shared/presets';
 import { isTraeRelayProvider } from '../shared/trae-relay-models';
 import { modelLocalAlias, suggestModelAlias } from '../shared/model-names';
 import { lookupModelMetadata, lookupModelReasoningDefaults } from '../shared/model-metadata';
@@ -29,6 +33,7 @@ interface CachedDiscovery {
   fingerprint: string;
   expiresAt: number;
   models: Map<string, DiscoveredModel>;
+  upstream: Map<string, Omit<DiscoveredModel, 'alias'>>;
   refresh?: Promise<DiscoveryResult>;
 }
 const staleCatalog = () => new Error('模型目录已过期或供应商配置已变化，请重新获取模型列表。');
@@ -123,7 +128,15 @@ function parseModel(entry: unknown, provider: Provider, messagesCatalog = false)
   const upstreamId = typeof entry === 'string' ? safeText(entry) : idFields.map(value => safeText(value)).find(Boolean) ?? '';
   if (!upstreamId) return undefined;
   const capabilities = object(data.capabilities);
-  const modalities = inputModalities(data.input_modalities, capabilities.input_modalities, object(data.architecture).input_modalities);
+  const go = provider.kind === 'opencode-go';
+  const goInput = object(data.modalities).input;
+  const modalities = inputModalities(data.input_modalities, data.inputModalities, capabilities.input_modalities, object(data.architecture).input_modalities,
+    go && Array.isArray(goInput) ? goInput.map(value => typeof value === 'string' && value.startsWith('image/') ? 'image' : value) : undefined);
+  const goLimit = object(go ? data.limit : undefined), goReasoning = object(go ? capabilities.reasoning : undefined);
+  const claudeThinking = object(messagesCatalog ? capabilities.thinking : undefined);
+  const claudeEffort = object(messagesCatalog ? capabilities.effort : undefined);
+  const claudeLevels = REASONING_EFFORTS.filter(level => object(claudeEffort[level]).supported === true);
+  const effort = object(data.effort);
   const limits = object(capabilities.limits), supports = object(capabilities.supports);
   // Protocol and account identity constrain dictionary inference. Public API limits
   // must never overwrite a native subscription catalog with the same model name.
@@ -135,14 +148,15 @@ function parseModel(entry: unknown, provider: Provider, messagesCatalog = false)
   const knownMetadata = lookupModelMetadata(upstreamId, provider, wireApi);
   // 订阅目录只借用缺少的思考默认值，不能借用公共 API 的容量或模态。
   const reasoningMetadata = knownMetadata ?? lookupModelReasoningDefaults(upstreamId, provider, wireApi);
-  const upstreamInput = positiveContext(data.max_input_tokens, data.maxInputTokens, limits.max_input_tokens, limits.max_prompt_tokens);
-  // max_tokens is frequently a default request budget, so it is deliberately
-  // excluded from published output-limit inference.
-  const upstreamOutput = positiveContext(data.max_output_tokens, data.maxOutputTokens, limits.max_output_tokens, limits.max_completion_tokens);
+  const upstreamInput = positiveContext(data.max_input_tokens, data.maxInputTokens, limits.max_input_tokens, limits.max_prompt_tokens, goLimit.input);
+  // The Anthropic Models API uses max_tokens for its published output limit.
+  const upstreamOutput = positiveContext(data.max_output_tokens, data.maxOutputTokens, limits.max_output_tokens, limits.max_completion_tokens, goLimit.output,
+    messagesCatalog ? data.max_tokens : undefined, object(data.top_provider).max_completion_tokens);
   const combined = upstreamInput !== undefined && upstreamOutput !== undefined && Number.isSafeInteger(upstreamInput + upstreamOutput) ? upstreamInput + upstreamOutput : undefined;
-  const upstreamContext = positiveContext(data.context_window, data.contextWindow, data.context_length, data.max_context_length, limits.max_context_window_tokens, combined, messagesCatalog ? upstreamInput : undefined);
+  const upstreamContext = positiveContext(data.context_window, data.contextWindow, data.context_length, data.max_context_length, limits.max_context_window_tokens, goLimit.context, messagesCatalog ? upstreamInput : undefined, combined);
   // A negative parallel-calls flag does not rule out ordinary function calls.
   const declaredTools = booleanValue(data.tools, data.supports_tools, data.supports_tool_calls, capabilities.tools, capabilities.tool_calling,
+    object(go ? capabilities.tools : undefined).supported, Array.isArray(data.supported_parameters) && data.supported_parameters.includes('tools') ? true : undefined,
     provider.kind === 'copilot' ? supports.tool_calls : undefined, provider.kind === 'codex' && data.supports_parallel_tool_calls === true ? true : undefined);
   const upstreamVision = booleanValue(data.vision, data.supports_vision, capabilities.vision, provider.kind === 'copilot' ? supports.vision : undefined, messagesCatalog ? object(capabilities.image_input).supported : undefined)
     ?? (modalities.length ? modalities.includes('image') : undefined);
@@ -154,17 +168,19 @@ function parseModel(entry: unknown, provider: Provider, messagesCatalog = false)
   for (const [key, upstream, dictionary] of [['contextWindow', upstreamContext, knownMetadata?.contextWindow], ['tools', declaredTools, knownMetadata?.tools], ['vision', upstreamVision, knownMetadata?.vision]] as const) {
     if (upstream === undefined) { if (dictionary !== undefined) metadataInferred.push(key); else metadataDefaults.push(key); }
   }
-  const declaredReasoning = [data.supported_reasoning_levels, data.reasoning_efforts, data.supports_reasoning_effort, supports.reasoning_effort]
+  const declaredReasoning = [data.supported_reasoning_levels, data.supportedReasoningEfforts, data.supported_reasoning_efforts, data.reasoning_efforts, data.supports_reasoning_effort, supports.reasoning_effort,
+    effort.supported_levels, goReasoning.effort, claudeEffort.supported === false ? false : claudeLevels.length ? claudeLevels : undefined]
     .find(value => Array.isArray(value) || value === false);
-  const declaredThinking = booleanValue(data.thinking, data.supports_thinking, capabilities.thinking, supports.thinking, supports.reasoning);
+  const declaredThinking = booleanValue(data.thinking, data.supports_thinking, capabilities.thinking, supports.thinking, supports.reasoning, claudeThinking.supported, goReasoning.supported);
   // 修改点：上游明确不支持思考时，也要收口字典推断的等级，不能导出
   // thinking:false 与非空等级的矛盾配置。缺少声明才使用内置维护参数。
   const declaredLevels = declaredThinking === false || declaredReasoning === false ? [] : Array.isArray(declaredReasoning) ? declaredReasoning : undefined;
   const reasoningEfforts = declaredLevels !== undefined
-    ? sanitizeReasoningEfforts(declaredLevels.map(level => typeof level === 'string' ? level : object(level).effort))
+    ? sanitizeReasoningEfforts(declaredLevels.map(level => typeof level === 'string' ? level : object(level).effort ?? object(level).reasoningEffort))
     : reasoningMetadata?.reasoningEfforts;
   if (declaredLevels === undefined && reasoningEfforts !== undefined) metadataInferred.push('reasoningEfforts');
-  const declaredDefaultLevel = data.default_reasoning_level ?? data.default_reasoning_effort;
+  const goDefault = object(goReasoning.default);
+  const declaredDefaultLevel = data.default_reasoning_level ?? data.default_reasoning_effort ?? data.defaultReasoningEffort ?? effort.default_level ?? (goDefault.type === 'effort' ? goDefault.value : undefined);
   const preferredLevel = declaredDefaultLevel ?? reasoningMetadata?.defaultReasoningEffort;
   const defaultReasoningEffort = isReasoningEffort(preferredLevel) && reasoningEfforts?.includes(preferredLevel) ? preferredLevel : undefined;
   if (declaredDefaultLevel === undefined && defaultReasoningEffort !== undefined) metadataInferred.push('defaultReasoningEffort');
@@ -181,7 +197,7 @@ function parseModel(entry: unknown, provider: Provider, messagesCatalog = false)
     maxInputTokens: upstreamInput, maxOutputTokens: upstreamOutputBudget,
     thinking: declaredThinking,
     reasoningEffortFormat: declaredFormat,
-    adaptiveThinking: booleanValue(data.adaptive_thinking, data.adaptiveThinking, capabilities.adaptive_thinking),
+    adaptiveThinking: booleanValue(data.adaptive_thinking, data.adaptiveThinking, capabilities.adaptive_thinking, object(object(claudeThinking.types).adaptive).supported),
     minThinkingBudget: positiveContext(data.min_thinking_budget, data.minThinkingBudget),
     maxThinkingBudget: positiveContext(data.max_thinking_budget, data.maxThinkingBudget),
   });
@@ -301,17 +317,51 @@ export class ModelCatalog {
   private readonly now: () => number;
   private readonly cache = new Map<string, CachedDiscovery>();
   private readonly revisions = new Map<string, number>();
+  private readonly parameterPreviews = new Map<string, { preview: ParameterPreview; originals: Map<string, Model>; fingerprint: string; expiresAt: number }>();
   constructor(private readonly store: CatalogStore, private readonly oauth: CatalogOAuth, private readonly options: { fetch?: typeof fetch; now?: () => number; nativeModels?: (provider: Provider, signal: AbortSignal) => Promise<Response | undefined> } = {}) {
     this.fetcher = options.fetch ?? fetch;
     this.now = options.now ?? (() => Date.now());
   }
   invalidate(providerId: string): void {
     this.cache.delete(providerId);
+    this.parameterPreviews.delete(providerId);
     this.revisions.set(providerId, (this.revisions.get(providerId) ?? 0) + 1);
   }
   discover(providerId: string): Promise<DiscoveryResult> {
     this.invalidate(providerId);
     return this.readDirectory(providerId, this.revisions.get(providerId)!);
+  }
+  async previewParameters(providerId: string, includeManufacturer = false): Promise<ParameterPreview> {
+    const provider = this.store.getProvider(providerId);
+    if (!provider) throw staleCatalog();
+    const discovery = this.discover(providerId);
+    const revision = this.revisions.get(providerId), identity = fingerprint(provider);
+    const result = await discovery;
+    const current = this.store.getProvider(providerId);
+    if (!current || fingerprint(current) !== identity || this.revisions.get(providerId) !== revision) throw staleCatalog();
+    const directory = result.ok ? this.cache.get(providerId)?.upstream : undefined;
+    const models = this.store.listModels().filter(model => model.providerId === providerId);
+    const rows = models.flatMap(model => parameterRow(provider, model, directory?.get(model.upstreamId), includeManufacturer === true) ?? []);
+    const preview: ParameterPreview = { token: randomUUID(), total: models.length, rows, ...(!result.ok ? { catalogError: result.message } : {}) };
+    this.parameterPreviews.set(providerId, { preview, originals: new Map(models.map(model => [model.id, model])), fingerprint: identity, expiresAt: this.now() + CACHE_LIFETIME_MS });
+    return structuredClone(preview);
+  }
+  applyParameters(providerId: string, token: string, ids: string[], replace: boolean): number {
+    const pending = this.parameterPreviews.get(providerId), provider = this.store.getProvider(providerId);
+    if (!pending || pending.preview.token !== token || !provider || fingerprint(provider) !== pending.fingerprint || this.now() >= pending.expiresAt) throw staleCatalog();
+    if (typeof replace !== 'boolean' || !Array.isArray(ids) || !ids.length || ids.length > pending.preview.rows.length || new Set(ids).size !== ids.length) throw new Error('请选择预览中的模型。');
+    const saved = new Map(this.store.listModels().map(model => [model.id, model]));
+    const rows = new Map(pending.preview.rows.map(row => [row.id, row]));
+    const changes = ids.map(id => {
+      const model = saved.get(id), row = rows.get(id);
+      if (!model || !row || !isDeepStrictEqual(model, pending.originals.get(id))) throw new Error('模型已变化，请重新预览参数。');
+      const fields = replace ? row.all : row.missing;
+      if (!fields.length) throw new Error('所选模型没有可应用的参数。');
+      return { ...model, ...Object.fromEntries(fields.map(field => [field.field, field.after ?? undefined])) };
+    });
+    this.store.saveModels(changes);
+    this.parameterPreviews.delete(providerId);
+    return changes.length;
   }
   private async readDirectory(providerId: string, revision: number): Promise<DiscoveryResult> {
     const provider = this.store.getProvider(providerId);
@@ -319,7 +369,8 @@ export class ModelCatalog {
     let statusCode: number | undefined;
     try {
       if (!provider) throw new CatalogFailure('invalid-provider', '供应商不存在。');
-      if (!provider.hasSecret) throw new CatalogFailure('missing-credentials', (provider.kind === 'openai-compatible' || provider.kind === 'opencode-go') ? '请先保存 API Key，再获取模型列表。' : '请先完成订阅授权，再获取模型列表。');
+      const publicGoCatalog = !provider.hasSecret && provider.kind === 'opencode-go' && provider.baseUrl === OPENCODE_GO_BASE_URL;
+      if (!provider.hasSecret && !publicGoCatalog) throw new CatalogFailure('missing-credentials', (provider.kind === 'openai-compatible' || provider.kind === 'opencode-go') ? '请先保存 API Key，再获取模型列表。' : '请先完成订阅授权，再获取模型列表。');
       const signal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
       // Resolve the narrow main-process port once. Ordinary providers return
       // undefined and continue through the authenticated HTTP catalog path.
@@ -330,7 +381,7 @@ export class ModelCatalog {
       // Preparing the request also refreshes native subscription credentials.
       const expected = messagesCatalog ? anthropicEndpoint(provider.baseUrl, '/models') : modelCatalogEndpoint(provider);
       let request: PreparedUpstream;
-      try { request = useNativeCatalog ? { url: expected, headers: {}, body: {} } : await this.oauth.prepareRequest(provider, messagesCatalog ? '/v1/models' : '/models', {}); }
+      try { request = useNativeCatalog || publicGoCatalog ? { url: expected, headers: {}, body: {} } : await this.oauth.prepareRequest(provider, messagesCatalog ? '/v1/models' : '/models', {}); }
       catch {
         if (provider.presetId === 'jetbrains-central') throw new CatalogFailure('authentication', '请先在 JetBrains 供应商详情中启动本机反代，再获取模型列表。');
         throw new CatalogFailure('authentication', (provider.kind === 'openai-compatible' || provider.kind === 'opencode-go') ? '无法准备 API 凭据，请重新保存 API Key。' : '无法准备订阅授权，请在授权中心检查账号或重新登录。'); }
@@ -410,7 +461,7 @@ export class ModelCatalog {
           ...(existing.defaultReasoningEffort ? { defaultReasoningEffort: existing.defaultReasoningEffort } : {}) };
       });
       history ??= subscriptionCatalogHistory(provider, discovered);
-      this.cache.set(providerId, { fingerprint: fingerprint(provider), expiresAt: this.now() + CACHE_LIFETIME_MS, models: new Map(discovered.map(model => [model.upstreamId, structuredClone(model)])) });
+      this.cache.set(providerId, { fingerprint: fingerprint(provider), expiresAt: this.now() + CACHE_LIFETIME_MS, upstream: models, models: new Map(discovered.map(model => [model.upstreamId, structuredClone(model)])) });
       return { ok: true, providerId, statusCode, message: `已读取模型目录，发现 ${discovered.length} 个模型。目录可见性不代表模型调用已验证。`, models: discovered, ...(history ? { history } : {}) };
     } catch (error) {
       // Upstream bodies and arbitrary exception text can contain credentials.

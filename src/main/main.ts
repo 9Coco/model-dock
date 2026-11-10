@@ -1140,6 +1140,11 @@ function registerIpc() {
   handle('skillsDelete', (id: string) => skills.remove(id));
   handle('testProvider', (id: string, input?: ConnectionTestInput) => connectionTester.test(id, input));
   handle('discoverModels', (id: string) => catalog.discover(id));
+  handle('previewModelParameters', (id: string, includeManufacturer?: boolean) => catalog.previewParameters(id, includeManufacturer));
+  handle('applyModelParameters', (id: string, token: string, models: string[], replace: boolean) => {
+    assertEditable();
+    return catalog.applyParameters(id, token, models, replace);
+  });
   handle('addDiscoveredModels', (id: string, selected: ModelSelection[]) => catalog.addSelectedWithRefresh(id, selected, assertEditable));
 }
 

@@ -62,3 +62,25 @@ export interface AddModelsResult {
   updated?: Model[];
   skipped: string[];
 }
+
+export type ParameterValue = number | boolean | string | string[] | null;
+export interface ParameterChange {
+  field: ModelMetadataField;
+  before: ParameterValue;
+  after: ParameterValue;
+  source: 'catalog' | 'dictionary' | 'protocol';
+}
+export interface ParameterRow {
+  id: string;
+  name: string;
+  upstreamId: string;
+  missing: ParameterChange[];
+  all: ParameterChange[];
+  reference?: { url: string; checked: string; manufacturer?: boolean };
+}
+export interface ParameterPreview {
+  token: string;
+  rows: ParameterRow[];
+  total: number;
+  catalogError?: string;
+}

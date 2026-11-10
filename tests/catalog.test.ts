@@ -9,6 +9,7 @@ import { Store } from '../src/main/store';
 import { buildConfig, buildCopilotDesktopPlan } from '../src/main/adapters';
 import { modelCatalogEndpoint, prepareUpstream } from '../src/main/oauth';
 import { lookupModelMetadata } from '../src/shared/model-metadata';
+import { presetById } from '../src/shared/presets';
 import { version as appVersion } from '../package.json';
 import { JetBrainsIdeAccountError } from '../src/main/jetbrains-ide-account';
 import { JetBrainsIdeApiError } from '../src/main/jetbrains-ide-api';
@@ -65,6 +66,93 @@ async function reopenAndSerializeVsCode(f: Awaited<ReturnType<typeof persistentC
 }
 
 describe('real model catalog discovery and batch selection', () => {
+  const legacyModel: Model = { id: 'saved', providerId: 'api', upstreamId: 'test-model', alias: 'my-route', displayName: '我的模型', wireApi: 'chat-completions', contextWindow: 0, enabled: true, tools: false, vision: false };
+
+  it('applies explicit parameter calibration to the same saved model and carries its capabilities into VS Code', async () => {
+    const f = await persistentCatalogFixture({ context_window: 64000, input_modalities: ['text', 'image'], tools: true, effort: { supported_levels: ['low', 'high'], default_level: 'high' } });
+    const model = f.store.saveModel({ ...legacyModel, id: undefined, providerId: f.source.id, upstreamId: 'kimi-k3', wireApi: 'responses', contextWindow: 16000 });
+    const p = await f.catalog.previewParameters(f.source.id);
+    const row = p.rows[0];
+    for (const field of ['contextWindow', 'vision', 'tools']) expect(row.missing.map(change => change.field)).not.toContain(field);
+    expect(row.all).toEqual(expect.arrayContaining([
+      { field: 'reasoningEfforts', before: [], after: ['low', 'high'], source: 'catalog' },
+      { field: 'vision', before: false, after: true, source: 'catalog' },
+    ]));
+    expect(f.store.listModels().find(m => m.id === model.id)?.vision).toBe(false);
+    expect(f.catalog.applyParameters(f.source.id, p.token, [model.id], true)).toBe(1);
+    expect(() => f.catalog.applyParameters(f.source.id, p.token, [model.id], true)).toThrow();
+    const { saved, output } = await reopenAndSerializeVsCode(f, model);
+    expect(saved).toMatchObject({ id: model.id, alias: model.alias, displayName: model.displayName, contextWindow: 64000, thinking: true });
+    expect(output).toMatchObject({ vision: true, toolCalling: true, supportsReasoningEffort: ['low', 'high'], defaultReasoningEffort: 'high' });
+  });
+
+  it('uses Anthropic nested per-level flags, image_input, adaptive thinking and the model output limit', async () => {
+    const f = fixture(async () => json({ data: [{ id: 'test-model', max_input_tokens: 300000, max_tokens: 16400,
+      capabilities: { image_input: { supported: true }, thinking: { supported: true, types: { adaptive: { supported: true } } },
+        effort: { supported: true, low: { supported: true }, medium: { supported: false }, max: { supported: true } } } }] }));
+    Object.assign(f.store.provider, { presetId: 'anthropic', baseUrl: 'https://api.anthropic.com', messagesAuth: 'api-key' });
+    f.store.models = [{ ...legacyModel, wireApi: 'messages' }];
+    const [row] = (await f.catalog.previewParameters('api')).rows;
+    expect(Object.fromEntries(row.all.map(c => [c.field, c.after]))).toMatchObject({ contextWindow: 300000, maxInputTokens: 300000, maxOutputTokens: 16400, vision: true, adaptiveThinking: true, reasoningEfforts: ['low', 'max'], reasoningEffortFormat: 'messages' });
+  });
+
+  it('reads the public Go directory without a key and retains the saved wire format', async () => {
+    const fetcher = vi.fn(async () => json({ data: [{ id: 'test-model', modalities: { input: ['text', 'image/png'] }, limit: { context: 65000, input: 56000, output: 9000 },
+      capabilities: { tools: { supported: true }, reasoning: { supported: true, effort: ['high', 'max'], default: { type: 'effort', value: 'high' } } } }] }));
+    const f = fixture(fetcher);
+    Object.assign(f.store.provider, { kind: 'opencode-go', presetId: 'opencode-go', baseUrl: 'https://opencode.ai/inference/go/openai/v1', hasSecret: false });
+    f.store.models = [{ ...legacyModel, wireApi: 'responses' }];
+    const [row] = (await f.catalog.previewParameters('api')).rows;
+    expect(f.prepareRequest).not.toHaveBeenCalled();
+    expect(fetcher).toHaveBeenCalledWith('https://opencode.ai/inference/go/v1/models', expect.objectContaining({ headers: {} }));
+    expect(Object.fromEntries(row.all.map(c => [c.field, c.after]))).toMatchObject({ maxInputTokens: 56000, maxOutputTokens: 9000, tools: true, vision: true, defaultReasoningEffort: 'high', reasoningEffortFormat: 'responses' });
+  });
+
+  it('falls back to the exact supplier dictionary offline and requires opt-in for third-party equivalents', async () => {
+    const f = fixture();
+    Object.assign(f.store.provider, { kind: 'codex', presetId: 'codex-subscription', baseUrl: 'https://chatgpt.com/backend-api/codex', hasSecret: false });
+    f.store.models = [{ ...legacyModel, upstreamId: 'gpt-6.1-terra', wireApi: 'responses' }];
+    const offline = await f.catalog.previewParameters('api');
+    expect(offline.catalogError).toBeTruthy();
+    expect(offline.rows[0].all.map(c => c.field)).not.toContain('contextWindow');
+    expect(offline.rows[0].all.find(c => c.field === 'reasoningEfforts')).toMatchObject({ after: ['low', 'medium', 'high', 'xhigh', 'max'], source: 'dictionary' });
+    Object.assign(f.store.provider, provider, { hasSecret: false });
+    expect((await f.catalog.previewParameters('api')).rows).toEqual([]);
+    const reference = (await f.catalog.previewParameters('api', true)).rows[0];
+    expect(reference.reference?.manufacturer).toBe(true);
+    expect(reference.all.find(c => c.field === 'contextWindow')?.after).toBe(1050000);
+    f.store.models[0].upstreamId += '-private';
+    expect((await f.catalog.previewParameters('api', true)).rows).toEqual([]);
+  });
+
+  it('honors explicit live negatives and rejects concurrent edits to a preview batch', async () => {
+    const f = fixture(async () => json({ data: [{ id: 'deepseek-flash', thinking: false, input_modalities: ['text'], effort: { supported_levels: [] } }] }));
+    Object.assign(f.store.provider, { presetId: 'deepseek', baseUrl: 'https://api.deepseek.com' });
+    f.store.models = [{ ...legacyModel, upstreamId: 'deepseek-flash', vision: true, thinking: true, reasoningEfforts: ['high'], defaultReasoningEffort: 'high' }];
+    const p = await f.catalog.previewParameters('api');
+    const changes = p.rows[0].all;
+    expect(Object.fromEntries(changes.map(c => [c.field, c.after]))).toMatchObject({ thinking: false, vision: false, reasoningEfforts: [], defaultReasoningEffort: null });
+    expect(changes.find(c => c.field === 'vision')?.source).toBe('catalog');
+    f.store.models[0].alias = 'changed';
+    expect(() => f.catalog.applyParameters('api', p.token, ['saved'], true)).toThrow('模型已变化');
+    expect(f.store.batches).toHaveLength(0);
+  });
+
+  it.each([
+    ['qwen-token', 'qwen3.8-flash', 'chat-completions', { thinking: true, vision: true }],
+    ['grok-build', 'grok-4.7', 'responses', { thinking: true, reasoningEfforts: ['low', 'medium', 'high', 'xhigh'] }],
+    ['copilot-subscription', 'grok-4.5', 'chat-completions', { thinking: true, reasoningEfforts: ['low', 'medium', 'high'] }],
+    ['jetbrains-central', 'anthropic-claude-sonnet-5-5', 'chat-completions', { contextWindow: 1000000 }],
+  ] as const)('keeps offline %s specifications scoped to the published route', async (presetId, upstreamId, wireApi, expected) => {
+    const preset = presetById(presetId)!;
+    const f = fixture();
+    Object.assign(f.store.provider, { kind: preset.kind, presetId, baseUrl: preset.baseUrl, hasSecret: false, nativeAdapter: presetId === 'jetbrains-central' ? 'jetbrains-ide' : undefined });
+    f.store.models = [{ ...legacyModel, upstreamId, wireApi }];
+    const row = (await f.catalog.previewParameters('api')).rows[0];
+    expect(Object.fromEntries(row.all.map(c => [c.field, c.after]))).toMatchObject(expected);
+    Object.assign(f.store.provider, { nativeAdapter: undefined, baseUrl: 'https://unknown.invalid/v1' });
+    expect((await f.catalog.previewParameters('api')).rows).toEqual([]);
+  });
   it('fills missing saved reasoning only on explicit request using current upstream levels and the same model identity', async () => {
     const f = await persistentCatalogFixture({ supported_reasoning_levels: ['low', 'high'], default_reasoning_level: 'low' });
     const saved = f.store.saveModel({ providerId: f.source.id, upstreamId: 'kimi-k3', alias: 'my-route', displayName: '我的模型', wireApi: 'responses', contextWindow: 40960, enabled: true, tools: false, vision: false, reasoningEfforts: [] });

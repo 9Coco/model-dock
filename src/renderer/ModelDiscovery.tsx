@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { Check, ChevronDown, Download, Layers3, RefreshCw, Search, Settings2 } from './MaterialIcon';
 import type { ModelDockApi, Provider, ReasoningEffort, WireApi } from '../shared/types';
+import { parameterLabels } from './ModelParameters';
 import type { AddModelsResult, DiscoveredModel, DiscoveryResult, ModelMetadataField, ModelSelection } from '../shared/catalog-types';
 import { catalogAccessMessages } from '../shared/catalog-types';
 import { MODEL_SPEC_FIELDS, REASONING_EFFORTS, modelSpecs } from '../shared/types';
@@ -20,6 +21,7 @@ interface Props {
   onClose: () => void;
   onAdded: () => Promise<void> | void;
   onManualAdd?: () => void;
+  onParameters?: () => void;
   initialResult?: DiscoveryResult;
 }
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error))
@@ -27,9 +29,8 @@ const errorText = (error: unknown) => (error instanceof Error ? error.message : 
 const protocolLabel = (wireApi: WireApi) => wireApi === 'messages' ? 'Anthropic Messages' : wireApi === 'responses' ? 'Responses' : 'Chat Completions';
 const reasoningEffortLabels: Record<ReasoningEffort, string> = { none: '无', minimal: '最小', low: '低', medium: '中', high: '高', xhigh: '超高', max: '最大' };
 const candidateDraft = (model: DiscoveredModel, providerId: string): CandidateDraft => ({ ...model, alias: modelLocalAlias({ providerId, alias: model.alias }), selected: false });
-const metadataLabels: Record<MetadataField, string> = { contextWindow: '上下文', tools: '工具调用', vision: '图片输入', maxInputTokens: '输入上限', maxOutputTokens: '输出预算', thinking: '思考能力', reasoningEfforts: '思考等级', defaultReasoningEffort: '默认强度', reasoningEffortFormat: '思考格式', adaptiveThinking: '自适应思考', minThinkingBudget: '最低思考预算', maxThinkingBudget: '最高思考预算' };
 const activeMetadataFields = (model: CandidateDraft, fields: readonly MetadataField[] | undefined) => (fields ?? []).filter(field => !model.editedFields?.includes(field));
-const metadataFieldLabels = (fields: readonly MetadataField[]) => fields.map(field => metadataLabels[field]).join('、');
+const metadataFieldLabels = (fields: readonly MetadataField[]) => fields.map(field => parameterLabels[field]).join('、');
 const metadataOrigin = (model: CandidateDraft, field: MetadataField) => model.existingModelId ? '已保存设置' : model.editedFields?.includes(field) ? '用户设置' : model[field] === undefined ? '未声明' : model.metadataInferred?.some(inferred => inferred === field) ? '内置字典' : model.metadataDefaults?.includes(field) ? '本地默认' : '供应商';
 const patchedCandidate = (model: CandidateDraft, patch: Partial<CandidateDraft>): CandidateDraft => {
   const merged = { ...model, ...patch };
@@ -117,7 +118,7 @@ function navigatePicker(event: KeyboardEvent<HTMLDivElement>) {
   (target.closest('.discovery-toggle') ? toggle : checkbox ?? toggle)?.focus();
 }
 
-export function ModelDiscovery({ api, provider, notify, onClose, onAdded, onManualAdd, initialResult }: Props) {
+export function ModelDiscovery({ api, provider, notify, onClose, onAdded, onManualAdd, onParameters, initialResult }: Props) {
   const chatOnly = provider.nativeAdapter === 'jetbrains-ide';
   const [result, setResult] = useState<DiscoveryResult | null>(initialResult ?? null);
   const [models, setModels] = useState<CandidateDraft[]>(() => (initialResult?.models ?? []).map(model => candidateDraft(model, provider.id)));
@@ -261,29 +262,9 @@ export function ModelDiscovery({ api, provider, notify, onClose, onAdded, onManu
     } finally { if (mounted.current) setAdding(false); }
   };
 
-  const missingReasoning = models.filter(model => model.existingModelId && model.availableReasoning);
-  const fillMissingReasoning = async () => {
-    if (!api || adding || !missingReasoning.length) return;
-    setAdding(true); setError(''); setAdded(null);
-    try {
-      const result = await api.addDiscoveredModels(provider.id, missingReasoning.map(model => ({ upstreamId: model.upstreamId, fillMissingReasoningFor: model.existingModelId })));
-      if (!mounted.current) return;
-      const updated = new Map(result.updated?.map(model => [model.id, model]));
-      const skipped = new Set(result.skipped);
-      setModels(current => current.map(model => {
-        const saved = model.existingModelId && updated.get(model.existingModelId);
-        if (saved) return { ...model, availableReasoning: undefined, thinking: saved.thinking, reasoningEfforts: saved.reasoningEfforts, defaultReasoningEffort: saved.defaultReasoningEffort, reasoningEffortFormat: saved.reasoningEffortFormat };
-        return skipped.has(model.upstreamId) ? { ...model, availableReasoning: undefined } : model;
-      }));
-      notify(`已补全 ${updated.size} 个模型的思考档位，请重新同步所用工具。`);
-      await onAdded();
-    } catch (failure) {
-      if (mounted.current) setError(errorText(failure));
-    } finally { if (mounted.current) setAdding(false); }
-  };
   return <Modal wide title="获取模型列表" subtitle={provider.name} onClose={() => { if (!adding) onClose(); }}>
     <div className="discovery-body" onKeyDown={navigatePicker}>
-      <div className="discovery-source"><span>模型来源</span><code title={provider.baseUrl}>{provider.baseUrl}</code>{missingReasoning.length > 0 && <button className="button secondary small" data-action="fill-missing-reasoning" disabled={loading || adding} title="将本次目录明确提供的档位写入此供应商缺少档位的已添加模型" onClick={() => void fillMissingReasoning()}>补全思考档位（{missingReasoning.length}）</button>}<button className="button secondary small" disabled={loading || adding} onClick={() => void fetchModels()}><BusyIcon active={loading}><RefreshCw size={14} /></BusyIcon>{loading ? '获取中' : '重新获取'}</button></div>
+      <div className="discovery-source"><span>模型来源</span><code title={provider.baseUrl}>{provider.baseUrl}</code>{onParameters && <button className="button secondary small" disabled={adding || loading} onClick={onParameters}>补全模型参数</button>}<button className="button secondary small" disabled={loading || adding} onClick={() => void fetchModels()}><BusyIcon active={loading}><RefreshCw size={14} /></BusyIcon>{loading ? '获取中' : '重新获取'}</button></div>
       {!loading && result?.ok && (
         <div className="discovery-picker-header">
           {catalogSeries.length > 0 && <div className="discovery-series-tabs" role="tablist" aria-label="模型系列">

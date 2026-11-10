@@ -1,5 +1,8 @@
 import rawSpecs from './model-specs-data.json';
-import type { Provider, ReasoningEffort, WireApi } from './types';
+import supplierSpecs from './provider-parameter-specs.json';
+import type { ModelDraftParameterField } from './model-draft';
+import { presetById } from './presets';
+import type { Model, Provider, ReasoningEffort, WireApi } from './types';
 
 /** 修改点：参数表按精确模型与供应商接口核对，不把模型能力等同于套餐授权。 */
 export interface ModelMetadata {
@@ -95,6 +98,54 @@ function resolveRecord(upstreamId: string, provider?: MetadataProvider) {
   const base = provider && canonicalBase(provider.baseUrl);
   const scoped = base && records.find(record => record.ids.some(value => value.toLowerCase() === id) && matchesScope(record, base));
   return { id, base, record: scoped || generic.get(id) };
+}
+
+type Parameters = Partial<Pick<Model, ModelDraftParameterField>>;
+type CatalogModel = Pick<Model, 'wireApi' | 'upstreamId'>;
+
+function supplierGroup(provider: Provider, wire: WireApi): keyof typeof supplierSpecs | undefined {
+  if (provider.nativeAdapter) return provider.nativeAdapter === 'jetbrains-ide' && wire === 'chat-completions' ? 'jetbrains-ide' : undefined;
+  const base = canonicalBase(provider.baseUrl);
+  const preset = presetById(provider.presetId);
+  if (!preset || preset.kind !== provider.kind || preset.baseUrl !== base) return;
+  switch (provider.kind) {
+    case 'codex': case 'grok': return wire === 'responses' ? provider.kind : undefined;
+    case 'copilot': case 'opencode-go': return wire !== 'messages' ? provider.kind : undefined;
+    case 'openai-compatible': return preset.id === 'qwen-token' && wire === 'chat-completions' ? 'qwen-token' : undefined;
+  }
+}
+
+function subscriptionParameters(provider: Provider, model: CatalogModel) {
+  const scope = supplierGroup(provider, model.wireApi);
+  if (!scope) return;
+  const group = supplierSpecs[scope];
+  if (!Object.hasOwn(group.models, model.upstreamId)) return;
+  const values: Parameters = { ...(group.models as Record<string, Parameters>)[model.upstreamId] };
+  if (values.maxOutputTokens && values.contextWindow && values.maxOutputTokens >= values.contextWindow) {
+    values.maxOutputTokens = Math.max(1, Math.floor(values.contextWindow / 4));
+  }
+  return { values, url: group.source, checked: group.checked, manufacturer: false };
+}
+
+/** Bulk updates use only published fields for this supplier, model ID and protocol. */
+export function documentedSupplierParameters(provider: Provider, model: CatalogModel, includeManufacturer = false) {
+  const subscription = subscriptionParameters(provider, model);
+  if (subscription) return subscription;
+  if (provider.nativeAdapter || provider.kind !== 'openai-compatible') return;
+  const base = canonicalBase(provider.baseUrl);
+  const { record } = resolveRecord(model.upstreamId, provider);
+  if (!record || record.supportedWireApis && !record.supportedWireApis.includes(model.wireApi)) return;
+  const manufacturer = !officialVendor(record, base);
+  if (manufacturer && !(includeManufacturer && provider.presetId === 'custom' && record.vendor !== 'volcengine')) return;
+  const metadata = lookupModelMetadata(model.upstreamId, manufacturer ? undefined : provider, model.wireApi)!;
+  const values: Parameters = { contextWindow: metadata.contextWindow, vision: metadata.vision, tools: metadata.tools,
+    maxInputTokens: metadata.defaultInputTokens ?? metadata.maxInputTokens, maxOutputTokens: metadata.defaultOutputTokens ?? metadata.maxOutputTokens,
+    thinking: record.thinking, adaptiveThinking: metadata.adaptiveThinking, minThinkingBudget: metadata.minThinkingBudget, maxThinkingBudget: metadata.maxThinkingBudget };
+  if (record.reasoningApis.includes(model.wireApi) && record.reasoningEfforts?.length) {
+    values.reasoningEfforts = [...record.reasoningEfforts];
+    values.defaultReasoningEffort = record.defaultReasoningEffort;
+  }
+  return { values, url: metadata.sourceUrl, checked: metadata.verifiedAt, manufacturer };
 }
 
 /** 修改点：未声明档位时回退软件维护参数；订阅仅补思考字段，不搬入公开 API 的长度上限。 */
