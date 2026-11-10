@@ -514,6 +514,10 @@ class ConnectivityTests(unittest.TestCase):
         self.assertEqual(lookup_site("https://github.com/some/path")[0], "GitHub")
         self.assertIsNone(lookup_site("https://other.invalid/"))
 
+    def test_jetbrains_probe_uses_the_ai_service_origin(self):
+        self.assertEqual(lookup_site("JetBrains AI"), ("JetBrains AI", "https://api.jetbrains.ai/"))
+        self.assertEqual(lookup_site("https://www.jetbrains.com/ai/"), ("JetBrains AI", "https://api.jetbrains.ai/"))
+
     def test_http_uses_absolute_uri_and_ignores_proxy_environment(self):
         result = self.check()
         self.assertTrue(result.ok, result)

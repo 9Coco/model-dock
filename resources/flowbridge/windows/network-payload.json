@@ -1,7 +1,7 @@
 {
   "LICENSE": "c99ff6daed10878c85cf6a4f08d13889c856fb72de266f4fa592afbb1e476c4f",
   "linux/THIRD-PARTY-LICENSE-sing-box.txt": "650d5e3b99a446fb38e820fa87a49562e0c79eab868fff58618ac487a58e554c",
-  "linux/connectivity.py": "0802bea1180325fc18a49c7770e58e5ad31fae8d737a8ece45357d0230a59bab",
+  "linux/connectivity.py": "12c7c246455e52399d44988fe3ab2c085a7cfc59d1df76840900f0c6bee2556f",
   "linux/relay.py": "3f4b4a64efa4fb69bc582c4d6c5662bc4fd910fc3e07b30bc782366d9e1de746",
   "linux/tun_client.py": "0d35956e805dc0bf3e8b6f889f33617f2c27c3e7b8344f24f6bbdacdce990d69",
   "python/LICENSE.txt": "e502c6b880ff58d614901495a9009c136539cd0b1e2a2abb8fc00b934c203419",
