@@ -3,7 +3,7 @@
   "linux/THIRD-PARTY-LICENSE-sing-box.txt": "650d5e3b99a446fb38e820fa87a49562e0c79eab868fff58618ac487a58e554c",
   "linux/connectivity.py": "12c7c246455e52399d44988fe3ab2c085a7cfc59d1df76840900f0c6bee2556f",
   "linux/relay.py": "3f4b4a64efa4fb69bc582c4d6c5662bc4fd910fc3e07b30bc782366d9e1de746",
-  "linux/tun_client.py": "0d35956e805dc0bf3e8b6f889f33617f2c27c3e7b8344f24f6bbdacdce990d69",
+  "linux/tun_client.py": "eecc1e8d6065dc32e4ce21b7cc822fb834d4b89166a7bbdcc4d974f22b57ac01",
   "python/LICENSE.txt": "e502c6b880ff58d614901495a9009c136539cd0b1e2a2abb8fc00b934c203419",
   "python/_asyncio.pyd": "c77de90cad749087a0c5dc5e19d78d24f6ef44e7e5ac19b8420cfc0cea62395d",
   "python/_bz2.pyd": "65f610646d10d5babea080e060d244b546ec52c54012e5e937dc72dcc2e2e7bc",
@@ -47,9 +47,9 @@
   "windows/native.py": "9ce42231e1f7a5f2c2b3958ef73e2795a2c385cbe26f785d6f0115db7e673870",
   "windows/network_pipe.py": "3f5a725f6553473db26779d66c918c9d8111970fdc909fbb3416a363c2774284",
   "windows/network_snapshot.py": "45fc3489bb8271ccae645b0278873b0df2aadc0e76cd07788c993940e1d0ef28",
-  "windows/network_worker.py": "667ac705226a84b69e287f58bc918073e449dd8a8d8e9751afa3377bff72656e",
+  "windows/network_worker.py": "56301bc50e1f4169904f5bf80bbab47966f1f32f508e525f8b2edc0cf6b7ecea",
   "windows/proxy.py": "b72898a9c2f544a2ae12eacd778d2cbaeebb3b1338f2d059c5e72e8070a4f16a",
   "windows/system_proxy.py": "dd02b7923b66882951ed3af154cf03dbf67fbfe9da7e5ba8ef5f7ba68e70b8f7",
-  "windows/tun_client.py": "e5e8183761ee99b048281196dc1b4d05dcf4f371bdace12a298f41c2b8d6ec46",
-  "windows/tun_config.py": "9b73c09ecc2e4ffd9a85106fa8a4dcb174007b819d74d6fceccf1018ab215409"
+  "windows/tun_client.py": "2ea536ccdcc40ce44de927e21ef4079de07ac7f4631ee3eced756c9d1f9a7c4f",
+  "windows/tun_config.py": "6d7e863f292299a59acc9f0fd6ad90bdf7b6c234d84ff6e68b304cd0b3665ce9"
 }

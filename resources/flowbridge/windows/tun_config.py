@@ -38,6 +38,30 @@ FAKEIP_CACHE_ID = "flowbridge-fast-v1"
 DOH_ADDRESS = "1.1.1.1"
 DOH_SERVER_NAME = "cloudflare-dns.com"
 _SECRET = re.compile(r"[A-Za-z0-9_-]{32,128}\Z")
+MAX_BYPASS_ADDRESSES = 32
+_RESERVED_BYPASS_NETWORKS = tuple(
+    ipaddress.ip_network(network, strict=False) for network in (*TUN_ADDRESSES, FAKEIP_RANGE)
+)
+
+
+def normalize_bypass_addresses(values) -> tuple[str, ...]:
+    """Accept only bounded, numeric host destinations from the control pipe."""
+    if not isinstance(values, (list, tuple)) or len(values) > MAX_BYPASS_ADDRESSES:
+        raise ValueError(f"直连白名单最多支持 {MAX_BYPASS_ADDRESSES} 个 IP 地址。")
+    normalized = {}
+    for value in values:
+        if not isinstance(value, str) or not 1 <= len(value) <= 45 or "%" in value:
+            raise ValueError("直连白名单需要填写单个 IPv4 或 IPv6 地址。")
+        try:
+            address = ipaddress.ip_address(value)
+        except ValueError:
+            raise ValueError("直连白名单需要填写单个 IPv4 或 IPv6 地址。") from None
+        if (address.is_unspecified or address.is_multicast or str(address) == "255.255.255.255"
+                or getattr(address, "ipv4_mapped", None) is not None
+                or any(address in network for network in _RESERVED_BYPASS_NETWORKS)):
+            raise ValueError("直连白名单含保留或不可直连的 IP 地址。")
+        normalized[str(address)] = None
+    return tuple(normalized)
 
 
 def _port(value, label):
@@ -70,7 +94,8 @@ def _cache_path(value):
 def build_config(endpoint, api_port: int, api_secret: str, *, proxy_port: int,
                  bypass_process_path: str | None = None,
                  dns_mode: str = DNS_MODE_COMPATIBLE,
-                 cache_path: str | None = None) -> dict:
+                 cache_path: str | None = None,
+                 bypass_addresses=()) -> dict:
     """Build either the existing DoH path or upstream hostname resolution.
 
     The controller supplies a persistent cache file for fast mode. Keeping that
@@ -97,6 +122,11 @@ def build_config(endpoint, api_port: int, api_secret: str, *, proxy_port: int,
     if address.is_loopback and bypass_process_path is None:
         raise ValueError("本机代理需要先识别监听端口所属程序，避免全局流量循环")
     bypass = _process_path(bypass_process_path) if bypass_process_path is not None else None
+    excluded = list(LOOPBACK_EXCLUDES)
+    for destination in normalize_bypass_addresses(bypass_addresses):
+        ip = ipaddress.ip_address(destination)
+        if not ip.is_loopback:
+            excluded.append(f"{ip}/{ip.max_prefixlen}")
     upstream = {
         "type": "socks", "tag": OUTBOUND_TAG, "version": "5",
         "server": host, "server_port": port,
@@ -136,7 +166,7 @@ def build_config(endpoint, api_port: int, api_secret: str, *, proxy_port: int,
             "auto_route": True, "strict_route": True, "dns_mode": "hijack",
             "dns_address": list(TUN_DNS_ADDRESSES),
             "route_address": list(ROUTE_ADDRESSES),
-            "route_exclude_address": list(LOOPBACK_EXCLUDES),
+            "route_exclude_address": excluded,
         }, {
             "type": "http", "tag": "tests-in", "listen": "127.0.0.1", "listen_port": proxy_port,
         }],

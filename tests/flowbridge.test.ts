@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FlowBridgeManager, validateNetworkSettings, type FlowBridgeOptions } from '../src/main/flowbridge';
 import { FlowBridgeEngine, NetworkAuthorizationRequired, type NetworkEngine } from '../src/main/flowbridge-engine';
-import { DEFAULT_FLOWBRIDGE, type NetworkEngineStatus } from '../src/shared/flowbridge-types';
+import { DEFAULT_FLOWBRIDGE, type FlowBridgeSettings, type NetworkEngineStatus } from '../src/shared/flowbridge-types';
 import { Store } from '../src/main/store';
 const folders: string[] = [];
 const temporary = () => { const path = mkdtempSync(join(tmpdir(), 'modeldock-network-test-')); folders.push(path); return path; };
@@ -14,15 +14,22 @@ function fixture(platform = 'linux', discoverCandidates: FlowBridgeOptions['disc
   const values = new Map<string, unknown>(), calls: string[] = [];
   const memory = { getManagedState<T>(k: string, v: T): T { return structuredClone(values.get(k) ?? v) as T; }, setManagedState(k: string, v: unknown) { values.set(k, structuredClone(v)); } };
   let stopFails = false, connectFails = false, failExit: () => void = () => {}, release: (() => void) | undefined;
-  const attempts: string[] = [], rejected = new Set<string>();
+  const attempts: string[] = [], connections: FlowBridgeSettings[] = [], rejected = new Set<string>();
   const engine: NetworkEngine = { async request<T>(method: string, args?: Record<string, unknown>) {
     calls.push(method);
     if (method === 'disconnect' && stopFails) throw new Error('cleanup failed');
-    if (method === 'connect') { const address = (args?.settings as { address: string }).address; attempts.push(address); if (connectFails || rejected.has(address)) throw new Error('UDP preflight rejected'); if (release) await new Promise<void>(resolve => { release = resolve; }); return { ...stopped(), running: true, cleanupConfirmed: false, localPort: 30000 } as T; }
+    if (method === 'connect') {
+      const settings = args?.settings as FlowBridgeSettings;
+      connections.push(structuredClone(settings));
+      attempts.push(settings.address);
+      if (connectFails || rejected.has(settings.address)) throw new Error('UDP preflight rejected');
+      if (release) await new Promise<void>(resolve => { release = resolve; });
+      return { ...stopped(), running: true, cleanupConfirmed: false, localPort: 30000 } as T;
+    }
     return stopped() as T;
   }, async close() { calls.push('close'); } };
   const manager = new FlowBridgeManager(memory, { platform, dataDir: temporary(), gatewayPort: () => 18181, discoverCandidates, engine: (_progress, exit) => { failExit = exit; return engine; } });
-  return { manager, memory, values, calls, attempts, rejectAddress(address: string) { rejected.add(address); }, failStop(value = true) { stopFails = value; }, failConnect() { connectFails = true; }, crash() { failExit(); }, hold() { release = () => {}; }, release() { release?.(); } };
+  return { manager, memory, values, calls, attempts, connections, rejectAddress(address: string) { rejected.add(address); }, failStop(value = true) { stopFails = value; }, failConnect() { connectFails = true; }, crash() { failExit(); }, hold() { release = () => {}; }, release() { release?.(); } };
 }
 describe('FlowBridge integration', () => {
   it('discovers the changed upstream at startup and remembers only the connected endpoint', async () => {
@@ -239,6 +246,34 @@ describe('FlowBridge integration', () => {
     expect(() => validateNetworkSettings({ mode: 'global', address: 'socks5://127.0.0.1:1080' }, { ...DEFAULT_FLOWBRIDGE }, 'linux', 18181)).toThrow('回环');
     expect(validateNetworkSettings({ mode: 'global', address: 'socks5://127.0.0.1:1080' }, { ...DEFAULT_FLOWBRIDGE }, 'win32', 18181).mode).toBe('global');
     expect(() => validateNetworkSettings({ mode: 'global', address: 'socks5://example.com:1080' }, { ...DEFAULT_FLOWBRIDGE }, 'linux', 18181)).toThrow('数值');
+  });
+  it('accepts only bounded exact IPs and canonicalizes equivalent entries', () => {
+    const validate = (bypassAddresses: unknown) =>
+      validateNetworkSettings({ bypassAddresses }, { ...DEFAULT_FLOWBRIDGE }, 'linux', 18181).bypassAddresses;
+    expect(validate(['2001:DB8:0:0::1', '172.30.12.34', '2001:db8::1'])).toEqual(['172.30.12.34', '2001:db8::1']);
+    for (const input of [
+      '172.30.12.34', null, Array(33).fill('192.0.2.2'), ['172.30.12.34:8022'], ['172.30.12.0/24'],
+      ['phone.local'], ['fe80::1%wifi'], ['0.0.0.0'], ['::'], ['ff02::1'], ['224.0.0.1'],
+      ['::ffff:192.0.2.1'], ['255.255.255.255'], ['172.31.255.2'], ['fd42:73fb:4827::2'], ['198.19.1.2'],
+    ]) expect(() => validate(input)).toThrow('直连白名单');
+  });
+  it('retains the list across modes and reconnects an active global route only for an effective change', async () => {
+    const f = fixture();
+    await f.manager.save({ bypassAddresses: ['172.30.12.34'] });
+    expect(f.calls).toEqual([]);
+    await f.manager.connect({ address: '192.0.2.20:38473', mode: 'http' });
+    const bypassAddresses = ['172.30.12.34', '2001:db8::1'];
+    await f.manager.save({ bypassAddresses });
+    expect(f.calls).toEqual(['connect']);
+    await f.manager.save({ mode: 'global' });
+    expect(f.connections.at(-1)).toMatchObject({ mode: 'global', bypassAddresses });
+    await f.manager.save({ bypassAddresses: ['2001:DB8::1', '172.30.12.34', '172.30.12.34'] });
+    await expect(f.manager.save({ bypassAddresses: ['172.30.12.34:8022'] })).rejects.toThrow('端口');
+    expect(f.calls).toEqual(['connect', 'disconnect', 'connect']);
+    await f.manager.save({ bypassAddresses: [] });
+    expect(f.calls).toEqual(['connect', 'disconnect', 'connect', 'disconnect', 'connect']);
+    expect(f.connections.at(-1)).toMatchObject({ mode: 'global', bypassAddresses: [] });
+    await f.manager.shutdown();
   });
   it.each(['linux', 'win32'])('connects a typed endpoint without a separate save on %s and validates reconnection before disconnecting', async platform => {
     const f = fixture(platform);

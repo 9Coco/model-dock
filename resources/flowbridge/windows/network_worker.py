@@ -11,6 +11,7 @@ from windows.network_pipe import accept_client
 from windows.proxy import parse_global_address
 from windows.tun_client import TunController
 
+_START_FIELDS = {'method', 'address', 'dnsMode'}
 
 def recover(directory):
     if not (directory / 'tun-recovery.json').exists():
@@ -39,10 +40,11 @@ def serve(stream, directory):
             try:
                 if not isinstance(request, dict):
                     raise ValueError('无效的网络命令。')
-                if set(request) == {'method', 'address', 'dnsMode'} and request['method'] == 'start':
+                if request.get('method') == 'start' and set(request) in (_START_FIELDS, _START_FIELDS | {'bypassAddresses'}):
                     if controller is not None:
                         raise ValueError('请先断开当前网络会话。')
                     controller = TunController(parse_global_address(request['address']), dns_mode=request['dnsMode'],
+                        bypass_addresses=request.get('bypassAddresses', ()),
                         state_dir=directory, progress=lambda message: send(stream, {'progress': message}))
                     controller.start()
                     result = controller.info['proxy_port']

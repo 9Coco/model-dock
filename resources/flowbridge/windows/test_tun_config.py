@@ -56,6 +56,22 @@ class WindowsTunConfigTests(unittest.TestCase):
         self.assertNotIn("insecure", server["tls"])
         self.assertEqual(config["dns"]["final"], DNS_TAG)
 
+    def test_allowlist_excludes_exact_destinations_and_preserves_proxy_policy(self):
+        config = self.config(bypass_addresses=["192.0.2.42", "2001:DB8:0:0::42", "2001:db8::42", "127.0.0.9", "::1"])
+        self.assertEqual(config["inbounds"][0]["route_exclude_address"],
+                         [*LOOPBACK_EXCLUDES, "192.0.2.42/32", "2001:db8::42/128"])
+        baseline = self.config()
+        self.assertEqual(config["route"], baseline["route"])
+        self.assertEqual(config["dns"], baseline["dns"])
+
+    def test_allowlist_rejects_non_host_destinations_and_protected_ranges(self):
+        invalid = ("0.0.0.0", "::", "224.0.0.1", "ff02::1", "255.255.255.255", "::ffff:192.0.2.42",
+                   "fe80::2%3", "192.0.2.0/24", "192.0.2.42:8022", "example.com", "[2001:db8::42]",
+                   "172.31.255.2", "fd42:73fb:4827::3", "198.19.0.12", 42)
+        for addresses in (["192.0.2.42"] * 33, "192.0.2.42", None, *([value] for value in invalid)):
+            with self.subTest(addresses=addresses), self.assertRaisesRegex(ValueError, "直连白名单"):
+                self.config(bypass_addresses=addresses)
+
     def test_fast_dns_preserves_proxy_routing_and_real_dns_fallback(self):
         config = self.config(dns_mode="fast", cache_path=CACHE_PATH)
         original = self.config()
@@ -176,7 +192,8 @@ class PinnedWindowsCoreTests(unittest.TestCase):
         for address, bypass in (("192.168.1.5:38473", None), ("127.0.0.1:1080", PROXY_PATH), ("[::1]:1080", PROXY_PATH)):
             with self.subTest(address=address), tempfile.TemporaryDirectory() as temp:
                 config = build_config(parse_global_address(address), 39090, SECRET,
-                                      proxy_port=39091, bypass_process_path=bypass)
+                                      proxy_port=39091, bypass_process_path=bypass,
+                                      bypass_addresses=["192.0.2.42", "2001:db8::42"])
                 path = Path(temp) / "config.json"
                 path.write_text(json.dumps(config), encoding="utf-8")
                 checked = subprocess.run([str(self.binary), "check", "-c", str(path)], capture_output=True, text=True, timeout=15)

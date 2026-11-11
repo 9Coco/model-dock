@@ -14,12 +14,11 @@ https://sing-box.sagernet.org/configuration/shared/dial/
 https://sing-box.sagernet.org/configuration/outbound/socks/
 https://raw.githubusercontent.com/SagerNet/sing-box/v1.14.4/option/simple.go
 
-Only SOCKS5 control/TCP and standard UDP relay sockets leave via the selected
-physical interface. TCP and UDP both use the phone proxy; DNS is intercepted
-first and sent as verified DoH through the same SOCKS5 proxy. UDP-over-TCP is
-disabled: GOST's extension is incompatible with sing-box's UoT protocol.
-There is deliberately no direct outbound or direct DNS fallback.
-Loopback stays local for the authenticated API and optional test HTTP inbound.
+Captured TCP and UDP use the phone proxy. DNS is intercepted first and sent
+as verified DoH through the same SOCKS5 proxy. UDP-over-TCP is disabled:
+GOST's extension is incompatible with sing-box's UoT protocol. Exact excluded
+addresses stay on their system routes; there is no direct core outbound or
+direct DNS fallback. Loopback stays local for the API and test HTTP inbound.
 """
 
 import ipaddress
@@ -38,6 +37,9 @@ TUN_ADDRESSES = ("172.31.255.1/30", "fd42:73fb:4827::1/126")
 TUN_DNS_ADDRESSES = ("172.31.255.2", "fd42:73fb:4827::2")
 ROUTE_ADDRESSES = ("0.0.0.0/1", "128.0.0.0/1", "::/1", "8000::/1")
 LOOPBACK_EXCLUDES = ("127.0.0.0/8", "::1/128")
+MAX_BYPASS_ADDRESSES = 32
+_RESERVED_BYPASS_NETWORKS = tuple(ipaddress.ip_network(prefix, strict=False)
+                                  for prefix in (*TUN_ADDRESSES, "198.18.0.0/15"))
 DOH_ADDRESS = "1.1.1.1"
 DOH_SERVER_NAME = "cloudflare-dns.com"
 OUTBOUND_TAG = "phone-proxy"
@@ -78,6 +80,26 @@ def _port(value, label):
     return value
 
 
+def normalize_bypass_addresses(values) -> tuple[str, ...]:
+    """Validate a bounded list of host literals, never a user-supplied route."""
+    if not isinstance(values, (list, tuple)) or len(values) > MAX_BYPASS_ADDRESSES:
+        raise ValueError(f"直连白名单最多支持 {MAX_BYPASS_ADDRESSES} 个 IP 地址。")
+    normalized = {}
+    for value in values:
+        if not isinstance(value, str) or not 1 <= len(value) <= 45 or "%" in value:
+            raise ValueError("直连白名单需要填写单个 IPv4 或 IPv6 地址。")
+        try:
+            address = ipaddress.ip_address(value)
+        except ValueError:
+            raise ValueError("直连白名单需要填写单个 IPv4 或 IPv6 地址。") from None
+        if (address.is_unspecified or address.is_multicast or str(address) == "255.255.255.255"
+                or getattr(address, "ipv4_mapped", None) is not None
+                or any(address in network for network in _RESERVED_BYPASS_NETWORKS)):
+            raise ValueError("直连白名单含保留或不可直连的 IP 地址。")
+        normalized[str(address)] = None
+    return tuple(normalized)
+
+
 def build_config(
     endpoint,
     physical_interface: str,
@@ -86,6 +108,7 @@ def build_config(
     interface_name: str = INTERFACE_NAME,
     *,
     proxy_port: int | None = None,
+    bypass_addresses=(),
 ) -> dict:
     """Build a fresh config; helper-generated ports/secret are never persisted here.
 
@@ -108,6 +131,12 @@ def build_config(
     if "%" in host and host.rsplit("%", 1)[1] != physical_interface:
         raise ValueError("IPv6 地址的网卡作用域必须与上游物理网卡一致")
 
+    exclusions = list(LOOPBACK_EXCLUDES)
+    for value in normalize_bypass_addresses(bypass_addresses):
+        address = ipaddress.ip_address(value)
+        if not address.is_loopback:
+            exclusions.append(f"{value}/{address.max_prefixlen}")
+
     inbounds = [{
         "type": "tun",
         "tag": "tun-in",
@@ -126,7 +155,7 @@ def build_config(
         # checking this table before main's connected routes. More-specific
         # split defaults also capture LAN UDP instead of silently bypassing it.
         "route_address": list(ROUTE_ADDRESSES),
-        "route_exclude_address": list(LOOPBACK_EXCLUDES),
+        "route_exclude_address": exclusions,
     }]
     if proxy_port is not None:
         inbounds.append({

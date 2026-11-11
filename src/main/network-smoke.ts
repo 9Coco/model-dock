@@ -128,13 +128,19 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
   }
   async function fill(selector: string, value: string) {
     await evaluate(`(() => {const input=${query(selector)};
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,${JSON.stringify(value)});
+      const prototype=input instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      Object.getOwnPropertyDescriptor(prototype,'value').set.call(input,${JSON.stringify(value)});
       input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
   }
   const network = () => evaluate<FlowBridgeSnapshot>('window.modelDock.networkSnapshot()');
   const connectButton = '[data-action="connect-network"]';
   const disconnectButton = '[data-action="disconnect-network"]';
   const discoverButton = '[data-action="discover-network-proxy"]';
+  const bypassToggle = '[data-action="toggle-network-bypass"]';
+  const bypassInput = '#network-bypass-addresses';
+  const bypassSave = '[data-action="save-network-bypass"]';
+  const httpMode = '[aria-label="网络连接模式"] button:first-child';
+  const globalMode = '[aria-label="网络连接模式"] button:nth-child(2)';
   async function verifySessionAction(selector: string, label: RegExp) {
     await wait(`!!${query(selector)} && ${label}.test(${query(selector)}.textContent)`);
     assert.equal(await evaluate(`document.querySelectorAll('${connectButton}, ${disconnectButton}').length`), 1);
@@ -207,6 +213,36 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
   await verifyNoSaveButton();
   await verifySessionAction(connectButton, /连接/);
   assert.equal(await evaluate(`${query(connectButton)}.disabled`), true);
+  assert.deepEqual(idle.settings.bypassAddresses, []);
+  assert.equal(await evaluate(`!!${query(bypassToggle)}`), false, 'HTTP mode must hide the TUN allowlist');
+  await click(globalMode);
+  await click(bypassToggle);
+  await wait(`document.activeElement===${query(bypassInput)}`);
+  const addresses = ['192.0.2.77', '2001:db8::20'];
+  const invalidBypass = addresses[0] + ':8022';
+  await fill(bypassInput, invalidBypass);
+  await click(bypassSave);
+  await wait("Array.from(document.querySelectorAll('.toast-stack .toast.error')).some(toast=>toast.textContent.includes('直连白名单'))");
+  assert.equal(await evaluate(`${query(bypassInput)}.value`), invalidBypass, 'Rejected addresses stay editable');
+  assert.deepEqual((await network()).settings.bypassAddresses, []);
+  await fill(bypassInput, `  ${addresses[0]}\n\n${addresses[1]}  `);
+  await click(bypassSave);
+  await wait(`${query(bypassToggle)}.textContent.includes('2 个地址')`);
+  assert.deepEqual((await network()).settings.bypassAddresses, addresses);
+  assert.equal((await network()).state, 'idle', 'Saving an offline list must not connect');
+  await wait(`${query(bypassInput)}.value===${JSON.stringify(addresses.join('\n'))}`);
+  await click(httpMode);
+  await wait(`!${query(bypassToggle)}`);
+  assert.deepEqual((await network()).settings.bypassAddresses, addresses, 'HTTP mode retains the list for future global sessions');
+  await click(globalMode);
+  await wait(`${query(bypassInput)}?.value===${JSON.stringify(addresses.join('\n'))}`);
+  await fill(bypassInput, '');
+  await click(bypassSave);
+  await wait(`${query(bypassToggle)}.textContent.includes('0 个地址')`);
+  assert.deepEqual(store.getManagedState<FlowBridgeSnapshot['settings']>('network.flowbridge.v1', idle.settings).bypassAddresses, []);
+  await click(bypassToggle);
+  await click(httpMode);
+  await wait(`!${query(bypassToggle)}`);
   if (windowsNetwork) {
     assert.equal(await evaluate("document.body.innerText.includes('手机热点')"), false);
     await click(discoverButton);
@@ -317,10 +353,23 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
   assert.equal(configured.settings.address, 'socks5://192.0.2.34:38473');
   assert.equal(configured.state, 'connected');
   assert.equal((await gateway()).running, true);
+  await click(bypassToggle);
+  await fill(bypassInput, addresses[0]);
+  await click(bypassSave);
+  await wait(`${networkState('connected')} && ${query(bypassToggle)}.textContent.includes('1 个地址')`);
+  assert.deepEqual((await network()).settings, { ...configured.settings, bypassAddresses: [addresses[0]] });
+  assert.deepEqual(store.getManagedState<FlowBridgeSnapshot['settings']>('network.flowbridge.v1', idle.settings).bypassAddresses, [addresses[0]]);
+  const bypassScreenshot = 'network-bypass.png';
+  writeFileSync(join(output, bypassScreenshot), await capture());
+  await fill(bypassInput, '');
+  await click(bypassSave);
+  await wait(`${networkState('connected')} && ${query(bypassToggle)}.textContent.includes('0 个地址')`);
+  assert.deepEqual((await network()).settings, configured.settings);
+  await click(bypassToggle);
 
   await evaluate(`document.querySelectorAll('.toast-stack [aria-label="关闭提示"]').forEach(button=>button.click())`);
   const layouts = [];
-  const screenshots = [];
+  const screenshots = [bypassScreenshot];
   async function verifyTrafficColors(theme: 'light' | 'dark', contents = window.webContents) {
     const colors: { text: string[]; line: string }[] = await contents.executeJavaScript(`['upload', 'download'].map(direction => {
       const selector = '[data-direction="' + direction + '"]';
@@ -535,6 +584,7 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
   assert.equal(store.getManagedState('network.flowbridge.lease', false), false);
   writeFileSync(join(output, 'network-validation.json'), JSON.stringify({ ok: true, defaultNetworkWorkspace: true,
     sidebarNetworkBeforeAuth: true, dedicatedNetworkPage: true, sessionPreservedAcrossNavigation: true,
+    globalBypassEditor: true, bypassSavedOfflineAndConnected: true, bypassRetainedAcrossModes: true,
     completedLatencyPreservedAcrossNavigation: true, pendingLatencyCompletesWhileHidden: true, latencyResetsOnModeAndAddressChange: true,
     offlineSpeedFromDraft: true, connectedWithDraft: true, explicitReconnect: true, cleanupRecovery: true, gatewayControlsIndependent: true, twelveWebsiteLatenciesOnly: true, trafficWindows: [1, 5, 15, 60], simulatedNetworkConnectDisconnectAndCancel: true,
     osNetworkUntouched: true, existingDataPreserved: true, anonymousElectronRedirectProbe: true,

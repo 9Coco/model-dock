@@ -13,10 +13,11 @@ from windows.network_pipe import open_client, pipe_name
 from windows.proxy import display_global_address
 
 ROOT = Path(__file__).resolve().parents[1]
-PAYLOAD_SHA256 = '988ad9732df5efe0940552d71fd846716db3b6cc9d4a27edb94f0ac0a80121fd'
+PAYLOAD_SHA256 = '66c7fc9f8cebadbc16b8e51f3d5512b10eda2ca5275cff9f6751118620641d94'
 # Known older tasks share the protected recovery journal and stop protocol.
 # New sessions require the current fixed website directory and worker payload.
 RECOVERY_PREDECESSORS = (
+    '988ad9732df5efe0940552d71fd846716db3b6cc9d4a27edb94f0ac0a80121fd',
     '5e6024be86dc8e951162936a9a8de7324bbb1c3231dcfcf1b300c9d10ea4f860',
     '9a094115e411455ebd48976ab1719e55008f97ef4116420db00e2c77156036f7',
     '0dc57d97ab47c139a54c511953a21b9e34daa41eabef7867bad1a239e2c6a536',
@@ -162,13 +163,15 @@ class NetworkAccess:
 
 
 class TaskTunController:
-    def __init__(self, access, endpoint, dns_mode):
+    def __init__(self, access, endpoint, dns_mode, *, bypass_addresses=()):
         self.access, self.address, self.dns_mode = access, display_global_address(endpoint), dns_mode
+        self.bypass_addresses = bypass_addresses
         self.cleanup_confirmed = False
         self.info = {}
 
     def start(self):
-        self.info['proxy_port'] = self.access.call('start', address=self.address, dnsMode=self.dns_mode)
+        self.info['proxy_port'] = self.access.call('start', address=self.address, dnsMode=self.dns_mode,
+                                                   bypassAddresses=self.bypass_addresses)
 
     def snapshot(self):
         return self.access.call('snapshot')

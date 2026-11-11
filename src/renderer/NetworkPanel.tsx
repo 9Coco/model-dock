@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { useEffect, useRef, useState } from 'react';
 import type { ModelDockApi } from '../shared/types';
-import { type FlowBridgeSnapshot, type NetworkMode, type NetworkSample } from '../shared/flowbridge-types';
+import { MAX_NETWORK_BYPASS_ADDRESSES, type FlowBridgeSnapshot, type NetworkMode, type NetworkSample } from '../shared/flowbridge-types';
 import { BusyIcon, Toggle, type Notify } from './components';
-import { Activity, Check, Download, Monitor, Plug2, RefreshCw, RotateCcw, Search, Unplug, X } from './MaterialIcon';
+import { Activity, Check, ChevronDown, Download, Monitor, Plug2, RefreshCw, RotateCcw, Search, Unplug, X } from './MaterialIcon';
 import { ProxySpeedPanel } from './ProxySpeedPanel';
 import './network.css';
 export const networkBytes = (value: number) => value >= 1024 ** 3 ? `${(value / 1024 ** 3).toFixed(2)} GB` : value >= 1024 ** 2 ? `${(value / 1024 ** 2).toFixed(1)} MB` : value >= 1024 ? `${(value / 1024).toFixed(1)} KB` : `${Math.round(value)} B`;
@@ -63,11 +63,20 @@ function NetworkTools({ api, snapshot, onChanged, notify }: Required<NetworkCont
   const [draft, setDraft] = useState<{ address: string; mode: NetworkMode } | null>(null);
   const { address, mode } = draft ?? snapshot.settings;
   const [candidates, setCandidates] = useState<string[] | null>(null);
+  const [bypassOpen, setBypassOpen] = useState(false);
+  const [bypassDraft, setBypassDraft] = useState<string | null>(null);
+  const bypassToggle = useRef<HTMLButtonElement>(null);
+  const bypassInput = useRef<HTMLTextAreaElement>(null);
+  const savedBypassText = snapshot.settings.bypassAddresses.join('\n');
+  const bypassText = bypassDraft ?? savedBypassText;
   const windows = snapshot.platform === 'win32';
   const { busy, action } = useNetworkAction(notify);
   useEffect(() => {
     setCandidates(null);
   }, [snapshot.settings.address, snapshot.settings.mode]);
+  useEffect(() => {
+    if (bypassOpen) bypassInput.current?.focus();
+  }, [bypassOpen]);
   const [disconnecting, setDisconnecting] = useState(false);
   const disconnectLock = useRef(false);
   const connected = snapshot.state === 'connected';
@@ -119,6 +128,14 @@ function NetworkTools({ api, snapshot, onChanged, notify }: Required<NetworkCont
   };
   const connect = () => change(connected ? 'reconnect' : 'connect', () =>
     connected ? api.saveNetworkSettings({ address, mode }) : api.connectNetwork({ address, mode }));
+  const bypassReconnect = connected && snapshot.settings.mode === 'global';
+  const saveBypass = () => action(bypassReconnect ? 'reconnect' : 'save-bypass', async () => {
+    const bypassAddresses = bypassText.split('\n').map(address => address.trim()).filter(Boolean);
+    try { await api.saveNetworkSettings({ bypassAddresses }); }
+    finally { await onChanged(); }
+    setBypassDraft(null);
+    notify('直连白名单已保存。', 'success');
+  });
   // Cancellation must reach the manager while its connection request is pending.
   const disconnect = async () => {
     if (disconnectLock.current) return;
@@ -142,6 +159,27 @@ function NetworkTools({ api, snapshot, onChanged, notify }: Required<NetworkCont
       <div className="gateway-top"><span className={`gateway-icon ${snapshot.state === 'connected' ? 'on' : ''}`}><Activity size={26} /></span><div><h2>网络接管</h2><p>{global ? '通过 SOCKS5 转发 TCP、UDP 和 DNS。' : '为桌面应用设置 HTTP / HTTPS 代理。'}</p></div><span className={`badge ${snapshot.state === 'connected' ? 'positive' : 'neutral'}`} data-network-service-status={snapshot.state} role="status"><span className="status-dot" />{stateLabel}</span></div>
       <div className="service-network-body">
         <div className="network-mode" role="group" aria-label="网络连接模式">{(['http', 'global'] as const).map(option => <button key={option} aria-pressed={mode === option} disabled={editingDisabled} onClick={() => void selectMode(option)}>{option === 'http' ? 'HTTP 代理' : '全局流量'}</button>)}</div>
+        {global && <div className="network-bypass">
+          <button ref={bypassToggle} type="button" className="network-bypass-toggle" data-action="toggle-network-bypass"
+            aria-expanded={bypassOpen} aria-controls="network-bypass-editor" disabled={editingDisabled}
+            onClick={() => setBypassOpen(open => !open)}>
+            直连白名单<span>{snapshot.settings.bypassAddresses.length} 个地址</span><ChevronDown size={16} />
+          </button>
+          {bypassOpen && <div id="network-bypass-editor" className="network-bypass-editor">
+            <p id="network-bypass-hint">每行一个 IPv4 或 IPv6 地址，最多 {MAX_NETWORK_BYPASS_ADDRESSES} 个。名单内地址的所有端口都走系统原有路由。{bypassReconnect && ' 保存时会重新连接全局代理。'}</p>
+            <label className="sr-only" htmlFor="network-bypass-addresses">直连 IP 地址</label>
+            <textarea ref={bypassInput} id="network-bypass-addresses" value={bypassText} rows={3} placeholder="192.168.1.20"
+              disabled={editingDisabled} aria-describedby="network-bypass-hint" spellCheck={false} autoComplete="off"
+              onChange={event => setBypassDraft(event.target.value)} />
+            <div className="network-bypass-actions">
+              <button type="button" className="button small secondary" disabled={editingDisabled} onClick={() => {
+                setBypassDraft(null); setBypassOpen(false); bypassToggle.current?.focus();
+              }}>取消</button>
+              <button type="button" className="button small primary" data-action="save-network-bypass"
+                disabled={editingDisabled || bypassText === savedBypassText} onClick={() => void saveBypass()}>保存白名单</button>
+            </div>
+          </div>}
+        </div>}
         <div className="network-address-heading">
           <label htmlFor="network-address">上游代理</label>
           <button type="button" className="network-lookup" data-action="discover-network-proxy" disabled={!canDiscover}

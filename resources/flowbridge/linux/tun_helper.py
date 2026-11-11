@@ -1,8 +1,9 @@
 """Restricted root helper for FlowBridge's fixed sing-box 全局接管configuration.
 
 The installed launcher uses /usr/bin/python3 -I and a root-owned source tree.
-Only a numeric phone endpoint crosses stdin. No shell commands, file paths,
-interface names or arbitrary sing-box configuration are accepted from the GUI.
+Only a numeric phone endpoint and optional destination IPs cross stdin.
+No shell commands, file paths, interface names or arbitrary sing-box
+configuration are accepted from the GUI.
 """
 
 from __future__ import annotations
@@ -42,6 +43,8 @@ RULE_COUNT = 11
 RULE_LAST = RULE_INDEX + RULE_COUNT - 1
 INTERFACE_NAME = "modeldock0"
 MAX_MESSAGE_BYTES = 4096
+# Exact IPv6 exclusions can split a default route into up to 128 prefixes each.
+MAX_JOURNAL_BYTES = 2 * 1024 * 1024
 CHILD_ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C", "LC_ALL": "C"}
 EOF = object()
 
@@ -109,8 +112,9 @@ def validate_installation():
     require_root_path(SOURCE_DIR / "tun_config.py")
 
 
-def validate_request(message) -> SimpleNamespace:
-    if not isinstance(message, dict) or set(message) != {"version", "host", "port"}:
+def validate_request(message, *, normalize_bypass=None) -> SimpleNamespace:
+    fields = {"version", "host", "port"}
+    if not isinstance(message, dict) or set(message) - {"bypassAddresses"} != fields:
         raise HelperError("全局接管启动请求格式无效。")
     if type(message["version"]) is not int or message["version"] != 2:
         raise HelperError("全局模式的通信版本不匹配。请更新 ModelDock 的 deb 安装包，再重新启动应用。")
@@ -125,7 +129,15 @@ def validate_request(message) -> SimpleNamespace:
         raise HelperError("全局接管模式需要填写手机的数字 IP 地址。") from error
     if address.is_loopback or address.is_unspecified or address.is_multicast or str(address) == "255.255.255.255":
         raise HelperError("手机代理 IP 地址不能是回环、空地址或广播地址。")
-    return SimpleNamespace(host=str(address), port=message["port"])
+    bypass_addresses = ()
+    if "bypassAddresses" in message:
+        if not isinstance(message["bypassAddresses"], list) or normalize_bypass is None:
+            raise HelperError("全局接管直连白名单格式无效。")
+        try:
+            bypass_addresses = normalize_bypass(message["bypassAddresses"])
+        except ValueError as error:
+            raise HelperError(str(error)) from error
+    return SimpleNamespace(host=str(address), port=message["port"], bypass_addresses=bypass_addresses)
 
 
 def is_recovery_request(message) -> bool:
@@ -134,11 +146,13 @@ def is_recovery_request(message) -> bool:
             and message["command"] == "recover")
 
 
-def validate_reusable_request(message, *, command, session_id=None):
+def validate_reusable_request(message, *, command, session_id=None, normalize_bypass=None):
     """Accept only the fixed v3 endpoint/stop vocabulary on the private pipe."""
     fields = {"version", "command", "id"}
     if command == "start":
         fields |= {"host", "port"}
+        if isinstance(message, dict) and "bypassAddresses" in message:
+            fields.add("bypassAddresses")
     if (not isinstance(message, dict) or set(message) != fields
             or type(message["version"]) is not int or message["version"] != 3
             or message["command"] != command
@@ -146,7 +160,8 @@ def validate_reusable_request(message, *, command, session_id=None):
             or (session_id is not None and message["id"] != session_id)):
         raise HelperError("全局接管会话控制请求无效。")
     if command == "start":
-        return validate_request({"version": 2, "host": message["host"], "port": message["port"]})
+        request = {name: message[name] for name in fields - {"version", "command", "id"}}
+        return validate_request({"version": 2, **request}, normalize_bypass=normalize_bypass)
     if command != "stop":
         raise HelperError("全局接管会话控制命令无效。")
     return None
@@ -551,7 +566,7 @@ class RouteResources:
         self.ownership = None
 
 
-def _load_config_builder():
+def _load_tun_config():
     path = SOURCE_DIR / "tun_config.py"
     require_root_path(path)
     module = ModuleType("flowbridge_privileged_tun_config")
@@ -563,7 +578,7 @@ def _load_config_builder():
                 "RULE_INDEX": RULE_INDEX, "RULE_COUNT": RULE_COUNT, "INTERFACE_NAME": INTERFACE_NAME}
     if any(getattr(module, key, None) != value for key, value in expected.items()):
         raise HelperError("全局接管配置与助手版本不一致，请重新安装软件。")
-    return module.build_config
+    return module
 
 
 def _prepare_runtime() -> int:
@@ -657,6 +672,8 @@ class SessionJournal:
             os.fchmod(fd, 0o600)
             with os.fdopen(fd, "w", encoding="utf-8") as stream:
                 json.dump(self.value, stream, allow_nan=False)
+                if stream.tell() > MAX_JOURNAL_BYTES:
+                    raise HelperError("全局接管恢复记录超过大小限制。")
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(temporary, self.path)
@@ -705,7 +722,7 @@ class SessionJournal:
             return None
         require_root_path(self.path)
         info = self.path.stat()
-        if info.st_mode & 0o077 or info.st_nlink != 1 or info.st_size > 262144:
+        if info.st_mode & 0o077 or info.st_nlink != 1 or info.st_size > MAX_JOURNAL_BYTES:
             raise HelperError("全局接管恢复记录权限或大小异常，未更改现有网络。")
         try:
             value = json.loads(self.path.read_text())
@@ -887,7 +904,8 @@ class HelperSession:
             api_port, proxy_port = _reserve_ports()
             api_secret = secrets.token_urlsafe(32)
             config = self.build_config(endpoint, physical, api_port, api_secret,
-                                       interface_name=INTERFACE_NAME, proxy_port=proxy_port)
+                                       interface_name=INTERFACE_NAME, proxy_port=proxy_port,
+                                       bypass_addresses=getattr(endpoint, "bypass_addresses", ()))
             self.work_dir = Path(tempfile.mkdtemp(prefix="session-", dir=RUNTIME_DIR))
             if self.journal is not None:
                 self.journal.workspace(self.work_dir)
@@ -945,7 +963,8 @@ class HelperSession:
         return 1 if failed else 0
 
 
-def run_reusable_sessions(request, *, uid, ip_command, reader, output, stop_event, build_config):
+def run_reusable_sessions(request, *, uid, ip_command, reader, output, stop_event, build_config,
+                          normalize_bypass=None):
     """Retain one authorization, while retaining no routes between sessions.
 
     The lifetime remains the inherited private pipe, not a public socket or a
@@ -966,7 +985,7 @@ def run_reusable_sessions(request, *, uid, ip_command, reader, output, stop_even
             idle_output.flush()
             request = None
             continue
-        endpoint = validate_reusable_request(request, command="start")
+        endpoint = validate_reusable_request(request, command="start", normalize_bypass=normalize_bypass)
         session_id = request["id"]
         if session_id <= last_id:
             raise HelperError("全局接管启动会话编号已使用或顺序无效。")
@@ -1006,7 +1025,8 @@ def main():
             raise HelperError("全局接管助手不接受命令行参数。")
         uid = validate_invoker()
         validate_installation()
-        build_config = _load_config_builder()
+        config = _load_tun_config()
+        normalize_bypass = config.normalize_bypass_addresses
         ip_command = find_ip_command()
         stop_event = threading.Event()
         for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
@@ -1026,13 +1046,13 @@ def main():
         reusable = (isinstance(request, dict) and type(request.get("version")) is int
                     and request["version"] == 3)
         if reusable:
-            validate_reusable_request(request, command="start")
-        endpoint = None if recovery_only or reusable else validate_request(request)
+            validate_reusable_request(request, command="start", normalize_bypass=normalize_bypass)
+        endpoint = None if recovery_only or reusable else validate_request(request, normalize_bypass=normalize_bypass)
         if reusable:
             may_have_changes = True
             return run_reusable_sessions(request, uid=uid, ip_command=ip_command,
                                          reader=reader, output=output, stop_event=stop_event,
-                                         build_config=build_config)
+                                         build_config=config.build_config, normalize_bypass=normalize_bypass)
         lock_fd = _prepare_runtime()
         resources = RouteResources(ip_command)
         journal = SessionJournal(uid)
@@ -1042,7 +1062,7 @@ def main():
             output.write('{"event":"stopped"}\n')
             output.flush()
             return 0
-        session = HelperSession(resources, reader, output, stop_event, build_config, journal=journal)
+        session = HelperSession(resources, reader, output, stop_event, config.build_config, journal=journal)
         return session.run(endpoint)
     except Exception as error:
         try:
