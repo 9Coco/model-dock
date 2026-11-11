@@ -2,7 +2,7 @@
   "source": "https://github.com/9Coco/flowbridge",
   "revision": "f80139e040ca51cd0e7036659b350e692b9c495c",
   "license": "GPL-3.0-or-later",
-  "changes": "Isolated ModelDock system paths/interface names; recomputed Windows Wintun interface GUID; independent recovery state directories without selecting test backends; ModelDock self-loop rejection; fixed script entry for embedded Python signal delivery; tests pin KDE or inject POSIX cache paths only for mock Windows cores. Original Qt GUI/storage/autostart are not imported. Namespace harness expects the ModelDock root-helper runtime path. ModelDock owns the Linux authorization prompts and service descriptions. Linux setup guidance and the bundled phone instructions refer to the integrated ModelDock application. Per-user system sockets require a trusted root grant as well as kernel peer identity; grant revocation gracefully shuts down the active helper. ModelDock adds fixed public AI website diagnostic targets to the shared connectivity allowlist.",
+  "changes": "Isolated ModelDock system paths/interface names; recomputed Windows Wintun interface GUID; independent recovery state directories without selecting test backends; ModelDock self-loop rejection; fixed script entry for embedded Python signal delivery; tests pin KDE or inject POSIX cache paths only for mock Windows cores. Original Qt GUI/storage/autostart are not imported. Namespace harness expects the ModelDock root-helper runtime path. ModelDock owns the Linux authorization prompts and service descriptions. Linux setup guidance and the bundled phone instructions refer to the integrated ModelDock application. Per-user system sockets require a trusted root grant as well as kernel peer identity; grant revocation gracefully shuts down the active helper. ModelDock adds fixed public AI website diagnostic targets to the shared connectivity allowlist. ModelDock adds exact destination IP exclusions in global mode, validated by the privileged helpers.",
   "files": [
     {
       "source": "LICENSE",
@@ -88,20 +88,20 @@
       "source": "linux/tun_client.py",
       "path": "linux/tun_client.py",
       "upstreamSha256": "cc98e1ca0fca1bcc082b46ec46ba0116e13f0b65028fdb50713fd78407fbb059",
-      "sha256": "0d35956e805dc0bf3e8b6f889f33617f2c27c3e7b8344f24f6bbdacdce990d69",
+      "sha256": "eecc1e8d6065dc32e4ce21b7cc822fb834d4b89166a7bbdcc4d974f22b57ac01",
       "changes": "Recover interrupted Linux sessions only over the preauthorized user socket and retain pending acknowledgements across retries."
     },
     {
       "source": "linux/tun_helper.py",
       "path": "linux/tun_helper.py",
       "upstreamSha256": "eefd220d0d42f2e633616dbd2a87786e9a0b164426f5af6572b30aff25421b0c",
-      "sha256": "8f3c14c68414e3a10b1ff2aa9b5200610f5c29af73f5826cde6738066fc4e0e8"
+      "sha256": "388ac2546d0b9d1e9e345c0013375e147e9b1130994620347084e75432bc0995"
     },
     {
       "source": "linux/tun_config.py",
       "path": "linux/tun_config.py",
       "upstreamSha256": "6f4c30486d8fada751a2a90ca0ad568c159f82e85caf168c2a4555d8adf237fa",
-      "sha256": "7144df56f88b9f818ae904d4bf1acc216f245f0314933b970c4a7106aa4a5a6e"
+      "sha256": "52f82bf40522931727166e193e4d8bc5dbd0c60af3323a3f0ffa197216a744c2"
     },
     {
       "source": "linux/tun_access.py",
@@ -149,13 +149,13 @@
       "source": "windows/tun_client.py",
       "path": "windows/tun_client.py",
       "upstreamSha256": "06a8a9f461bc88c710cf7adf952998ed6af0530731de0f8f0e86cc8a380b0c12",
-      "sha256": "e5e8183761ee99b048281196dc1b4d05dcf4f371bdace12a298f41c2b8d6ec46"
+      "sha256": "2ea536ccdcc40ce44de927e21ef4079de07ac7f4631ee3eced756c9d1f9a7c4f"
     },
     {
       "source": "windows/tun_config.py",
       "path": "windows/tun_config.py",
       "upstreamSha256": "4032ed8698399d9120110be3beb8cea8f1d4f46faef41027840d065fdab88b4b",
-      "sha256": "9b73c09ecc2e4ffd9a85106fa8a4dcb174007b819d74d6fceccf1018ab215409"
+      "sha256": "6d7e863f292299a59acc9f0fd6ad90bdf7b6c234d84ff6e68b304cd0b3665ce9"
     },
     {
       "source": "windows/guardian.py",
@@ -216,13 +216,13 @@
       "source": "linux/test_tun_helper.py",
       "path": "linux/test_tun_helper.py",
       "upstreamSha256": "46c7ed020ccb17d77362877b5d999d3a5dea7c642086fffc799c63868a5812a6",
-      "sha256": "19104bfc088030b55376fc5fb67444c4d61e611613e88c861b8d7b199f4de31f"
+      "sha256": "88ae9ca4ca95827526fae4939fe0b36a6ac2097081ba84b45fda42e17dc11273"
     },
     {
       "source": "linux/test_tun_config.py",
       "path": "linux/test_tun_config.py",
       "upstreamSha256": "9d63931c295f73852906d7cb5bdbfd0b39a19f46d0a079da208e81b3419dcf2e",
-      "sha256": "20ca840f717ebf1ee6b8e7f788401c61b880618f6612491f0676bd7b01a37843"
+      "sha256": "1e365cad431498571ea11c90e8d0a9f0b5e5880ea8f0b7e6c61f8ff67cf5b69f"
     },
     {
       "source": "linux/test_tun_access.py",
@@ -240,7 +240,7 @@
       "source": "linux/test_reusable_tun_client.py",
       "path": "linux/test_reusable_tun_client.py",
       "upstreamSha256": "cd81d1999e39885a259b2bc005395ca9bf79f85e1e00bda7a52ed3ed5495d335",
-      "sha256": "5ecc4e5229c5828a2bae38b2ab75cca648abb57d305991f21c2c4797e7cbfa6a",
+      "sha256": "526455f4d3f5a6add648193fd008f2ca6f4745692177125254e6d71c9f7276b2",
       "changes": "Cover noninteractive stale and interrupted lease recovery, unavailable grants and acknowledgement handling."
     },
     {
@@ -271,7 +271,7 @@
       "source": "windows/test_tun_config.py",
       "path": "windows/test_tun_config.py",
       "upstreamSha256": "2e296e74ab4dc42522729cd8da23e5f8af47a525224c427eac42cf97992840df",
-      "sha256": "2e296e74ab4dc42522729cd8da23e5f8af47a525224c427eac42cf97992840df"
+      "sha256": "71d57e6ec24857d1defb276d203ab73b6c17cc0890e290a60ebff6202652e31f"
     },
     {
       "source": "windows/test_dns_transport.py",
@@ -325,7 +325,7 @@
       "source": "tools/test_tun_namespace.py",
       "path": "tools/test_tun_namespace.py",
       "upstreamSha256": "9b1b959c025efbc9a4c7a5e47bbef9a5b33bb064de881fdad978ff2354159786",
-      "sha256": "f58d0bd8a4608df9d64f77059b76f4fbaca6bde409c74817ac555acf4023c4d1"
+      "sha256": "01a261edaf559e524c3bb03a74d5b6d955acdd685983801202cca14fe87db678"
     },
     {
       "source": "termux/验证记录.txt",
@@ -339,8 +339,8 @@
       "source": "https://github.com/9Coco/model-dock/blob/7ea8d51e40b18b23c85eab905b7b6b421632b218/resources/flowbridge/bridge.py",
       "path": "resources/flowbridge/bridge.py",
       "upstreamSha256": "1ea86b5d63bc6189e04ef790e38de0f85b6794c2ff830539eb36caca8f738cf8",
-      "sha256": "79e416d900b7614e41121487574a3d48563042ecdc56c8171136a824205f65ec",
-      "changes": "Escape non-ASCII protocol output, expose read-only Windows proxy discovery, and restore on EOF only after session control requests. Delegate Windows global sessions to the protected demand-start task and preserve legacy recovery. Restore stale Linux sessions via the preauthorized socket and retain pending recovery for retry. Detect standalone FlowBridge TUN conflicts on the actual Linux upstream route and retry transient startup probes once, switching targets only for target-specific failures. Use the current recovery button label. Allow task repair during explicit Windows recovery. Automatic Linux global startup requires an existing grant and never opens initial authorization."
+      "sha256": "38e35d25f1596a91d4963b20e3af8a2b8eb61fd3e288632bc50e8c54c6181b26",
+      "changes": "Escape non-ASCII protocol output, expose read-only Windows proxy discovery, and restore on EOF only after session control requests. Delegate Windows global sessions to the protected demand-start task and preserve legacy recovery. Restore stale Linux sessions via the preauthorized socket and retain pending recovery for retry. Detect standalone FlowBridge TUN conflicts on the actual Linux upstream route and retry transient startup probes once, switching targets only for target-specific failures. Use the current recovery button label. Allow task repair during explicit Windows recovery. Automatic Linux global startup requires an existing grant and never opens initial authorization. Support fixed destination IP exclusions for global TUN sessions."
     },
     {
       "source": "https://github.com/9Coco/model-dock/blob/7ea8d51e40b18b23c85eab905b7b6b421632b218/resources/flowbridge/tools/fetch_python.py",
@@ -372,15 +372,15 @@
     {
       "source": "https://github.com/9Coco/model-dock/blob/a7371a9fc067fa5271d1973f399645dc09659257/resources/flowbridge/windows/network-payload.json",
       "path": "resources/flowbridge/windows/network-payload.json",
-      "sha256": "988ad9732df5efe0940552d71fd846716db3b6cc9d4a27edb94f0ac0a80121fd",
-      "changes": "Pin the protected worker with the corrected pipe permissions, embedded runtime and core. Pin the extended website diagnostic allowlist and retain recovery compatibility with the previous ModelDock worker. Pin the JetBrains service probe change while allowing the 0.4.19 worker for recovery only.",
+      "sha256": "66c7fc9f8cebadbc16b8e51f3d5512b10eda2ca5275cff9f6751118620641d94",
+      "changes": "Pin the protected worker with the corrected pipe permissions, embedded runtime and core. Pin the extended website diagnostic allowlist and retain recovery compatibility with the previous ModelDock worker. Pin the JetBrains service probe change while allowing the 0.4.19 worker for recovery only. Support fixed destination IP exclusions for global TUN sessions.",
       "upstreamSha256": "0dc57d97ab47c139a54c511953a21b9e34daa41eabef7867bad1a239e2c6a536"
     },
     {
       "source": "https://github.com/9Coco/model-dock/blob/a7371a9fc067fa5271d1973f399645dc09659257/resources/flowbridge/windows/network_access.py",
       "path": "resources/flowbridge/windows/network_access.py",
-      "sha256": "36d52ba3a1e6f7a2b9b124122fd65399dc4128a4c1a8f706ab15c741f59f04b6",
-      "changes": "Request first-use consent, upgrade old worker ACLs for new connections and report installation stages. Pin the extended website diagnostic allowlist and retain recovery compatibility with the previous ModelDock worker. Pin the JetBrains service probe change while allowing the 0.4.19 worker for recovery only.",
+      "sha256": "cec2ad09378326972b8bbccaacd608de86ccee96f67927e5221ce4553e650c91",
+      "changes": "Request first-use consent, upgrade old worker ACLs for new connections and report installation stages. Pin the extended website diagnostic allowlist and retain recovery compatibility with the previous ModelDock worker. Pin the JetBrains service probe change while allowing the 0.4.19 worker for recovery only. Support fixed destination IP exclusions for global TUN sessions.",
       "upstreamSha256": "b1cec3b3711de731c54e20fa83afe81cfdf27e62ac9cad16997a82c212c4f0cd"
     },
     {
@@ -393,8 +393,8 @@
     {
       "source": "ModelDock Windows network integration",
       "path": "resources/flowbridge/windows/network_worker.py",
-      "sha256": "667ac705226a84b69e287f58bc918073e449dd8a8d8e9751afa3377bff72656e",
-      "changes": "Run only validated TUN start, status, stop and recovery operations from the protected package."
+      "sha256": "56301bc50e1f4169904f5bf80bbab47966f1f32f508e525f8b2edc0cf6b7ecea",
+      "changes": "Run only validated TUN start, status, stop and recovery operations from the protected package. Support fixed destination IP exclusions for global TUN sessions."
     }
   ]
 }

@@ -106,7 +106,7 @@ def _normalize_endpoint(endpoint):
 
 class TunController:
     def __init__(
-        self, endpoint, *, popen_factory=None, api_opener=None,
+        self, endpoint, *, bypass_addresses=(), popen_factory=None, api_opener=None,
         start_timeout: float = 90.0, stop_timeout: float = 20.0,
         poll_interval: float = 1.0, api_timeout: float = 3.0,
     ):
@@ -116,6 +116,7 @@ class TunController:
                 raise ValueError("超时与采样间隔必须为正数。")
         self.endpoint = endpoint
         self._host, self._port = host, port
+        self._bypass_addresses = tuple(bypass_addresses)
         self._popen = popen_factory or subprocess.Popen
         self._opener = api_opener or urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
         self._start_timeout, self._stop_timeout = start_timeout, stop_timeout
@@ -125,6 +126,12 @@ class TunController:
         self._process = None
         self._reader = self._sampler = None
         self._reset_state()
+
+    def _start_request(self, version, **fields):
+        request = {"version": version, "host": self._host, "port": self._port, **fields}
+        if self._bypass_addresses:
+            request["bypassAddresses"] = self._bypass_addresses
+        return json.dumps(request) + "\n"
 
     def _reset_state(self):
         self._changed = threading.Event()
@@ -216,7 +223,7 @@ class TunController:
                     self._reader.start()
                     if process.stdin is None:
                         raise OSError("missing helper stdin")
-                    process.stdin.write(json.dumps({"version": 2, "host": self._host, "port": self._port}) + "\n")
+                    process.stdin.write(self._start_request(2))
                     process.stdin.flush()
             except (OSError, ValueError) as error:
                 if self._process is None:
@@ -791,8 +798,7 @@ class ReusableTunController(TunController):
                     process = self._process
                     if process.stdin is None or process.stdin.closed:
                         raise OSError("missing helper stdin")
-                    process.stdin.write(json.dumps({"version": 3, "command": "start", "id": self._request_id,
-                                                    "host": self._host, "port": self._port}) + "\n")
+                    process.stdin.write(self._start_request(3, command="start", id=self._request_id))
                     process.stdin.flush()
             except TunStartError:
                 if self._process is None:

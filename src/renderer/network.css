@@ -8,6 +8,23 @@
 .network-mode { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-soft); padding: 2px; }
 .network-mode button { padding: 5px 12px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: 12px; }
 .network-mode button[aria-pressed="true"] { color: var(--ink); background: var(--surface); box-shadow: 0 0 0 1px var(--line); font-weight: 600; }
+.network-bypass { margin-top: 8px; }
+.network-bypass-toggle {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 5px 8px;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); color: var(--ink); font-size: 12px;
+}
+.network-bypass-toggle span { margin-inline-start: auto; color: var(--muted); }
+.network-bypass-toggle:is(:hover:enabled, [aria-expanded="true"]) { border-color: var(--accent); }
+.network-bypass-toggle[aria-expanded="true"] svg { transform: rotate(180deg); }
+.network-bypass-editor { display: grid; gap: 6px; margin-top: 8px; }
+.network-bypass-editor p { margin: 0; }
+.network-bypass-editor textarea {
+  width: 100%; min-width: 0; padding: 6px 8px; resize: vertical;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--field); color: var(--ink);
+  font: 12px/1.5 var(--font-mono, monospace);
+}
+.network-bypass-editor textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.network-bypass-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 .network-address-heading {
   display: flex; justify-content: space-between; align-items: center; gap: 8px;
   margin: 12px 0 4px; font-size: 12px;

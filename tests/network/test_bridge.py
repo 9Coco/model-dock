@@ -90,6 +90,17 @@ class BridgeTests(unittest.TestCase):
                 self.session.connect({'address':'http://192.0.2.1:38473','mode':'http','dnsMode':'fast'})
         self.session.desktop.apply.assert_not_called()
 
+    @unittest.skipUnless(sys.platform.startswith('linux'), 'Linux global controller')
+    def test_global_connect_passes_exact_bypass_addresses_to_the_controller(self):
+        bypass = ['172.30.12.34', '2001:db8::7']
+        settings = {'mode': 'global', 'address': 'socks5://192.0.2.1:38473', 'bypassAddresses': bypass}
+        with patch.object(bridge, 'probe_global_proxy'), patch.object(bridge, 'TunController') as controller:
+            controller.return_value.info = {'proxy_port': 30000}
+            controller.return_value.snapshot.return_value = {'running': True}
+            self.session.connect(settings, True)
+            controller.assert_called_once_with(bridge.Endpoint('192.0.2.1', 38473), bypass_addresses=bypass)
+            controller.return_value.start.assert_called_once()
+
     @unittest.skipUnless(sys.platform.startswith('linux'), 'Linux automatic authorization')
     def test_automatic_global_connection_requires_existing_authorization_without_opening_setup(self):
         settings = {'mode': 'global', 'address': 'socks5://192.0.2.1:38473'}

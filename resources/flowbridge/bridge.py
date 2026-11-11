@@ -223,12 +223,13 @@ class NetworkSession:
             self.last_stats = {}
             self.mode = mode
             if mode == 'global':
+                bypass_addresses = settings.get('bypassAddresses', [])
                 if self.access is not None:
                     self.access.open(allow_install)
                     if self.cancelled.is_set(): raise RuntimeError('连接已取消。')
-                    self.controller = TaskTunController(self.access, endpoint, settings['dnsMode'])
+                    self.controller = TaskTunController(self.access, endpoint, settings['dnsMode'], bypass_addresses=bypass_addresses)
                 else:
-                    self.controller = TunController(endpoint)
+                    self.controller = TunController(endpoint, bypass_addresses=bypass_addresses)
                 marker = self.directory / 'global-lease.json'
                 with marker.open('x') as stream:
                     json.dump({'version':2 if self.access is not None else 1},stream); stream.flush(); os.fsync(stream.fileno())

@@ -4,15 +4,43 @@ import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSyn
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { DEFAULT_FLOWBRIDGE, NETWORK_SITES, parseNetworkEndpoint, type FlowBridgeSettings, type FlowBridgeSnapshot, type NetworkEngineStatus, type NetworkSample, type NetworkSite, type NetworkCheck } from '../shared/flowbridge-types';
+import { DEFAULT_FLOWBRIDGE, MAX_NETWORK_BYPASS_ADDRESSES, NETWORK_SITES, parseNetworkEndpoint, type FlowBridgeSettings, type FlowBridgeSnapshot, type NetworkEngineStatus, type NetworkSample, type NetworkSite, type NetworkCheck } from '../shared/flowbridge-types';
 import type { SettingsStore } from './settings';
 import { NetworkAuthorizationRequired, NetworkEngineUnavailableError, type NetworkEngine } from './flowbridge-engine';
 const KEY = 'network.flowbridge.v1', LEASE = 'network.flowbridge.lease';
 const idleStatus = (): NetworkEngineStatus => ({ running: false, cleanupConfirmed: true, localPort: null, uploadBytes: 0, downloadBytes: 0, connections: 0, message: '' });
 const plain = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
+function normalizeBypassAddresses(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length > MAX_NETWORK_BYPASS_ADDRESSES) {
+    throw new Error(`直连白名单最多支持 ${MAX_NETWORK_BYPASS_ADDRESSES} 个 IP 地址。`);
+  }
+  const addresses = new Set<string>();
+  const invalid = '直连白名单只接受单个 IPv4 或 IPv6 地址，请去掉端口、网段和主机名。';
+  for (const input of value) {
+    if (typeof input !== 'string' || input.length > 45 || input.includes('%')) throw new Error(invalid);
+    const family = isIP(input);
+    if (family !== 4 && family !== 6) throw new Error(invalid);
+    const address = family === 6 ? new URL(`http://[${input}]`).hostname.slice(1, -1) : input;
+    if (isReservedBypassAddress(address, family)) {
+      throw new Error('直连白名单不能使用组播、未指定、广播、映射地址或 ModelDock 内部网络地址。');
+    }
+    addresses.add(address);
+  }
+  return [...addresses].sort();
+}
+function isReservedBypassAddress(address: string, family: 4 | 6): boolean {
+  if (family === 4) {
+    const firstOctet = Number(address.split('.')[0]);
+    return address === '0.0.0.0' || address === '255.255.255.255' || (firstOctet >= 224 && firstOctet <= 239)
+      || /^172\.31\.255\.[0-3]$/.test(address) || /^198\.(18|19)\./.test(address);
+  }
+  return address === '::' || /^ff[\da-f]{2}:/.test(address) || /^::ffff:[\da-f]+:[\da-f]+$/.test(address)
+    || /^fd42:73fb:4827::[1-3]?$/.test(address);
+}
 export function validateNetworkSettings(raw: unknown, previous: FlowBridgeSettings, platform: string, gatewayPort: number): FlowBridgeSettings {
   if (!plain(raw) || Object.keys(raw).some(key => !Object.hasOwn(DEFAULT_FLOWBRIDGE, key))) throw new Error('网络设置字段无效。');
   const next = { ...previous, ...raw };
+  next.bypassAddresses = normalizeBypassAddresses(next.bypassAddresses);
   if (!['http', 'global'].includes(next.mode) || !['fast', 'compatible'].includes(next.dnsMode) || typeof next.autoConnect !== 'boolean' || typeof next.autoDiscover !== 'boolean' || typeof next.showMiniOnStart !== 'boolean') throw new Error('网络设置选项无效。');
   if (typeof next.address !== 'string' || next.address.length > 512 || /[\s\x00-\x1f\x7f\\]/.test(next.address)) throw new Error('请填写不含凭据的代理地址和端口。');
   if (!next.address) { if (next.autoConnect && !next.autoDiscover) throw new Error('自动连接需要代理地址或启动时自动查找。'); return next; }
@@ -105,7 +133,7 @@ export class FlowBridgeManager {
   snapshot(): FlowBridgeSnapshot {
     this.prune();
     const status = { ...this.current, cleanupConfirmed: !this.active && this.current.cleanupConfirmed };
-    return { settings: { ...this.settings }, state: this.state, message: this.message, platform: this.options.platform, status, history: this.history.map(v => ({ ...v })) };
+    return { settings: { ...this.settings, bypassAddresses: [...this.settings.bypassAddresses] }, state: this.state, message: this.message, platform: this.options.platform, status, history: this.history.map(v => ({ ...v })) };
   }
   private getEngine() {
     return this.engine ??= this.options.engine(message => { this.message = message; }, () => {
@@ -125,7 +153,10 @@ export class FlowBridgeManager {
       try {
         if (options?.offlineOnly && this.active) throw new Error('网络连接状态已变化。请断开并完成恢复后再修改代理地址。');
         const next = validateNetworkSettings(patch, this.settings, this.options.platform, this.options.gatewayPort());
-        const reconnect = this.state === 'connected' && ['address', 'mode', 'dnsMode'].some(k => next[k as keyof FlowBridgeSettings] !== this.settings[k as keyof FlowBridgeSettings]);
+        const bypassChanged = next.mode === 'global' && (next.bypassAddresses.length !== this.settings.bypassAddresses.length
+          || next.bypassAddresses.some((address, index) => address !== this.settings.bypassAddresses[index]));
+        const reconnect = this.state === 'connected' && (bypassChanged
+          || ['address', 'mode', 'dnsMode'].some(k => next[k as keyof FlowBridgeSettings] !== this.settings[k as keyof FlowBridgeSettings]));
         if (reconnect && !next.address) throw new Error('请先断开当前连接，再清除上游代理地址。');
         if (this.active && this.state !== 'connected') throw new Error('请先点击「恢复网络」，完成后再修改网络设置。');
         if (reconnect) await this.stop();

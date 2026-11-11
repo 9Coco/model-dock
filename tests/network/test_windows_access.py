@@ -71,17 +71,20 @@ class AccessTests(unittest.TestCase):
         self.install.assert_not_called()
         self.run_task.assert_called_once()
 
-    def test_recovery_accepts_the_previous_service_probe_payload_only_for_stopping(self):
-        previous = '5e6024be86dc8e951162936a9a8de7324bbb1c3231dcfcf1b300c9d10ea4f860'
-        self.assertIn(previous, access.RECOVERY_PREDECESSORS)
+    def test_recovery_accepts_recent_previous_payloads_only_for_stopping(self):
         stream = self.pipe.return_value = Mock()
         self.pipe.side_effect = None
         stream.readline.return_value = b'{"result":true}\n'
-        self.state.side_effect = lambda sid, digest: 'ready' if digest == previous else 'outdated'
-        self.assertTrue(access.NetworkAccess(Mock()).call('stop'))
-        stream.write.assert_called_once_with(b'{"method": "stop"}\n')
-        with self.assertRaises(access.AuthorizationRequired):
-            access.NetworkAccess(Mock()).open(False)
+        for previous in ('5e6024be86dc8e951162936a9a8de7324bbb1c3231dcfcf1b300c9d10ea4f860',
+                         '988ad9732df5efe0940552d71fd846716db3b6cc9d4a27edb94f0ac0a80121fd'):
+            with self.subTest(previous=previous):
+                self.assertIn(previous, access.RECOVERY_PREDECESSORS)
+                stream.reset_mock()
+                self.state.side_effect = lambda sid, digest: 'ready' if digest == previous else 'outdated'
+                self.assertTrue(access.NetworkAccess(Mock()).call('stop'))
+                stream.write.assert_called_once_with(b'{"method": "stop"}\n')
+                with self.assertRaises(access.AuthorizationRequired):
+                    access.NetworkAccess(Mock()).open(False)
         self.install.assert_not_called()
 
     def test_manual_repair_upgrades_the_old_pipe_before_recovery(self):
@@ -133,6 +136,29 @@ class WorkerTests(unittest.TestCase):
                                     {'method': 'stop'}, {'method': 'stop'}], controller)
         self.assertEqual(replies[-2:], [{'error': 'route in use'}, {'result': True}])
         self.assertEqual(controller.close.call_count, 2)
+
+    def test_allowlist_is_carried_from_task_client_to_protected_controller(self):
+        endpoint = worker.parse_global_address('socks5://127.0.0.1:1080')
+        destinations = ['192.0.2.42', '2001:db8::42']
+        access_client = Mock()
+        controller = access.TaskTunController(access_client, endpoint, 'fast', bypass_addresses=destinations)
+        controller.start()
+        method, = access_client.call.call_args.args
+        request = {'method': method, **access_client.call.call_args.kwargs}
+        replies, factory = self.exchange([request], Mock(info={'proxy_port': 54321}))
+        self.assertEqual(replies, [{'result': 54321}])
+        self.assertEqual(factory.call_args.kwargs['bypass_addresses'], destinations)
+
+    def test_protected_controller_rejects_invalid_allowlist_before_start(self):
+        stream = Mock()
+        request = {'method': 'start', 'address': 'socks5://127.0.0.1:1080', 'dnsMode': 'fast',
+                   'bypassAddresses': ['0.0.0.0/0']}
+        stream.readline = io.BytesIO(json.dumps(request).encode() + b'\n').readline
+        with patch.object(worker.TunController, 'start') as start:
+            worker.serve(stream, Path('protected-fixture'))
+        start.assert_not_called()
+        reply = json.loads(stream.write.call_args.args[0])
+        self.assertIn('直连白名单', reply['error'])
 
 
 @unittest.skipUnless(sys.platform == 'win32', 'Windows native pipe')

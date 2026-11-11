@@ -18,6 +18,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 import tun_helper as helper
+from tun_config import normalize_bypass_addresses
 
 
 class FakeIP:
@@ -199,7 +200,7 @@ class ValidationTests(unittest.TestCase):
             cache.mkdir()
             (cache / "tun_config.cpython-310.pyc").write_bytes(b"not trusted bytecode")
             with patch.object(helper, "SOURCE_DIR", root), patch.object(helper, "require_root_path") as safety:
-                self.assertEqual(helper._load_config_builder()(), "source")
+                self.assertEqual(helper._load_tun_config().build_config(), "source")
                 safety.assert_called_once_with(root / "tun_config.py")
 
     def test_preflight_error_acknowledges_that_no_changes_were_made(self):
@@ -618,7 +619,7 @@ class JournalTests(unittest.TestCase):
         self.journal.interface(7, ownership)
         self.assertGreater(self.journal.path.stat().st_size, 8192)
         self.assertEqual(self.journal._read()["ownership"], ownership)
-        self.journal.path.write_bytes(b"x" * 262145)
+        self.journal.path.write_bytes(b"x" * (helper.MAX_JOURNAL_BYTES + 1))
         with self.assertRaises(helper.HelperError): self.journal._read()
 
     def test_core_identity_checks_starttime_executable_uid_and_exact_args(self):
@@ -661,7 +662,7 @@ class RecoveryProtocolTests(unittest.TestCase):
                 reader.close = Mock()
                 with ExitStack() as stack:
                     for target, value in (("validate_invoker", lambda: 1000), ("validate_installation", lambda: None),
-                                          ("_load_config_builder", Mock()), ("find_ip_command", lambda: "/fake/ip"),
+                                          ("_load_tun_config", Mock()), ("find_ip_command", lambda: "/fake/ip"),
                                           ("_prepare_runtime", lambda: None), ("MessageReader", lambda fd: reader),
                                           ("SessionJournal", lambda uid: journal)):
                         stack.enter_context(patch.object(helper, target, value))
@@ -711,6 +712,19 @@ class ReusableProtocolTests(unittest.TestCase):
                         {"command": "stop"}, {**self.stop(), "id": True}):
             with self.subTest(request=request), self.assertRaises(helper.HelperError):
                 helper.validate_reusable_request(request, command="stop", session_id=1)
+
+    def test_v3_start_normalizes_the_allowlist_and_stop_cannot_change_it(self):
+        addresses = ["172.30.238.94", "FD77:0:0:0::10", "fd77::10"]
+        endpoint = helper.validate_reusable_request({**self.start(), "bypassAddresses": addresses},
+                                                   command="start", normalize_bypass=normalize_bypass_addresses)
+        self.assertEqual(endpoint.bypass_addresses, ("172.30.238.94", "fd77::10"))
+        self.assertEqual(helper.validate_reusable_request(self.start(), command="start").bypass_addresses, ())
+        for invalid in (None, "172.30.238.94", ["172.30.238.0/24"], ["172.31.255.2"], ["::1"] * 33):
+            with self.subTest(invalid=invalid), self.assertRaises(helper.HelperError):
+                helper.validate_reusable_request({**self.start(), "bypassAddresses": invalid},
+                                                 command="start", normalize_bypass=normalize_bypass_addresses)
+        with self.assertRaises(helper.HelperError):
+            helper.validate_reusable_request({**self.stop(), "bypassAddresses": addresses}, command="stop")
 
     def broker(self, messages, *, result=0, stop_event=None):
         output = io.StringIO()

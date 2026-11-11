@@ -48,6 +48,23 @@ class TunConfigTests(unittest.TestCase):
         self.assertNotIn("10.15.60.93/32", inbound["route_exclude_address"])
         self.assertNotIn("10.0.0.0/8", inbound["route_exclude_address"])
 
+    def test_direct_exclusions_are_exact_and_canonical(self):
+        config = self.config(bypass_addresses=["172.30.238.94", "FD77:73FB:0:0::10", "fd77:73fb::10",
+                                              "172.30.238.94", "127.0.0.2", "::1"])
+        inbound = config["inbounds"][0]
+        self.assertEqual(inbound["route_address"], list(ROUTE_ADDRESSES))
+        self.assertEqual(inbound["route_exclude_address"], [*LOOPBACK_EXCLUDES, "172.30.238.94/32", "fd77:73fb::10/128"])
+        self.assertEqual([outbound["tag"] for outbound in config["outbounds"]], [OUTBOUND_TAG])
+
+    def test_rejects_broad_or_internal_exclusions(self):
+        invalid = [None, "172.30.238.94", ["192.0.2.1"] * 33]
+        invalid += [[item] for item in (None, 1, "172.30.238.0/24", "172.30.238.94:8022",
+                    "host.local", "fe80::1%wlan0", "::ffff:192.0.2.1", "::", "0.0.0.0", "224.0.0.1",
+                    "ff02::1", "255.255.255.255", "172.31.255.3", "fd42:73fb:4827::2", "198.19.1.1")]
+        for entries in invalid:
+            with self.subTest(entries=entries), self.assertRaises(ValueError):
+                self.config(bypass_addresses=entries)
+
     def test_dns_is_hijacked_before_tcp_udp_routing_and_uses_verified_proxied_doh(self):
         config = self.config()
         inbound = config["inbounds"][0]
@@ -162,7 +179,8 @@ class PinnedCoreCheckTests(unittest.TestCase):
 
     def test_actual_core_accepts_ipv4_ipv6_and_test_inbound_configs(self):
         for target, proxy_port in ((endpoint(), None), (endpoint("fd00::123"), None), (endpoint(), 39091)):
-            config = build_config(target, self.physical, 39090, SECRET, proxy_port=proxy_port)
+            config = build_config(target, self.physical, 39090, SECRET, proxy_port=proxy_port,
+                                  bypass_addresses=["172.30.238.94", "fd77:73fb::10"])
             with self.subTest(host=target.host, proxy_port=proxy_port), tempfile.TemporaryDirectory() as directory:
                 path = Path(directory) / "config.json"
                 path.write_text(json.dumps(config), encoding="utf-8")

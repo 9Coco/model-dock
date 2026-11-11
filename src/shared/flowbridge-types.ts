@@ -14,11 +14,16 @@ export interface FlowBridgeSettings {
   address: string;
   mode: NetworkMode;
   dnsMode: 'fast' | 'compatible';
+  bypassAddresses: readonly string[];
   autoConnect: boolean;
   autoDiscover: boolean;
   showMiniOnStart: boolean;
 }
-export const DEFAULT_FLOWBRIDGE: Readonly<FlowBridgeSettings> = Object.freeze({ address: '', mode: 'http', dnsMode: 'fast', autoConnect: false, autoDiscover: true, showMiniOnStart: false });
+export const MAX_NETWORK_BYPASS_ADDRESSES = 32;
+export const DEFAULT_FLOWBRIDGE: Readonly<FlowBridgeSettings> = Object.freeze({
+  address: '', mode: 'http', dnsMode: 'fast', bypassAddresses: Object.freeze([]),
+  autoConnect: false, autoDiscover: true, showMiniOnStart: false,
+});
 export interface NetworkSample { time: number; uploadRate: number; downloadRate: number; uploadBytes: number; downloadBytes: number }
 export interface NetworkEngineStatus { running: boolean; cleanupConfirmed: boolean; localPort: number | null; uploadBytes: number; downloadBytes: number; connections: number; message: string }
 export interface FlowBridgeSnapshot {

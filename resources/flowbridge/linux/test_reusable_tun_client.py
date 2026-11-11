@@ -63,10 +63,10 @@ class ReusableTunClientTests(unittest.TestCase):
             controller._sampling_stop.set()
             if controller._sampler:controller._sampler.join(.3)
         self.preflight.stop()
-    def make(self,process=None):
+    def make(self,process=None,**kwargs):
         process=process or ReusableProcess();factory=FakeFactory(process)
         controller=client.ReusableTunController(Endpoint('10.15.60.93',38473),popen_factory=factory,
-            api_opener=FakeOpener(),start_timeout=.3,stop_timeout=.15,poll_interval=.01,api_timeout=.1)
+            api_opener=FakeOpener(),start_timeout=.3,stop_timeout=.15,poll_interval=.01,api_timeout=.1,**kwargs)
         self.controllers.append((controller,process,factory))
         return controller,process,factory
 
@@ -87,6 +87,15 @@ class ReusableTunClientTests(unittest.TestCase):
         self.assertFalse(controller.authorization_open)
         self.assertEqual(process.forced_signals,0)
         self.assertEqual(process.poll(),0)
+
+    def test_start_sends_saved_destination_exceptions_and_stop_stays_unchanged(self):
+        addresses = ['172.30.238.94', 'fd77::10']
+        controller, process, _ = self.make(bypass_addresses=addresses)
+        addresses.clear()
+        controller.start()
+        self.assertEqual(process.stdin.messages[-1]['bypassAddresses'], ['172.30.238.94', 'fd77::10'])
+        controller.stop()
+        self.assertEqual(process.stdin.messages[-1], {'version': 3, 'command': 'stop', 'id': 1})
 
     def test_stop_and_close_without_first_start_never_request_authorization(self):
         controller,_,factory=self.make();controller.stop();controller.close()

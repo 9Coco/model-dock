@@ -38,13 +38,14 @@ from urllib.parse import parse_qs, urlsplit
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "linux"))
 from tun_config import (CORE_VERSION, DOH_SERVER_NAME, INTERFACE_NAME, ROUTE_TABLE,
-                        RULE_INDEX, RULE_LAST, build_config)
+                        RULE_INDEX, RULE_LAST, build_config, normalize_bypass_addresses)
 
 HOST_INTERFACE = "fb-host"
 CLIENT_INTERFACE = "fb-uplink"
 HOST4, CLIENT4 = "10.77.0.1", "10.77.0.2"
 HOST6, CLIENT6 = "fd77:73fb::1", "fd77:73fb::2"
 TARGET4, TARGET6 = "198.51.100.7", "2001:db8::7"
+DIRECT4, DIRECT6 = "198.51.100.8", "2001:db8::8"
 UDP_PORT = 49273
 ANSWER = "203.0.113.77"
 PAYLOAD = b"flowbridge-netns-ok"
@@ -393,6 +394,18 @@ def assert_clean():
             raise AssertionError("owned route table remained after core exit")
 
 
+def assert_allowlist_routes():
+    devices = {}
+    for family, direct, captured in (("-4", DIRECT4, TARGET4), ("-6", DIRECT6, TARGET6)):
+        for target, expected in ((direct, CLIENT_INTERFACE), (captured, INTERFACE_NAME)):
+            routes = ip_json(family, "route", "get", target)
+            device = routes[0].get("dev") if routes else None
+            if device != expected:
+                raise AssertionError(f"{target} selected {device}; expected {expected}")
+            devices[target] = device
+    return devices
+
+
 def resource_snapshot():
     resources = {}
     for family in ("-4", "-6"):
@@ -559,7 +572,8 @@ def run_journal_helper(core):
     tun_helper.CORE_PATH = core
     tun_helper.validate_invoker = lambda: uid
     tun_helper.validate_installation = lambda: None
-    tun_helper._load_config_builder = lambda: test_config
+    tun_helper._load_tun_config = lambda: SimpleNamespace(build_config=test_config,
+                                                         normalize_bypass_addresses=normalize_bypass_addresses)
     tun_helper.find_ip_command = lambda: shutil.which("ip") or "/usr/sbin/ip"
     tun_helper.require_root_path = private_run_path
     # Production main rejects all command-line arguments. The wrapper's flags
@@ -589,12 +603,14 @@ def run_journal_recovery(core, initialization):
         old_helper = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                       stderr=subprocess.PIPE, text=True, env=environment)
         old_helper.stdin.write(json.dumps({"version": 2, "host": HOST4,
-                                          "port": initialization["proxy_port"]}) + "\n")
+                                          "port": initialization["proxy_port"],
+                                          "bypassAddresses": [DIRECT4, DIRECT6]}) + "\n")
         old_helper.stdin.flush()
         ready = read_child_line(old_helper, 22)
         if ready.get("event") != "ready":
             raise AssertionError("journaled helper did not become ready: " + json.dumps(
                 {key: ready[key] for key in ("event", "message") if key in ready}, ensure_ascii=False))
+        allowlist_routes = assert_allowlist_routes()
         value = json.loads(journal_path.read_text())
         if value.get("ifindex") is None or not isinstance(value.get("ownership"), dict):
             raise AssertionError("ready journal did not persist interface ownership")
@@ -640,6 +656,7 @@ def run_journal_recovery(core, initialization):
         if journal_path.exists() or work_dir.exists():
             raise AssertionError("recovery left the journal or private session workspace behind")
         return {"ready": True, "ipv4_tcp": True, "helper_returncode": old_helper.returncode,
+                "direct_allowlist_routes": allowlist_routes,
                 "core_exited_on_helper_death": True, "journal_ownership_counts": journal_counts,
                 "resources_before_recovery": before, "recovery_events": events,
                 "journal_removed": True, "workspace_removed": True, "recovery_cleanup": True}

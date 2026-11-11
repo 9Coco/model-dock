@@ -30,7 +30,7 @@ from linux.tun_client import TunController as _Metrics, TunStartError, TunStopEr
 from windows import native
 from windows.proxy import validate_endpoint
 from windows.system_proxy import atomic_json
-from windows.tun_config import CORE_VERSION, INTERFACE_NAME, build_config
+from windows.tun_config import CORE_VERSION, INTERFACE_NAME, build_config, normalize_bypass_addresses
 
 
 def core_path():
@@ -68,7 +68,7 @@ class TunController(_Metrics):
     def __init__(self, endpoint, *, dns_mode='fast', progress=None, start_timeout=25.0, stop_timeout=15.0,
                  poll_interval=1.0, api_timeout=2.0, api_opener=None,
                  platform_api=None, core_provider=None, process_factory=None,
-                 config_checker=None, state_dir=None):
+                 config_checker=None, state_dir=None, bypass_addresses=()):
         validate_endpoint(endpoint)
         if dns_mode not in ('fast', 'compatible'):
             raise ValueError('解析模式必须为快速解析或兼容解析。')
@@ -77,6 +77,7 @@ class TunController(_Metrics):
                 raise ValueError('超时与采样间隔必须为正数。')
         self.endpoint = endpoint
         self.dns_mode = dns_mode
+        self.bypass_addresses = normalize_bypass_addresses(bypass_addresses)
         if progress is not None and not callable(progress):
             raise ValueError('progress must be callable')
         self._progress = progress
@@ -267,7 +268,8 @@ class TunController(_Metrics):
                 self._interface = INTERFACE_NAME
                 config = build_config(self.endpoint, self._api_port, self._secret,
                                       proxy_port=self._proxy_port, bypass_process_path=bypass,
-                                      dns_mode=self.dns_mode, cache_path=str(self._dns_cache))
+                                      dns_mode=self.dns_mode, cache_path=str(self._dns_cache),
+                                      bypass_addresses=self.bypass_addresses)
                 self._directory = Path(tempfile.mkdtemp(prefix='tun-', dir=self._state_dir))
                 config_path = self._directory / 'config.json'
                 config_path.write_text(json.dumps(config), encoding='utf-8')
