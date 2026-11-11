@@ -176,7 +176,7 @@ describe('JetBrains native IDE API', () => {
     const api = new JetBrainsIdeApi({ fetch, now: () => NOW });
     const models = await api.models(AI);
     expect(models.data.map(value => value.id)).toEqual(['openai-gpt-fixture', 'anthropic', 'gemini', 'vertex-claude', 'bedrock', 'xai', 'vllm', 'azure-fixture']);
-    expect(models.data[0]).toEqual({ id: profile.id, object: 'model', owned_by: 'jetbrains', name: 'Fixture GPT', context_length: 128000, max_output_tokens: 16000, modeldock_catalog_visibility: 'historical' });
+    expect(models.data[0]).toEqual({ id: profile.id, object: 'model', owned_by: 'jetbrains', name: 'Fixture GPT', context_length: 128000, max_output_tokens: 16000, modeldock_catalog_visibility: 'historical', reasoning_efforts: [] });
     expect(JSON.stringify(models)).not.toContain('gpt-native-fixture');
     models.data[0].id = 'mutated-outside';
     await expect(api.chat(AI, { model: 'mutated-outside', messages: [{ role: 'user', content: 'fixture' }] }, signal())).rejects.toMatchObject({ code: 'model' });
@@ -372,7 +372,7 @@ describe('JetBrains native multi-vendor V9 routing', () => {
   it('rejects unsupported reasoning before any inference POST and does not retry', async () => {
     const fetch = mockTransport(url => { expect(url.endsWith('profiles/v9')).toBe(true); return reply({ profiles: [{ ...nativeProfile('claude'), provider: 'Anthropic' }] }); });
     const api = new JetBrainsIdeApi({ fetch, now: () => NOW });
-    await expect(api.chat(AI, { model: 'claude', messages: [{ role: 'user', content: 'q' }], reasoning_effort: 'high' }, signal())).rejects.toMatchObject({ code: 'capability' });
+    await expect(api.chat(AI, { model: 'claude', messages: [{ role: 'user', content: 'q' }], reasoning_effort: 'high' }, signal())).rejects.toMatchObject({ code: 'reasoning', status: 400 });
     expect(fetch).toHaveBeenCalledTimes(1);
   });
   it('rejects an HTTP 200 JSON error instead of presenting it as a successful native vendor answer', async () => {

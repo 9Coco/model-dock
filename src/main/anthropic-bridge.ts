@@ -66,7 +66,7 @@ export function parseAnthropicRequest(value: unknown, modelWireApi: WireApi): Js
   if (body.top_k !== undefined) return invalid('上游 Chat/Responses 不支持 Anthropic top_k。');
   if (body.output_config !== undefined) {
     const config = object(body.output_config);
-    if (!isObject(body.output_config) || Object.keys(config).some(key => key !== 'effort') || !['low', 'medium', 'high', 'max'].includes(String(config.effort)))
+    if (!isObject(body.output_config) || Object.keys(config).some(key => key !== 'effort') || !['low', 'medium', 'high', 'xhigh', 'max'].includes(String(config.effort)))
       return invalid('跨协议桥接只支持 output_config.effort；结构化输出格式暂不支持。');
   }
   const result: Json = { model: string(body.model, '模型 ID'), stream: body.stream === true,

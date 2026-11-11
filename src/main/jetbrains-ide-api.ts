@@ -4,6 +4,7 @@ import type { QuotaWindow, SubscriptionUsage } from '../shared/auth-types';
 import { JetBrainsGrazieBridgeError, JetBrainsGrazieSignatures, prepareJetBrainsGrazieChat, createJetBrainsGrazieChatStream, collectJetBrainsGrazieChat } from './jetbrains-grazie-bridge';
 import { JetBrainsLicenseCatalogError, readJetBrainsIdeLicenseCatalog } from './jetbrains-license-catalog';
 import { jetBrainsClientModelHistory, jetBrainsClientModelVisibility } from './jetbrains-client-models';
+import { jetBrainsReasoning } from './jetbrains-reasoning';
 
 /** Native personal-license API, independently of Central CLI. The wire contract
  * comes from the installed JetBrains AI Assistant 2026.2 public classes:
@@ -20,7 +21,7 @@ const REQUEST_LIMIT = 2 * 1024 * 1024;
 const DIRECTORY_TTL = 5 * 60_000;
 const CALLER = JSON.stringify({ name: 'modeldock', version });
 type JsonObject = Record<string, unknown>;
-export type JetBrainsIdeApiErrorCode = 'credentials' | 'authorization' | 'entitlement' | 'region' | 'network' | 'response' | 'cancelled' | 'model' | 'request' | 'capability' | 'limit' | 'license-source';
+export type JetBrainsIdeApiErrorCode = 'credentials' | 'authorization' | 'entitlement' | 'region' | 'network' | 'response' | 'cancelled' | 'model' | 'request' | 'capability' | 'reasoning' | 'limit' | 'license-source';
 const messages: Record<JetBrainsIdeApiErrorCode, string> = {
   credentials: 'JetBrains 账号授权或许可证信息无效，请在原生客户端重新登录后重试。',
   authorization: 'JetBrains 账号授权已失效，请在原生客户端重新登录后重试。',
@@ -32,6 +33,7 @@ const messages: Record<JetBrainsIdeApiErrorCode, string> = {
   model: '此模型未在当前账号的兼容模型目录中，请刷新模型列表后重试。',
   request: '此 JetBrains 连接需要有效的 Chat Completions 请求。',
   capability: '此 JetBrains 模型暂不支持所请求的参数或工具历史。请关闭扩展思考、严格工具模式，或新建会话后重试。',
+  reasoning: '此 JetBrains 模型当前不支持所选思考等级。请刷新供应商模型目录、补全思考档位并重新同步工具配置。',
   limit: 'JetBrains AI 请求或响应超出支持范围。',
   'license-source': '此 JetBrains 登录方式暂未支持账号许可证目录，请从已支持的 IDE 登录来源导入。原有账号保持不变。',
 };
@@ -41,7 +43,7 @@ export class JetBrainsIdeApiError extends Error {
     super(messages[code]); this.name = 'JetBrainsIdeApiError';
     this.status = status && Number.isInteger(status) && status >= 400 && status <= 599 ? status
       : code === 'region' ? 451 : ['credentials', 'authorization'].includes(code) ? 401 : code === 'entitlement' ? 403
-        : ['request', 'model', 'capability', 'license-source'].includes(code) ? 400 : code === 'cancelled' ? 504 : code === 'limit' ? 413 : 502;
+        : ['request', 'model', 'capability', 'reasoning', 'license-source'].includes(code) ? 400 : code === 'cancelled' ? 504 : code === 'limit' ? 413 : 502;
   }
 }
 export interface JetBrainsIdeModel {
@@ -54,6 +56,9 @@ export interface JetBrainsIdeModel {
   tools?: boolean;
   vision?: boolean;
   reasoning_efforts?: string[];
+  default_reasoning_effort?: string;
+  thinking?: boolean;
+  reasoning_effort_format?: 'chat-completions';
   modeldock_catalog_visibility: 'current' | 'historical';
 }
 export interface JetBrainsIdeModels { data: JetBrainsIdeModel[]; modeldock_history: typeof jetBrainsClientModelHistory }
@@ -251,10 +256,12 @@ export class JetBrainsIdeApi {
       const name = safeText(profile.modelName, 160); if (name) model.name = name;
       if (typeof profile.contextLimit === 'number' && Number.isSafeInteger(profile.contextLimit) && profile.contextLimit > 0) model.context_length = profile.contextLimit;
       if (typeof profile.maxOutputTokens === 'number' && Number.isSafeInteger(profile.maxOutputTokens) && profile.maxOutputTokens > 0) model.max_output_tokens = profile.maxOutputTokens;
-      // No user-configurable thinking/effort controls are projected until the
-      // V9 reasoning wire is verified; prevent unrelated dictionary defaults.
-      if (nativeGrazie) model.reasoning_efforts = [];
       const definition = object(profile.chatDefinition)!;
+      const reasoning = jetBrainsReasoning(id, String(profile.provider), definition.parameters);
+      // Keep unknown profiles explicit, so generic vendor dictionaries cannot
+      // invent controls which this native account adapter cannot translate.
+      model.reasoning_efforts = reasoning?.levels ?? [];
+      if (reasoning) { model.default_reasoning_effort = reasoning.defaultLevel; model.thinking = true; model.reasoning_effort_format = 'chat-completions'; }
       // Official V9 ProfileInfo projection requires both tool messages and the
       // toolConfig.tools parameter. Missing descriptors remain unknown.
       if (Array.isArray(definition.roles) && Array.isArray(definition.parameters)) model.tools = definition.roles.includes('tool') && definition.parameters.includes('toolConfig.tools');
@@ -267,7 +274,7 @@ export class JetBrainsIdeApi {
     this.directories.set(key, { fetchedAt: this.now(), models });
     // Visibility is discovery metadata only. Retain every compatible route so
     // showing a narrower client menu never invalidates already-saved models.
-    return { data: Array.from(models.values(), value => ({ ...value.model })), modeldock_history: { ...jetBrainsClientModelHistory } };
+    return { data: Array.from(models.values(), value => structuredClone(value.model)), modeldock_history: { ...jetBrainsClientModelHistory } };
   }
 
   async chat(token: string, body: Record<string, unknown>, signal: AbortSignal): Promise<Response> {
@@ -278,9 +285,12 @@ export class JetBrainsIdeApi {
     if (!directory || this.now() - directory.fetchedAt >= DIRECTORY_TTL) { await this.models(token, signal); directory = this.directories.get(digest(token)); }
     const route = directory?.models.get(requestModel);
     if (!route) throw failure('model');
+    if (body.reasoning_effort !== undefined && (typeof body.reasoning_effort !== 'string'
+      || (route.protocol === 'grazie' || !!route.model.reasoning_efforts?.length) && !route.model.reasoning_efforts?.includes(body.reasoning_effort))) throw failure('reasoning');
     const grazie = route.protocol === 'grazie';
     const bridgeOptions = {
       profileId: route.model.id, maxOutputTokens: route.model.max_output_tokens,
+      reasoningEfforts: route.model.reasoning_efforts,
       signatureNamespace: `${digest(token)}:${route.model.id}`, signatures: this.signatures, signal,
       history: body.messages, requireToolSignatures: route.requireToolSignatures,
       toolNames: Array.isArray(body.tools) ? body.tools.map(value => object(object(value)?.function)?.name).filter((name): name is string => typeof name === 'string') : [],
