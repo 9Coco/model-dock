@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { request as httpRequest } from 'node:http';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../src/main/store';
@@ -8,6 +8,8 @@ import { Gateway } from '../src/main/gateway';
 import { JetBrainsIdeApi } from '../src/main/jetbrains-ide-api';
 import { JetBrainsGatewayAdapter } from '../src/main/jetbrains-gateway-adapter';
 import type { Provider } from '../src/shared/types';
+import { ModelCatalog } from '../src/main/catalog';
+import { applyConfig, buildConfig, buildCopilotDesktopPlan, buildDshPlan } from '../src/main/adapters';
 
 // Public installed V9 DTO shapes and entirely synthetic credentials. The only
 // listening socket is the test Gateway on an ephemeral loopback port. Official
@@ -96,6 +98,78 @@ async function fixture(handler: (request: Seen) => Response | Promise<Response> 
 }
 const requestBody = (model: string, stream: boolean, messages: Json[] = [{ role: 'user', content: 'SYNTHETIC_PRIVATE_PROMPT' }]) => ({ model, stream, messages,
   tools: [{ type: 'function', function: { name: 'lookup', description: 'Synthetic local tool', parameters: { type: 'object', properties: { q: { type: 'string' } }, required: ['q'] } } }], tool_choice: 'auto', max_tokens: 64 });
+
+async function reasoningFixture() {
+  const f = await fixture();
+  const id = 'anthropic-claude-opus-5-5';
+  const native = profile('Anthropic', id);
+  native.chatDefinition.parameters.push('reasoningEffort');
+  f.profiles.set(tokens.a, [native]);
+  const saved = f.store.saveModel({ ...f.models.a.Anthropic, upstreamId: id, reasoningEfforts: [], thinking: true });
+  f.store.saveBinding({ id: 'codex', name: 'Codex', enabled: true, mode: 'aggregate', providerIds: [f.providers.a.id], modelIds: [saved.id], modelSelection: 'selected', defaultModelId: saved.id, note: '' });
+  return { ...f, saved, id };
+}
+
+describe('JetBrains effort discovery and inference regression', () => {
+  const levels = ['low', 'medium', 'high', 'xhigh', 'max'];
+  it('offers an explicit repair for an existing empty catalog and exports the full picker without replacing user settings', async () => {
+    const f = await reasoningFixture();
+    const catalog = new ModelCatalog(f.store, { prepareRequest: f.forbiddenPrepare }, { nativeModels: (provider, signal) => f.adapter.models(provider, signal) });
+    const discovery = await catalog.discover(f.providers.a.id);
+    const candidate = discovery.models.find(row => row.upstreamId === f.id)!;
+    expect(candidate.availableReasoning).toEqual({ levels, defaultLevel: 'low' });
+    expect(f.store.listModels().find(model => model.id === f.saved.id)?.reasoningEfforts).toEqual([]);
+    const before = f.store.listBindings();
+    // Use the same explicit parameter-preview/apply path as the renderer.
+    const preview = await catalog.previewParameters(f.providers.a.id);
+    expect(preview.rows.find(row => row.id === f.saved.id)?.missing).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: 'reasoningEfforts', after: levels, source: 'catalog' }),
+      expect.objectContaining({ field: 'defaultReasoningEffort', after: 'low', source: 'catalog' }),
+    ]));
+    expect(catalog.applyParameters(f.providers.a.id, preview.token, [f.saved.id], false)).toBe(1);
+    const repaired = f.store.listModels().find(model => model.id === f.saved.id)!;
+    expect(repaired).toMatchObject({ id: f.saved.id, alias: f.saved.alias, thinking: true, reasoningEfforts: levels, defaultReasoningEffort: 'low', reasoningEffortFormat: 'chat-completions' });
+    expect(f.store.listBindings()).toEqual(before);
+    for (const id of ['codex', 'vscode', 'copilot', 'dsh', 'copilot-cli'] as const) f.store.saveBinding({ id, name: id, enabled: true, mode: 'aggregate', providerIds: [f.providers.a.id], modelIds: [f.saved.id], modelSelection: 'selected', defaultModelId: f.saved.id, note: '' });
+    const vscode = JSON.parse(buildConfig(f.store, 'vscode', 19191).content);
+    expect(vscode[0].models[0]).toMatchObject({ supportsReasoningEffort: levels, defaultReasoningEffort: 'low', reasoningEffortFormat: 'chat-completions' });
+    expect(buildCopilotDesktopPlan(f.store, 19191).providers[0].models[0]).toMatchObject({ supportedReasoningEfforts: levels });
+    expect(Object.values(buildDshPlan(f.store, 19191).providers)[0].models[0]).toMatchObject({ reasoningEfforts: levels });
+    expect(buildConfig(f.store, 'copilot-cli', 19191).content).toContain('xhigh');
+    await applyConfig(f.store, 'codex', 19191, f.store.dataDir, join(f.store.dataDir, 'backups'), f.store.dataDir);
+    const codex = JSON.parse(readFileSync(join(f.store.dataDir, '.codex', 'modeldock-models.json'), 'utf8')).models[0];
+    expect(codex.supported_reasoning_levels.map((row: Json) => row.effort)).toEqual(levels);
+    expect(codex.default_reasoning_level).toBe('low');
+    expect(f.inferences()).toHaveLength(0);
+    assertPrivate(f);
+  });
+  it.each(levels.flatMap(level => [false, true].flatMap(stream => ['chat', 'responses', 'messages'].map(protocol => ({ level, stream, protocol })))))(
+    'forwards $protocol $level (stream=$stream) through the gateway exactly once', async ({ level, stream, protocol }) => {
+      const f = await reasoningFixture();
+      const body = protocol === 'chat' ? { ...requestBody(f.saved.alias, stream), reasoning_effort: level }
+        : protocol === 'messages' ? { ...messagesBody(f.saved.alias, stream), output_config: { effort: level } }
+          : { model: f.saved.alias, input: 'fixture', stream, reasoning: { effort: level }, max_output_tokens: 64 };
+      const response = await fetch(protocol === 'messages' ? f.messagesUrl : protocol === 'responses' ? f.url.replace('/tool/rider/', '/tool/codex/').replace('/chat/completions', '/responses') : f.url,
+        { method: 'POST', headers: f.headers, body: JSON.stringify(body) });
+      expect(response.status).toBe(200);
+      const text = await response.text();
+      expect(text).toContain('SYNTHETIC_NATIVE_ANSWER');
+      expect(f.inferences()).toHaveLength(1);
+      expect(f.inferences()[0].body).toMatchObject({ profile: f.id, parameters: { reasoningEffort: level, length: 64 } });
+      expect(f.inferences()[0].body).not.toHaveProperty('reasoning_effort');
+      assertPrivate(f, text);
+    });
+  it('rejects unsupported effort before inference and cannot mutate the cached allowlist from discovery results', async () => {
+    const f = await reasoningFixture();
+    const directory = await f.api.models(tokens.a);
+    directory.data[0].reasoning_efforts!.push('ultra');
+    for (const effort of ['ultra', 'none', null, 42]) {
+      const response = await f.post({ ...requestBody(f.saved.alias, false), reasoning_effort: effort });
+      expect(response.status).toBe(400);
+    }
+    expect(f.inferences()).toHaveLength(0);
+  });
+});
 function chunksOf(text: string): Json[] {
   return text.split(/\r\n\r\n|\n\n/).filter(Boolean).map(frame => frame.split(/\r?\n/).filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n')).filter(value => value && value !== '[DONE]').map(value => JSON.parse(value));
 }

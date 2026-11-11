@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { JetBrainsGrazieSignatures } from './jetbrains-grazie-signatures';
 export { JetBrainsGrazieSignatures } from './jetbrains-grazie-signatures';
 type Json = Record<string, unknown>;
-export interface JetBrainsGrazieOptions { profileId?: string; maxOutputTokens?: number; signatureNamespace?: string; signatures?: JetBrainsGrazieSignatures; history?: unknown; requireToolSignatures?: boolean; toolNames?: readonly string[]; signal?: AbortSignal }
+export interface JetBrainsGrazieOptions { profileId?: string; maxOutputTokens?: number; reasoningEfforts?: readonly string[]; signatureNamespace?: string; signatures?: JetBrainsGrazieSignatures; history?: unknown; requireToolSignatures?: boolean; toolNames?: readonly string[]; signal?: AbortSignal }
 export class JetBrainsGrazieBridgeError extends Error {
   constructor(readonly status: 400 | 502, message = status === 400 ? '此 JetBrains 连接暂不支持所请求的消息、参数或签名历史，请使用新的文本会话重试。' : 'JetBrains 返回了无法识别或未完整结束的流，本次响应未被标记为成功。') { super(message); this.name = 'JetBrainsGrazieBridgeError'; }
 }
@@ -45,10 +45,14 @@ function inlineContent(value: unknown, role: string): Json[] {
 /** Matches the installed official ChatModels.Stream.V9.Request serializer.
  * Provider differences stay inside the existing main-process gateway. */
 export function prepareJetBrainsGrazieChat(body: Json, options: JetBrainsGrazieOptions): Json {
-  const allowed = new Set(['model', 'messages', 'stream', 'tools', 'tool_choice', 'parallel_tool_calls', 'max_tokens', 'max_completion_tokens', 'temperature', 'top_p', 'seed', 'stop', 'n', 'stream_options']);
+  const allowed = new Set(['model', 'messages', 'stream', 'tools', 'tool_choice', 'parallel_tool_calls', 'max_tokens', 'max_completion_tokens', 'temperature', 'top_p', 'seed', 'stop', 'n', 'stream_options', 'reasoning_effort']);
   if (Object.keys(body).some(key => !allowed.has(key) && body[key] !== undefined) || !Array.isArray(body.messages) || !body.messages.length || body.messages.length > 4096 || body.stream !== undefined && typeof body.stream !== 'boolean') throw bad();
   if (body.stream_options !== undefined) { const value = object(body.stream_options); if (!value || Object.keys(value).some(key => key !== 'include_usage') || value.include_usage !== undefined && typeof value.include_usage !== 'boolean') throw bad(); }
   const parameters: Json = {}, tools: Json[] = [], toolNames = new Set<string>();
+  if (body.reasoning_effort !== undefined) {
+    if (typeof body.reasoning_effort !== 'string' || !options.reasoningEfforts?.includes(body.reasoning_effort)) throw bad();
+    parameters.reasoningEffort = body.reasoning_effort;
+  }
   if (body.tools !== undefined) {
     if (!Array.isArray(body.tools) || body.tools.length > MAX_TOOLS) throw bad();
     for (const input of body.tools) {
