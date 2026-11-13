@@ -1,12 +1,12 @@
+import { toolCategories, toolCategoryFor } from '../shared/tool-categories';
 import assert from 'node:assert/strict';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { BrowserWindow } from 'electron';
-import type { ConfigPreview, Snapshot, ToolBinding } from '../shared/types';
+import type { ConfigPreview, Snapshot, ToolBinding, ToolId } from '../shared/types';
 
-const toolIds = ['codex', 'claude-code', 'junie', 'opencode', 'dsh', 'vscode', 'copilot', 'copilot-cli', 'webstorm', 'intellij-idea', 'rider', 'pycharm'] as const;
+const toolIds = ['codex', 'claude-code', 'junie', 'opencode', 'opencode-desktop', 'dsh', 'vscode', 'copilot', 'copilot-cli', 'webstorm', 'intellij-idea', 'rider', 'pycharm'] as const;
 const jetBrainsIds = ['webstorm', 'intellij-idea', 'rider', 'pycharm'] as const;
-const inJetBrainsCategory = (tool: string) => tool === 'junie' || (jetBrainsIds as readonly string[]).includes(tool);
 
 interface IconReadback {
   tool: string;
@@ -87,8 +87,8 @@ export async function verifyToolIcons(window: BrowserWindow, outputDir: string, 
   let copilotCliPreview: { canApply: boolean; keyRedacted: boolean; nativeEndpoint: boolean; qualifiedDefault: boolean; externalSyncInvoked: false } | undefined;
   let restoredSize: number[] | undefined;
   const sizeTolerance = process.platform === 'win32' ? 1 : 0;
-  async function selectTool(tool: string): Promise<void> {
-    const category = inJetBrainsCategory(tool) ? 'jetbrains' : 'agent';
+  async function selectTool(tool: ToolId): Promise<void> {
+    const category = toolCategoryFor(tool);
     await evaluate(`document.querySelector('[data-tool-category="${category}"]').click()`);
     await waitFor(`document.querySelector('[data-tool-category="${category}"]')?.getAttribute('aria-selected')==='true'`, `${category} tool category`);
     await evaluate(`document.querySelector('.sidebar [data-page="tools"][data-tool-id=${JSON.stringify(tool)}]').click()`);
@@ -98,7 +98,7 @@ export async function verifyToolIcons(window: BrowserWindow, outputDir: string, 
     assert.ok(icon.ariaHidden && icon.emptyAlt && icon.visible && icon.complete && icon.decoded && icon.localResource, `Tool logo must be visible, decorative and locally decoded: ${icon.tool}`);
     assert.ok(icon.width > 0 && icon.height > 0 && icon.markWidth > 0 && icon.markHeight > 0, `Tool logo must have visible dimensions: ${icon.tool}`);
     const asset = decodeURIComponent(new URL(icon.source).pathname).split('/').pop()!;
-    const identity = icon.tool === 'copilot-cli' ? 'copilot' : icon.tool;
+    const identity = icon.tool === 'copilot-cli' ? 'copilot' : icon.tool === 'opencode-desktop' ? 'opencode' : icon.tool;
     assert.ok(asset.startsWith(`${identity}.`) || asset.startsWith(`${identity}-`), `Tool logo source must match its official product identity: ${icon.tool}`);
     const isJetBrains = (jetBrainsIds as readonly string[]).includes(icon.tool);
     assert.equal(icon.renderMode, isJetBrains ? 'image' : 'mask', `Tool logo must use its intended color/mask source: ${icon.tool}`);
@@ -130,13 +130,13 @@ export async function verifyToolIcons(window: BrowserWindow, outputDir: string, 
           }
           return {viewport:{width:innerWidth,height:innerHeight},sidebar,categories,allToolsVisibleInCategory:categories.every(value=>value.allVisible),documentOverflow:document.documentElement.scrollWidth>innerWidth};
         })()`);
-        assert.deepEqual(value.sidebar.map(icon => icon.tool), [...toolIds.filter(tool => !inJetBrainsCategory(tool)), ...toolIds.filter(inJetBrainsCategory)], 'Twelve tool navigation buttons must show their matching logos in category order');
+        assert.deepEqual(value.sidebar.map(icon => icon.tool), toolCategories.flatMap(category => toolIds.filter(tool => toolCategoryFor(tool) === category.id)), 'Thirteen tool navigation buttons must show their matching logos in category order');
         value.sidebar.forEach(assertIcon);
-        assert.equal(new Set(value.sidebar.map(icon => icon.source)).size, toolIds.length - 1, 'Copilot CLI and desktop share the official Copilot logo; other tools retain their own resources');
+        assert.equal(new Set(value.sidebar.map(icon => icon.source)).size, toolIds.length - 2, 'OpenCode and Copilot share their respective Desktop/TUI logos');
         assert.equal(value.sidebar.find(icon => icon.tool === 'copilot-cli')?.source, value.sidebar.find(icon => icon.tool === 'copilot')?.source, 'Both Copilot tools use the same official product logo');
         assert.equal(value.documentOverflow, false, 'Tool logos must not introduce horizontal document overflow');
-        assert.deepEqual(value.categories.map(category => category.category), ['agent', 'jetbrains'], 'Two tool category tabs remain available');
-        assert.deepEqual(value.categories.map(category => category.tools.length), [7, 5], 'Regular Agent and JetBrains categories retain their tool counts');
+        assert.deepEqual(value.categories.map(category => category.category), ['editor', 'tui', 'desktop'], 'Three product categories remain available');
+        assert.deepEqual(value.categories.map(category => category.tools.length), [5, 4, 4], 'Product category counts match their tools');
         if (height === 1440) assert.ok(value.allToolsVisibleInCategory, 'Tall overview must display all tools together within each category');
         const headers: IconReadback[] = [];
         const screenshots: string[] = [];
@@ -157,7 +157,7 @@ export async function verifyToolIcons(window: BrowserWindow, outputDir: string, 
             const entries = await evaluate<{ cli: boolean; independent: boolean; mode: boolean; preview: boolean; apply: boolean; restore: boolean }>(`(()=>{const guide=document.querySelector('[data-copilot-cli-entry-guide]');return {cli:guide?.textContent.includes('/model')===true,independent:guide?.textContent.includes('无需打开 Copilot app')===true,mode:!!document.querySelector('[data-tool-binding="copilot-cli"] [data-action="tool-use-aggregate"]'),preview:!!document.querySelector('[data-tool-binding="copilot-cli"] [data-action="preview-tool-config"]'),apply:!!document.querySelector('[data-tool-binding="copilot-cli"] [data-action="apply-tool-config"]'),restore:!!document.querySelector('[data-tool-binding="copilot-cli"] [data-action="restore-official-tool-config"]')}})()`);
             assert.deepEqual(entries, { cli: true, independent: true, mode: true, preview: true, apply: true, restore: true }, 'Copilot CLI has an independent terminal guide and shared configuration controls');
           }
-          if (height === 880 && ((jetBrainsIds as readonly string[]).includes(tool) || tool === 'junie' || tool === 'copilot-cli')) {
+          if (height === 880 && ((jetBrainsIds as readonly string[]).includes(tool) || tool === 'junie' || tool === 'copilot-cli' || tool === 'opencode-desktop')) {
             const screenshot = `electron-tool-icons-${theme}-${tool}-detail.png`;
             writeFileSync(join(outputDir, screenshot), await captureUi());
             screenshots.push(screenshot);
@@ -165,8 +165,8 @@ export async function verifyToolIcons(window: BrowserWindow, outputDir: string, 
         }
         const brandedHeaders = headers.filter(icon => (jetBrainsIds as readonly string[]).includes(icon.tool));
         assert.ok(brandedHeaders.every(icon => Math.abs(icon.scale - brandedHeaders[0].scale) < 0.01), 'Four JetBrains logos must have the same relative size');
-        for (const category of ['agent', 'jetbrains']) {
-          await selectTool(category === 'agent' ? 'codex' : 'webstorm');
+        for (const category of ['editor', 'tui', 'desktop']) {
+          await selectTool(category === 'desktop' ? 'opencode-desktop' : category === 'tui' ? 'opencode' : 'webstorm');
           if (height === 1440) await evaluate(`document.querySelector('[data-sidebar-scroll="tools"]').scrollTop=0`);
           const screenshot = `electron-tool-icons-${theme}-${category}-${width}-${height}.png`;
           writeFileSync(join(outputDir, screenshot), await captureUi());

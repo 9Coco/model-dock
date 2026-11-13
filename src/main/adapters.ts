@@ -11,7 +11,8 @@ import { modelDisplayLabel, modelLocalAlias } from '../shared/model-names';
 import { subscriptionDisplayName } from '../shared/subscription-names';
 import type { CopilotDesktopPlan } from './copilot-desktop';
 import { dshPatchPreview, type DshPlan, type DshProviderProfile } from './dsh-config';
-import { openCodeConfigDirectory } from './opencode-paths';
+import { isOpenCodeTool, openCodeConfigTargets, type OpenCodePathOptions } from './opencode-paths';
+import { replacePrivateFile } from './private-file';
 import { applyClaudeConfig, buildClaudeConfig } from './claude-config';
 import { applyJunieConfig, buildJunieConfig } from './junie-config';
 import { applyCopilotCliConfig, buildCopilotCliConfig } from './copilot-cli-config';
@@ -277,7 +278,7 @@ export function buildDshPlan(store: AdapterStore, port: number, revealKey = fals
   }
   return { syncScope, providers, credentials, ...(defaultModel ? { defaultModel } : {}), ...(mappings.length ? { legacyDispatch: { version: 1 as const, mappings } } : {}) };
 }
-export function buildConfig(store: AdapterStore, tool: ToolId, port: number, revealKey = false, homeDirectory = homedir(), options: { jetBrainsOptions?: JetBrainsConfigOptions; junieHome?: string; copilotCliHome?: string; copilotCliProvidersConfig?: string } = {}): ConfigPreview {
+export function buildConfig(store: AdapterStore, tool: ToolId, port: number, revealKey = false, homeDirectory = homedir(), options: OpenCodePathOptions & { jetBrainsOptions?: JetBrainsConfigOptions; junieHome?: string; copilotCliHome?: string; copilotCliProvidersConfig?: string } = {}): ConfigPreview {
   if (isJetBrainsTool(tool)) return buildJetBrainsConfig(store, tool, port, revealKey, homeDirectory, options.jetBrainsOptions);
   // 修改点：Claude Code 按原生 Messages 入口或本机协议桥生成配置，不能落入其他工具适配分支。
   if (tool === 'claude-code') return buildClaudeConfig(store, revealKey, port);
@@ -305,7 +306,7 @@ export function buildConfig(store: AdapterStore, tool: ToolId, port: number, rev
         ? 'TRAE 原生连接的输出预算与采样使用上游原生默认值；思考仍由上游生成，已配置的推理强度选项保留。请重新同步 VS Code 配置并重新加载窗口以使用此适配。' : '')
       + clientBudgetNotice(models),
   };
-  if (tool === 'opencode') {
+  if (isOpenCodeTool(tool)) {
     const provider = Object.fromEntries(groups.map(group => [group.id, { name: group.name,
       npm: group.models[0].wireApi === 'responses' ? '@ai-sdk/openai' : '@ai-sdk/openai-compatible',
       options: { baseURL: group.base, apiKey: group.key }, models: Object.fromEntries(group.models.map(model => [model.alias, {
@@ -315,9 +316,12 @@ export function buildConfig(store: AdapterStore, tool: ToolId, port: number, rev
       tool_call: model.tools, modalities: { input: model.vision ? ['text', 'image'] : ['text'], output: ['text'] },
     }])) }]));
     const defaultGroup = defaultModel && groups.find(group => group.models.some(model => model.id === defaultModel.id));
-    return { filename: 'modeldock-opencode.json', canApply: true,
+    let targetNotice: string, canApply = true;
+    try { targetNotice = `配置目标：${openCodeConfigTargets(tool, homeDirectory, options).target}。`; }
+    catch (error) { canApply = false; targetNotice = `${error instanceof Error ? error.message : '配置路径无法确认。'}当前仅支持预览和导出。`; }
+    return { filename: tool === 'opencode-desktop' ? 'modeldock-opencode-desktop.json' : 'modeldock-opencode.json', canApply,
       content: JSON.stringify({ $schema: 'https://opencode.ai/config.json', ...(defaultGroup ? { model: `${defaultGroup.id}/${defaultModel.alias}` } : {}), provider, enabled_providers: Object.keys(provider) }, null, 2),
-      instructions: connection + '合并到 OpenCode 全局配置，仅启用当前勾选的供应商；其他供应商的配置和凭据保留但不启用，MCP 和现有注释保留。各模型的 SDK 按其协议选择。' + clientBudgetNotice(models),
+      instructions: targetNotice + `${tool === 'opencode-desktop' ? 'Desktop 本机默认服务；自定义启动环境、远程或 WSL 服务需在对应环境配置。' : 'TUI 配置；自定义路径只影响使用该路径的终端。'}未设置独立路径时两端共享全局配置，最近一次同步同时影响两端。完全退出并重新打开客户端后在新会话选择模型。` + connection + '合并到 OpenCode 配置，仅启用当前勾选的供应商；其他供应商的配置和凭据保留但不启用，MCP 和现有注释保留。各模型的 SDK 按其协议选择。' + clientBudgetNotice(models),
     };
   }
   if (tool === 'copilot') {
@@ -349,25 +353,23 @@ export function buildConfig(store: AdapterStore, tool: ToolId, port: number, rev
       + (responses.some(model => model.contextWindow === 0) ? '上下文未知的模型省略可选上下文字段；可在模型编辑中填写实际上下文后重新生成配置。' : ''),
   };
 }
-export function applyConfig(store: AdapterStore, tool: ToolId, port: number, appData: string, backups: string, homeDirectory = homedir(), options: { codexHome?: string; configHome?: string; claudeConfigDir?: string; junieHome?: string; copilotCliHome?: string; copilotCliProvidersConfig?: string; jetBrainsOptions?: JetBrainsConfigOptions } = {}): string {
+export function applyConfig(store: AdapterStore, tool: ToolId, port: number, appData: string, backups: string, homeDirectory = homedir(), options: OpenCodePathOptions & { codexHome?: string; configHome?: string; claudeConfigDir?: string; junieHome?: string; copilotCliHome?: string; copilotCliProvidersConfig?: string; jetBrainsOptions?: JetBrainsConfigOptions } = {}): string {
   if (isJetBrainsTool(tool)) return applyJetBrainsConfig(store, tool, backups, homeDirectory, { ...options.jetBrainsOptions, port });
   if (tool === 'claude-code') return applyClaudeConfig(store, backups, homeDirectory, { claudeConfigDir: options.claudeConfigDir, port });
   if (tool === 'junie') return applyJunieConfig(store, backups, homeDirectory, { junieHome: options.junieHome, port });
   if (tool === 'copilot-cli') return applyCopilotCliConfig(store, backups, homeDirectory, { copilotHome: options.copilotCliHome, providersConfig: options.copilotCliProvidersConfig, port });
   if (tool === 'copilot') throw new Error('Copilot 桌面配置需要通过运行中的原生接口同步。');
   if (tool === 'dsh') throw new Error('DSH 配置需要通过原生插件与凭据同步入口应用。');
-  const config = buildConfig(store, tool, port, true);
-  if (!config.canApply) throw new Error('此工具暂支持预览和导出，请通过其配置入口合并。');
+  const config = buildConfig(store, tool, port, true, homeDirectory, options);
+  if (!config.canApply) throw new Error(isOpenCodeTool(tool) ? config.instructions : '此工具暂支持预览和导出，请通过其配置入口合并。');
   // 修改点：同步、还原、MCP/Skills 使用同一 XDG 配置根，避免写入未被 OpenCode 读取的默认目录。
-  const openCodeDir = openCodeConfigDirectory(homeDirectory, options.configHome);
-  const openCodeJsonc = join(openCodeDir, 'opencode.jsonc');
   const target = tool === 'vscode' ? join(appData, 'Code', 'User', 'chatLanguageModels.json')
-    : tool === 'opencode' ? (existsSync(openCodeJsonc) ? openCodeJsonc : join(openCodeDir, 'opencode.json')) : join(options.codexHome ?? join(homeDirectory, '.codex'), 'config.toml');
+    : isOpenCodeTool(tool) ? openCodeConfigTargets(tool, homeDirectory, options).target : join(options.codexHome ?? join(homeDirectory, '.codex'), 'config.toml');
   const original = existsSync(target) ? readFileSync(target, 'utf8') : null;
   let output: string;
   let companion: { path: string; content: string | null; original: string | null } | undefined;
   let historyChange: { key: string; before: CodexSelectionHistory | null; after: CodexSelectionHistory | null } | undefined;
-  if (tool === 'opencode') {
+  if (isOpenCodeTool(tool)) {
     const errors: ParseError[] = [];
     const current = original ? parseJsonc(original, errors, { allowTrailingComma: true }) : {};
     if (errors.length || !current || typeof current !== 'object' || Array.isArray(current)) throw new Error('OpenCode 配置格式有误，未修改原文件。');
@@ -375,6 +377,10 @@ export function applyConfig(store: AdapterStore, tool: ToolId, port: number, app
     for (const field of ['enabled_providers', 'disabled_providers'] as const) {
       if (current[field] !== undefined && (!Array.isArray(current[field]) || current[field].some((id: unknown) => typeof id !== 'string'))) throw new Error(`OpenCode ${field} 必须是供应商 ID 字符串数组，未修改原文件。`);
     }
+    // V2 native entries take precedence over legacy providers. Refuse an
+    // ambiguous managed entry instead of reporting a successful but ineffective sync.
+    if (current.providers !== undefined && (!current.providers || typeof current.providers !== 'object' || Array.isArray(current.providers))) throw new Error('OpenCode providers 配置格式有误，未修改原文件。');
+    if (Object.keys(current.providers ?? {}).some(ownsOpenCodeProvider)) throw new Error('OpenCode 已有同名 V2 原生 ModelDock 来源，请先导出并手动合并，避免覆盖已有配置。');
     const addition = JSON.parse(config.content);
     const options = { formattingOptions: { insertSpaces: true, tabSize: 2 } };
     output = original ?? '{}';
@@ -449,10 +455,18 @@ export function applyConfig(store: AdapterStore, tool: ToolId, port: number, app
     output = stringifyToml({ ...existing, ...addition, model_providers: { ...providers, ...newProviders }, model_catalog_json: catalogPath } as Parameters<typeof stringifyToml>[0]);
     }
   }
-  if (tool === 'vscode' || tool === 'opencode') {
+  if (tool === 'vscode' || isOpenCodeTool(tool)) {
     const errors: ParseError[] = [];
     parseJsonc(output, errors, { allowTrailingComma: true });
     if (errors.length) throw new Error('配置合并未生成有效的 JSONC，未修改原文件。');
+  }
+  if (isOpenCodeTool(tool)) {
+    if (original === output) return target;
+    const unchanged = () => original === null ? !existsSync(target) : existsSync(target) && readFileSync(target, 'utf8') === original;
+    if (original !== null) replacePrivateFile(join(backups, `${tool}-${Date.now()}-${randomUUID()}.bak`), original);
+    if (!unchanged()) throw new Error('配置刚被其他程序修改，请重新预览后再应用。');
+    replacePrivateFile(target, output);
+    return target;
   }
   mkdirSync(backups, { recursive: true, mode: 0o700 });
   const stamp = `${Date.now()}-${randomUUID().slice(0, 8)}`;

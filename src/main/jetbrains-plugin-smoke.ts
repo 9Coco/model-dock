@@ -55,7 +55,7 @@ export async function verifyJetBrainsPluginSwitch(window: BrowserWindow, store: 
     await evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);
   }
   async function open(tool: JetBrainsToolId) {
-    await click('[data-tool-category="jetbrains"]'); await click(`[data-tool-id="${tool}"]`);
+    await click('[data-tool-category="editor"]'); await click(`[data-tool-id="${tool}"]`);
     await waitFor(`!!document.querySelector('[data-jetbrains-connection="${tool}"]')`, 'selected IDE');
   }
   async function select(plugin: string) {

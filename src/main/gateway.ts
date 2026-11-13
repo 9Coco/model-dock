@@ -43,7 +43,7 @@ export interface GatewayOptions {
   runWithDiagnostics?: (context: DiagnosticContext, action: () => Promise<void>) => Promise<void>;
 }
 const BODY_LIMIT = 8 * 1024 * 1024;
-const toolIds = new Set(['codex', 'opencode', 'dsh', 'vscode', 'copilot', 'copilot-cli', 'claude-code', 'junie', 'webstorm', 'intellij-idea', 'rider', 'pycharm']);
+const toolIds = new Set(['codex', 'opencode', 'opencode-desktop', 'dsh', 'vscode', 'copilot', 'copilot-cli', 'claude-code', 'junie', 'webstorm', 'intellij-idea', 'rider', 'pycharm']);
 const upstreamHeaderNames = new Set(['authorization', 'x-api-key', 'anthropic-version', 'anthropic-beta', 'content-type', 'accept', 'user-agent', 'originator', 'version', 'chatgpt-account-id', 'openai-beta', 'openai-organization', 'openai-project', 'session_id', 'conversation_id', 'x-request-id', 'x-grok-cli-version', 'x-grok-client-version', 'x-grok-client-identifier', 'x-grok-client-mode', 'x-xai-token-auth', 'x-authenticateresponse', 'x-grok-conv-id', 'copilot-integration-id', 'editor-version', 'editor-plugin-version', 'x-github-api-version', 'x-initiator']);
 const responseHeaderNames = new Set(['content-type', 'x-request-id', 'retry-after']);
 const nativeErrorTypes = new Set(['invalid_request_error', 'authentication_error', 'permission_error', 'not_found_error', 'request_too_large', 'rate_limit_error', 'api_error', 'overloaded_error', 'timeout_error']);
@@ -411,7 +411,7 @@ export class Gateway {
       endpoint = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
       anthropic = endpoint.endsWith('/v1/messages');
       // Unknown paths and query parameters can contain secrets; only known route names are retained.
-      const knownRoute = endpoint.replace(/^\/tool\/(?:codex|opencode|dsh|vscode|copilot-cli|copilot|claude-code|junie|webstorm|intellij-idea|rider|pycharm)/, '');
+      const knownRoute = endpoint.replace(/^\/tool\/(?:codex|opencode-desktop|opencode|dsh|vscode|copilot-cli|copilot|claude-code|junie|webstorm|intellij-idea|rider|pycharm)/, '');
       if (['/v1/models', '/v1/chat/completions', '/v1/responses', '/v1/messages', '/v1/completions'].includes(knownRoute)) diagnosticEndpoint = knownRoute;
       if (!this.authenticated(request, endpoint)) throw new GatewayError(401, '需要有效的 ModelDock API Key。');
       const route = this.route(endpoint);

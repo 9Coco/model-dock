@@ -154,6 +154,10 @@ child.on('exit', code => {
     if(existsSync(errorFile)) throw new Error(readFileSync(errorFile,'utf8'));
     const value = JSON.parse(readFileSync(resolve(output, 'electron-smoke.json'), 'utf8'));
     if (!value.bridge || !value.title.includes('ModelDock')) throw new Error('Renderer/preload bridge unavailable');
+    if (env.MODELDOCK_SMOKE_OPENCODE_DESKTOP_ONLY === '1') {
+      const result = JSON.parse(readFileSync(resolve(output, 'opencode-desktop-validation.json'), 'utf8'));
+      assert.equal(result.ok, true); console.log(JSON.stringify(result)); process.exit(code || 0);
+    }
     if (env.MODELDOCK_SMOKE_NETWORK_ONLY === '1') {
       const result = JSON.parse(readFileSync(resolve(output, 'network-validation.json'), 'utf8'));
       assert.ok(result.ok); console.log(JSON.stringify({exitCode:code, network:true, output})); process.exit(code || 0);
@@ -220,7 +224,7 @@ child.on('exit', code => {
     }
     if (env.MODELDOCK_SMOKE_TOOL_ICONS_ONLY === '1') {
       const icons = JSON.parse(readFileSync(resolve(output, 'tool-icons-validation.json'), 'utf8'));
-      if (icons.tools.length !== 12 || icons.jetBrainsTools.length !== 4 || !icons.copilotCliPreview?.qualifiedDefault || !icons.copilotCliPreview?.keyRedacted || !icons.originalUiRestored || !icons.savedSettingsUnchanged || !icons.toolSelectionsUnchanged || icons.configurationSyncInvoked !== false) throw new Error('Tool icon validation failed');
+      if (icons.tools.length !== 13 || icons.jetBrainsTools.length !== 4 || !icons.copilotCliPreview?.qualifiedDefault || !icons.copilotCliPreview?.keyRedacted || !icons.originalUiRestored || !icons.savedSettingsUnchanged || !icons.toolSelectionsUnchanged || icons.configurationSyncInvoked !== false) throw new Error('Tool icon validation failed');
       console.log(JSON.stringify({ exitCode: code, bridge: value.bridge, tools: icons.tools.length, layouts: icons.layouts.length, originalUiRestored: icons.originalUiRestored, output }));
       return;
     }

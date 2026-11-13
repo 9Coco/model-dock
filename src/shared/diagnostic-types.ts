@@ -62,7 +62,7 @@ export interface DiagnosticContext extends DiagnosticErrorDescription {
   modelCount?: number;
   providerId?: string;
   modelId?: string;
-  toolId?: 'codex' | 'opencode' | 'dsh' | 'vscode' | 'copilot' | 'copilot-cli' | 'claude-code' | 'junie' | 'webstorm' | 'intellij-idea' | 'rider' | 'pycharm';
+  toolId?: 'codex' | 'opencode' | 'opencode-desktop' | 'dsh' | 'vscode' | 'copilot' | 'copilot-cli' | 'claude-code' | 'junie' | 'webstorm' | 'intellij-idea' | 'rider' | 'pycharm';
   statusCode?: number;
   durationMs?: number;
   outcome?: DiagnosticOutcome;

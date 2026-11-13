@@ -50,7 +50,9 @@ describe('private atomic files', () => {
       expect(command).toBe('powershell.exe');
       const script = Buffer.from(args[args.length - 1], 'base64').toString('utf16le');
       expect(script).toContain('SetSecurityDescriptorSddlForm'); expect(script).toContain('D:P(A;;FA;;;{0})(A;;FA;;;SY)');
-      expect(script).toContain('-LiteralPath $env:MODELDOCK_PRIVATE_FILE'); expect(script).not.toContain(f.root);
+      expect(script).toContain('[System.IO.File]::SetAccessControl($env:MODELDOCK_PRIVATE_FILE,$acl)'); expect(script).not.toContain(f.root);
+      expect(script).toContain('[System.Security.AccessControl.FileSecurity]::new()');
+      expect(script).not.toContain('Set-Acl'); expect(script).not.toContain('Get-Acl');
       expect(fs.readFileSync(options.env.MODELDOCK_PRIVATE_FILE, 'utf8')).toBe('');
       expect(hooks.write).not.toHaveBeenCalled(); return Buffer.alloc(0);
     });

@@ -131,7 +131,7 @@ export async function verifySidebarLayout(window: BrowserWindow, store: Store, o
         for (const category of ['api', 'subscription']) { await nativeClick(`[data-provider-category="${category}"]`); validate(await read()); }
         for (const page of ['codex-aggregate', 'service']) {
           if (page === 'codex-aggregate') {
-            await click('[data-tool-category="agent"]'); await click('.sidebar [data-tool-id="codex"]');
+            await click('[data-tool-category="desktop"]'); await click('.sidebar [data-tool-id="codex"]');
             await waitFor(`!!document.querySelector('[data-aggregate-internal="codex"] .tool-workspace')`, 'Codex aggregate provider/model workspace');
           } else {
             await click('[data-page="service"]'); await click('[data-service-tab="interface"]');

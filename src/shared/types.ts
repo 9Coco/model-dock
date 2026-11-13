@@ -7,7 +7,7 @@ import type { DiscoveryResult, ModelSelection, AddModelsResult, ParameterPreview
 import type { ConnectionResult, ConnectionTestInput } from './connection-types';
 export type { ConnectionResult, ConnectionTestInput } from './connection-types';
 export type ProviderKind = 'openai-compatible' | 'codex' | 'grok' | 'copilot' | 'opencode-go';
-export type ToolId = 'codex' | 'opencode' | 'dsh' | 'vscode' | 'copilot' | 'copilot-cli' | 'claude-code' | 'junie' | 'webstorm' | 'intellij-idea' | 'rider' | 'pycharm';
+export type ToolId = 'codex' | 'opencode' | 'opencode-desktop' | 'dsh' | 'vscode' | 'copilot' | 'copilot-cli' | 'claude-code' | 'junie' | 'webstorm' | 'intellij-idea' | 'rider' | 'pycharm';
 export type WireApi = 'chat-completions' | 'responses' | 'messages';
 export type ToolMode = 'direct' | 'aggregate' | 'auto';
 /** Thinking levels recognized by client tools (VS Code picker labels these; unknown levels are not written to client configs). */

@@ -1,10 +1,9 @@
 import { useEffect, useState, type KeyboardEvent } from 'react';
 import type { ToolId } from '../shared/types';
-import { isJetBrainsTool } from '../shared/jetbrains';
+import { toolCategories as categories, toolCategoryFor as categoryFor, type ToolCategory } from '../shared/tool-categories';
 import { ToolIcon } from './ToolIcon';
 import './tool-navigation.css';
 
-type ToolCategory = 'agent' | 'jetbrains';
 type NavigationTool = { id: ToolId; name: string; connected: boolean };
 type ToolNavigationProps = {
   tools: NavigationTool[];
@@ -12,11 +11,6 @@ type ToolNavigationProps = {
   active: boolean;
   onSelect: (tool: ToolId) => void;
 };
-const categories: { id: ToolCategory; label: string }[] = [
-  { id: 'agent', label: '常规 Agent' },
-  { id: 'jetbrains', label: 'JetBrains' },
-];
-const categoryFor = (tool: ToolId): ToolCategory => tool === 'junie' || isJetBrainsTool(tool) ? 'jetbrains' : 'agent';
 
 export function ToolNavigation({ tools, selectedTool, active, onSelect }: ToolNavigationProps) {
   const [category, setCategory] = useState<ToolCategory>(() => categoryFor(selectedTool));

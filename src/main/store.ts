@@ -35,7 +35,7 @@ interface ProviderRemovalData {
   bindingsBefore: Record<string, unknown>[];
   bindingsAfter: Record<string, unknown>[];
 }
-const TOOL_NAMES: Record<ToolId, string> = { codex: 'Codex', opencode: 'OpenCode', dsh: 'DeepSeek Harness', vscode: 'VS Code', copilot: 'GitHub Copilot', 'copilot-cli': 'Copilot CLI', 'claude-code': 'Claude Code', junie: 'Junie', webstorm: 'WebStorm', 'intellij-idea': 'IntelliJ IDEA', rider: 'Rider', pycharm: 'PyCharm' };
+const TOOL_NAMES: Record<ToolId, string> = { codex: 'Codex', opencode: 'OpenCode TUI', 'opencode-desktop': 'OpenCode Desktop', dsh: 'DeepSeek Harness', vscode: 'VS Code', copilot: 'GitHub Copilot', 'copilot-cli': 'Copilot CLI', 'claude-code': 'Claude Code', junie: 'Junie', webstorm: 'WebStorm', 'intellij-idea': 'IntelliJ IDEA', rider: 'Rider', pycharm: 'PyCharm' };
 const kinds = new Set(['openai-compatible', 'codex', 'grok', 'copilot', 'opencode-go']);
 let sqlPromise: Promise<SqlJsStatic> | undefined;
 

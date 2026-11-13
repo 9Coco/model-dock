@@ -10,7 +10,7 @@ import { codexHistoryKey } from './adapters';
 import { claudeConfigDirectory, claudeHistoryKey, recoverClaudeConfig } from './claude-config';
 import { junieConfigTargets, junieHistoryKey, recoverJunieConfig, replaceJunieConfigFile } from './junie-config';
 import { copilotCliConfigTargets, copilotCliHistoryKey, recoverCopilotCliConfig, replaceCopilotCliConfigFile } from './copilot-cli-config';
-import { openCodeConfigDirectory } from './opencode-paths';
+import { isOpenCodeTool, openCodeConfigTargets, type OpenCodePathOptions } from './opencode-paths';
 import { DSH_LEGACY_SCRIPT } from './dsh-runtime';
 import { copilotSyncUndoKey, copilotSyncUndoStatus, undoCopilotDesktop, type CopilotSyncOptions } from './copilot-sync';
 
@@ -24,7 +24,7 @@ export interface ToolSyncUndoStore {
   setManagedState(key: string, value: unknown): void;
   createManagedBackup(kind: string, value: unknown): string;
 }
-export interface ToolSyncUndoOptions {
+export interface ToolSyncUndoOptions extends OpenCodePathOptions {
   appData: string; homeDirectory?: string; codexHome?: string; configHome?: string;
   claudeConfigDir?: string; dshHome?: string; copilotHome?: string;
   junieHome?: string;
@@ -115,10 +115,7 @@ export class ToolSyncUndoManager {
       const { providersPath, settingsPath } = copilotCliConfigTargets(home, { copilotHome: this.options.copilotCliHome, providersConfig: this.options.copilotCliProvidersConfig });
       return { target: providersPath, paths: [providersPath, settingsPath], stateKeys: [copilotCliHistoryKey(providersPath)] };
     }
-    if (tool === 'opencode') {
-      const directory = openCodeConfigDirectory(home, this.options.configHome), jsoncPath = join(directory, 'opencode.jsonc'), jsonPath = join(directory, 'opencode.json');
-      return { target: read(jsoncPath).content !== null ? jsoncPath : jsonPath, paths: [jsoncPath, jsonPath], stateKeys: [] };
-    }
+    if (isOpenCodeTool(tool)) return { ...openCodeConfigTargets(tool, home, this.options), stateKeys: [] };
     if (tool === 'vscode') {
       const target = join(this.options.appData, 'Code', 'User', 'chatLanguageModels.json');
       return { target, paths: [target], stateKeys: [] };

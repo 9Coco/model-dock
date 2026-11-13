@@ -6,6 +6,16 @@ ModelDock 是跨平台本地模型管理台：全局维护模型来源与别名�
 
 0.4.0 起包含 FlowBridge 的组合发行版采用 [GPL-3.0-or-later](LICENSE)；原 ModelDock 代码及原创应用标记保留 [MIT 授权](LICENSE-MIT)，第三方图标和依赖保留各自的 Apache-2.0、CC-BY-4.0、MIT 或其他许可，详见 [第三方声明](THIRD_PARTY_NOTICES.md)。欢迎按 [贡献指南](CONTRIBUTING.md) 提交修复；敏感问题请遵循 [安全报告流程](SECURITY.md)。
 
+## 0.4.25 · OpenCode Desktop 与产品形态导航
+
+- 工具分为「编辑器 / TUI / 桌面 App」。编辑器包括 VS Code 与四款 JetBrains IDE；TUI 包括 Claude Code、Junie、OpenCode TUI 和 Copilot CLI；桌面 App 包括 Codex、OpenCode Desktop、DSH 和 Copilot app。跨形态工具保留原有共享绑定，OpenCode 的两种入口分别保存选择。
+- 新增 OpenCode Desktop 一键配置，复用主进程 TypeScript 适配器、已有 Gateway、400 ms 自动同步、备份及撤销。支持 API 直连和聚合，分别保留 Chat Completions / Responses；预览隐藏密钥，账号令牌不写入客户端。
+- Desktop 默认目标为本机服务的 `~/.config/opencode/opencode.json(c)`，支持绝对 `XDG_CONFIG_HOME`。TUI 额外尊重 ModelDock 启动环境中的绝对 `OPENCODE_CONFIG` / `OPENCODE_CONFIG_DIR`；目录覆盖文件。优先更新已有 JSONC，保留注释、MCP、权限及非 ModelDock 供应商。相对路径或内联配置无法确认时只提供预览/导出，不自动写入。
+- **未设置独立路径时，两端共用全局文件，最后一次同步同时影响两端**，并非隔离的客户端配置。预览列出实际目标；另一端同步后，旧撤销记录会因文件变化而拒绝覆盖。Desktop 的「清理 ModelDock 配置」仅移除受管来源。自定义启动环境、远程服务、WSL 服务和项目/系统覆盖需在对应环境配置；同步后完全退出并重新打开客户端，在新会话选择模型。
+- OpenCode 2.x 仍支持生成的 V1 格式。若目标文件存在同名 V2 原生 ModelDock 来源，会拒绝自动覆盖并提示手动合并，避免原生字段优先级使同步无效。机制依据：[官方迁移说明](https://opencode.ai/docs/migrate-v1/)、[配置说明](https://opencode.ai/docs/config/)。
+- TRAE 工具入口继续停用，历史绑定仍保留；已有 TRAE 订阅账号与模型不删除，也不会设为默认工具。
+- Windows 私有文件改用仅写入 DACL 的系统接口，避免重复同步/撤销要求额外审计权限。验证包括隔离 Electron 页面与 Windows 官方 OpenCode Desktop 2.2.7 所带客户端的两种协议模拟流式请求；不等同于真实上游或 Linux/macOS 桌面验收。
+
 ## 0.4.24 · JetBrains 思考档位映射
 
 - JetBrains 订阅模型按当前账号目录与已核实的原生模型定义提供思考档位和默认值。Opus 5.5 保留 `low / medium / high / xhigh / max` 五档；其他已核实模型使用各自的档位，不根据供应商品牌或名称猜测能力。

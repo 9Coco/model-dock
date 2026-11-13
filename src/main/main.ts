@@ -51,6 +51,7 @@ import { verifyGrokLogin } from './grok-login-smoke';
 import { verifyToolSelection } from './tool-selection-smoke';
 import { verifyToolRestoreAndConnections } from './tool-restore-smoke';
 import { verifyCopilotDesktop } from './copilot-desktop-smoke';
+import { verifyOpenCodeDesktop } from './opencode-desktop-smoke';
 import { verifyToolIcons } from './tool-icons-smoke';
 import { verifyJetBrainsPluginSwitch } from './jetbrains-plugin-smoke';
 import { verifyProviderManagement } from './provider-management-smoke';
@@ -189,7 +190,7 @@ if (runtimeConfig.dataDir) {
   app.setPath('userData', runtimeConfig.dataDir);
   app.setPath('sessionData', runtimeConfig.dataDir);
 }
-const toolIds = new Set(['codex', 'opencode', 'dsh', 'vscode', 'copilot', 'copilot-cli', 'claude-code', 'junie', 'webstorm', 'intellij-idea', 'rider', 'pycharm']);
+const toolIds = new Set(['codex', 'opencode', 'opencode-desktop', 'dsh', 'vscode', 'copilot', 'copilot-cli', 'claude-code', 'junie', 'webstorm', 'intellij-idea', 'rider', 'pycharm']);
 function toolId(value: unknown): ToolId {
   if (typeof value !== 'string' || !toolIds.has(value)) throw new Error('无法识别的工具。');
   return value as ToolId;
@@ -293,8 +294,10 @@ async function createWindow(forceShow = false) {
         writeFileSync(join(outputDir, 'electron-smoke.json'), JSON.stringify({ ...result, dataDir, windowSize: window!.getSize(), contentSize: window!.getContentSize() }, null, 2));
         writeFileSync(join(outputDir, 'electron-smoke.png'), await captureUi());
         if (process.env.MODELDOCK_SMOKE_NETWORK_ONLY === '1') { await verifyNetworkUi(window!, store, outputDir, captureUi); quitting = true; app.quit(); return; }
-        if (!modelHistoryOnly && process.env.MODELDOCK_SMOKE_JETBRAINS_IDE_ONLY !== '1' && process.env.MODELDOCK_SMOKE_PROVIDER_MANAGEMENT_ONLY !== '1' && process.env.MODELDOCK_SMOKE_RELAY_QUOTA_ONLY !== '1' && process.env.MODELDOCK_SMOKE_RELAY_CLIENT_IMPORT_ONLY !== '1' && process.env.MODELDOCK_SMOKE_SIDEBAR_LAYOUT_ONLY !== '1' && process.env.MODELDOCK_SMOKE_NAVIGATION_CONSOLIDATION_ONLY !== '1' && process.env.MODELDOCK_SMOKE_RELAY_SUBSCRIPTIONS_ONLY !== '1' && process.env.MODELDOCK_SMOKE_JETBRAINS_PLUGIN_ONLY !== '1' && process.env.MODELDOCK_SMOKE_CONTEXT_MENU_ONLY !== '1') await verifyToolIcons(window!, outputDir, captureUi);
-        if (modelHistoryOnly) {
+        if (!modelHistoryOnly && process.env.MODELDOCK_SMOKE_OPENCODE_DESKTOP_ONLY !== '1' && process.env.MODELDOCK_SMOKE_JETBRAINS_IDE_ONLY !== '1' && process.env.MODELDOCK_SMOKE_PROVIDER_MANAGEMENT_ONLY !== '1' && process.env.MODELDOCK_SMOKE_RELAY_QUOTA_ONLY !== '1' && process.env.MODELDOCK_SMOKE_RELAY_CLIENT_IMPORT_ONLY !== '1' && process.env.MODELDOCK_SMOKE_SIDEBAR_LAYOUT_ONLY !== '1' && process.env.MODELDOCK_SMOKE_NAVIGATION_CONSOLIDATION_ONLY !== '1' && process.env.MODELDOCK_SMOKE_RELAY_SUBSCRIPTIONS_ONLY !== '1' && process.env.MODELDOCK_SMOKE_JETBRAINS_PLUGIN_ONLY !== '1' && process.env.MODELDOCK_SMOKE_CONTEXT_MENU_ONLY !== '1') await verifyToolIcons(window!, outputDir, captureUi);
+        if (process.env.MODELDOCK_SMOKE_OPENCODE_DESKTOP_ONLY === '1') {
+          await verifyOpenCodeDesktop(window!, store, outputDir, captureUi);
+        } else if (modelHistoryOnly) {
           await verifyHistoryModels(window!, store, outputDir, captureUi);
         } else if (process.env.MODELDOCK_SMOKE_CONTEXT_MENU_ONLY === '1') {
           await verifyContextMenus(window!, store, outputDir, captureUi);
@@ -664,6 +667,12 @@ function registerIpc() {
   const junieHome = __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.junie') : process.env.JUNIE_HOME;
   const copilotCliHome = __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.copilot-cli') : process.env.COPILOT_HOME;
   const copilotCliProvidersConfig = __MODELDOCK_SMOKE_BUILD__ ? join(copilotCliHome!, 'providers.json') : process.env.COPILOT_PROVIDERS_CONFIG;
+  const openCodeOptions = {
+    configHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.config') : process.env.XDG_CONFIG_HOME,
+    openCodeConfigFile: __MODELDOCK_SMOKE_BUILD__ ? undefined : process.env.OPENCODE_CONFIG,
+    openCodeConfigDir: __MODELDOCK_SMOKE_BUILD__ ? undefined : process.env.OPENCODE_CONFIG_DIR,
+    openCodeConfigContent: __MODELDOCK_SMOKE_BUILD__ ? undefined : process.env.OPENCODE_CONFIG_CONTENT,
+  };
   const copilot = copilotTarget();
   const relayQuotas = new RelayQuotaCenter(store, async apiKey => {
     if (__MODELDOCK_SMOKE_BUILD__) {
@@ -700,6 +709,7 @@ function registerIpc() {
     throw new RelayQuotaFailure('请从客户端重新导入 TRAE 账号，再通过内置适配器查询套餐与额度。');
   });
   const undoManager = new ToolSyncUndoManager(store, {
+    ...openCodeOptions,
     appData: __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-appdata') : app.getPath('appData'),
     homeDirectory: featureHome,
     junieHome,
@@ -723,7 +733,7 @@ function registerIpc() {
     try {
     const binding = store.listBindings().find(item => item.id === id);
     if (isJetBrainsTool(id) && store.getJetBrainsPlugin(id) === 'air') throw new Error('请在 Air Accounts 的 More Providers → OpenAI 中添加提供商并填写 URL 和 Key；Air 不支持无密钥的离线账户同步。');
-    const preview = buildConfig(store, id, gateway.status().port, true, __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home') : app.getPath('home'), { jetBrainsOptions: jetBrainsOptions(), junieHome, copilotCliHome, copilotCliProvidersConfig });
+    const preview = buildConfig(store, id, gateway.status().port, true, __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home') : app.getPath('home'), { ...openCodeOptions, jetBrainsOptions: jetBrainsOptions(), junieHome, copilotCliHome, copilotCliProvidersConfig });
     if (!preview.canApply) throw new Error('此工具使用导出配置入口。');
     const usesGateway = binding && bindingConnectionPolicy(binding, store.listModels(), store.listProviders()).groups.some(group => group.connection === 'local-managed' && group.modelIds.length > 0);
     if (usesGateway && !gateway.status().running) {
@@ -748,6 +758,7 @@ function registerIpc() {
     const featureHome = __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home') : undefined;
     const appData = __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-appdata') : app.getPath('appData');
     operation = () => applyConfig(store, id, gateway.status().port, appData, join(dataDir, 'backups'), featureHome, {
+      ...openCodeOptions,
       codexHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome!, '.codex') : process.env.CODEX_HOME?.trim() ? resolve(process.env.CODEX_HOME.trim()) : undefined,
       configHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome!, '.config') : process.env.XDG_CONFIG_HOME,
       claudeConfigDir: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome!, '.claude') : process.env.CLAUDE_CONFIG_DIR,
@@ -1049,9 +1060,9 @@ function registerIpc() {
     const home = __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home') : app.getPath('home');
     return jetBrainsStatus(value, home, { ...jetBrainsOptions(), plugin: store.getJetBrainsPlugin(value), refreshProcessEvidence: refresh === true });
   });
-  handle('previewConfig', (tool: ToolId) => buildConfig(store, toolId(tool), gateway.status().port, false, __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home') : app.getPath('home'), { jetBrainsOptions: jetBrainsOptions(), junieHome, copilotCliHome, copilotCliProvidersConfig }));
+  handle('previewConfig', (tool: ToolId) => buildConfig(store, toolId(tool), gateway.status().port, false, __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home') : app.getPath('home'), { ...openCodeOptions, jetBrainsOptions: jetBrainsOptions(), junieHome, copilotCliHome, copilotCliProvidersConfig }));
   handle('exportConfig', async (tool: ToolId) => {
-    const config = buildConfig(store, toolId(tool), gateway.status().port, true, __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home') : app.getPath('home'), { jetBrainsOptions: jetBrainsOptions(), junieHome, copilotCliHome, copilotCliProvidersConfig });
+    const config = buildConfig(store, toolId(tool), gateway.status().port, true, __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home') : app.getPath('home'), { ...openCodeOptions, jetBrainsOptions: jetBrainsOptions(), junieHome, copilotCliHome, copilotCliProvidersConfig });
     const result = await dialog.showSaveDialog(window!, { defaultPath: config.filename });
     if (result.canceled || !result.filePath) return null;
     replacePrivateFile(result.filePath, config.content); return result.filePath;
@@ -1073,6 +1084,7 @@ function registerIpc() {
         { id: 'llm-deepseek-account', name: '@deepseek-ai/dsh-llm-deepseek-account' },
       ], baselineProviders: {} } : await resolveDshProfile(dshHome) : undefined;
       const location = await restoreToolBinding(store, id, () => restoreOfficialConfig(store, id, appData, join(dataDir, 'backups'), featureHome, {
+        ...openCodeOptions,
         codexHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.codex') : process.env.CODEX_HOME?.trim() ? resolve(process.env.CODEX_HOME.trim()) : join(featureHome, '.codex'),
         configHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.config') : process.env.XDG_CONFIG_HOME,
         claudeConfigDir: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.claude') : process.env.CLAUDE_CONFIG_DIR,

@@ -8,7 +8,7 @@ import type { ToolId } from '../shared/types';
 import { codexHistoryKey, editJsonc } from './adapters';
 import { restoreDshOfficialConfig, type DshApplyOptions, type DshConfigStore } from './dsh-config';
 import { applyCopilotDesktop, type CopilotSyncOptions } from './copilot-sync';
-import { openCodeConfigDirectory } from './opencode-paths';
+import { isOpenCodeTool, openCodeConfigTargets, type OpenCodePathOptions } from './opencode-paths';
 import { restoreClaudeOfficialConfig } from './claude-config';
 import { restoreJunieOfficialConfig } from './junie-config';
 import { restoreCopilotCliOfficialConfig } from './copilot-cli-config';
@@ -17,7 +17,7 @@ import { restoreJetBrainsConfig, type JetBrainsConfigOptions } from './jetbrains
 import { replacePrivateFile } from './private-file';
 
 export interface ToolRestoreStore extends DshConfigStore {}
-export interface ToolRestoreOptions {
+export interface ToolRestoreOptions extends OpenCodePathOptions {
   junieHome?: string;
   copilotCliHome?: string;
   copilotCliProvidersConfig?: string;
@@ -84,11 +84,9 @@ export async function restoreOfficialConfig(store: ToolRestoreStore, tool: ToolI
   if (tool === 'copilot-cli') return restoreCopilotCliOfficialConfig(store, backups, homeDirectory, { copilotHome: options.copilotCliHome, providersConfig: options.copilotCliProvidersConfig, beforeCommit: options.beforeCommit });
   if (tool === 'copilot') return applyCopilotDesktop(store, { providers: [] }, options.copilotHome ?? join(homeDirectory, '.copilot'), { ...options.copilotOptions, syncScope: 'selected' });
   if (tool === 'dsh') return restoreDshOfficialConfig(store, options.dshHome ?? join(homeDirectory, '.dsh'), options.dshOptions);
-  if (!['codex', 'opencode', 'vscode'].includes(tool)) throw new Error('不支持的工具，未还原配置。');
-  const openCodeHome = openCodeConfigDirectory(homeDirectory, options.configHome);
-  const jsoncPath = join(openCodeHome, 'opencode.jsonc');
+  if (!['codex', 'opencode', 'opencode-desktop', 'vscode'].includes(tool)) throw new Error('不支持的工具，未还原配置。');
   const target = tool === 'codex' ? join(options.codexHome ?? join(homeDirectory, '.codex'), 'config.toml')
-    : tool === 'opencode' ? existsSync(jsoncPath) ? jsoncPath : join(openCodeHome, 'opencode.json')
+    : isOpenCodeTool(tool) ? openCodeConfigTargets(tool, homeDirectory, options).target
       : join(appData, 'Code', 'User', 'chatLanguageModels.json');
   const original = readConfig(target);
   const changes: FileChange[] = [];
@@ -119,8 +117,17 @@ export async function restoreOfficialConfig(store: ToolRestoreStore, tool: ToolI
     if (catalog !== null && ownsCatalog(catalog)) changes.push({ path: catalogPath, original: catalog, content: null });
   } else if (original !== null) {
     let output = original;
-    const value = parseJson(original, tool === 'opencode' ? 'OpenCode' : 'VS Code');
-    if (tool === 'opencode') {
+    const value = parseJson(original, isOpenCodeTool(tool) ? 'OpenCode' : 'VS Code');
+    if (tool === 'opencode-desktop') {
+      if (!record(value) || value.provider !== undefined && !record(value.provider)) throw new Error('OpenCode provider 配置格式有误，未修改原文件。');
+      const owns = (id: string) => id === 'modeldock' || id.startsWith('modeldock-');
+      for (const id of Object.keys(value.provider ?? {}).filter(owns)) output = editJsonc(output, modify(output, ['provider', id], undefined, jsonOptions));
+      for (const key of ['model', 'small_model']) if (typeof value[key] === 'string' && owns(value[key].split('/', 1)[0])) output = editJsonc(output, modify(output, [key], undefined, jsonOptions));
+      for (const key of ['enabled_providers', 'disabled_providers']) if (Array.isArray(value[key])) {
+        const remaining = value[key].filter((id: unknown) => typeof id !== 'string' || !owns(id));
+        output = editJsonc(output, modify(output, [key], remaining.length ? remaining : undefined, jsonOptions));
+      }
+    } else if (isOpenCodeTool(tool)) {
       if (!record(value) || value.provider !== undefined && !record(value.provider)) throw new Error('OpenCode provider 配置格式有误，未修改原文件。');
       for (const section of ['agent', 'command']) {
         if (value[section] === undefined) continue;
@@ -138,7 +145,7 @@ export async function restoreOfficialConfig(store: ToolRestoreStore, tool: ToolI
       if (!Array.isArray(value)) throw new Error('VS Code 模型文件不是数组，未修改原文件。');
       for (let index = value.length - 1; index >= 0; index--) if (record(value[index]) && value[index].vendor === 'customendpoint') output = editJsonc(output, modify(output, [index], undefined, jsonOptions));
     }
-    parseJson(output, tool === 'opencode' ? 'OpenCode' : 'VS Code');
+    parseJson(output, isOpenCodeTool(tool) ? 'OpenCode' : 'VS Code');
     changes.push({ path: target, original, content: output });
   }
   const changed = changes.filter(change => change.original !== change.content);
@@ -149,7 +156,8 @@ export async function restoreOfficialConfig(store: ToolRestoreStore, tool: ToolI
   for (const [index, change] of changed.entries()) if (change.original !== null) {
     if (!currentMatches(change)) throw new Error('配置刚被其他程序修改，还原未执行，请重试。');
     const backupPath = join(backups, `${tool}-official-${stamp}${index ? `-${index}` : ''}.bak`);
-    copyFileSync(change.path, backupPath); chmodSync(backupPath, 0o600);
+    if (isOpenCodeTool(tool)) replacePrivateFile(backupPath, change.original);
+    else { copyFileSync(change.path, backupPath); chmodSync(backupPath, 0o600); }
     if (readFileSync(backupPath, 'utf8') !== change.original) throw new Error('配置备份验证失败，还原未执行。');
   }
   const committed: FileChange[] = [];

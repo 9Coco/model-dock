@@ -36,7 +36,11 @@ export function protectPrivateFile(path: string): void {
   if (process.platform !== 'win32') { chmodSync(path, 0o600); return; }
   windowsSid ??= execFileSync('whoami.exe', ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8', windowsHide: true, stdio: 'pipe' }).match(/S-1-\d+(?:-\d+)+/)?.[0];
   if (!windowsSid) throw new Error('无法确认私有文件的本机用户权限。');
-  const script = "$ErrorActionPreference='Stop'; $acl=Get-Acl -LiteralPath $env:MODELDOCK_PRIVATE_FILE; $acl.SetSecurityDescriptorSddlForm(('D:P(A;;FA;;;{0})(A;;FA;;;SY)' -f $env:MODELDOCK_PRIVATE_SID), [System.Security.AccessControl.AccessControlSections]::Access); Set-Acl -LiteralPath $env:MODELDOCK_PRIVATE_FILE -AclObject $acl";
+  // Write only the DACL through FileSecurity. PowerShell's Set-Acl provider can
+  // request SeSecurityPrivilege on an already-protected file during sync/undo.
+  // The .NET file API treats the environment-supplied path literally and avoids
+  // both that extra privilege and host-specific PowerShell module discovery.
+  const script = "$ErrorActionPreference='Stop'; $acl=[System.Security.AccessControl.FileSecurity]::new(); $acl.SetSecurityDescriptorSddlForm(('D:P(A;;FA;;;{0})(A;;FA;;;SY)' -f $env:MODELDOCK_PRIVATE_SID), [System.Security.AccessControl.AccessControlSections]::Access); [System.IO.File]::SetAccessControl($env:MODELDOCK_PRIVATE_FILE,$acl)";
   retryPrivateFileOperation(() => execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
     windowsHide: true, stdio: 'pipe', env: { ...process.env, MODELDOCK_PRIVATE_FILE: resolve(path), MODELDOCK_PRIVATE_SID: windowsSid },
   }));

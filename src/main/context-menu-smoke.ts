@@ -182,7 +182,7 @@ export async function verifyContextMenus(window: BrowserWindow, store: Store, ou
       assert.ok(toolIds.includes('tool-open')&&toolIds.includes('tool-preview')); await click(action('tool-open'));
       await waitFor(`!!document.querySelector('[data-tool-binding="${tool}"]')`,`tool menu opens the clicked ${tool} tool`);
     }
-    store.setJetBrainsPlugin('webstorm','air'); await click('[aria-label="刷新本机配置"]'); await click('[data-tool-category="jetbrains"]');
+    store.setJetBrainsPlugin('webstorm','air'); await click('[aria-label="刷新本机配置"]'); await click('[data-tool-category="editor"]');
     const airIds = await context('.sidebar [data-tool-id="webstorm"]');
     for(const forbidden of ['tool-apply','tool-restore','tool-undo']) assert.equal(airIds.includes(forbidden),false,`Air cannot ${forbidden}`); await dismiss();
     assert.deepEqual(store.listBindings(),beforeBindings.map(binding=>binding.id==='webstorm'?{...binding,jetBrainsPlugin:'air'}:binding),'Menus do not synchronize external tools');
