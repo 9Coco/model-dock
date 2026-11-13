@@ -20,11 +20,39 @@ function snapshot(store: Store, providerId: string) {
   return { providers: store.listProviders(), secret: store.getSecret(providerId), models: store.listModels(), bindings: store.listBindings(), logs: store.logs(), key: store.gatewayKey(), managed: store.getManagedState('durability', null) };
 }
 afterEach(() => {
+  vi.unstubAllGlobals();
   vi.restoreAllMocks(); vi.mocked(fsyncSync).mockReset(); vi.mocked(renameSync).mockReset(); vi.mocked(unlinkSync).mockReset();
   for (const store of stores.splice(0)) store.close();
   for (const dir of directories.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 describe('durable store replacement', () => {
+  it('retries a transient Windows replacement lock and commits the same database', async () => {
+    const { dir, store } = await setup();
+    vi.stubGlobal('process', { ...process, platform: 'win32' });
+    vi.mocked(renameSync).mockClear().mockImplementationOnce(() => { throw Object.assign(new Error('Synthetic temporary lock'), { code: 'EPERM' }); });
+    store.setManagedState('durability', { retained: true });
+    expect(renameSync).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(renameSync).mock.calls[0]).toEqual(vi.mocked(renameSync).mock.calls[1]);
+    expect(readdirSync(dir).filter(name => name.endsWith('.tmp'))).toEqual([]);
+    const reopened = await Store.create(dir, codec); stores.push(reopened);
+    expect(reopened.getManagedState('durability', null)).toEqual({ retained: true });
+  });
+  it('bounds persistent Windows lock retries and restores both memory and disk', async () => {
+    const { dir, store, provider } = await setup(), filename = join(dir, 'modeldock.sqlite');
+    const before = snapshot(store, provider.id), disk = readFileSync(filename);
+    vi.stubGlobal('process', { ...process, platform: 'win32' });
+    const locked = Object.assign(new Error('Synthetic persistent lock'), { code: 'EPERM' });
+    vi.mocked(renameSync).mockClear().mockImplementation(() => { throw locked; });
+    expect(() => store.setSecret(provider.id, { apiKey: 'synthetic-uncommitted-secret' })).toThrow(locked);
+    expect(renameSync).toHaveBeenCalledTimes(6);
+    expect(snapshot(store, provider.id)).toEqual(before); expect(readFileSync(filename)).toEqual(disk);
+    expect(readdirSync(dir).filter(name => name.endsWith('.tmp'))).toEqual([]);
+    vi.mocked(renameSync).mockReset();
+    store.setManagedState('recoverability', true);
+    const reopened = await Store.create(dir, codec); stores.push(reopened);
+    expect(snapshot(reopened, provider.id)).toEqual(before);
+    expect(reopened.getManagedState('recoverability', null)).toBe(true);
+  });
   it.each(['provider', 'secret', 'managed', 'model', 'binding', 'log', 'gateway-key'] as const)('restores memory and disk after a failed %s write, then remains writable', async kind => {
     const { dir, store, provider } = await setup(), filename = join(dir, 'modeldock.sqlite');
     const before = snapshot(store, provider.id), disk = readFileSync(filename);

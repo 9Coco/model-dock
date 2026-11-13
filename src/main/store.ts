@@ -14,6 +14,7 @@ import { isJetBrainsTool } from '../shared/jetbrains';
 import { normalizeApiKey } from './credentials';
 import { providerIdentity, type ProviderDuplicateGroup, type ProviderMergeResult } from '../shared/provider-duplicates';
 import { suggestModelAlias } from '../shared/model-names';
+import { retryPrivateFileOperation } from './private-file';
 
 export interface SecretCodec { encrypt(text: string): string; decrypt(text: string): string }
 /** Main-only opaque rollback handle; raw encrypted rows remain inside Store. */
@@ -182,7 +183,7 @@ export class Store {
       writeFileSync(descriptor, bytes);
       fsyncSync(descriptor);
       closeSync(descriptor); descriptor = undefined;
-      renameSync(temp, filename);
+      retryPrivateFileOperation(() => renameSync(temp, filename));
     } catch (error) { failed = true; throw error; }
     finally {
       let cleanupError: unknown; let cleanupFailed = false;
