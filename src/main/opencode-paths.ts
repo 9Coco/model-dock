@@ -3,9 +3,7 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { existsSync } from 'node:fs';
 import type { ToolId } from '../shared/types';
 
-export function isOpenCodeTool(tool: ToolId): tool is 'opencode' | 'opencode-desktop' {
-  return tool === 'opencode' || tool === 'opencode-desktop';
-}
+export { isOpenCodeTool } from '../shared/opencode';
 export interface OpenCodePathOptions {
   configHome?: string;
   openCodeConfigFile?: string;

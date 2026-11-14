@@ -308,7 +308,7 @@ describe('tool adapters', () => {
     const output = buildConfig(direct, 'copilot', 19191, true);
     expect(output.content).toContain('/tool/copilot/v1');
     expect(output.content).not.toContain('never-export');
-    expect(output.instructions).toContain('订阅单源');
+    expect(output.instructions).toContain('不把 OAuth 凭据写入工具');
     expect(connectionKey(direct, 'dsh')).toBe('local-test-secret');
   });
 
@@ -351,16 +351,16 @@ describe('tool adapters', () => {
     };
     const expected = [{ id: 'glm-5.3', name: '火山 Coding Plan - glm-5.3' }];
     expect(JSON.parse(buildConfig(direct, 'vscode', 19191).content)[0].models).toMatchObject(expected);
-    expect(dshProviders(buildConfig(direct, 'dsh', 19191).content).modeldock.models).toMatchObject(expected);
+    expect(dshProviders(buildConfig(direct, 'dsh', 19191).content)['modeldock-provider-b'].models).toMatchObject(expected);
     expect(JSON.parse(buildConfig(direct, 'copilot', 19191).content).providers[0]).toMatchObject({ name: '火山 Coding Plan', models: [{ modelId: 'glm-5.3', wireModel: 'glm-5.3', displayName: 'glm-5.3' }] });
     const opencode = JSON.parse(buildConfig(direct, 'opencode', 19191).content);
-    expect(opencode.model).toBe('modeldock/glm-5.3');
-    expect(Object.keys(opencode.provider.modeldock.models)).toEqual(['glm-5.3']);
-    expect(opencode.provider.modeldock.models['glm-5.3'].name).toBe(expected[0].name);
+    expect(opencode.model).toBe('modeldock-provider-b/glm-5.3');
+    expect(Object.keys(opencode.provider['modeldock-provider-b'].models)).toEqual(['glm-5.3']);
+    expect(opencode.provider['modeldock-provider-b'].models['glm-5.3'].name).toBe(expected[0].name);
     for (const tool of ['vscode', 'dsh', 'copilot', 'opencode', 'codex'] as const) {
       const preview = buildConfig(direct, tool, 19191);
       expect(preview.content).toContain('https://coding.test/v1');
-      expect(preview.content).not.toContain(catalog[1].alias);
+      expect(preview.content).not.toContain(JSON.stringify(catalog[1].alias));
       expect(preview.content).not.toContain('synthetic-only');
     }
     const root = mkdtempSync(join(tmpdir(), 'modeldock-adapter-')); roots.push(root);

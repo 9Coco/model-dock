@@ -52,7 +52,7 @@ const providerNames = ['modeldock-chat', 'modeldock-responses'] as const;
 const maximumFileSize = 2 * 1024 * 1024;
 const json = (value: unknown) => JSON.stringify(value, null, 2) + '\n';
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
-const owns = (value: unknown): boolean => typeof value === 'string' && (providerNames as readonly string[]).includes(value);
+const owns = (value: unknown): boolean => typeof value === 'string' && ((providerNames as readonly string[]).includes(value) || /^modeldock-[a-f0-9]{24}-(chat|responses)$/.test(value));
 const valueAt = (record: Record<string, unknown>, key: string): Value => Object.hasOwn(record, key) ? { present: true, value: record[key] } : { present: false };
 
 function configuredPath(value: string | undefined, label: string): string | undefined {
@@ -88,18 +88,20 @@ function selection(store: CopilotCliConfigStore, revealKey: boolean, port: numbe
   const models = resolveBindingModels(binding, allModels, providers).filter(model => model.wireApi === 'responses' || model.wireApi === 'chat-completions');
   if (!models.length) return null;
   const aggregate = binding.mode === 'aggregate';
-  if (!aggregate && providerIds.length !== 1) throw new Error('Copilot CLI 直连必须选择恰好一个 API 供应商。');
-  if (!aggregate && providers.find(provider => provider.id === providerIds[0])?.kind !== 'openai-compatible') throw new Error('Copilot CLI 订阅来源必须使用聚合接口。');
   if (models.some(model => { const provider = providers.find(source => source.id === model.providerId); return !provider?.enabled || !provider.hasSecret || provider.authStatus !== 'ready'; })) throw new Error('Copilot CLI 所选来源的凭据尚未就绪。');
-  if (aggregate && (!Number.isSafeInteger(port) || port < 1 || port > 65535)) throw new Error('Copilot CLI 本机入口端口无效。');
+  const source = (model: Model) => providers.find(provider => provider.id === model.providerId)!;
+  const local = (model: Model) => aggregate || source(model).kind !== 'openai-compatible' || !!source(model).nativeAdapter;
+  if (models.some(local) && (!Number.isSafeInteger(port) || port < 1 || port > 65535)) throw new Error('Copilot CLI 本机入口端口无效。');
   const chosen = models.find(model => model.id === binding.defaultModelId) ?? models[0];
-  const name = (model: Model) => model.wireApi === 'responses' ? providerNames[1] : providerNames[0];
-  const id = (model: Model) => aggregate ? model.alias : model.upstreamId;
-  const native = providers.find(provider => provider.id === models[0].providerId)!;
-  const key = revealKey ? aggregate ? store.gatewayKey() : store.getSecret?.(native.id)?.apiKey : aggregate ? '__MODELDOCK_LOCAL_KEY__' : '__PROVIDER_API_KEY__';
-  if (!key || /[\x00-\x1f\x7f]/.test(key)) throw new Error('Copilot CLI 所选来源缺少有效的 API Key。');
-  const baseUrl = aggregate ? `http://127.0.0.1:${port}/tool/copilot-cli/v1` : native.baseUrl.replace(/\/+$/, '');
-  const connections = [...new Set(models.map(name))].map(provider => ({ name: provider, type: 'openai', baseUrl, wireApi: provider === providerNames[1] ? 'responses' : 'completions', apiKey: key }));
+  const name = (model: Model) => aggregate ? (model.wireApi === 'responses' ? providerNames[1] : providerNames[0])
+    : `modeldock-${createHash('sha256').update(model.providerId).digest('hex').slice(0, 24)}-${model.wireApi === 'responses' ? 'responses' : 'chat'}`;
+  const id = (model: Model) => local(model) ? model.alias : model.upstreamId;
+  const connections = models.filter((model, index) => models.findIndex(other => name(other) === name(model)) === index).map(model => {
+    const key = revealKey ? local(model) ? store.gatewayKey() : store.getSecret?.(model.providerId)?.apiKey : local(model) ? '__MODELDOCK_LOCAL_KEY__' : '__PROVIDER_API_KEY__';
+    if (!key || /[\x00-\x1f\x7f]/.test(key)) throw new Error('Copilot CLI 所选来源缺少有效的 API Key。');
+    const baseUrl = local(model) ? `http://127.0.0.1:${port}/tool/copilot-cli/v1` : source(model).baseUrl.replace(/\/+$/, '');
+    return { name: name(model), type: 'openai', baseUrl, wireApi: model.wireApi === 'responses' ? 'responses' : 'completions', apiKey: key };
+  });
   const configuredModels = models.map(model => {
     assertId(id(model)); assertId(model.upstreamId);
     if (model.contextWindow === 1) throw new Error('Copilot CLI 上下文预算至少需要 2 个 token 才能同时分配输入和输出，请修正模型参数。');
@@ -117,7 +119,7 @@ export function buildCopilotCliConfig(store: CopilotCliConfigStore, revealKey = 
   const selected = selection(store, revealKey, port), targets = copilotCliConfigTargets(homeDirectory, options);
   return { filename: 'modeldock-copilot-cli.json', canApply: true,
     content: selected ? json({ providers: selected.providers, models: selected.models, settings: { model: selected.model } }) : '',
-    instructions: selected ? `合并 ${targets.providersPath} 中的 ModelDock 专用来源和模型，并只更新 ${targets.settingsPath} 的 model；保留其他来源、模型、设置注释、账号、权限、MCP、Skills 与会话。Chat Completions 和 Responses 分别使用 modeldock-chat / modeldock-responses 连接，不改变上游模型协议。预览隐藏密钥，导出或应用才包含 API Key；订阅令牌留在 ModelDock。重启 Copilot CLI 后用 /model 选择，或执行 copilot --model ${selected.model}。命令行和项目设置可能覆盖默认模型。这是独立 CLI 配置，不会同步 Copilot app 或 VS Code。${selected.unknownBudget ? '上下文未知模型使用 32K（32768）上下文 / 4K（4096）输出的客户端预算，不代表上游模型规格。' : ''}配置写入不代表真实模型推理已通过。`
+    instructions: selected ? `合并 ${targets.providersPath} 中的 ModelDock 专用来源和模型，并只更新 ${targets.settingsPath} 的 model；保留其他来源、模型、设置注释、账号、权限、MCP、Skills 与会话。按供应商和协议分别注册连接，各 API 使用独立地址与 Key；聚合模式使用 modeldock-chat / modeldock-responses，不改变上游模型协议。预览隐藏密钥，导出或应用才包含 API Key；订阅令牌留在 ModelDock。重启 Copilot CLI 后用 /model 选择，或执行 copilot --model ${selected.model}。命令行和项目设置可能覆盖默认模型。这是独立 CLI 配置，不会同步 Copilot app 或 VS Code。${selected.unknownBudget ? '上下文未知模型使用 32K（32768）上下文 / 4K（4096）输出的客户端预算，不代表上游模型规格。' : ''}配置写入不代表真实模型推理已通过。`
       : '移除仍属于 ModelDock 的 Copilot CLI 来源和模型，恢复此前默认选择；保留其他来源、账号、权限、MCP、Skills、会话及设置。没有管理记录时不修改文件。' };
 }
 

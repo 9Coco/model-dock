@@ -1,10 +1,11 @@
 import type { Model, Provider, ToolBinding, ToolId, ToolConnectionChoices } from './types';
+import { supportsMultipleSources } from './tool-capabilities';
 import { traeRelayClientModel } from './trae-relay-models';
 import { claudeModelsForProvider, nativeClaudeBaseUrl } from './claude';
 import { isJetBrainsTool, nativeJetBrainsBaseUrl } from './jetbrains';
 
 /** 修改点：这些客户端只消费一个入口，来源多选只属于聚合入口内部。 */
-export function isSingleEntryTool(tool: ToolId): boolean { return tool === 'codex' || tool === 'claude-code' || tool === 'junie' || tool === 'copilot-cli' || isJetBrainsTool(tool); }
+export function isSingleEntryTool(tool: ToolId): boolean { return !supportsMultipleSources(tool); }
 export function directModelsForProvider(tool: ToolId, provider: Provider, models: readonly Model[]): Model[] {
   if (!provider.enabled || provider.kind !== 'openai-compatible' || provider.nativeAdapter) return [];
   const available = models.filter(model => model.enabled && model.providerId === provider.id).map(model => traeRelayClientModel(tool, model, provider));

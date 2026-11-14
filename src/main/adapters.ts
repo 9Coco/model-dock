@@ -11,6 +11,7 @@ import { modelDisplayLabel, modelLocalAlias } from '../shared/model-names';
 import { subscriptionDisplayName } from '../shared/subscription-names';
 import type { CopilotDesktopPlan } from './copilot-desktop';
 import { dshPatchPreview, type DshPlan, type DshProviderProfile } from './dsh-config';
+import { supportsMultipleSources } from '../shared/tool-capabilities';
 import { isOpenCodeTool, openCodeConfigTargets, type OpenCodePathOptions } from './opencode-paths';
 import { replacePrivateFile } from './private-file';
 import { applyClaudeConfig, buildClaudeConfig } from './claude-config';
@@ -294,7 +295,7 @@ export function buildConfig(store: AdapterStore, tool: ToolId, port: number, rev
   const first = groups[0];
   const connection = !groups.length ? '没有选择供应商：应用将清理本工具中由 ModelDock 管理的分组，保留其他配置。'
     : groups.some(group => group.directApi) ? 'API 来源按供应商分别直连上游，使用真实模型 ID；订阅来源经本机入口管理授权续期。预览隐藏密钥，导出或应用才写入 API Key。'
-      : binding.mode === 'direct' ? '订阅单源模式：只使用所选订阅，由本机入口管理授权续期，不把 OAuth 凭据写入工具。'
+      : binding.mode === 'direct' && !supportsMultipleSources(tool) ? '订阅单源模式：只使用所选订阅，由本机入口管理授权续期，不把 OAuth 凭据写入工具。'
         : '通过本机入口按模型别名分发到所选供应商，不把 OAuth 凭据写入工具。';
   const defaultModel = models.find(m => m.id === binding.defaultModelId) ?? models[0];
   if (tool === 'vscode') return {

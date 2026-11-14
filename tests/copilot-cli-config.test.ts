@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -7,6 +8,7 @@ import { parse as parseJsonc } from 'jsonc-parser';
 import { applyCopilotCliConfig, buildCopilotCliConfig, copilotCliConfigDirectory, copilotCliConfigTargets, copilotCliHistoryKey, restoreCopilotCliOfficialConfig, type CopilotCliConfigOptions } from '../src/main/copilot-cli-config';
 import type { Model, Provider, ToolBinding } from '../src/shared/types';
 
+const nativeName = (wire: string) => `modeldock-${createHash('sha256').update('api').digest('hex').slice(0, 24)}-${wire}`;
 const roots: string[] = [];
 afterEach(() => { vi.unstubAllEnvs(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true, maxRetries: 5 }); });
 function fixture() {
@@ -35,16 +37,39 @@ function fixture() {
 }
 
 describe('independent Copilot CLI model registry configuration', () => {
+  it('keeps equal model IDs from multiple sources distinct, with stable connections and independent credentials', () => {
+    const f = fixture();
+    f.providers.push({ ...f.provider, id: 'second', baseUrl: 'https://second.invalid/v1' }, { ...f.provider, id: 'subscription', kind: 'codex' });
+    f.models.push({ ...f.model, id: 'second-model', providerId: 'second', alias: 'second-alias' }, { ...f.model, id: 'subscription-model', providerId: 'subscription', alias: 'subscription-alias' });
+    f.binding.providerIds = f.providers.map(provider => provider.id);
+    f.store.getSecret.mockImplementation((...args: unknown[]) => {
+      expect(args[0]).not.toBe('subscription');
+      return { apiKey: args[0] === 'second' ? 'SYNTHETIC_SECOND_KEY' : 'SYNTHETIC_UPSTREAM_KEY', accessToken: 'NEVER_EXPORT' };
+    });
+    const first = JSON.parse(f.preview(true).content);
+    expect(first.providers).toHaveLength(4); expect(first.models).toHaveLength(4);
+    expect(first.models.filter((model: any) => model.id === f.model.upstreamId)).toHaveLength(2);
+    expect(new Set(first.providers.map((source: any) => source.name)).size).toBe(4);
+    expect(first.providers.find((source: any) => source.baseUrl === 'https://second.invalid/v1').apiKey).toBe('SYNTHETIC_SECOND_KEY');
+    expect(first.providers.find((source: any) => source.baseUrl.includes('/tool/copilot-cli/')).apiKey).toBe('SYNTHETIC_LOCAL_KEY');
+    expect(JSON.stringify(first)).not.toContain('NEVER_EXPORT');
+    const secondConnection = first.providers.find((source: any) => source.baseUrl === 'https://second.invalid/v1');
+    f.apply(); f.binding.providerIds = ['second']; f.binding.defaultModelId = 'second-model'; f.apply();
+    expect(f.read(f.targets.providersPath).providers).toEqual([secondConnection]);
+    expect(f.read(f.targets.providersPath).models).toHaveLength(1);
+    expect(f.read(f.targets.settingsPath).model).toBe(`${secondConnection.name}/${f.model.upstreamId}`);
+    f.restore(); expect(f.files()).toEqual([null, null]);
+  });
   it('previews both native protocols and a qualified default without reading credentials or writing files', () => {
     const f = fixture(), value = JSON.parse(f.preview().content);
     expect(value.providers).toEqual([
-      { name: 'modeldock-responses', type: 'openai', baseUrl: 'https://api.fixture.invalid/v1', wireApi: 'responses', apiKey: '__PROVIDER_API_KEY__' },
-      { name: 'modeldock-chat', type: 'openai', baseUrl: 'https://api.fixture.invalid/v1', wireApi: 'completions', apiKey: '__PROVIDER_API_KEY__' },
+      { name: nativeName('responses'), type: 'openai', baseUrl: 'https://api.fixture.invalid/v1', wireApi: 'responses', apiKey: '__PROVIDER_API_KEY__' },
+      { name: nativeName('chat'), type: 'openai', baseUrl: 'https://api.fixture.invalid/v1', wireApi: 'completions', apiKey: '__PROVIDER_API_KEY__' },
     ]);
-    expect(value.models[0]).toMatchObject({ id: f.model.upstreamId, provider: 'modeldock-responses', wireModel: f.model.upstreamId, modelId: f.model.upstreamId, maxPromptTokens: 50000, maxContextWindowTokens: 64000, maxOutputTokens: 10000, capabilities: { supports: { vision: true, toolCalls: true, streaming: true, reasoning_effort: ['low', 'high'] } } });
-    expect(value.models[1]).toMatchObject({ id: f.chat.upstreamId, provider: 'modeldock-chat', maxPromptTokens: 28672, maxContextWindowTokens: 32768, maxOutputTokens: 4096, capabilities: { supports: { vision: false, toolCalls: false } } });
+    expect(value.models[0]).toMatchObject({ id: f.model.upstreamId, provider: nativeName('responses'), wireModel: f.model.upstreamId, modelId: f.model.upstreamId, maxPromptTokens: 50000, maxContextWindowTokens: 64000, maxOutputTokens: 10000, capabilities: { supports: { vision: true, toolCalls: true, streaming: true, reasoning_effort: ['low', 'high'] } } });
+    expect(value.models[1]).toMatchObject({ id: f.chat.upstreamId, provider: nativeName('chat'), maxPromptTokens: 28672, maxContextWindowTokens: 32768, maxOutputTokens: 4096, capabilities: { supports: { vision: false, toolCalls: false } } });
     expect(value.models[1].capabilities.supports).not.toHaveProperty('reasoning_effort');
-    expect(value.settings).toEqual({ model: 'modeldock-responses/native-responses-id' });
+    expect(value.settings).toEqual({ model: `${nativeName('responses')}/native-responses-id` });
     expect(f.preview().instructions).toContain('客户端预算');
     expect(f.preview().filename).toBe('modeldock-copilot-cli.json');
     expect(f.store.getSecret).not.toHaveBeenCalled(); expect(f.files()).toEqual([null, null]); expect(f.states.size).toBe(0);
@@ -63,11 +88,12 @@ describe('independent Copilot CLI model registry configuration', () => {
     f.binding.modelIds = []; expect(f.preview().content).toBe(''); expect(f.store.getSecret).not.toHaveBeenCalled();
   });
 
-  it('does not silently use local bridges for direct subscriptions, multiple sources or unsupported protocols', () => {
+  it('uses managed subscription bridges without exposing tokens and rejects missing credentials or unsupported protocols', () => {
     const f = fixture(); f.binding.providerIds!.push('other');
-    expect(() => f.preview()).toThrow(/恰好一个/);
+    expect(JSON.parse(f.preview().content).providers).toHaveLength(2);
     f.binding.providerIds = [f.provider.id]; f.provider.kind = 'codex';
-    expect(f.preview().content).toBe('');
+    expect(JSON.parse(f.preview(true).content).providers.every((source: any) => source.apiKey === 'SYNTHETIC_LOCAL_KEY')).toBe(true);
+    expect(f.store.getSecret).not.toHaveBeenCalled();
     f.provider.kind = 'openai-compatible'; f.provider.authStatus = 'missing';
     expect(() => f.preview()).toThrow(/凭据/);
     f.provider.authStatus = 'ready'; f.models.splice(1); f.model.wireApi = 'messages';
@@ -93,7 +119,7 @@ describe('independent Copilot CLI model registry configuration', () => {
     expect(f.apply()).toBe(f.targets.providersPath);
     expect(f.read(f.targets.providersPath).providers[0]).toEqual(registry.providers[0]); expect(f.read(f.targets.providersPath).models[0]).toEqual(registry.models[0]);
     expect(f.read(f.targets.providersPath).future).toBe(true);
-    expect(f.read(f.targets.settingsPath)).toEqual({ model: 'modeldock-responses/native-responses-id', theme: 'dark' });
+    expect(f.read(f.targets.settingsPath)).toEqual({ model: `${nativeName('responses')}/native-responses-id`, theme: 'dark' });
     for (const comment of ['// keep opening comment', '// keep model comment', '// keep inline']) expect(readFileSync(f.targets.settingsPath, 'utf8')).toContain(comment);
     expect(f.read(untouched)).toEqual({ trusted_folders: ['keep'], user: 'keep' }); expect(f.read(mcp)).toEqual({ mcpServers: { keep: {} } });
     expect(f.journals).toHaveLength(1); f.apply(); expect(f.journals).toHaveLength(1);
@@ -179,7 +205,7 @@ describe('independent Copilot CLI model registry configuration', () => {
     expect(copilotCliConfigTargets(f.root)).toEqual(f.targets);
     const options = { copilotHome: join(f.root, '中文 CLI home'), providersConfig: join(f.root, 'registry & path', 'custom.json') };
     const targets = copilotCliConfigTargets(f.root, options); f.apply(options);
-    expect(f.read(targets.providersPath).providers).toHaveLength(2); expect(f.read(targets.settingsPath).model).toContain('modeldock-responses/');
+    expect(f.read(targets.providersPath).providers).toHaveLength(2); expect(f.read(targets.settingsPath).model).toContain(`${nativeName('responses')}/`);
     expect(() => copilotCliConfigTargets(f.root, { providersConfig: 'relative' })).toThrow(/绝对路径/);
     expect(() => copilotCliConfigTargets(f.root, { copilotHome: ' ' })).toThrow(/绝对路径/);
     expect(() => copilotCliConfigTargets(f.root, { providersConfig: f.targets.settingsPath })).toThrow(/同一个文件/);

@@ -35,19 +35,71 @@ function fixture() {
 }
 
 describe('Junie CLI and IDE custom profile configuration', () => {
+  it('registers all sources with stable profile IDs, independent keys and a separate default shortcut', () => {
+    const f = fixture();
+    f.providers.push({ ...f.provider, id: 'second', baseUrl: 'https://second.invalid/v1', name: 'Second' }, { ...f.provider, id: 'subscription', kind: 'codex' });
+    f.models.push({ ...f.model, id: 'second-model', providerId: 'second', alias: 'second-alias' }, { ...f.model, id: 'subscription-model', providerId: 'subscription', alias: 'subscription-alias' });
+    f.binding.providerIds = f.providers.map(provider => provider.id);
+    f.store.getSecret.mockImplementation((...args: unknown[]) => {
+      expect(args[0]).not.toBe('subscription');
+      return { apiKey: args[0] === 'second' ? 'SYNTHETIC_SECOND_KEY' : 'SYNTHETIC_UPSTREAM_KEY', accessToken: 'NEVER_EXPORT' };
+    });
+    const first = JSON.parse(f.preview(true).content);
+    expect(Object.values(first.profiles)).toHaveLength(3);
+    expect(Object.values(first.profiles)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: f.model.upstreamId, apiKey: 'SYNTHETIC_UPSTREAM_KEY', baseUrl: 'https://api.fixture.invalid/v1/responses' }),
+      expect.objectContaining({ id: f.model.upstreamId, apiKey: 'SYNTHETIC_SECOND_KEY', baseUrl: 'https://second.invalid/v1/responses' }),
+      expect.objectContaining({ id: 'subscription-alias', apiKey: 'SYNTHETIC_LOCAL_KEY' }),
+    ]));
+    expect(JSON.stringify(first)).not.toContain('NEVER_EXPORT');
+    f.apply();
+    const paths = Object.keys(first.profiles).map(name => join(dirname(f.targets.profilePath), name));
+    expect(paths.every(existsSync)).toBe(true);
+    f.binding.defaultModelId = 'second-model'; f.apply();
+    expect(Object.keys(JSON.parse(f.preview().content).profiles)).toEqual(Object.keys(first.profiles));
+    expect(f.read(f.targets.profilePath).apiKey).toBe('SYNTHETIC_SECOND_KEY');
+    f.binding.providerIds = ['second']; f.apply();
+    expect(paths.filter(existsSync)).toHaveLength(1);
+    expect(f.read(paths.find(existsSync)!).apiKey).toBe('SYNTHETIC_SECOND_KEY');
+    f.restore(); expect(paths.some(existsSync)).toBe(false);
+  });
+
+  it.each(['before', 'after'] as const)('rolls back every model profile on %s-write failure and protects external profile edits', failure => {
+    const f = fixture(); f.models.push({ ...f.model, id: 'second-model', alias: 'second-alias' });
+    const paths = Object.keys(JSON.parse(f.preview().content).profiles).map(name => join(dirname(f.targets.profilePath), name));
+    if (failure === 'after') expect(() => f.apply({ afterFileCommit: index => { if (index === 3) throw new Error('PROFILE_FAILURE'); } })).toThrow('PROFILE_FAILURE');
+    else { f.write(paths[0], { id: 'user-owned' }); expect(() => f.apply()).toThrow('不属于'); expect(f.read(paths[0])).toEqual({ id: 'user-owned' }); rmSync(paths[0]); }
+    expect([...paths, ...Object.values(f.targets)].some(existsSync)).toBe(false);
+    f.apply(); f.write(paths[0], { id: 'external-edit' });
+    const files = [...paths, ...Object.values(f.targets)].map(path => readFileSync(path, 'utf8'));
+    expect(() => f.restore()).toThrow('外部修改');
+    expect([...paths, ...Object.values(f.targets)].map(path => readFileSync(path, 'utf8'))).toEqual(files);
+  });
+
+  it('upgrades and restores the original three-file ownership history without inventing model baselines', () => {
+    const f = fixture(); f.apply();
+    const key = junieHistoryKey(f.targets.configPath), previous = f.store.getManagedState<any>(key, null);
+    for (const file of previous.profiles) rmSync(file.path);
+    delete previous.profiles; previous.version = 1; f.states.set(key, previous);
+    f.models.push({ ...f.model, id: 'new-model', alias: 'new-alias' }); f.apply();
+    const next = f.store.getManagedState<any>(key, null);
+    expect(next.version).toBe(2); expect(next.beforeModel).toEqual(previous.beforeModel);
+    expect(next.profiles).toHaveLength(2); expect(next.profiles.every((file: any) => file.before === null)).toBe(true);
+    f.restore(); expect(f.files()).toEqual([null, null, null]); expect(next.profiles.some((file: any) => existsSync(file.path))).toBe(false);
+  });
   it('previews native Responses and a separate IDE ACP entry without reading credentials or writing files', () => {
     const f = fixture(), preview = f.preview(), value = JSON.parse(preview.content);
     expect(value.config).toEqual({ model: 'custom:modeldock' });
-    expect(value.profile).toEqual({ id: 'native-model-id', baseUrl: 'https://api.fixture.invalid/v1/responses', apiType: 'OpenAIResponses', apiKey: '__PROVIDER_API_KEY__', displayName: 'Selected fixture model', providerName: 'Fixture API', maxContextLength: 64000 });
+    expect(value.profile).toEqual({ id: 'native-model-id', baseUrl: 'https://api.fixture.invalid/v1/responses', apiType: 'OpenAIResponses', apiKey: '__PROVIDER_API_KEY__', displayName: 'Selected fixture model · ModelDock 默认', providerName: 'Fixture API', maxContextLength: 64000 });
     expect(value.acp).toEqual({ command: process.execPath, args: ['--acp', 'true', '--model', 'custom:modeldock'], env: { JUNIE_HOME: join(f.root, '.junie') } });
-    expect(preview.canApply).toBe(true); expect(preview.instructions).toContain('当前仅同步默认模型');
+    expect(preview.canApply).toBe(true); expect(preview.instructions).toContain('全部所选模型分别写入');
     expect(f.store.getSecret).not.toHaveBeenCalled(); expect(f.files()).toEqual([null, null, null]); expect(f.states.size).toBe(0);
     expect(preview.content).not.toMatch(/SYNTHETIC_|aggregate-model-alias/);
   });
 
   it('uses full Chat endpoint URLs and omits an unknown context instead of inventing a budget', () => {
     const f = fixture(); f.model.wireApi = 'chat-completions'; f.model.contextWindow = 0;
-    expect(JSON.parse(f.preview(true).content).profile).toEqual({ id: f.model.upstreamId, baseUrl: 'https://api.fixture.invalid/v1/chat/completions', apiType: 'OpenAICompletion', apiKey: 'SYNTHETIC_UPSTREAM_KEY', displayName: f.model.displayName, providerName: f.provider.name });
+    expect(JSON.parse(f.preview(true).content).profile).toEqual({ id: f.model.upstreamId, baseUrl: 'https://api.fixture.invalid/v1/chat/completions', apiType: 'OpenAICompletion', apiKey: 'SYNTHETIC_UPSTREAM_KEY', displayName: `${f.model.displayName} · ModelDock 默认`, providerName: f.provider.name });
     expect(f.preview(true).content).not.toContain('SYNTHETIC_OAUTH');
   });
 
@@ -64,7 +116,7 @@ describe('Junie CLI and IDE custom profile configuration', () => {
 
   it('does not silently bridge an unavailable direct source or invent a Messages profile', () => {
     const f = fixture(); f.providers.push({ ...f.provider, id: 'second' }); f.binding.providerIds!.push('second');
-    expect(() => f.preview()).toThrow(/恰好一个/);
+    expect(JSON.parse(f.preview().content).profiles).toHaveProperty(Object.keys(JSON.parse(f.preview().content).profiles)[0]);
     f.binding.providerIds = [f.provider.id]; f.model.wireApi = 'messages';
     expect(f.preview().content).toBe('');
     f.model.wireApi = 'responses'; f.provider.authStatus = 'missing';
@@ -135,7 +187,7 @@ describe('Junie CLI and IDE custom profile configuration', () => {
     expect(f.files()).toEqual(before);
   });
 
-  it.each([1, 2, 0])('rolls back files and ownership when committing file %s fails', index => {
+  it.each([1, 2, 3, 0])('rolls back files and ownership when committing file %s fails', index => {
     const f = fixture(); f.write(f.targets.configPath, { model: 'before', hooks: { keep: [] } }); f.write(f.targets.acpPath, { agent_servers: { Other: { command: '/keep' } } });
     const before = f.files();
     expect(() => f.apply({ afterFileCommit: committed => { if (committed === index) throw new Error('synthetic file failure'); } })).toThrow('synthetic file failure');
@@ -157,11 +209,11 @@ describe('Junie CLI and IDE custom profile configuration', () => {
     expect(f.store.getManagedState(junieHistoryKey(f.targets.configPath), null)).toBeNull();
   });
 
-  it.each([1, 2, 0])('recovers an interrupted first transaction at file %s before reading the next restore baseline', index => {
+  it.each([1, 2, 3, 0])('recovers an interrupted first transaction at file %s before reading the next restore baseline', index => {
     const f = fixture(); f.write(f.targets.configPath, { model: 'original', future: true }); f.apply();
     const journal = structuredClone(f.journals[0]) as any;
     journal.files.forEach((file: any) => { if (file.before === null) rmSync(file.path, { force: true }); else f.write(file.path, file.before); });
-    for (const committed of [1, 2, 0]) {
+    for (const committed of journal.order) {
       f.write(journal.files[committed].path, journal.files[committed].after);
       if (committed === index) break;
     }
@@ -181,7 +233,7 @@ describe('Junie CLI and IDE custom profile configuration', () => {
   it.each(['before', 'after'] as const)('keeps a valid default/profile pair when the first crash-recovery write fails %s replacement', failure => {
     const f = fixture(); f.write(f.targets.configPath, { model: 'original', future: true }); f.apply();
     const journal = structuredClone(f.journals[0]) as any;
-    expect(journal.order).toEqual([1, 2, 0]); f.states.set(junieHistoryKey(f.targets.configPath), journal);
+    expect(journal.order).toEqual([1, 2, 3, 0]); f.states.set(junieHistoryKey(f.targets.configPath), journal);
     const replace = privateFiles.replacePrivateFile, attempted: string[] = [];
     const spy = vi.spyOn(privateFiles, 'replacePrivateFile').mockImplementation((path, content) => {
       attempted.push(path);

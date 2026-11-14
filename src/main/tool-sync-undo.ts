@@ -4,11 +4,11 @@ import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import type { ToolBinding, ToolId } from '../shared/types';
+import type { Model, Provider, ToolBinding, ToolId } from '../shared/types';
 import { isJetBrainsTool } from '../shared/jetbrains';
 import { codexHistoryKey } from './adapters';
 import { claudeConfigDirectory, claudeHistoryKey, recoverClaudeConfig } from './claude-config';
-import { junieConfigTargets, junieHistoryKey, recoverJunieConfig, replaceJunieConfigFile } from './junie-config';
+import { isJunieManagedProfilePath, junieManagedConfigPaths, junieConfigTargets, junieHistoryKey, recoverJunieConfig, replaceJunieConfigFile } from './junie-config';
 import { copilotCliConfigTargets, copilotCliHistoryKey, recoverCopilotCliConfig, replaceCopilotCliConfigFile } from './copilot-cli-config';
 import { isOpenCodeTool, openCodeConfigTargets, type OpenCodePathOptions } from './opencode-paths';
 import { DSH_LEGACY_SCRIPT } from './dsh-runtime';
@@ -19,6 +19,8 @@ import { copilotSyncUndoKey, copilotSyncUndoStatus, undoCopilotDesktop, type Cop
 export interface ToolSyncUndoStore {
   dataDir: string;
   listBindings(): ToolBinding[];
+  listModels?(): Model[];
+  listProviders?(): Provider[];
   restoreBindingSelection(binding: ToolBinding): void;
   getManagedState<T>(key: string, fallback: T): T;
   setManagedState(key: string, value: unknown): void;
@@ -108,8 +110,8 @@ export class ToolSyncUndoManager {
       return { target, paths: [target], stateKeys: [claudeHistoryKey(target)] };
     }
     if (tool === 'junie') {
-      const { configPath, profilePath, acpPath } = junieConfigTargets(home, { junieHome: this.options.junieHome });
-      return { target: configPath, paths: [configPath, profilePath, acpPath], stateKeys: [junieHistoryKey(configPath)] };
+      const options = { junieHome: this.options.junieHome }, { configPath } = junieConfigTargets(home, options);
+      return { target: configPath, paths: junieManagedConfigPaths(this.store, home, options), stateKeys: [junieHistoryKey(configPath)] };
     }
     if (tool === 'copilot-cli') {
       const { providersPath, settingsPath } = copilotCliConfigTargets(home, { copilotHome: this.options.copilotCliHome, providersConfig: this.options.copilotCliProvidersConfig });
@@ -141,6 +143,13 @@ export class ToolSyncUndoManager {
     }
     if (value.kind !== 'files') fail('invalid');
     const targets = this.targets(tool);
+    // The selection can have changed since the last sync. Validate historical
+    // Junie paths by the exact managed filename namespace, not today's models.
+    if (tool === 'junie' && Array.isArray(value.beforeFiles)) {
+      const base = targets.paths.slice(0, 3), extra = value.beforeFiles.slice(3).map(file => file.path);
+      if (extra.some(path => typeof path !== 'string' || !isJunieManagedProfilePath(path, base[1])) || new Set(extra).size !== extra.length) fail('invalid');
+      targets.paths = [...base, ...extra];
+    }
     const validFiles = (files: SnapshotFile[]) => Array.isArray(files) && files.length === targets.paths.length && files.every((file, index) => file.path === targets.paths[index]
       && (file.content === null || typeof file.content === 'string' && Buffer.byteLength(file.content, 'utf8') <= maximumFileSize) && Number.isInteger(file.mode) && file.mode >= 0 && file.mode <= 0o777);
     const validStates = (states: SnapshotState[]) => Array.isArray(states) && states.length === targets.stateKeys.length && states.every((state, index) => state.key === targets.stateKeys[index]);

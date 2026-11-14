@@ -41,9 +41,10 @@ interface HistoryStore {
 }
 interface Value { present: boolean; value?: string }
 interface History {
-  version: 1; configPath: string; profilePath: string; configWasPresent: boolean;
+  version: 1 | 2; configPath: string; profilePath: string; configWasPresent: boolean;
   beforeModel: Value; appliedModel: Value; beforeProfile: string | null; appliedProfile: string;
   acpPath: string; acpWasPresent: boolean; acpAgentsWasPresent: boolean; beforeAcpEntry: EntryValue; appliedAcpEntry: EntryValue;
+  profiles?: { path: string; before: string | null; applied: string | null }[];
 }
 interface EntryValue { present: boolean; value?: unknown }
 interface FileState { path: string; content: string | null }
@@ -79,40 +80,48 @@ function modelValue(config: Record<string, unknown>): Value {
 function assertId(value: string): void {
   if (!value.trim() || value.length > 512 || /[\x00-\x1f\x7f]/.test(value)) throw new Error('Junie 模型标识无效。');
 }
-function selection(store: JunieConfigStore, revealKey: boolean, port: number): JunieModelProfile | null {
+function selectedModels(store: JunieConfigStore): { binding: ToolBinding; providers: Provider[]; models: Model[] } {
   const binding = store.listBindings().find(item => String(item.id) === 'junie');
   if (!binding) throw new Error('找不到 Junie 的配置。');
-  if (!binding.enabled) return null;
   const allModels = store.listModels();
   const providerIds = [...new Set(binding.providerIds ?? allModels.filter(model => binding.modelIds.includes(model.id)).map(model => model.providerId))];
   const providers = store.listProviders?.() ?? providerIds.flatMap(id => { const provider = store.getProvider?.(id); return provider ? [provider] : []; });
   const models = resolveBindingModels(binding, allModels, providers).filter(model => model.wireApi === 'responses' || model.wireApi === 'chat-completions');
+  return { binding, providers, models };
+}
+function profileFilename(modelId: string): string { return `modeldock-${createHash('sha256').update(modelId).digest('hex').slice(0, 24)}.json`; }
+function selection(store: JunieConfigStore, revealKey: boolean, port: number): { profile: JunieModelProfile; profiles: Record<string, JunieModelProfile> } | null {
+  const { binding, providers, models } = selectedModels(store);
   if (!models.length) return null;
   const chosen = models.find(model => model.id === binding.defaultModelId) ?? models[0];
   const aggregate = binding.mode === 'aggregate';
-  if (!aggregate && providerIds.length !== 1) throw new Error('Junie 直连必须选择恰好一个 API 供应商。');
-  const provider = providers.find(source => source.id === chosen.providerId);
-  if (!provider?.enabled || !provider.hasSecret || provider.authStatus !== 'ready') throw new Error('Junie 所选来源的凭据尚未就绪。');
-  if (!aggregate && provider.kind !== 'openai-compatible') throw new Error('Junie 订阅来源必须使用聚合接口。');
-  if (aggregate && (!Number.isSafeInteger(port) || port < 1 || port > 65535)) throw new Error('Junie 本机入口端口无效。');
-  const id = aggregate ? chosen.alias : chosen.upstreamId;
-  assertId(id);
-  const key = revealKey ? aggregate ? store.gatewayKey() : store.getSecret?.(provider.id)?.apiKey : aggregate ? '__MODELDOCK_LOCAL_KEY__' : '__PROVIDER_API_KEY__';
-  if (!key || /[\x00-\x1f\x7f]/.test(key) || key.includes('${')) throw new Error('Junie 所选来源缺少有效的 API Key。');
-  const route = chosen.wireApi === 'responses' ? '/responses' : '/chat/completions';
-  const base = aggregate ? `http://127.0.0.1:${port}/tool/junie/v1` : provider.baseUrl;
-  return { id, baseUrl: upstreamEndpoint(base, route), apiType: chosen.wireApi === 'responses' ? 'OpenAIResponses' : 'OpenAICompletion', apiKey: key,
-    displayName: chosen.displayName || chosen.upstreamId, providerName: aggregate ? 'ModelDock' : provider.name,
-    ...(Number.isSafeInteger(chosen.contextWindow) && chosen.contextWindow > 0 ? { maxContextLength: chosen.contextWindow } : {}) };
+  function toProfile(model: Model): JunieModelProfile {
+    const provider = providers.find(source => source.id === model.providerId);
+    if (!provider?.enabled || !provider.hasSecret || provider.authStatus !== 'ready') throw new Error('Junie 所选来源的凭据尚未就绪。');
+    const local = aggregate || provider.kind !== 'openai-compatible' || !!provider.nativeAdapter;
+    if (local && (!Number.isSafeInteger(port) || port < 1 || port > 65535)) throw new Error('Junie 本机入口端口无效。');
+    const id = local ? model.alias : model.upstreamId;
+    assertId(id);
+    const key = revealKey ? local ? store.gatewayKey() : store.getSecret?.(provider.id)?.apiKey : local ? '__MODELDOCK_LOCAL_KEY__' : '__PROVIDER_API_KEY__';
+    if (!key || /[\x00-\x1f\x7f]/.test(key) || key.includes('${')) throw new Error('Junie 所选来源缺少有效的 API Key。');
+    const route = model.wireApi === 'responses' ? '/responses' : '/chat/completions';
+    const base = local ? `http://127.0.0.1:${port}/tool/junie/v1` : provider.baseUrl;
+    return { id, baseUrl: upstreamEndpoint(base, route), apiType: model.wireApi === 'responses' ? 'OpenAIResponses' : 'OpenAICompletion', apiKey: key,
+      displayName: model.displayName || model.upstreamId, providerName: provider.name,
+      ...(Number.isSafeInteger(model.contextWindow) && model.contextWindow > 0 ? { maxContextLength: model.contextWindow } : {}) };
+  }
+  const profiles = Object.fromEntries(models.map(model => [profileFilename(model.id), toProfile(model)]));
+  const chosenProfile = profiles[profileFilename(chosen.id)];
+  return { profile: { ...chosenProfile, displayName: `${chosenProfile.displayName} · ModelDock 默认` }, profiles };
 }
 export function buildJunieConfig(store: JunieConfigStore, revealKey = false, port = 18181, homeDirectory = homedir(), options: JunieConfigOptions = {}): ConfigPreview {
-  const targets = junieConfigTargets(homeDirectory, options), profile = selection(store, revealKey, port);
+  const targets = junieConfigTargets(homeDirectory, options), selected = selection(store, revealKey, port), profile = selected?.profile;
   const command = profile ? options.junieCommand ?? resolveJunieCommand(homeDirectory) : undefined;
   const acp = profile && command ? buildJunieAcpEntry(profileId, junieConfigDirectory(homeDirectory, options.junieHome), command) : undefined;
   return { filename: 'modeldock-junie.json', canApply: !profile || !!command,
-    content: profile ? json({ config: { model: profileId }, profile, ...(acp ? { acp } : {}) }) : '',
+    content: profile ? json({ config: { model: profileId }, profile, profiles: selected!.profiles, ...(acp ? { acp } : {}) }) : '',
     instructions: profile
-      ? `将默认模型写入 ${targets.profilePath}，只合并 ${targets.configPath} 的 model 字段；在 ${targets.acpPath} 添加独立的 Junie · ModelDock 代理，保留 IDE 其他代理和 MCP 设置。Junie 的 baseUrl 使用完整推理端点，Responses 与 Chat Completions 保持所选协议。当前仅同步默认模型，其余聚合映射保留在 ModelDock 网关权限中。预览隐藏密钥，导出或应用时才写入所用 API Key；订阅令牌留在 ModelDock。终端使用 junie --model custom:modeldock 或在 /model 的 Custom 标签选择；IDE 在 AI Chat 选择 Junie · ModelDock 代理。项目 config.json、命令行和 Junie settings.json 可能影响最终选择；配置写入不代表实际推理已通过。${command ? '' : '未找到支持的 Junie CLI 启动程序，请先安装 Junie CLI 后重新预览。'}`
+      ? `将默认模型写入 ${targets.profilePath}，只合并 ${targets.configPath} 的 model 字段；在 ${targets.acpPath} 添加独立的 Junie · ModelDock 代理，保留 IDE 其他代理和 MCP 设置。Junie 的 baseUrl 使用完整推理端点，Responses 与 Chat Completions 保持所选协议。全部所选模型分别写入 models/modeldock-*.json，可在 /model 中独立选择。modeldock.json 保留为当前默认模型的快捷配置，切换默认模型不会改动其他模型配置的标识。预览隐藏密钥，导出或应用时才写入所用 API Key；订阅令牌留在 ModelDock。终端使用 junie --model custom:modeldock 或在 /model 的 Custom 标签选择；IDE 在 AI Chat 选择 Junie · ModelDock 代理。项目 config.json、命令行和 Junie settings.json 可能影响最终选择；配置写入不代表实际推理已通过。${command ? '' : '未找到支持的 Junie CLI 启动程序，请先安装 Junie CLI 后重新预览。'}`
       : '移除仍属于 ModelDock 的 Junie 配置并恢复原有默认模型；保留其他模型、账号、MCP、Hooks 与用户设置。没有管理记录时不修改文件。',
   };
 }
@@ -149,13 +158,21 @@ function entryValid(value: unknown): value is EntryValue {
   return object(value) && typeof value.present === 'boolean' && Object.keys(value).every(key => key === 'present' || key === 'value')
     && (value.present ? object(value.value) : value.value === undefined);
 }
+/** No user-named profiles or paths outside this models directory are owned. */
+export function isJunieManagedProfilePath(path: string, profilePath: string): boolean {
+  return dirname(path) === dirname(profilePath) && /^modeldock-[a-f0-9]{24}\.json$/.test(path.slice(dirname(path).length + 1));
+}
 function validateHistory(value: unknown, configPath: string, profilePath: string, acpPath: string): History | null {
   if (value === null) return null;
-  if (!object(value) || value.version !== 1 || value.configPath !== configPath || value.profilePath !== profilePath || value.acpPath !== acpPath || typeof value.configWasPresent !== 'boolean' || typeof value.acpWasPresent !== 'boolean' || typeof value.acpAgentsWasPresent !== 'boolean'
+  if (!object(value) || ![1, 2].includes(value.version as number) || value.configPath !== configPath || value.profilePath !== profilePath || value.acpPath !== acpPath || typeof value.configWasPresent !== 'boolean' || typeof value.acpWasPresent !== 'boolean' || typeof value.acpAgentsWasPresent !== 'boolean'
     || !valueValid(value.beforeModel) || !valueValid(value.appliedModel) || value.appliedModel.value !== profileId || value.appliedModel.present !== true
     || !entryValid(value.beforeAcpEntry) || !entryValid(value.appliedAcpEntry) || value.appliedAcpEntry.present !== true
     || value.beforeProfile !== null && typeof value.beforeProfile !== 'string' || typeof value.appliedProfile !== 'string'
     || Buffer.byteLength(JSON.stringify(value), 'utf8') > 6 * 1024 * 1024) throw new Error('Junie 配置恢复记录无效，未修改原文件。');
+  if (value.version === 2 && (!Array.isArray(value.profiles) || value.profiles.some(file => !object(file) || typeof file.path !== 'string' || !isJunieManagedProfilePath(file.path, profilePath)
+    || ![file.before, file.applied].every(content => content === null || typeof content === 'string' && Buffer.byteLength(content, 'utf8') <= maximumFileSize))
+    || new Set(value.profiles.map(file => file.path)).size !== value.profiles.length)) throw new Error('Junie 模型配置恢复记录无效，未修改原文件。');
+  if (value.version === 1 && value.profiles !== undefined) throw new Error('Junie 配置恢复记录版本无效，未修改原文件。');
   return value as unknown as History;
 }
 function historyStore(store: JunieHistoryStore): HistoryStore {
@@ -169,7 +186,24 @@ function replace(path: string, content: string | null): void {
 /** Unified undo preserves the same private credential-file permissions. */
 export function replaceJunieConfigFile(path: string, content: string | null): void { read(path); replace(path, content); }
 function history(store: HistoryStore, configPath: string, profilePath: string, acpPath: string): History | null {
-  return recoverConfigJournal(store, junieHistoryKey(configPath), [configPath, profilePath, acpPath], value => validateHistory(value, configPath, profilePath, acpPath), read, replace);
+  const validate = (value: unknown) => validateHistory(value, configPath, profilePath, acpPath);
+  const value = store.getManagedState<unknown>(junieHistoryKey(configPath), null);
+  const records = object(value) && Object.hasOwn(value, 'modeldockPending') ? [validate(value.previous), validate(value.next)] : [validate(value)];
+  const paths = [...new Set(records.flatMap(record => record?.profiles?.map(file => file.path) ?? []))].sort();
+  return recoverConfigJournal(store, junieHistoryKey(configPath), [configPath, profilePath, acpPath, ...paths], validate, read, replace);
+}
+/** Includes removed profiles until the ownership record is restored, plus the
+ * next selection so unified undo captures newly created files as absent. */
+export function junieManagedConfigPaths(store: JunieHistoryStore & Pick<JunieConfigStore, 'listBindings'> & Partial<Pick<JunieConfigStore, 'listModels' | 'listProviders'>>, homeDirectory: string, options: JunieConfigOptions = {}): string[] {
+  const { configPath, profilePath, acpPath } = junieConfigTargets(homeDirectory, options);
+  const value = store.getManagedState?.<unknown>(junieHistoryKey(configPath), null) ?? null;
+  const validate = (value: unknown) => validateHistory(value, configPath, profilePath, acpPath);
+  const records = object(value) && Object.hasOwn(value, 'modeldockPending') ? [validate(value.previous), validate(value.next)] : [validate(value)];
+  const binding = store.listBindings().find(binding => binding.id === 'junie');
+  const ids = !binding?.enabled ? [] : store.listModels ? resolveBindingModels(binding, store.listModels(), store.listProviders?.()).map(model => model.id) : binding.modelIds;
+  const paths = [...new Set([...records.flatMap(record => record?.profiles?.map(file => file.path) ?? []),
+    ...ids.map(id => join(dirname(profilePath), profileFilename(id)))])].sort();
+  return [configPath, profilePath, acpPath, ...paths];
 }
 export function recoverJunieConfig(store: JunieHistoryStore, homeDirectory = homedir(), options: JunieConfigOptions = {}): void {
   const { configPath, profilePath, acpPath } = junieConfigTargets(homeDirectory, options);
@@ -179,7 +213,7 @@ function transact(store: HistoryStore, beforeFiles: FileState[], afterFiles: Fil
   const target = beforeFiles[0].path;
   transactConfigFiles({ store, key: junieHistoryKey(target), kind: 'junie-config', before, after,
     files: beforeFiles.map((file, index) => ({ path: file.path, before: file.content, after: afterFiles[index].content })),
-    read, write: replace, order: [1, 2, 0], beforeCommit: options.beforeCommit, afterFileCommit: options.afterFileCommit });
+    read, write: replace, order: [...beforeFiles.map((_, index) => index).slice(1), 0], beforeCommit: options.beforeCommit, afterFileCommit: options.afterFileCommit });
   return target;
 }
 function restore(store: HistoryStore, homeDirectory: string, options: JunieConfigOptions): string {
@@ -189,6 +223,8 @@ function restore(store: HistoryStore, homeDirectory: string, options: JunieConfi
   const original = read(configPath), profile = read(profilePath), acp = read(acpPath), config = parseConfig(original);
   if (profile !== before.appliedProfile) throw new Error('Junie 受管模型已被外部修改，未覆盖新修改。');
   if (!equal(readJunieAcpEntry(acp), before.appliedAcpEntry)) throw new Error('Junie 受管 IDE 代理已被外部修改，未覆盖新修改。');
+  const profiles = [...(before.profiles ?? [])].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+  if (profiles.some(file => read(file.path) !== file.applied)) throw new Error('Junie 受管模型已被外部修改，未覆盖新修改。');
   if (equal(modelValue(config), before.appliedModel)) {
     if (before.beforeModel.present) config.model = before.beforeModel.value; else delete config.model;
   }
@@ -199,12 +235,13 @@ function restore(store: HistoryStore, homeDirectory: string, options: JunieConfi
     if (object(value.agent_servers) && !Object.keys(value.agent_servers).length) { delete value.agent_servers; outputAcp = json(value); }
   }
   if (!before.acpWasPresent && outputAcp !== null && !Object.keys(JSON.parse(outputAcp)).length) outputAcp = null;
-  return transact(store, [{ path: configPath, content: original }, { path: profilePath, content: profile }, { path: acpPath, content: acp }],
-    [{ path: configPath, content: output }, { path: profilePath, content: before.beforeProfile }, { path: acpPath, content: outputAcp }], before, null, options);
+  return transact(store, [{ path: configPath, content: original }, { path: profilePath, content: profile }, { path: acpPath, content: acp }, ...profiles.map(file => ({ path: file.path, content: file.applied }))],
+    [{ path: configPath, content: output }, { path: profilePath, content: before.beforeProfile }, { path: acpPath, content: outputAcp }, ...profiles.map(file => ({ path: file.path, content: file.before }))], before, null, options);
 }
 export function applyJunieConfig(store: JunieConfigStore, _backups: string, homeDirectory = homedir(), options: JunieConfigOptions = {}): string {
-  const state = historyStore(store), profile = selection(store, true, options.port ?? 18181);
-  if (!profile) return restore(state, homeDirectory, options);
+  const state = historyStore(store), selected = selection(store, true, options.port ?? 18181);
+  if (!selected) return restore(state, homeDirectory, options);
+  const { profile } = selected;
   const command = options.junieCommand ?? resolveJunieCommand(homeDirectory);
   if (!command) throw new Error('未找到支持的 Junie CLI 启动程序，请先安装 Junie CLI，再同步终端和 IDE 配置。');
   const { configPath, profilePath, acpPath } = junieConfigTargets(homeDirectory, options);
@@ -218,15 +255,23 @@ export function applyJunieConfig(store: JunieConfigStore, _backups: string, home
   const desiredAcp = buildJunieAcpEntry(profileId, junieConfigDirectory(homeDirectory, options.junieHome), command);
   const outputAcp = mergeJunieAcp(acp, desiredAcp);
   const currentModel = modelValue(config), outputProfile = json(profile);
-  const next: History = { version: 1, configPath, profilePath, configWasPresent: before?.configWasPresent ?? original !== null,
+  const desiredProfiles = new Map(Object.entries(selected.profiles).map(([name, value]) => [join(dirname(profilePath), name), json(value)]));
+  const paths = [...new Set([...(before?.profiles?.map(file => file.path) ?? []), ...desiredProfiles.keys()])].sort();
+  const oldProfiles = paths.map(path => ({ path, content: read(path) }));
+  const profiles = oldProfiles.map(file => {
+    const owned = before?.profiles?.find(previous => previous.path === file.path);
+    if (file.content !== (owned?.applied ?? null)) throw new Error('Junie 模型配置已存在且不属于 ModelDock，或已被外部修改，未覆盖原文件。');
+    return { path: file.path, before: owned?.before ?? null, applied: desiredProfiles.get(file.path) ?? null };
+  });
+  const next: History = { version: 2, profiles, configPath, profilePath, configWasPresent: before?.configWasPresent ?? original !== null,
     beforeModel: before && equal(currentModel, before.appliedModel) ? before.beforeModel : currentModel,
     appliedModel: { present: true, value: profileId }, beforeProfile: before ? before.beforeProfile : oldProfile, appliedProfile: outputProfile,
     acpPath, acpWasPresent: before?.acpWasPresent ?? acp !== null,
     acpAgentsWasPresent: before?.acpAgentsWasPresent ?? (acp !== null && Object.hasOwn(JSON.parse(acp.replace(/^\uFEFF/, '')), 'agent_servers')),
     beforeAcpEntry: before?.beforeAcpEntry ?? currentAcp, appliedAcpEntry: { present: true, value: desiredAcp } };
   config.model = profileId;
-  return transact(state, [{ path: configPath, content: original }, { path: profilePath, content: oldProfile }, { path: acpPath, content: acp }],
-    [{ path: configPath, content: json(config) }, { path: profilePath, content: outputProfile }, { path: acpPath, content: outputAcp }], before, next, options);
+  return transact(state, [{ path: configPath, content: original }, { path: profilePath, content: oldProfile }, { path: acpPath, content: acp }, ...oldProfiles],
+    [{ path: configPath, content: json(config) }, { path: profilePath, content: outputProfile }, { path: acpPath, content: outputAcp }, ...profiles.map(file => ({ path: file.path, content: file.applied }))], before, next, options);
 }
 export function restoreJunieOfficialConfig(store: JunieHistoryStore, _backups: string, homeDirectory = homedir(), options: JunieConfigOptions = {}): string {
   return restore(historyStore(store), homeDirectory, options);

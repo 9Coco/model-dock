@@ -19,15 +19,16 @@ const calls = [];
 const server = createServer((request, response) => {
   let body = ''; request.setEncoding('utf8'); request.on('data', part => { body += part; });
   request.on('end', () => {
-    if (request.method !== 'POST' || request.headers.authorization !== 'Bearer synthetic-client-key') { response.writeHead(401); response.end(); return; }
+    const source = request.url?.split('/')[1];
+    if (request.method !== 'POST' || !['a', 'b'].includes(source) || request.headers.authorization !== `Bearer synthetic-client-key-${source}`) { response.writeHead(401); response.end(); return; }
     const value = JSON.parse(body); calls.push({ path: request.url, model: value.model, streaming: value.stream });
     response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
     const send = (value, event) => response.write(`${event ? `event: ${event}\n` : ''}data: ${JSON.stringify(value)}\n\n`);
-    if (request.url === '/v1/chat/completions') {
+    if (request.url.endsWith('/v1/chat/completions')) {
       send({ id: 'fixture-chat', object: 'chat.completion.chunk', model: value.model, choices: [{ index: 0, delta: { role: 'assistant', content: 'OPENCODE_DESKTOP_OK' }, finish_reason: null }] });
       send({ id: 'fixture-chat', object: 'chat.completion.chunk', model: value.model, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 } });
       response.end('data: [DONE]\n\n');
-    } else if (request.url === '/v1/responses') {
+    } else if (request.url.endsWith('/v1/responses')) {
       const item = { id: 'msg-fixture', type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'OPENCODE_DESKTOP_OK', annotations: [] }] };
       const base = { id: 'resp-fixture', object: 'response', model: value.model, created_at: 1 };
       const event = (type, data) => send({ type, ...data }, type);
@@ -43,18 +44,20 @@ const server = createServer((request, response) => {
   });
 });
 await new Promise(done => server.listen(0, '127.0.0.1', done));
-const provider = { id: 'fixture', kind: 'openai-compatible', name: 'Fixture', enabled: true, hasSecret: true, authStatus: 'ready', baseUrl: `http://127.0.0.1:${server.address().port}/v1` };
-const models = ['chat-completions', 'responses'].map((wireApi, index) => ({ id: `m${index}`, providerId: provider.id, upstreamId: `fixture-${index}`, alias: `fixture-${index}`, displayName: `Fixture ${wireApi}`, wireApi, contextWindow: 32000, tools: true, vision: false, enabled: true }));
-const store = { listBindings: () => [{ id: 'opencode-desktop', name: 'Fixture', enabled: true, mode: 'direct', providerIds: [provider.id], modelIds: models.map(m => m.id), defaultModelId: models[0].id }], listModels: () => models, listProviders: () => [provider], getProvider: () => provider, getSecret: () => ({ apiKey: 'synthetic-client-key' }), gatewayKey: () => 'synthetic-local-key' };
+const providers = ['a', 'b'].map(id => ({ id, kind: 'openai-compatible', name: `Fixture ${id}`, enabled: true, hasSecret: true, authStatus: 'ready', baseUrl: `http://127.0.0.1:${server.address().port}/${id}/v1` }));
+const models = ['chat-completions', 'responses'].map((wireApi, index) => ({ id: `m${index}`, providerId: providers[index].id, upstreamId: 'shared-fixture-model', alias: `fixture-local-${index}`, displayName: `Fixture ${wireApi}`, wireApi, contextWindow: 32000, tools: true, vision: false, enabled: true }));
+const store = { listBindings: () => [{ id: 'opencode-desktop', name: 'Fixture', enabled: true, mode: 'direct', providerIds: providers.map(p => p.id), modelIds: models.map(m => m.id), defaultModelId: models[0].id }], listModels: () => models, listProviders: () => providers, getProvider: id => providers.find(p => p.id === id), getSecret: id => ({ apiKey: `synthetic-client-key-${id}` }), gatewayKey: () => 'synthetic-local-key' };
 const env = { ...process.env, OPENCODE_DISABLE_AUTOUPDATE: 'true', OPENCODE_CONFIG_CONTENT: '', OPENCODE_CONFIG: '', OPENCODE_CONFIG_DIR: '', OPENCODE_DB: join(profile, 'fixture.db') };
 for (const key of ['CONFIG', 'DATA', 'CACHE', 'STATE']) { env[`XDG_${key}_HOME`] = join(profile, key.toLowerCase()); mkdirSync(env[`XDG_${key}_HOME`], { recursive: true }); }
 const configDir = join(env.XDG_CONFIG_HOME, 'opencode'); mkdirSync(configDir, { recursive: true });
-writeFileSync(join(configDir, 'opencode.json'), buildConfig(store, 'opencode-desktop', 18181, true, profile).content);
+const config = JSON.parse(buildConfig(store, 'opencode-desktop', 18181, true, profile).content);
+assert.deepEqual(config.enabled_providers, ['modeldock-a', 'modeldock-b']);
+writeFileSync(join(configDir, 'opencode.json'), JSON.stringify(config, null, 2));
 const results = [];
 try {
   for (const model of models) {
     const result = await new Promise((done, reject) => {
-      const child = spawn(executable, ['run', '--standalone', '--format', 'json', '--model', `modeldock/${model.upstreamId}`, 'Reply exactly OPENCODE_DESKTOP_OK'], { cwd: profile, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = spawn(executable, ['run', '--standalone', '--format', 'json', '--model', `modeldock-${model.providerId}/${model.upstreamId}`, 'Reply exactly OPENCODE_DESKTOP_OK'], { cwd: profile, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
       let stdout = '', stderr = ''; const timer = setTimeout(() => {
         writeFileSync(join(profile, `${model.id}-output.txt`), stdout + stderr);
         child.kill(); reject(new Error(`Native client fixture timed out; inspect ${profile}`));
@@ -66,9 +69,9 @@ try {
     writeFileSync(join(profile, `${model.id}-output.txt`), result.stdout + result.stderr);
     assert.equal(result.code, 0, `Native client failed; inspect ${profile}`);
     assert.ok(result.stdout.includes('OPENCODE_DESKTOP_OK'), `No native text output; inspect ${profile}`);
-    assert.ok(calls.some(call => call.path === (model.wireApi === 'responses' ? '/v1/responses' : '/v1/chat/completions') && call.model === model.upstreamId));
-    results.push({ protocol: model.wireApi, textReceived: true, realUpstreamId: true });
+    assert.ok(calls.some(call => call.path === `/${model.providerId}/v1/${model.wireApi === 'responses' ? 'responses' : 'chat/completions'}` && call.model === model.upstreamId));
+    results.push({ provider: model.providerId, protocol: model.wireApi, textReceived: true, realUpstreamId: true, independentAuthentication: true });
   }
-  const result = { ok: true, executable, profile, results, calls, realUserConfigurationChanged: false, liveProviderInferenceTested: false };
+  const result = { ok: true, executable, profile, simultaneousProviders: config.enabled_providers, results, calls, realUserConfigurationChanged: false, liveProviderInferenceTested: false };
   writeFileSync(join(output, 'result.json'), JSON.stringify(result, null, 2)); console.log(JSON.stringify(result));
 } finally { await new Promise(done => server.close(done)); }

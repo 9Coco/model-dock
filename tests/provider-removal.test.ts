@@ -20,6 +20,12 @@ function setup(affected: ToolId[] = ['vscode', 'copilot', 'dsh']) {
   return { store, checkpoint, removed: () => removed };
 }
 describe('explicit provider removal and client synchronization', () => {
+  it('also removes globally deleted sources from Desktop, CLI and Junie without touching offline IDEs', async () => {
+    const fixture = setup(['opencode-desktop', 'copilot-cli', 'junie', 'rider']), synchronized: ToolId[] = [];
+    await removeProviderAndSync(fixture.store, 'source', async tool => { synchronized.push(tool); });
+    expect(synchronized).toEqual(['opencode-desktop', 'copilot-cli', 'junie']);
+    expect(fixture.store.finishProviderRemoval).toHaveBeenCalledWith(fixture.checkpoint);
+  });
   it('synchronizes affected automatic clients once and finishes after all succeed', async () => {
     const fixture = setup(), synchronized: ToolId[] = [];
     await removeProviderAndSync(fixture.store, 'source', async tool => { expect(fixture.removed()).toBe(true); synchronized.push(tool); });

@@ -75,7 +75,7 @@ describe('provider selections and preserved model-scoped bindings', () => {
 });
 
 describe('automatic client connection topology without credentials', () => {
-  it.each(['opencode', 'vscode', 'dsh', 'copilot'] as const)('%s legacy auto mode connects each selected provider separately', tool => {
+  it.each(['opencode', 'opencode-desktop', 'vscode', 'dsh', 'copilot', 'copilot-cli', 'junie'] as const)('%s legacy auto mode connects each selected provider separately', tool => {
     const selected = binding(tool, { mode: 'auto', modelSelection: 'selected', modelIds: ['a-one', 'b-one', 'codex-one', 'grok-one'] });
     expect(resolveBindingModels(selected, models, providers).map(item => item.id)).toEqual(['a-one', 'b-one', 'codex-one', 'grok-one']);
     expect(bindingConnectionPolicy(selected, models, providers)).toEqual({ kind: 'native', groups: [
@@ -104,7 +104,7 @@ describe('automatic client connection topology without credentials', () => {
     expect(bindingConnectionPolicy(selected, onlyFirst, providers)).toEqual({ kind: 'aggregate', groups: [{ connection: 'local-managed', providerIds: ['api-a', 'api-b'], modelIds: ['a-one', 'a-two'] }] });
     expect(bindingConnectionPolicy(selected, [...onlyFirst, model('new-b', 'api-b')], providers).groups[0].modelIds).toEqual(['a-one', 'a-two', 'new-b']);
   });
-  it.each(['opencode', 'vscode', 'dsh', 'copilot'] as const)('%s creates one native endpoint group per provider with subscription authorization kept local', tool => {
+  it.each(['opencode', 'opencode-desktop', 'vscode', 'dsh', 'copilot', 'copilot-cli', 'junie'] as const)('%s creates one native endpoint group per provider with subscription authorization kept local', tool => {
     expect(bindingConnectionPolicy(binding(tool), models, providers)).toEqual({ kind: 'native', groups: [
       { connection: 'direct-api', providerIds: ['api-a'], modelIds: ['a-one', 'a-two'] },
       { connection: 'direct-api', providerIds: ['api-b'], modelIds: ['b-one'] },
@@ -122,7 +122,7 @@ describe('automatic client connection topology without credentials', () => {
     const aggregate = binding('opencode', { mode: 'aggregate', providerIds: ['api-a'] });
     expect(bindingConnectionPolicy(aggregate, models, providers)).toEqual({ kind: 'aggregate', groups: [{ connection: 'local-managed', providerIds: ['api-a'], modelIds: ['a-one', 'a-two'] }] });
     const direct = binding('vscode', { mode: 'direct', providerIds: ['codex'] });
-    expect(bindingConnectionPolicy(direct, models, providers)).toEqual({ kind: 'direct', groups: [{ connection: 'local-managed', providerIds: ['codex'], modelIds: ['codex-one'] }] });
+    expect(bindingConnectionPolicy(direct, models, providers)).toEqual({ kind: 'native', groups: [{ connection: 'local-managed', providerIds: ['codex'], modelIds: ['codex-one'] }] });
     expect(aggregate.mode).toBe('aggregate'); expect(direct.mode).toBe('direct');
   });
   it('does not assume unknown provider metadata means a direct API endpoint', () => {

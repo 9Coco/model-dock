@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { toolCategories, toolCategoryFor } from '../shared/tool-categories';
 import assert from 'node:assert/strict';
 import { writeFileSync } from 'node:fs';
@@ -210,7 +211,7 @@ export async function verifyToolIcons(window: BrowserWindow, outputDir: string, 
     await waitFor(`document.querySelector('[data-tool-binding="copilot-cli"] [data-action="tool-default-model"]')?.value===${JSON.stringify(model.id)}`, 'Copilot CLI synthetic selection rendered');
     const cliPreview = await evaluate<ConfigPreview>(`window.modelDock.previewConfig('copilot-cli')`);
     const cliContent = JSON.parse(cliPreview.content) as { providers: { name: string; type: string; baseUrl: string; wireApi: string; apiKey: string }[]; models: { id: string; provider: string; wireModel: string }[]; settings: { model: string } };
-    const providerName = model.wireApi === 'responses' ? 'modeldock-responses' : 'modeldock-chat';
+    const providerName = `modeldock-${createHash('sha256').update(model.providerId).digest('hex').slice(0, 24)}-${model.wireApi === 'responses' ? 'responses' : 'chat'}`;
     const nativeProvider = cliContent.providers.find(provider => provider.name === providerName);
     assert.ok(nativeProvider, 'Copilot CLI preview includes the default model protocol');
     assert.equal(nativeProvider.type, 'openai');

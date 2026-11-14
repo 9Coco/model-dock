@@ -69,8 +69,46 @@ describe('OpenCode Desktop and TUI targets', () => {
     const preview = buildConfig(f.store, 'opencode-desktop', 18181, false, f.root);
     expect(preview.content).not.toContain('synthetic-opencode-api-key');
     const config = parse(buildConfig(f.store, 'opencode-desktop', 18181, true, f.root).content);
-    expect(config.model).toBe('modeldock/fixture-chat');
-    expect(config.provider.modeldock.options).toEqual({ baseURL: 'https://fixture.example/v1', apiKey: 'synthetic-opencode-api-key' });
+    expect(config.model).toBe(`modeldock-${f.provider.id}/fixture-chat`);
+    expect(config.provider[`modeldock-${f.provider.id}`].options).toEqual({ baseURL: 'https://fixture.example/v1', apiKey: 'synthetic-opencode-api-key' });
+  });
+  it.each(['opencode', 'opencode-desktop'] as const)('%s keeps mixed native providers, independent credentials and exact model selections when adding or removing a source', async tool => {
+    const f = await fixture(); f.activate(tool, 'direct');
+    const other = f.store.saveProvider({ name: 'Second API', kind: 'openai-compatible', baseUrl: 'https://second.example/v1', enabled: true, apiKey: 'synthetic-second-key' });
+    const subscription = f.store.saveProvider({ name: 'Subscription', kind: 'codex', presetId: 'codex-subscription', baseUrl: 'https://chatgpt.com/backend-api/codex', enabled: true });
+    f.store.setSecret(subscription.id, { accessToken: 'synthetic-never-export-oauth', refreshToken: 'synthetic-never-export-refresh' });
+    const secondModel = f.store.saveModel({ ...f.model, id: undefined, providerId: other.id, alias: 'second-local' });
+    const subModel = f.store.saveModel({ ...f.model, id: undefined, providerId: subscription.id, upstreamId: 'native-subscription', alias: 'subscription-local', wireApi: 'responses' });
+    f.store.saveModel({ ...f.model, id: undefined, alias: 'unselected-local', upstreamId: 'unselected-upstream' });
+    const before = f.store.listBindings().find(binding => binding.id === tool)!;
+    const selection = { ...before, providerIds: [f.provider.id, other.id, subscription.id], modelIds: [f.model.id, secondModel.id, subModel.id], defaultModelId: secondModel.id };
+    f.store.saveBinding(selection);
+    const ids = selection.providerIds.map(id => `modeldock-${id}`);
+    const config = parse(buildConfig(f.store, tool, 18181, true, f.root).content);
+    expect(config.enabled_providers).toEqual(ids);
+    expect(config.model).toBe(`${ids[1]}/${secondModel.upstreamId}`);
+    expect(config.provider[ids[0]].options).toEqual({ baseURL: f.provider.baseUrl, apiKey: 'synthetic-opencode-api-key' });
+    expect(config.provider[ids[1]].options).toEqual({ baseURL: other.baseUrl, apiKey: 'synthetic-second-key' });
+    expect(config.provider[ids[2]].options).toEqual({ baseURL: `http://127.0.0.1:18181/tool/${tool}/v1`, apiKey: f.store.gatewayKey() });
+    expect(config.provider[ids[2]].models[subModel.alias].provider.npm).toBe('@ai-sdk/openai');
+    expect(JSON.stringify(config)).not.toMatch(/never-export|unselected-upstream/);
+    expect(buildConfig(f.store, tool, 18181, false, f.root).content).not.toMatch(/synthetic-opencode-api-key|synthetic-second-key|never-export/);
+    await f.manager.run(tool, before, () => f.apply(tool));
+    const written = readFileSync(f.target, 'utf8');
+    expect(written).toContain('// preserve user comments');
+    expect(parse(written)).toMatchObject({ model: config.model, provider: { ...config.provider, foreign: { name: 'Keep' } }, mcp: parse(f.original).mcp, permission: { bash: 'ask' } });
+    f.store.saveBinding({ ...selection, providerIds: [f.provider.id, subscription.id], modelIds: [f.model.id, subModel.id], defaultModelId: f.model.id });
+    f.apply(tool);
+    const removed = parse(readFileSync(f.target, 'utf8'));
+    expect(removed.enabled_providers).toEqual([ids[0], ids[2]]);
+    expect(removed.provider[ids[1]]).toBeUndefined();
+    expect(removed.provider[ids[0]]).toEqual(config.provider[ids[0]]);
+    expect(removed.provider[ids[2]]).toEqual(config.provider[ids[2]]);
+    expect(removed.provider.foreign).toEqual({ name: 'Keep' });
+    f.store.saveBinding(selection);
+    f.store.deleteProvider(other.id);
+    expect(f.store.listBindings().find(binding => binding.id === tool)).toMatchObject({ enabled: true, mode: 'direct', providerIds: [f.provider.id, subscription.id], modelIds: [f.model.id, subModel.id] });
+    expect(parse(buildConfig(f.store, tool, 18181, true, f.root).content).enabled_providers).toEqual([ids[0], ids[2]]);
   });
   it('rejects stale shared-file undo after the other product synchronizes, and restores exactly after its own undo', async () => {
     const f = await fixture();
@@ -124,5 +162,28 @@ describe('OpenCode Desktop and TUI targets', () => {
     const denied = await request('not-selected'); expect(denied.status).toBeGreaterThanOrEqual(400); await denied.text();
     const unauthorized = await request(f.model.alias, { ...headers, authorization: 'Bearer invalid' }); expect(unauthorized.status).toBe(401); await unauthorized.text();
     expect(upstream).toHaveBeenCalledTimes(1);
+  });
+  it.each(['opencode', 'opencode-desktop'] as const)('%s routes both selected direct-mode sources with exact authentication and rejects removed models', async tool => {
+    const f = await fixture(); f.activate(tool, 'direct');
+    const other = f.store.saveProvider({ name: 'Second route', kind: 'openai-compatible', baseUrl: 'https://second-route.example/v1', enabled: true, apiKey: 'synthetic-route-key' });
+    const model = f.store.saveModel({ ...f.model, id: undefined, providerId: other.id, alias: 'second-route-local' });
+    const binding = f.store.listBindings().find(value => value.id === tool)!;
+    f.store.saveBinding({ ...binding, providerIds: [f.provider.id, other.id], modelIds: [f.model.id, model.id] });
+    const upstream = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const second = String(url).startsWith(other.baseUrl);
+      expect(String(url)).toBe(`${second ? other.baseUrl : f.provider.baseUrl}/chat/completions`);
+      expect(new Headers(init?.headers).get('authorization')).toBe(`Bearer ${second ? 'synthetic-route-key' : 'synthetic-opencode-api-key'}`);
+      expect(JSON.parse(String(init?.body)).model).toBe(f.model.upstreamId);
+      return new Response(JSON.stringify({ id: 'fixture', choices: [{ message: { role: 'assistant', content: second ? 'B' : 'A' }, finish_reason: 'stop' }] }), { headers: { 'content-type': 'application/json' } });
+    });
+    const gateway = new Gateway(f.store, { fetch: upstream }); await gateway.start(0); cleanup.push(async () => { await gateway.stop(); });
+    const origin = new URL(gateway.status().baseUrl).origin;
+    const request = (alias: string) => fetch(`${origin}/tool/${tool}/v1/chat/completions`, { method: 'POST', headers: { authorization: `Bearer ${f.store.gatewayKey()}`, 'content-type': 'application/json' }, body: JSON.stringify({ model: alias, messages: [{ role: 'user', content: 'synthetic' }] }) });
+    for (const [alias, text] of [[f.model.alias, 'A'], [model.alias, 'B']]) {
+      const result = await request(alias); expect(result.status).toBe(200); expect((await result.json()).choices[0].message.content).toBe(text);
+    }
+    f.store.saveBinding(binding);
+    const removed = await request(model.alias); expect(removed.status).toBe(403); await removed.text();
+    expect(upstream).toHaveBeenCalledTimes(2);
   });
 });

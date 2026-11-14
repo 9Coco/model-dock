@@ -6,6 +6,21 @@ ModelDock 是跨平台本地模型管理台：全局维护模型来源与别名�
 
 0.4.0 起包含 FlowBridge 的组合发行版采用 [GPL-3.0-or-later](LICENSE)；原 ModelDock 代码及原创应用标记保留 [MIT 授权](LICENSE-MIT)，第三方图标和依赖保留各自的 Apache-2.0、CC-BY-4.0、MIT 或其他许可，详见 [第三方声明](THIRD_PARTY_NOTICES.md)。欢迎按 [贡献指南](CONTRIBUTING.md) 提交修复；敏感问题请遵循 [安全报告流程](SECURITY.md)。
 
+## 0.4.27 · 按产品能力选择供应商
+
+- 统一检查 13 个工具入口。OpenCode TUI / Desktop、VS Code、DSH、Copilot app、Copilot CLI、Junie 支持非聚合多选；新增来源保留已有选择，默认模型的单选不再限制可保存的供应商数量。界面、主进程校验、模型路由与启动迁移共用产品能力表。
+- Codex 当前连接、Claude Code 当前环境及四款 JetBrains AI Assistant 的 OpenAI-compatible 连接槽继续只配置一个原生端点；聚合模式可选择多个内部来源。Air 自身支持多个账号，本页一次准备一个账号参数，仍需在 Air 内手动添加及切换，不能据此宣称 Air 只支持一个账号。
+- Copilot CLI 按供应商和协议注册稳定的命名连接；各 API 使用自己的地址、模型 ID 和 Key。同名模型来自不同供应商时互不覆盖。继续保留其他来源、JSONC 注释、账号、MCP、权限和会话；兼容此前受管条目的清理与还原。依据：[GitHub 官方配置说明](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-config-dir-reference)。
+- Junie 为全部所选模型生成稳定的自定义模型文件，可在 `/model` 中切换；`modeldock.json` 是带「ModelDock 默认」标记的当前默认快捷配置，仍供独立的 Junie · ModelDock ACP 代理使用。多个文件共同备份、事务提交和撤销，兼容旧三文件恢复记录，检测外部编辑后拒绝覆盖。依据：[Junie 官方自定义模型说明](https://junie.jetbrains.com/docs/custom-llm-models.html)。
+- 全局删除供应商的同步补齐 OpenCode Desktop、Junie 与 Copilot CLI。仅清除对应受管来源和模型；绑定保存仍即时生效，外部写入仍使用 400 ms 合并队列，启动及导航不写入客户端配置。
+- 原生 API 分别直连；订阅仍由 Electron 主进程内现有 Gateway 管理授权，预览隐藏密钥，不导出 OAuth 令牌。客户端配置、模拟上游测试和真实供应商推理分别验收。
+
+## 0.4.26 · OpenCode 多供应商选择
+
+- 修复 OpenCode TUI / Desktop 在关闭「使用聚合接口」时错误地限制单选的问题。两种模式均可多选供应商；新增或取消某一来源保留其余选择，切换聚合开关保留来源、精确模型范围和默认模型。
+- 非聚合配置为每家供应商生成稳定的独立条目，API 使用各自的地址、真实模型 ID 和 Key，订阅仍使用现有主进程 Gateway，OAuth 令牌不导出。显式同步会将旧的单来源 `modeldock` 条目更新为对应的供应商条目；启动和页面导航不写入外部配置。
+- TUI 与 Desktop 分别保存选择；未设置独立路径时仍共用 OpenCode 全局配置文件。保留 400 ms 自动同步、备份、撤销，以及其他供应商配置、注释、MCP 和权限。
+
 ## 0.4.25 · OpenCode Desktop 与产品形态导航
 
 - 工具分为「编辑器 / TUI / 桌面 App」。编辑器包括 VS Code 与四款 JetBrains IDE；TUI 包括 Claude Code、Junie、OpenCode TUI 和 Copilot CLI；桌面 App 包括 Codex、OpenCode Desktop、DSH 和 Copilot app。跨形态工具保留原有共享绑定，OpenCode 的两种入口分别保存选择。

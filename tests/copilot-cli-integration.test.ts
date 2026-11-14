@@ -63,11 +63,11 @@ describe('Copilot CLI independent configuration and gateway integration', () => 
     }
     expect(calls).toHaveLength(1);
     const binding = f.store.listBindings().find(binding => binding.id === 'copilot-cli')!;
-    f.store.saveBinding({ ...switchSingleEntryMode(binding, 'direct', f.store.listModels(), f.store.listProviders()), enabled: true, providerIds: [f.source.id], modelIds: [], modelSelection: 'all', defaultModelId: f.model.id });
+    f.store.saveBinding({ ...switchSingleEntryMode(binding, 'direct', f.store.listModels(), f.store.listProviders()), enabled: true, providerIds: [f.source.id], modelIds: [f.model.id], modelSelection: 'selected', defaultModelId: f.model.id });
     const direct = JSON.parse(buildConfig(f.store, 'copilot-cli', 18181, true, f.home).content);
     expect(direct.providers[0]).toMatchObject({ baseUrl: f.source.baseUrl, apiKey: 'synthetic-cli-upstream-key' });
     expect(direct.models[0]).toMatchObject({ id: f.model.upstreamId, wireModel: f.model.upstreamId });
-    const disabled = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify(body) });
+    const disabled = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify({ ...body, model: f.other.alias }) });
     expect(disabled.status).toBe(403); await disabled.text(); expect(calls).toHaveLength(1);
   });
 

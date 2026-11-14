@@ -27,6 +27,27 @@ async function fixture(wireApi: WireApi = 'responses') {
 }
 
 describe('Junie tool integration', () => {
+  it('undoes added and removed model profiles together and rejects edits in any extra profile', async () => {
+    const f = await fixture(), manager = new ToolSyncUndoManager(f.store, { homeDirectory: f.home, appData: join(f.home, 'appdata') });
+    const apply = () => applyJunieConfig(f.store, join(f.home, 'backups'), f.home, f.options);
+    await manager.run('junie', f.before, apply);
+    const before = f.store.listBindings().find(binding => binding.id === 'junie')!;
+    const profileDirectory = dirname(junieConfigTargets(f.home).profilePath);
+    const initialNames = Object.keys(JSON.parse(buildJunieConfig(f.store, false, 18181, f.home, f.options).content).profiles);
+    const initialText = readFileSync(join(profileDirectory, initialNames[0]), 'utf8');
+    f.store.saveBinding({ ...before, modelIds: [f.other.id], defaultModelId: f.other.id });
+    await manager.run('junie', before, apply);
+    const newNames = Object.keys(JSON.parse(buildJunieConfig(f.store, false, 18181, f.home, f.options).content).profiles);
+    const added = join(profileDirectory, newNames[0]), applied = readFileSync(added, 'utf8');
+    expect(existsSync(join(profileDirectory, initialNames[0]))).toBe(false);
+    writeFileSync(added, applied + ' ');
+    await expect(manager.undo('junie')).rejects.toThrow('修改');
+    writeFileSync(added, applied);
+    await manager.undo('junie');
+    expect(existsSync(added)).toBe(false);
+    expect(readFileSync(join(profileDirectory, initialNames[0]), 'utf8')).toBe(initialText);
+    expect(f.store.listBindings().find(binding => binding.id === 'junie')!.modelIds).toEqual([f.model.id]);
+  });
   it.each(['responses', 'chat-completions'] as const)('uses the generated %s endpoint with exact scoped model permissions', async wire => {
     const f = await fixture(wire), calls: {url: string; body: any; key: string | null}[] = [];
     const gateway = new Gateway(f.store, { fetch: async (url, init) => {
@@ -55,10 +76,10 @@ describe('Junie tool integration', () => {
     expect(calls).toHaveLength(1);
     const binding = f.store.listBindings().find(binding => binding.id === 'junie')!;
     f.store.saveBinding({ ...switchSingleEntryMode(binding,'direct',f.store.listModels(),f.store.listProviders()), enabled:true,
-      providerIds:[f.source.id],modelIds:[],modelSelection:'all',defaultModelId:f.model.id });
+      providerIds:[f.source.id],modelIds:[f.model.id],modelSelection:'selected',defaultModelId:f.model.id });
     const direct = JSON.parse(buildJunieConfig(f.store,true,18181,f.home,f.options).content);
     expect(direct.profile).toMatchObject({id:f.model.upstreamId,baseUrl:`${f.source.baseUrl}/${wire === 'responses' ? 'responses' : 'chat/completions'}`,apiKey:'synthetic-junie-upstream-key'});
-    const disabledRoute = await fetch(profile.baseUrl,{method:'POST',headers,body:JSON.stringify(body)});
+    const disabledRoute = await fetch(profile.baseUrl,{method:'POST',headers,body:JSON.stringify({...body, model:f.other.alias})});
     expect(disabledRoute.status).toBe(403); await disabledRoute.text(); expect(calls).toHaveLength(1);
   });
 

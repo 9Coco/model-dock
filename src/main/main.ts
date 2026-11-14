@@ -376,7 +376,8 @@ async function createWindow(forceShow = false) {
             return {content:preview.content,instructions:preview.instructions};
           })()`);
           const directConfig = JSON.parse(direct.content);
-          if (directConfig.provider.modeldock.options.baseURL !== upstream || directConfig.model !== 'modeldock/mock-model') throw new Error('Direct provider binding failed');
+          const directGroup = `modeldock-${outcome.providerId}`;
+          if (directConfig.provider[directGroup].options.baseURL !== upstream || directConfig.model !== `${directGroup}/mock-model`) throw new Error('Direct provider binding failed');
           writeFileSync(join(outputDir,'direct-mode-validation.json'),JSON.stringify({ok:true,tool:'opencode',mode:'direct',upstreamId:'mock-model',keyRedacted:!direct.content.includes('synthetic-only')},null,2));
           await window!.webContents.executeJavaScript(`document.querySelector('[aria-label="刷新本机配置"]').click()`);
           await new Promise(resolve => setTimeout(resolve,500));

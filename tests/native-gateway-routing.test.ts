@@ -149,7 +149,7 @@ describe('native account catalog and inference routing', () => {
 });
 
 describe('native accounts cannot export historical relay endpoints as supplier direct APIs', () => {
-  const strictTools: ToolId[] = ['codex', 'claude-code', 'junie', 'copilot-cli', 'webstorm', 'intellij-idea', 'rider', 'pycharm'];
+  const strictTools: ToolId[] = ['codex', 'claude-code', 'webstorm', 'intellij-idea', 'rider', 'pycharm'];
   it.each(adapters)('%s is ineligible for every single-entry direct mode', async adapter => {
     const f = await fixture(adapter), providers = f.store.listProviders(), models = f.store.listModels();
     expect(nativeClaudeBaseUrl(f.provider)).toBeUndefined();
@@ -185,7 +185,7 @@ describe('native accounts cannot export historical relay endpoints as supplier d
   });
   it.each(adapters)('%s legacy direct groups remain locally managed and never export the historical placeholder key', async adapter => {
     const f = await fixture(adapter);
-    for (const tool of ['vscode', 'opencode', 'copilot'] as const) {
+    for (const tool of ['vscode', 'opencode', 'copilot', 'junie', 'copilot-cli'] as const) {
       const base = f.store.listBindings().find(row => row.id === tool)!;
       f.store.saveBinding({ ...base, enabled: true, mode: 'direct', providerIds: [f.provider.id], modelIds: [f.model.id], modelSelection: 'selected', defaultModelId: f.model.id });
       const binding = f.store.listBindings().find(row => row.id === tool)!;

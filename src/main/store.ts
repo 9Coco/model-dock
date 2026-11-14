@@ -10,6 +10,7 @@ import { isReasoningEffort, MODEL_SPEC_FIELDS, modelSpecs, sanitizeReasoningEffo
 import { OPENCODE_GO_BASE_URL, JETBRAINS_RELAY_BASE_URL, isLocalTraeRelayUrl, providerPresets, presetById, TRAE_RELAY_BASE_URL } from '../shared/presets';
 import { resolveBindingModels } from '../shared/bindings';
 import { directModelsForProvider, isSingleEntryTool, updateSingleEntryBinding } from '../shared/single-entry';
+import { supportsMultipleSources } from '../shared/tool-capabilities';
 import { isJetBrainsTool } from '../shared/jetbrains';
 import { normalizeApiKey } from './credentials';
 import { providerIdentity, type ProviderDuplicateGroup, type ProviderMergeResult } from '../shared/provider-duplicates';
@@ -93,7 +94,7 @@ export class Store {
       }
       // 修改点：旧版其他工具允许 direct 多入口，转为等价的 auto 元数据；不改外部配置或所选来源。
       for (const row of store.rows("SELECT id,provider_ids FROM bindings WHERE mode='direct'")) {
-        if (!Object.hasOwn(TOOL_NAMES, String(row.id)) || row.id === 'codex' || row.id === 'claude-code') continue;
+        if (!Object.hasOwn(TOOL_NAMES, String(row.id)) || row.id === 'codex' || row.id === 'claude-code' || supportsMultipleSources(row.id as ToolId)) continue;
         const ids = row.provider_ids === null ? [] : JSON.parse(String(row.provider_ids));
         if (Array.isArray(ids) && ids.length > 1) db.run("UPDATE bindings SET mode='auto' WHERE id=?", [String(row.id)]);
       }
@@ -733,7 +734,7 @@ export class Store {
     const providerIds = binding.providerIds === undefined ? [...new Set(allModels.filter(model => modelIds.includes(model.id)).map(model => model.providerId))] : [...new Set(binding.providerIds)];
     const providers = this.listProviders();
     if (providerIds.some(providerId => typeof providerId !== 'string' || !providers.some(provider => provider.id === providerId))) throw new Error('工具绑定引用了不存在的来源。');
-    if (mode === 'direct' && (providerIds.length > 1 || binding.enabled && providerIds.length !== 1)) throw new Error('单供应商模式必须选择恰好一个来源。');
+    if (mode === 'direct' && !supportsMultipleSources(binding.id) && (providerIds.length > 1 || binding.enabled && providerIds.length !== 1)) throw new Error('单供应商模式必须选择恰好一个来源。');
     if (binding.claudeDisableTelemetry !== undefined && (binding.id !== 'claude-code' || typeof binding.claudeDisableTelemetry !== 'boolean')) throw new Error('Claude Code 隐私选项无效。');
     const previousClaudePrivacy = this.one('SELECT claude_disable_telemetry FROM bindings WHERE id=?', [binding.id])?.claude_disable_telemetry;
     const claudePrivacy = binding.id === 'claude-code' ? binding.claudeDisableTelemetry ?? previousClaudePrivacy !== 0 : true;
@@ -747,10 +748,11 @@ export class Store {
     if (binding.defaultModelId && !defaultModels.some(model => model.id === binding.defaultModelId)) throw new Error('默认模型必须属于工具可用模型。');
     if (isSingleEntryTool(binding.id) && binding.enabled && mode === 'direct' && !resolveBindingModels(candidate, allModels, providers).length) throw new Error(mode === 'direct' ? '直连需要所选供应商的原生 API 模型；订阅和其他协议请使用聚合接口。' : '需要所选来源的可用模型。');
     const previous = this.allBindings().find(row => row.id === binding.id);
-    const previousChoices = !(Object.hasOwn(binding, 'connectionChoices') && binding.connectionChoices === undefined) && previous && isSingleEntryTool(binding.id) ? updateSingleEntryBinding(previous, {}, allModels, providers).connectionChoices : undefined;
-    const withChoices = updateSingleEntryBinding(candidate, { connectionChoices: { ...previousChoices, ...binding.connectionChoices } }, allModels, providers);
-    if (isSingleEntryTool(binding.id)) this.validateConnectionChoices(withChoices.connectionChoices, allModels, providers);
-    this.mutate(() => this.db.run('UPDATE bindings SET name=?,enabled=?,model_ids=?,default_model_id=?,note=?,mode=?,provider_ids=?,model_selection=?,vscode_sync_scope=?,copilot_sync_scope=?,dsh_sync_scope=?,claude_disable_telemetry=?,connection_choices=? WHERE id=?', [TOOL_NAMES[binding.id], Number(binding.enabled), JSON.stringify(modelIds), binding.defaultModelId, typeof binding.note === 'string' ? binding.note.slice(0, 1000) : '', mode, JSON.stringify(providerIds), modelSelection ?? null, syncScope, copilotScope, dshScope, Number(claudePrivacy), isSingleEntryTool(binding.id) ? JSON.stringify(withChoices.connectionChoices) : null, binding.id]));
+    const previousChoices = !(Object.hasOwn(binding, 'connectionChoices') && binding.connectionChoices === undefined) && previous ? updateSingleEntryBinding(previous, {}, allModels, providers).connectionChoices : undefined;
+    const withChoices = updateSingleEntryBinding(candidate, isSingleEntryTool(binding.id) || previousChoices || binding.connectionChoices
+      ? { connectionChoices: { ...previousChoices, ...binding.connectionChoices } } : {}, allModels, providers);
+    if (withChoices.connectionChoices) this.validateConnectionChoices(withChoices.connectionChoices, allModels, providers);
+    this.mutate(() => this.db.run('UPDATE bindings SET name=?,enabled=?,model_ids=?,default_model_id=?,note=?,mode=?,provider_ids=?,model_selection=?,vscode_sync_scope=?,copilot_sync_scope=?,dsh_sync_scope=?,claude_disable_telemetry=?,connection_choices=? WHERE id=?', [TOOL_NAMES[binding.id], Number(binding.enabled), JSON.stringify(modelIds), binding.defaultModelId, typeof binding.note === 'string' ? binding.note.slice(0, 1000) : '', mode, JSON.stringify(providerIds), modelSelection ?? null, syncScope, copilotScope, dshScope, Number(claudePrivacy), withChoices.connectionChoices ? JSON.stringify(withChoices.connectionChoices) : null, binding.id]));
   }
   private pruneBindings(): void {
     const models = this.listModels();
@@ -759,7 +761,7 @@ export class Store {
     for (const binding of this.allBindings()) {
       const providerIds = (binding.providerIds ?? []).filter(providerId => providers.some(provider => provider.id === providerId));
       const modelIds = binding.modelIds.filter(modelId => existing.has(modelId) && providerIds.includes(models.find(model => model.id === modelId)!.providerId));
-      const enabled = binding.enabled && providerIds.length > 0 && (binding.mode !== 'direct' || providerIds.length === 1) && (binding.modelSelection !== undefined || !binding.modelIds.length || modelIds.length > 0);
+      const enabled = binding.enabled && providerIds.length > 0 && (binding.mode !== 'direct' || supportsMultipleSources(binding.id) || providerIds.length === 1) && (binding.modelSelection !== undefined || !binding.modelIds.length || modelIds.length > 0);
       const candidate = { ...binding, enabled, providerIds, modelIds };
       const defaultId = resolveBindingModels({ ...candidate, enabled: true }, models, providers).some(model => model.id === binding.defaultModelId) ? binding.defaultModelId : '';
       const choices = binding.connectionChoices ? structuredClone(binding.connectionChoices) : undefined;
@@ -775,7 +777,7 @@ export class Store {
         if (draft.completionModelId && !models.some(model => model.id === draft.completionModelId && draft.providerIds.includes(model.providerId))) delete draft.completionModelId;
         if (!models.some(model => model.id === draft.defaultModelId && draft.providerIds.includes(model.providerId))) draft.defaultModelId = '';
       }
-      const updated = isSingleEntryTool(binding.id) ? updateSingleEntryBinding({ ...candidate, defaultModelId: defaultId, connectionChoices: choices }, {}, models, providers) : candidate;
+      const updated = updateSingleEntryBinding({ ...candidate, defaultModelId: defaultId, connectionChoices: choices }, {}, models, providers);
       this.db.run('UPDATE bindings SET enabled=?,provider_ids=?,model_ids=?,default_model_id=?,connection_choices=? WHERE id=?', [Number(enabled), JSON.stringify(providerIds), JSON.stringify(modelIds), defaultId, updated.connectionChoices ? JSON.stringify(updated.connectionChoices) : null, binding.id]);
     }
   }

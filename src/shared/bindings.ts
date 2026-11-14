@@ -3,6 +3,7 @@ import { traeRelayClientModel } from './trae-relay-models';
 import { claudeConnectionKind, claudeModelsForProvider } from './claude';
 import { isJetBrainsTool } from './jetbrains';
 import { directModelsForProvider, isSingleEntryTool, nativeDirectBaseUrl } from './single-entry';
+import { supportsMultipleSources } from './tool-capabilities';
 
 export interface BindingConnectionGroup {
   /** Direct API groups contain exactly one provider, hence one credential. */
@@ -21,7 +22,7 @@ export function resolveBindingModels(binding: ToolBinding, models: Model[], prov
   if (!binding.enabled) return [];
   const providerIds = binding.providerIds;
   const claude = binding.id === 'claude-code';
-  const singleSource = binding.mode === 'direct' || claude && binding.mode !== 'aggregate';
+  const singleSource = binding.mode === 'direct' && !supportsMultipleSources(binding.id) || claude && binding.mode !== 'aggregate';
   // 修改点：Claude 使用官方 Messages 入口或本机协议桥，其他适配器仍不消费 Messages。
   const claudeIds = claude && providers ? new Set(providers.filter(provider => provider.enabled).flatMap(provider => binding.mode === 'aggregate'
     ? models.filter(model => model.providerId === provider.id && model.enabled)
@@ -50,15 +51,12 @@ export function bindingConnectionPolicy(binding: ToolBinding, models: Model[], p
   const localGroup = (): BindingConnectionGroup => ({ connection: 'local-managed', providerIds: selectedIds, modelIds: resolved.map(model => model.id) });
   // 修改点：所有工具的显式聚合模式共用一个本机入口，凭据不写到客户端。
   if (binding.mode === 'aggregate') return { kind: 'aggregate', groups: binding.enabled && selectedIds.length ? [localGroup()] : [] };
-  if (binding.mode === 'direct') {
+  if (binding.mode === 'direct' && !supportsMultipleSources(binding.id)) {
     if (!binding.enabled || !requestedIds.length) return { kind: 'direct', groups: [] };
     if (requestedIds.length !== 1) throw new Error('单供应商模式必须只选择一个来源。');
     if (!selectedIds.length) return { kind: 'direct', groups: [] };
     const provider = providers?.find(item => item.id === selectedIds[0]);
-    if (isSingleEntryTool(binding.id)) return { kind: 'direct', groups: provider && nativeDirectBaseUrl(binding.id, provider, resolved) ? [{ connection: 'direct-api', providerIds: selectedIds, modelIds: resolved.map(model => model.id) }] : [] };
-    const native = provider?.kind === 'openai-compatible' && !provider.nativeAdapter && (binding.id === 'claude-code' ? claudeConnectionKind(provider, resolved) === 'direct-api'
-      : isJetBrainsTool(binding.id) ? resolved.length > 0 && resolved.every(model => model.wireApi === 'chat-completions') : true);
-    return { kind: 'direct', groups: [{ connection: native ? 'direct-api' : 'local-managed', providerIds: selectedIds, modelIds: resolved.map(model => model.id) }] };
+    return { kind: 'direct', groups: provider && nativeDirectBaseUrl(binding.id, provider, resolved) ? [{ connection: 'direct-api', providerIds: selectedIds, modelIds: resolved.map(model => model.id) }] : [] };
   }
   if (isJetBrainsTool(binding.id)) {
     const providerIds = [...new Set(binding.providerIds ?? resolved.map(model => model.providerId))].filter(providerId => !providers || providers.some(provider => provider.id === providerId && provider.enabled));
@@ -71,8 +69,8 @@ export function bindingConnectionPolicy(binding: ToolBinding, models: Model[], p
     const provider = providers?.find(item => item.id === providerIds[0]);
     return { kind: 'direct', groups: [{ connection: provider ? claudeConnectionKind(provider, resolved) : 'local-managed', providerIds, modelIds: resolved.map(model => model.id) }] };
   }
-  // 旧 auto 模式保持原先的原生多入口行为，直到用户明确切换。
-  const auto = binding.mode === 'auto';
+  // Registry and profile clients keep native per-source connections in direct mode.
+  const auto = binding.mode === 'auto' || binding.mode === 'direct' && supportsMultipleSources(binding.id);
   const modeKind = auto && binding.id !== 'codex' ? 'native' : 'aggregate';
   if (!binding.enabled || !selectedIds.length) return { kind: modeKind, groups: [] };
   const singleProvider = selectedIds.length === 1 ? providers?.find(provider => provider.id === selectedIds[0]) : undefined;

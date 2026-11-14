@@ -230,7 +230,7 @@ child.on('exit', code => {
     }
     if (env.MODELDOCK_SMOKE_AGGREGATE_ONLY === '1') {
       const result=JSON.parse(readFileSync(resolve(output,'aggregate-modes-validation.json'),'utf8'));
-      if(!result.ok||result.tools.length!==10||aggregateRequests.length!==20||aggregateRequests.some(request=>!request.ok))throw new Error('All-tool aggregation/UI routing verification failed');
+      if(!result.ok||result.tools.length!==13||aggregateRequests.length!==26||aggregateRequests.some(request=>!request.ok))throw new Error('All-tool aggregation/UI routing verification failed');
       writeFileSync(resolve(output,'aggregate-network-validation.json'),JSON.stringify({requests:aggregateRequests},null,2));
       console.log(JSON.stringify({exitCode:code,bridge:value.bridge,tools:result.tools.length,layouts:result.layouts.length,mockRequests:aggregateRequests.length,output}));
       process.exit(code||0);

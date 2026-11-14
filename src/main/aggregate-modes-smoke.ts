@@ -1,18 +1,23 @@
 import assert from 'node:assert/strict';
 import { join, resolve } from 'node:path';
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import type { BrowserWindow } from 'electron';
 import type { Store } from './store';
 import type { Model, ToolBinding, ToolId } from '../shared/types';
 import { bindingConnectionPolicy } from '../shared/bindings';
 import { isJetBrainsTool } from '../shared/jetbrains';
+import { supportsMultipleSources } from '../shared/tool-capabilities';
 import { isSingleEntryTool } from '../shared/single-entry';
 
-const tools: ToolId[] = ['codex', 'claude-code', 'opencode', 'dsh', 'vscode', 'copilot', 'webstorm', 'intellij-idea', 'rider', 'pycharm'];
+const tools: ToolId[] = ['codex', 'claude-code', 'opencode', 'opencode-desktop', 'junie', 'copilot-cli', 'dsh', 'vscode', 'copilot', 'webstorm', 'intellij-idea', 'rider', 'pycharm'];
 /** 修改点：验证真实React切换与IPC保存，外部客户端写入仅限隔离的假home。 */
 export async function verifyAggregateModes(window: BrowserWindow, store: Store, outputDir: string, captureUi: () => Promise<Buffer>): Promise<void> {
   assert.equal(resolve(outputDir), resolve(process.env.MODELDOCK_SMOKE!)); assert.equal(resolve(store.dataDir), resolve(process.env.MODELDOCK_DATA_DIR!));
   assert.equal(process.env.MODELDOCK_SMOKE_AUTH_MOCK, '1');
+  // Discovery-only fixture: this file is never executed; no native Junie claim.
+  const fixtureBin = join(store.dataDir, 'feature-home', '.local', 'bin');
+  mkdirSync(fixtureBin, { recursive: true });
+  writeFileSync(join(fixtureBin, process.platform === 'win32' ? 'junie.exe' : 'junie'), 'synthetic discovery fixture; never executed', { mode: 0o700 });
   const upstream = new URL(process.env.MODELDOCK_SMOKE_UPSTREAM!); assert.equal(upstream.hostname, '127.0.0.1'); assert.equal(upstream.protocol, 'http:');
   const providers = ['a', 'b'].map(side => store.saveProvider({ name: `聚合验证 ${side.toUpperCase()}`, kind: 'openai-compatible', baseUrl: `${upstream.origin}/aggregate/${side}/v1`, claudeBaseUrl: `${upstream.origin}/aggregate/native-${side}`, messagesAuth: side === 'a' ? 'api-key' : 'bearer', enabled: true, apiKey: `synthetic-${side}` }));
   const models: Model[] = [];
@@ -90,7 +95,7 @@ export async function verifyAggregateModes(window: BrowserWindow, store: Store, 
       const layout = await evaluate<any>(`(()=>{const main=document.querySelector('.main-content'),rect=document.querySelector('[data-action="tool-use-aggregate"]').getBoundingClientRect();return {horizontalOverflow:main.scrollWidth>main.clientWidth+1,toggleVisible:rect.top>=0&&rect.bottom<=innerHeight+1,checked:document.querySelector('[data-action="tool-use-aggregate"]').checked};})()`);
       assert.equal(layout.horizontalOverflow, false); assert.equal(layout.toggleVisible, true); assert.equal(layout.checked, true);
       layouts.push({ tool, theme, width, height, ...layout });
-      if (['claude-code', 'webstorm', 'opencode', 'codex'].includes(tool)) writeFileSync(join(outputDir, `${tool}-aggregate-${theme}-${width}.png`), await captureUi());
+      if (['claude-code', 'webstorm', 'opencode', 'codex', 'junie', 'copilot-cli', 'vscode'].includes(tool)) writeFileSync(join(outputDir, `${tool}-aggregate-${theme}-${width}.png`), await captureUi());
     }
     await click('[data-action="tool-use-aggregate"]');
     if (isSingleEntryTool(tool)) {
@@ -99,20 +104,32 @@ export async function verifyAggregateModes(window: BrowserWindow, store: Store, 
       await idle(tool);
       await evaluate(`(()=>{const select=document.querySelector('[data-action="tool-default-model"]');Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(select,${JSON.stringify(chosen[1].id)});select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
     }
-    await waitFor(`(async()=>{const binding=(await window.modelDock.snapshot()).bindings.find(b=>b.id===${JSON.stringify(tool)});return binding.mode==='direct'&&binding.providerIds.length===1&&!document.querySelector('[data-action="tool-use-aggregate"]').disabled;})()`, `${tool} direct mode`);
+    await waitFor(`(async()=>{const binding=(await window.modelDock.snapshot()).bindings.find(b=>b.id===${JSON.stringify(tool)});return binding.mode==='direct'&&binding.providerIds.length===${supportsMultipleSources(tool) ? 2 : 1}&&!document.querySelector('[data-action="tool-use-aggregate"]').disabled;})()`, `${tool} direct mode`);
     await idle(tool);
-    assert.deepEqual(stored(tool).providerIds, [providers[1].id]); assert.equal(stored(tool).defaultModelId, chosen[1].id);
+    assert.deepEqual(stored(tool).providerIds, supportsMultipleSources(tool) ? providers.map(provider => provider.id) : [providers[1].id]); assert.equal(stored(tool).defaultModelId, chosen[1].id);
     const direct = await evaluate<any>(`window.modelDock.previewConfig(${JSON.stringify(tool)})`);
     assert.ok(!direct.content.includes(`/tool/${tool}`));
     if (isJetBrainsTool(tool)) assert.equal(JSON.parse(direct.content).modelAssignment.core, `OpenAIAPI/${chosen[1].upstreamId}`);
-    const singleRequest = await fetch(`http://127.0.0.1:${gateway.port}/tool/${tool}/v1/${path}`, { method: 'POST', headers, body: JSON.stringify(tool === 'codex' ? { model: chosen[0].alias, input: 'SYNTHETIC' } : { model: chosen[0].alias, max_tokens: 64, messages: [{ role: 'user', content: 'SYNTHETIC' }] }) }); assert.equal(singleRequest.status, 403);
+    const excludedAlias = supportsMultipleSources(tool) ? models.find(model => model.wireApi === 'responses')!.alias : chosen[0].alias;
+    const singleRequest = await fetch(`http://127.0.0.1:${gateway.port}/tool/${tool}/v1/${path}`, { method: 'POST', headers, body: JSON.stringify(tool === 'codex' ? { model: excludedAlias, input: 'SYNTHETIC' } : { model: excludedAlias, max_tokens: 64, messages: [{ role: 'user', content: 'SYNTHETIC' }] }) }); assert.equal(singleRequest.status, 403);
+    if (supportsMultipleSources(tool)) {
+      assert.equal(await evaluate<string>('document.querySelector("[data-tool-workspace]").dataset.sourceSelection'), 'multiple');
+      const selector = `article[data-provider-id="${providers[0].id}"] input[data-action="select-tool-provider"]`;
+      await click(selector); await idle(tool);
+      assert.deepEqual(stored(tool).providerIds, [providers[1].id]);
+      assert.equal(stored(tool).defaultModelId, chosen[1].id);
+      await click(selector); await idle(tool);
+      assert.deepEqual(new Set(stored(tool).providerIds), new Set(providers.map(provider => provider.id)));
+      assert.equal(stored(tool).defaultModelId, chosen[1].id);
+      writeFileSync(join(outputDir, `${tool}-native-multiple-dark.png`), await captureUi());
+    }
     if (isSingleEntryTool(tool)) {
       assert.equal(await evaluate<number>(`document.querySelectorAll('[data-action="select-tool-provider"]').length`), 0);
       await click('[data-action="tool-use-aggregate"]'); await idle(tool);
       assert.deepEqual(new Set(stored(tool).providerIds), new Set(providers.map(provider => provider.id)));
       assert.deepEqual(new Set(stored(tool).modelIds), new Set(chosen.map(model => model.id)));
     }
-    results.push({ tool, twoSourceAggregate: true, oneEndpoint: true, exactModels: true, routedAAndB: true, defaultProviderRetainedOnDirect: true, directUsesNativeApi: true, excludedSourceRejected: true, externalSync: tool === 'copilot' ? 'serialization-only-no-running-client' : isJetBrainsTool(tool) ? 'manual-offline-boundary' : 'isolated-fixture' });
+    results.push({ tool, twoSourceAggregate: true, oneEndpoint: true, exactModels: true, routedAAndB: true, defaultProviderRetainedOnDirect: true, directUsesNativeApi: true, directProviderCount: supportsMultipleSources(tool) ? 2 : 1, excludedModelRejected: true, externalSync: tool === 'copilot' ? 'serialization-only-no-running-client' : isJetBrainsTool(tool) ? 'manual-offline-boundary' : 'isolated-fixture' });
   }
-  writeFileSync(join(outputDir, 'aggregate-modes-validation.json'), JSON.stringify({ ok: true, tools: results, layouts, allTenToggles: true, mockInferenceRequests: 20, noActualClientProfiles: true }, null, 2));
+  writeFileSync(join(outputDir, 'aggregate-modes-validation.json'), JSON.stringify({ ok: true, tools: results, layouts, allThirteenToggles: true, mockInferenceRequests: 26, nativeJunieNotExecuted: true, noActualClientProfiles: true }, null, 2));
 }
