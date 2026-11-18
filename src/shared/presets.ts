@@ -31,8 +31,6 @@ export const providerPresets: ProviderPreset[] = [
     note: '默认中国北京 Token Plan 个人/团队端点，使用套餐专属 Key；国际地区需改为控制台对应地址。', docsUrl: 'https://help.aliyun.com/zh/model-studio/token-plan-personal-quick-start' },
   { id: 'trae-cn-relay', name: SUBSCRIPTION_NAMES['trae-cn-relay'], category: 'subscription', kind: 'openai-compatible', baseUrl: TRAE_RELAY_BASE_URL, defaultWireApi: 'chat-completions',
     note: '从本机 TRAE 中国版或 SOLO 中国版导入本人账号，由内置适配器接入 ModelDock 网关，再查询官方套餐、额度与实际模型。', docsUrl: '' },
-  { id: 'jetbrains-central', name: SUBSCRIPTION_NAMES['jetbrains-central'], category: 'subscription', kind: 'openai-compatible', baseUrl: JETBRAINS_RELAY_BASE_URL, defaultWireApi: 'chat-completions',
-    note: '从 IDE / Air 或 Central 的个人 AI 许可证导入授权，由内置适配器直接连接官方服务并接入现有网关。', docsUrl: JETBRAINS_CENTRAL_SETUP_URL },
   { id: 'custom', name: '自定义 API', category: 'api', kind: 'openai-compatible', baseUrl: '', defaultWireApi: 'chat-completions', note: '填写兼容接口地址、密钥，再发现或添加实际模型，并选择对应的调用协议。', docsUrl: '' },
   { id: 'codex-subscription', name: SUBSCRIPTION_NAMES.codex, category: 'subscription', kind: 'codex', baseUrl: 'https://chatgpt.com/backend-api/codex', defaultWireApi: 'responses',
     note: '使用本人 ChatGPT/Codex 账号授权，凭据由 ModelDock 管理续期。', docsUrl: 'https://developers.openai.com/codex/auth/' },
@@ -52,5 +50,5 @@ export function providerCategory(provider: Pick<Provider, 'kind' | 'presetId'>):
 }
 
 export function isRelayProvider(provider: Pick<Provider, 'kind' | 'presetId'>): boolean {
-  return provider.kind === 'openai-compatible' && (provider.presetId === 'trae-cn-relay' || provider.presetId === 'jetbrains-central');
+  return provider.kind === 'openai-compatible' && provider.presetId === 'trae-cn-relay';
 }

@@ -7,7 +7,8 @@ import { isRelayProvider, providerCategory, providerPresets } from '../src/share
 
 it('lists account relays only among subscription presets while retaining their transport', () => {
   const subscriptionIds = providerPresets.filter(preset => preset.category === 'subscription').map(preset => preset.id);
-  expect(subscriptionIds).toEqual(expect.arrayContaining(['codex-subscription', 'copilot-subscription', 'grok-build', 'trae-cn-relay', 'jetbrains-central']));
+  expect(subscriptionIds).toEqual(expect.arrayContaining(['codex-subscription', 'copilot-subscription', 'grok-build', 'trae-cn-relay']));
+  expect(subscriptionIds).not.toContain('jetbrains-central');
   for (const preset of providerPresets) {
     const provider = { kind: preset.kind, presetId: preset.id };
     expect(providerCategory(provider)).toBe(preset.category);

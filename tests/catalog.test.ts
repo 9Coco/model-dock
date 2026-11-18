@@ -11,8 +11,6 @@ import { modelCatalogEndpoint, prepareUpstream } from '../src/main/oauth';
 import { lookupModelMetadata } from '../src/shared/model-metadata';
 import { presetById } from '../src/shared/presets';
 import { version as appVersion } from '../package.json';
-import { JetBrainsIdeAccountError } from '../src/main/jetbrains-ide-account';
-import { JetBrainsIdeApiError } from '../src/main/jetbrains-ide-api';
 
 const provider: Provider = { id: 'api', name: 'Example', kind: 'openai-compatible', presetId: 'custom', baseUrl: 'https://api.example.test/v1', enabled: true, hasSecret: true, authStatus: 'ready', note: '' };
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } });
@@ -142,11 +140,10 @@ describe('real model catalog discovery and batch selection', () => {
     ['qwen-token', 'qwen3.8-flash', 'chat-completions', { thinking: true, vision: true }],
     ['grok-build', 'grok-4.7', 'responses', { thinking: true, reasoningEfforts: ['low', 'medium', 'high', 'xhigh'] }],
     ['copilot-subscription', 'grok-4.5', 'chat-completions', { thinking: true, reasoningEfforts: ['low', 'medium', 'high'] }],
-    ['jetbrains-central', 'anthropic-claude-sonnet-5-5', 'chat-completions', { contextWindow: 1000000 }],
   ] as const)('keeps offline %s specifications scoped to the published route', async (presetId, upstreamId, wireApi, expected) => {
     const preset = presetById(presetId)!;
     const f = fixture();
-    Object.assign(f.store.provider, { kind: preset.kind, presetId, baseUrl: preset.baseUrl, hasSecret: false, nativeAdapter: presetId === 'jetbrains-central' ? 'jetbrains-ide' : undefined });
+    Object.assign(f.store.provider, { kind: preset.kind, presetId, baseUrl: preset.baseUrl, hasSecret: false, nativeAdapter: undefined });
     f.store.models = [{ ...legacyModel, upstreamId, wireApi }];
     const row = (await f.catalog.previewParameters('api')).rows[0];
     expect(Object.fromEntries(row.all.map(c => [c.field, c.after]))).toMatchObject(expected);
@@ -164,15 +161,6 @@ describe('real model catalog discovery and batch selection', () => {
     expect(f.catalog.addSelected(f.source.id, request).updated?.[0]).toMatchObject({ ...saved, thinking: true, reasoningEfforts: ['low', 'high'], defaultReasoningEffort: 'low' });
     expect(f.catalog.addSelected(f.source.id, request).skipped).toEqual([saved.upstreamId]);
   });
-  it.each([false, true])('preserves JetBrains regional HTTP 451 during native model discovery (account wrapper=%s)', async wrapped => {
-    const f = fixture(), apiError = new JetBrainsIdeApiError('region');
-    f.store.provider.nativeAdapter = 'jetbrains-ide';
-    const nativeModels = vi.fn(async () => { throw wrapped ? new JetBrainsIdeAccountError(apiError.message, apiError.status, apiError.code) : apiError; });
-    const catalog = new ModelCatalog(f.store, { prepareRequest: f.prepareRequest }, { nativeModels });
-    expect(await catalog.discover('api')).toMatchObject({ ok: false, statusCode: 451, errorCategory: 'permission', models: [], message: expect.stringContaining('应用网络代理') });
-    expect(nativeModels).toHaveBeenCalledOnce(); expect(f.prepareRequest).not.toHaveBeenCalled();
-  });
-
   it('discovers complete provider-specific Kimi defaults and saves the selected output budget rather than the native maximum', async () => {
     const f = fixture(vi.fn(async () => json({ data: [{ id: 'kimi-k3' }] })) as typeof fetch);
     f.store.provider.presetId = 'volcengine-agent'; f.store.provider.baseUrl = 'https://ark.cn-beijing.volces.com/api/plan/v3';
@@ -801,7 +789,7 @@ describe('native discovery history metadata and the complete selection directory
   }
 
   it.each([
-    ['trae', 'trae-client'], ['jetbrains-ide', 'jetbrains-client'],
+    ['trae', 'trae-client'],
   ] as const)('retains all %s routes for explicit selection while projecting verified history only into discovery', async (adapter, source) => {
     const f = nativeFixture(adapter, { modeldock_history: { source, currentVerified: true, message: '已核对官方客户端当前目录。' }, data: [
       { id: 'current-model', modeldock_catalog_visibility: 'current' },
@@ -912,7 +900,7 @@ describe('native discovery history metadata and the complete selection directory
   });
 
   it('keeps legacy wording for an unknown restriction or a non-TRAE native adapter', async () => {
-    for (const [adapter, source, reason] of [['trae', 'trae-client', 'new-code'], ['jetbrains-ide', 'jetbrains-client', 'account-access']] as const) {
+    for (const [adapter, source, reason] of [['trae', 'trae-client', 'new-code']] as const) {
       const f = nativeFixture(adapter, { modeldock_history: { source, currentVerified: true }, data: [
         { id: 'blocked', modeldock_catalog_importable: false, modeldock_catalog_blocked_reason: reason },
       ] });
@@ -921,7 +909,7 @@ describe('native discovery history metadata and the complete selection directory
     }
   });
 
-  it.each(['custom', 'trae-cn-relay', 'jetbrains-central'] as const)('ignores history-shaped fields from an ordinary %s upstream', async presetId => {
+  it.each(['custom', 'trae-cn-relay'] as const)('ignores history-shaped fields from an ordinary %s upstream', async presetId => {
     const f = fixture(vi.fn(async () => json({ modeldock_history: { source: 'trae-client', currentVerified: true }, data: [
       { id: 'ordinary-model', modeldock_catalog_visibility: 'historical', modeldock_catalog_importable: false, modeldock_catalog_blocked_reason: 'account-access' },
     ] })) as typeof fetch);
@@ -937,8 +925,6 @@ describe('native discovery history metadata and the complete selection directory
 
   it.each([
     ['trae', { source: 'jetbrains-client', currentVerified: true }],
-    ['jetbrains-ide', { source: 'trae-client', currentVerified: true }],
-    ['jetbrains-central', { source: 'jetbrains-client', currentVerified: true }],
     ['trae', { source: 'trae-client', currentVerified: 'true' }],
     ['trae', { source: 'trae-client' }],
     ['trae', undefined],

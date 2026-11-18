@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { isDeepStrictEqual } from 'node:util';
 import type { Provider, ProviderInput, ProviderSecret, Model, ModelInput, ToolBinding, ToolId, RequestLog, GatewayExposure, JetBrainsPlugin } from '../shared/types';
 import { isReasoningEffort, MODEL_SPEC_FIELDS, modelSpecs, sanitizeReasoningEfforts } from '../shared/types';
-import { OPENCODE_GO_BASE_URL, JETBRAINS_RELAY_BASE_URL, isLocalTraeRelayUrl, providerPresets, presetById, TRAE_RELAY_BASE_URL } from '../shared/presets';
+import { OPENCODE_GO_BASE_URL, isLocalTraeRelayUrl, providerPresets, presetById, TRAE_RELAY_BASE_URL } from '../shared/presets';
 import { resolveBindingModels } from '../shared/bindings';
 import { directModelsForProvider, isSingleEntryTool, updateSingleEntryBinding } from '../shared/single-entry';
 import { supportsMultipleSources } from '../shared/tool-capabilities';
@@ -99,6 +99,7 @@ export class Store {
         if (Array.isArray(ids) && ids.length > 1) db.run("UPDATE bindings SET mode='auto' WHERE id=?", [String(row.id)]);
       }
       for (const [tool, name] of Object.entries(TOOL_NAMES)) db.run('INSERT OR IGNORE INTO bindings(id,name,enabled,model_ids,default_model_id,note,mode,provider_ids,vscode_sync_scope,copilot_sync_scope,dsh_sync_scope) VALUES(?,?,?,?,?,?,?,?,?,?,?)', [tool, name, 0, '[]', '', '', isJetBrainsTool(tool) ? 'aggregate' : 'direct', '[]', tool === 'vscode' ? 'selected' : 'managed', tool === 'copilot' ? 'selected' : 'managed', tool === 'dsh' ? 'selected' : 'managed']);
+      store.retireJetBrainsSubscriptions();
       store.migrateSingleEntryBindings();
       if (!store.one("SELECT value FROM settings WHERE key='gateway_key'")) db.run('INSERT INTO settings(key,value) VALUES(?,?)', ['gateway_key', codec.encrypt(store.newKey())]);
       store.persist();
@@ -228,16 +229,12 @@ export class Store {
         if (relayMode === 'managed' || this.getManagedState<{ nativeClient?: unknown } | null>(`auth-metadata:${String(row.id)}`, null)?.nativeClient) nativeAdapter = 'trae';
       } catch { nativeAdapter = 'trae'; }
     }
-    if (row.preset_id === 'jetbrains-central') {
-      try {
-        const metadata = this.getManagedState<{ nativeIde?: unknown; clientImport?: { client?: string } } | null>(`auth-metadata:${String(row.id)}`, null);
-        nativeAdapter = metadata?.nativeIde || metadata?.clientImport?.client === 'jetbrains-ide' ? 'jetbrains-ide' : 'jetbrains-central';
-      } catch { nativeAdapter = 'jetbrains-central'; }
-    }
     return { ...(row.preset_id === 'trae-cn-relay' ? { relayMode } : {}), ...(nativeAdapter ? { nativeAdapter } : {}), id: String(row.id), name: String(row.name), kind: row.kind as Provider['kind'], presetId: (row.preset_id || 'custom') as Provider['presetId'], baseUrl: String(row.base_url), enabled: Boolean(row.enabled), hasSecret: Boolean(this.one('SELECT provider_id FROM secrets WHERE provider_id=?', [String(row.id)])), authStatus: row.auth_status as Provider['authStatus'], note: String(row.note), ...(row.kind === 'openai-compatible' ? { messagesAuth: row.messages_auth === 'api-key' ? 'api-key' as const : 'bearer' as const, ...(row.claude_base_url ? { claudeBaseUrl: String(row.claude_base_url) } : {}) } : {}), ...(row.kind === 'copilot' ? { copilotAccountId: this.getSecret(String(row.id))?.copilotAccountId } : {}) };
   }
-  listProviders(): Provider[] { return this.rows('SELECT * FROM providers ORDER BY rowid').map(row => this.provider(row)); }
-  getProvider(providerId: string): Provider | undefined { const row = this.one('SELECT * FROM providers WHERE id=?', [providerId]); return row ? this.provider(row) : undefined; }
+  // Retired subscriptions remain encrypted on disk, outside all active account,
+  // catalog and gateway reads. A custom API with a similar name is unaffected.
+  listProviders(): Provider[] { return this.rows("SELECT * FROM providers WHERE preset_id <> 'jetbrains-central' ORDER BY rowid").map(row => this.provider(row)); }
+  getProvider(providerId: string): Provider | undefined { const row = this.one("SELECT * FROM providers WHERE id=? AND preset_id <> 'jetbrains-central'", [providerId]); return row ? this.provider(row) : undefined; }
   setGatewayPort(port: number): void { this.gatewayPort = port; }
   getManagedState<T>(key: string, fallback: T): T {
     const name = this.managedKey(key);
@@ -292,8 +289,7 @@ export class Store {
     if (typeof input.baseUrl !== 'string') throw new Error('上游地址无效。');
     // These fixed values retain historical provider identity, never a network
     // destination. Native adapters connect only to their own official origins.
-    const identityOnly = preset.id === 'jetbrains-central' && input.baseUrl.trim() === JETBRAINS_RELAY_BASE_URL
-      || preset.id === 'trae-cn-relay' && (input.relayMode ?? existing?.relayMode) === 'managed' && input.baseUrl.trim() === TRAE_RELAY_BASE_URL;
+    const identityOnly = preset.id === 'trae-cn-relay' && (input.relayMode ?? existing?.relayMode) === 'managed' && input.baseUrl.trim() === TRAE_RELAY_BASE_URL;
     const baseUrl = input.baseUrl.trim() ? validateUpstreamUrl(input.baseUrl, identityOnly ? 0 : this.gatewayPort) : '';
     if (input.kind === 'opencode-go' && (baseUrl !== OPENCODE_GO_BASE_URL || input.claudeBaseUrl || input.messagesAuth)) throw new Error('OpenCode Go 订阅仅使用官方 Go 接口。');
     if (input.kind === 'copilot' && baseUrl !== 'https://api.githubcopilot.com') throw new Error('Copilot 订阅只使用官方服务地址。');
@@ -304,9 +300,6 @@ export class Store {
     const claudeBaseUrl = input.claudeBaseUrl === undefined ? existing?.claudeBaseUrl ?? '' : input.claudeBaseUrl.trim() ? validateUpstreamUrl(input.claudeBaseUrl, this.gatewayPort) : '';
     if (input.relayMode !== undefined && (preset.id !== 'trae-cn-relay' || !['managed', 'manual'].includes(input.relayMode))) throw new Error('反代连接方式无效。');
     const relayMode = preset.id === 'trae-cn-relay' ? input.relayMode ?? existing?.relayMode ?? 'manual' : null;
-    if (preset.id === 'jetbrains-central' && (baseUrl !== JETBRAINS_RELAY_BASE_URL || claudeBaseUrl || input.messagesAuth === 'api-key')) {
-      throw new Error('JetBrains 会员反代仅使用固定本机 Chat 接口。');
-    }
     if (preset.id === 'trae-cn-relay') {
       if (!isLocalTraeRelayUrl(baseUrl) || (claudeBaseUrl && !isLocalTraeRelayUrl(claudeBaseUrl))) {
         throw new Error('TRAE 本机反代只接受回环地址，例如 http://127.0.0.1:18080/v1。');
@@ -357,7 +350,7 @@ export class Store {
   async saveRelayClientImport(input: ProviderInput, metadata: unknown, expected?: { provider: Provider; apiKey?: string }): Promise<Provider> {
     await sqlPromise!;
     if (this.closed) throw new Error('存储已关闭。');
-    if (input.kind !== 'openai-compatible' || !['trae-cn-relay', 'jetbrains-central'].includes(input.presetId ?? '')) throw new Error('反代导入来源无效。');
+    if (input.kind !== 'openai-compatible' || input.presetId !== 'trae-cn-relay') throw new Error('反代导入来源无效。');
     if (expected && (!isDeepStrictEqual(this.getProvider(expected.provider.id), expected.provider) || this.getSecret(expected.provider.id)?.apiKey !== expected.apiKey)) throw new Error('供应商已被修改，请重新导入。');
     if (!input.id && this.listProviders().some(provider => providerIdentity(provider) === providerIdentity(input))) throw new Error('供应商列表已变动，请重新导入。');
     const encoded = JSON.stringify(metadata);
@@ -375,7 +368,7 @@ export class Store {
     return [...providers].sort((a, b) => keyScore(b) - keyScore(a) || this.providerModelCount(b.id) - this.providerModelCount(a.id) || a.id.localeCompare(b.id));
   }
   private readDuplicateApiKey(providerId: string): string {
-    const row = this.one('SELECT ciphertext FROM secrets WHERE provider_id=?', [providerId]);
+    const row = this.one("SELECT ciphertext FROM secrets JOIN providers ON providers.id=secrets.provider_id WHERE provider_id=? AND providers.preset_id <> 'jetbrains-central'", [providerId]);
     if (!row) return '';
     let decoded: unknown;
     try { decoded = JSON.parse(this.codec.decrypt(String(row.ciphertext))); }
@@ -584,7 +577,7 @@ export class Store {
     }
   }
   getSecret(providerId: string): ProviderSecret | undefined {
-    const row = this.one('SELECT ciphertext FROM secrets WHERE provider_id=?', [providerId]);
+    const row = this.one("SELECT ciphertext FROM secrets JOIN providers ON providers.id=secrets.provider_id WHERE provider_id=? AND providers.preset_id <> 'jetbrains-central'", [providerId]);
     if (!row) return undefined;
     const secret = JSON.parse(this.codec.decrypt(String(row.ciphertext))) as ProviderSecret;
     return secret.apiKey ? { ...secret, apiKey: normalizeApiKey(secret.apiKey) } : secret;
@@ -619,7 +612,7 @@ export class Store {
     try { specs = modelSpecs(JSON.parse(String(row.specs_json ?? '{}'))); } catch { /* Malformed optional metadata cannot replace the model's existing fields. */ }
     return { id: String(row.id), providerId: String(row.provider_id), upstreamId: String(row.upstream_id), alias: String(row.alias), displayName: String(row.display_name), wireApi: row.wire_api as Model['wireApi'], contextWindow: Number(row.context_window), tools: Boolean(row.tools), vision: Boolean(row.vision), enabled: Boolean(row.enabled), reasoningEfforts, ...(isReasoningEffort(defaultLevel) && reasoningEfforts.includes(defaultLevel) ? { defaultReasoningEffort: defaultLevel } : {}), ...specs };
   }
-  listModels(): Model[] { return this.rows('SELECT * FROM models ORDER BY rowid').map(row => this.model(row)); }
+  listModels(): Model[] { return this.rows("SELECT models.* FROM models JOIN providers ON providers.id=models.provider_id WHERE providers.preset_id <> 'jetbrains-central' ORDER BY models.rowid").map(row => this.model(row)); }
   saveModel(input: ModelInput): Model { return this.saveModels([input])[0]; }
   saveModels(inputs: ModelInput[]): Model[] {
     if (!Array.isArray(inputs) || !inputs.length || inputs.length > 2000) throw new Error('模型批量数量无效。');
@@ -631,11 +624,14 @@ export class Store {
   }
   private putModel(input: ModelInput): Model {
     const modelId = input.id ? id(input.id) : randomUUID();
+    if (input.id) this.assertModelNotRetired(modelId);
     const provider = this.getProvider(input.providerId);
     if (!provider) throw new Error('模型引用的供应商不存在。');
     const requestedAlias = text(input.alias, '模型别名', 400);
     if (!/^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$/.test(requestedAlias)) throw new Error('模型别名只能包含字母、数字和 . _ : / -。');
-    const alias = suggestModelAlias(input.providerId, requestedAlias, this.listModels(), modelId);
+    // Archived rows still reserve their database aliases. Include them only
+    // for collision avoidance, never in the published model catalog.
+    const alias = suggestModelAlias(input.providerId, requestedAlias, this.rows('SELECT id,provider_id,alias FROM models').map(row => ({ id: String(row.id), providerId: String(row.provider_id), alias: String(row.alias) })), modelId);
     if (alias.length > 400) throw new Error('模型别名过长。');
     if (!['chat-completions', 'responses', 'messages'].includes(input.wireApi)) throw new Error('模型协议无效。');
     if (input.wireApi === 'messages' && this.getProvider(input.providerId)?.kind !== 'openai-compatible') throw new Error('Messages 协议仅支持 API 供应商。');
@@ -650,7 +646,10 @@ export class Store {
     const model: Model = { ...baseModel, ...specs, id: modelId, upstreamId: text(input.upstreamId, '上游模型 ID'), alias, displayName: text(input.displayName, '模型显示名称'), reasoningEfforts, ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}) };
     this.db.run('INSERT INTO models(id,provider_id,upstream_id,alias,display_name,wire_api,context_window,tools,vision,enabled,reasoning_efforts,default_reasoning_effort,specs_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET provider_id=excluded.provider_id,upstream_id=excluded.upstream_id,alias=excluded.alias,display_name=excluded.display_name,wire_api=excluded.wire_api,context_window=excluded.context_window,tools=excluded.tools,vision=excluded.vision,enabled=excluded.enabled,reasoning_efforts=excluded.reasoning_efforts,default_reasoning_effort=excluded.default_reasoning_effort,specs_json=excluded.specs_json', [modelId, model.providerId, model.upstreamId, alias, model.displayName, model.wireApi, model.contextWindow, Number(model.tools), Number(model.vision), Number(model.enabled), JSON.stringify(reasoningEfforts), defaultReasoningEffort ?? null, JSON.stringify(specs)]); return model;
   }
-  deleteModel(modelId: string): void { this.mutate(() => { this.db.run('DELETE FROM models WHERE id=?', [modelId]); this.pruneBindings(); }); }
+  private assertModelNotRetired(modelId: string): void {
+    if (this.one("SELECT models.id FROM models JOIN providers ON providers.id=models.provider_id WHERE models.id=? AND providers.preset_id='jetbrains-central'", [modelId])) throw new Error('模型来源已停用，原始数据仅保留存档。');
+  }
+  deleteModel(modelId: string): void { this.assertModelNotRetired(modelId); this.mutate(() => { this.db.run('DELETE FROM models WHERE id=?', [modelId]); this.pruneBindings(); }); }
   private validateConnectionChoices(choices: ToolBinding['connectionChoices'], models: Model[], providers: Provider[]): void {
     if (!choices || typeof choices !== 'object' || Array.isArray(choices) || Object.keys(choices).some(key => !['direct', 'aggregate'].includes(key))) throw new Error('连接草稿无效。');
     const providerExists = (value: unknown) => typeof value === 'string' && (!value || providers.some(provider => provider.id === value));
@@ -754,11 +753,28 @@ export class Store {
     if (withChoices.connectionChoices) this.validateConnectionChoices(withChoices.connectionChoices, allModels, providers);
     this.mutate(() => this.db.run('UPDATE bindings SET name=?,enabled=?,model_ids=?,default_model_id=?,note=?,mode=?,provider_ids=?,model_selection=?,vscode_sync_scope=?,copilot_sync_scope=?,dsh_sync_scope=?,claude_disable_telemetry=?,connection_choices=? WHERE id=?', [TOOL_NAMES[binding.id], Number(binding.enabled), JSON.stringify(modelIds), binding.defaultModelId, typeof binding.note === 'string' ? binding.note.slice(0, 1000) : '', mode, JSON.stringify(providerIds), modelSelection ?? null, syncScope, copilotScope, dshScope, Number(claudePrivacy), withChoices.connectionChoices ? JSON.stringify(withChoices.connectionChoices) : null, binding.id]));
   }
-  private pruneBindings(): void {
+  private retireJetBrainsSubscriptions(): void {
+    const retiredProviders = new Set(this.rows("SELECT id FROM providers WHERE preset_id='jetbrains-central'").map(row => String(row.id)));
+    if (!retiredProviders.size) return;
+    const retiredModels = new Set(this.rows("SELECT models.id FROM models JOIN providers ON providers.id=models.provider_id WHERE providers.preset_id='jetbrains-central'").map(row => String(row.id)));
+    const affected = this.allBindings().filter(binding => {
+      const direct = binding.connectionChoices?.direct, aggregate = binding.connectionChoices?.aggregate;
+      return [...(binding.providerIds ?? []), ...(aggregate?.providerIds ?? []), direct?.providerId ?? ''].some(value => retiredProviders.has(value))
+        || [...binding.modelIds, binding.defaultModelId, ...(aggregate?.modelIds ?? []), aggregate?.defaultModelId ?? '', aggregate?.completionModelId ?? '', direct?.defaultModelId ?? '', direct?.completionModelId ?? ''].some(value => retiredModels.has(value));
+    });
+    if (!affected.length) return;
+    // Keep the original selections as an encrypted recovery record. Migration
+    // only updates ModelDock's references; it never writes an IDE/client file.
+    const key = this.managedKey('retired-jetbrains-subscriptions:bindings');
+    if (!this.one('SELECT key FROM settings WHERE key=?', [key])) this.db.run('INSERT INTO settings(key,value) VALUES(?,?)', [key, this.codec.encrypt(JSON.stringify(affected))]);
+    this.pruneBindings(new Set(affected.map(binding => binding.id)));
+  }
+  private pruneBindings(onlyTools?: Set<ToolId>): void {
     const models = this.listModels();
     const providers = this.listProviders();
     const existing = new Set(models.map(model => model.id));
     for (const binding of this.allBindings()) {
+      if (onlyTools && !onlyTools.has(binding.id)) continue;
       const providerIds = (binding.providerIds ?? []).filter(providerId => providers.some(provider => provider.id === providerId));
       const modelIds = binding.modelIds.filter(modelId => existing.has(modelId) && providerIds.includes(models.find(model => model.id === modelId)!.providerId));
       const enabled = binding.enabled && providerIds.length > 0 && (binding.mode !== 'direct' || supportsMultipleSources(binding.id) || providerIds.length === 1) && (binding.modelSelection !== undefined || !binding.modelIds.length || modelIds.length > 0);

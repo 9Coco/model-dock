@@ -18,11 +18,7 @@ import { AnthropicBridgeError, parseAnthropicRequest, toAnthropicResponse, creat
 import { ChatResponsesBridgeError, parseChatResponsesRequest, responsesToChat, createResponsesChatStream, collectResponsesChatStream, chatResponseToSse } from './chat-responses-bridge';
 import { ResponsesChatBridgeError } from './responses-chat-bridge';
 import { TraeApiError } from './trae-api';
-import { CentralApiError } from './central-api';
 import { TraeNativeAccountError } from './trae-native-account';
-import { CentralNativeAccountError } from './central-native-account';
-import { JetBrainsIdeAccountError } from './jetbrains-ide-account';
-import { JetBrainsIdeApiError } from './jetbrains-ide-api';
 import { isJetBrainsTool } from '../shared/jetbrains';
 import { isSingleEntryTool } from '../shared/single-entry';
 import { JetBrainsChatError, createJetBrainsChatStream, normalizeJetBrainsChatResponse, jetBrainsResponsesHistory } from './jetbrains-chat-stream';
@@ -233,17 +229,10 @@ async function sendEventStream(reader: ReadableStreamDefaultReader<Uint8Array>, 
 function controlledFailure(error: unknown): { status: number; message: string } | undefined {
   if (error instanceof GatewayError || error instanceof AnthropicBridgeError || error instanceof ChatResponsesBridgeError || error instanceof ResponsesChatBridgeError
     || error instanceof NativeMessagesError || error instanceof JetBrainsChatError || error instanceof JetBrainsCompletionError) return error;
-  if (error instanceof TraeNativeAccountError || error instanceof CentralNativeAccountError) return { status: 401, message: error.message };
-  if (error instanceof JetBrainsIdeAccountError || error instanceof JetBrainsIdeApiError) return { status: error.status, message: error.message };
+  if (error instanceof TraeNativeAccountError) return { status: 401, message: error.message };
   if (error instanceof TraeApiError) {
     const status = error.status && error.status >= 400 && error.status <= 599 ? error.status
       : ['request', 'capability', 'model'].includes(error.code) ? 400 : error.code === 'credentials' || error.code === 'authorization' ? 401
-        : error.code === 'cancelled' ? 504 : error.code === 'limit' ? 413 : 502;
-    return { status, message: error.message };
-  }
-  if (error instanceof CentralApiError) {
-    const status = error.status && error.status >= 400 && error.status <= 599 ? error.status
-      : ['format', 'unsupported', 'model', 'request'].includes(error.code) ? 400 : error.code === 'authorization' ? 401
         : error.code === 'cancelled' ? 504 : error.code === 'limit' ? 413 : 502;
     return { status, message: error.message };
   }
@@ -659,7 +648,7 @@ export class Gateway {
         }
         jsonResponse(response, upstream.status, collector.result(model.alias));
       } else if (stream) {
-        if (jetBrains || provider.nativeAdapter === 'jetbrains-ide' && path.endsWith('/chat/completions')) {
+        if (jetBrains) {
           let source: ReadableStream<Uint8Array>;
           if (sse) { if (!upstream.body) throw new JetBrainsChatError(); source = upstream.body; }
           else {
@@ -674,7 +663,7 @@ export class Gateway {
         if (sse) {
           if (!upstream.body) throw new GatewayError(502, '上游流式响应为空。');
           reader = upstream.body.pipeThrough(validatedSse(model.wireApi === 'responses' ? 'responses' : 'chat-completions', model.alias, observe), { signal: controller.signal }).getReader();
-          await sendEventStream(reader, response, upstream.status, controller.signal, provider.nativeAdapter === 'jetbrains-ide' ? 32 * 1024 * 1024 : undefined);
+          await sendEventStream(reader, response, upstream.status, controller.signal);
         } else {
           let value: unknown;
           try { value = JSON.parse(await limitedText(upstream)); } catch (error) { if (error instanceof GatewayError) throw error; throw new GatewayError(502, '上游成功响应不是有效 JSON。'); }

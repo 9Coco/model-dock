@@ -1,7 +1,8 @@
 import type { Provider } from './types';
 
 export type SubscriptionKind = 'codex' | 'grok';
-/** Relay-backed subscriptions keep their own upstream login flow. */
+/** jetbrains-central is retained only for reading archived data and fixtures;
+ * supported relay import entry points accept trae-cn-relay exclusively. */
 export type RelayAccountKind = 'trae-cn-relay' | 'jetbrains-central';
 export type AuthAccountKind = SubscriptionKind | 'copilot' | RelayAccountKind;
 

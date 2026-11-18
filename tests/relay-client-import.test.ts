@@ -10,7 +10,7 @@ import type { RelayAccountKind } from '../src/shared/auth-types';
 const directories: string[] = [], stores: Store[] = [];
 const PRIVATE = 'PRIVATE_RELAY_IMPORT_TOKEN_STDERR_PATH';
 const KEY = 'synthetic-relay-client-import-key';
-const kinds: RelayAccountKind[] = ['trae-cn-relay', 'jetbrains-central'];
+const kinds: RelayAccountKind[] = ['trae-cn-relay'];
 const candidate = (kind: RelayAccountKind): NativeRelayCandidate => ({ sourceId: `fixture-${kind}`, client: kind === 'trae-cn-relay' ? 'trae-cn' : 'jetbrains-central', clientName: kind === 'trae-cn-relay' ? 'TRAE 中国版' : 'Central CLI', accountId: 'fixture-account', accountLabel: '合成演示账号' });
 const baseUrl = (kind: RelayAccountKind) => kind === 'trae-cn-relay' ? TRAE_RELAY_BASE_URL : JETBRAINS_RELAY_BASE_URL;
 async function setup() {
@@ -47,7 +47,7 @@ describe('relay client import tickets and safe failures', () => {
     const first = (await manager.preview('trae-cn-relay')).candidates[0];
     expect(Object.keys(first).sort()).toEqual(['accountLabel', 'clientName', 'id']);
     expect(first.id).not.toContain('fixture');
-    await expect(manager.import('jetbrains-central', first.id)).rejects.toThrow('过期');
+    await expect(manager.import('jetbrains-central', first.id)).rejects.toThrow('受支持');
     advance(5 * 60_000 + 1);
     await expect(manager.import('trae-cn-relay', first.id)).rejects.toThrow('过期');
     expect(key).not.toHaveBeenCalled(); expect(adapters['trae-cn-relay'].perform).not.toHaveBeenCalled();
@@ -121,12 +121,6 @@ describe('relay provider reuse, provenance and local atomic save', () => {
     expect(relayClientImportProvenance(store, edited)).toBeUndefined();
     ticket = (await manager.preview(kind)).candidates[0]; const second = await manager.import(kind, ticket.id);
     expect(second.providerId).not.toBe(edited.id); expect(store.getProvider(edited.id)).toEqual(edited); expect(store.getSecret(edited.id)).toEqual({ apiKey: KEY });
-  });
-  it('refuses a non-bearer Central connection edit and retains the original imported connection', async () => {
-    const { store, manager } = await setup(), ticket = (await manager.preview('jetbrains-central')).candidates[0];
-    const account = await manager.import('jetbrains-central', ticket.id), imported = store.getProvider(account.providerId)!, before = state(store);
-    expect(() => store.saveProvider({ ...imported, messagesAuth: 'api-key' })).toThrow('固定本机 Chat 接口');
-    expect(state(store)).toEqual(before); expect(relayClientImportProvenance(store, imported)).toBeDefined();
   });
   it('preserves both original in-memory and on-disk state after local persistence fails', async () => {
     const { store, manager, dir, codec } = await setup(); const before = state(store), disk = readFileSync(join(dir, 'modeldock.sqlite'));

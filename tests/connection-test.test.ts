@@ -5,8 +5,6 @@ import { OAuthManager, prepareUpstream, type OAuthStore, type PreparedUpstream }
 import type { Model, Provider, ProviderSecret } from '../src/shared/types';
 import { firstConnectionModel } from '../src/shared/connection-types';
 import { anthropicBaseUrl, anthropicEndpoint } from '../src/main/anthropic-endpoint';
-import { JetBrainsIdeAccountError } from '../src/main/jetbrains-ide-account';
-import { JetBrainsIdeApiError } from '../src/main/jetbrains-ide-api';
 
 const provider: Provider = { id: 'api', name: 'Test Plan', kind: 'openai-compatible', presetId: 'custom', baseUrl: 'https://api.example.test/coding/v3', enabled: true, hasSecret: true, authStatus: 'ready', note: '' };
 const saved: Model = { id: 'saved', providerId: 'api', upstreamId: 'actual-model', alias: 'local-name', displayName: 'Model', wireApi: 'chat-completions', contextWindow: 0, tools: true, vision: false, enabled: true };
@@ -53,54 +51,8 @@ const messageStream = (events: unknown[]) => events.map(value => {
   return `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
 }).join('');
 
-describe('native JetBrains connection probe output budget', () => {
-  it.each([false, true])('reports JetBrains regional HTTP 451 without blaming credentials (account wrapper=%s)', async wrapped => {
-    const f = fixture(), apiError = new JetBrainsIdeApiError('region');
-    f.store.provider.nativeAdapter = 'jetbrains-ide';
-    const nativeRequest = vi.fn(async () => { throw wrapped ? new JetBrainsIdeAccountError(apiError.message, apiError.status, apiError.code) : apiError; });
-    const tester = new ConnectionTester(f.store, { prepareRequest: f.prepareRequest }, { nativeRequest });
-    expect(await tester.test('api')).toMatchObject({ ok: false, statusCode: 451, outcome: 'permission', message: expect.stringContaining('应用网络代理') });
-    expect(nativeRequest).toHaveBeenCalledOnce(); expect(f.prepareRequest).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    [undefined, 256], [0, 256], [-1, 256], [1.5, 256], [NaN, 256], [64, 64], [256, 256], [8192, 256],
-  ])('uses a single probe with selected-model cap %s and budget %s', async (cap, budget) => {
-    const f = fixture(); f.store.provider.nativeAdapter = 'jetbrains-ide'; f.store.models[0].maxOutputTokens = cap;
-    const nativeRequest = vi.fn(async (_provider: Provider, _route: string, body: Record<string, unknown>) => {
-      expect(body).toMatchObject({ model: saved.upstreamId, stream: false, max_tokens: budget });
-      return json(chat('OK'));
-    });
-    const fetcher = vi.fn(), tester = new ConnectionTester(f.store, { prepareRequest: f.prepareRequest }, { nativeRequest, fetch: fetcher });
-    expect(await tester.test('api', { modelId: saved.id })).toMatchObject({ ok: true });
-    expect(nativeRequest).toHaveBeenCalledTimes(1); expect(fetcher).not.toHaveBeenCalled(); expect(f.prepareRequest).not.toHaveBeenCalled();
-    expect(f.store.models[0].maxOutputTokens).toBe(cap);
-  });
-  it('uses the smaller default-selected model cap and 256 for an explicitly typed native ID', async () => {
-    const f = fixture(); f.store.provider.nativeAdapter = 'jetbrains-ide'; f.store.models[0].maxOutputTokens = 32;
-    const budgets: unknown[] = [], nativeRequest = vi.fn(async (_provider: Provider, _route: string, body: Record<string, unknown>) => { budgets.push(body.max_tokens); return json(chat('OK')); });
-    const tester = new ConnectionTester(f.store, { prepareRequest: f.prepareRequest }, { nativeRequest });
-    expect((await tester.test('api')).ok).toBe(true);
-    expect((await tester.test('api', { upstreamId: 'typed-native-id', wireApi: 'chat-completions' })).ok).toBe(true);
-    expect(budgets).toEqual([32, 256]); expect(nativeRequest).toHaveBeenCalledTimes(2);
-  });
-  it.each(['responses', 'messages'] as const)('uses 256 or the smaller explicit cap with the correct %s field', async wireApi => {
-    const f = fixture(); f.store.provider.nativeAdapter = 'jetbrains-ide'; f.store.models[0].wireApi = wireApi;
-    const nativeRequest = vi.fn(async (_provider: Provider, route: string, body: Record<string, unknown>) => {
-      expect(route).toBe(wireApi === 'responses' ? '/responses' : '/v1/messages');
-      expect(body).not.toHaveProperty(wireApi === 'responses' ? 'max_tokens' : 'max_output_tokens');
-      return json(wireApi === 'responses' ? nativeResponse() : nativeMessage());
-    });
-    const tester = new ConnectionTester(f.store, { prepareRequest: f.prepareRequest }, { nativeRequest });
-    expect((await tester.test('api', { modelId: saved.id })).ok).toBe(true);
-    f.store.models[0].maxOutputTokens = 32;
-    expect((await tester.test('api', { modelId: saved.id })).ok).toBe(true);
-    expect((await tester.test('api', { upstreamId: 'typed-native-id', wireApi })).ok).toBe(true);
-    const field = wireApi === 'responses' ? 'max_output_tokens' : 'max_tokens';
-    expect(nativeRequest.mock.calls.map(call => call[2][field])).toEqual([256, 32, 256]);
-    expect(nativeRequest).toHaveBeenCalledTimes(3);
-  });
-  it.each([undefined, 'jetbrains-central', 'trae'] as const)('retains the existing Chat budget for adapter %s', async adapter => {
+describe('native connection probe output budget', () => {
+  it.each([undefined, 'trae'] as const)('retains the existing Chat budget for adapter %s', async adapter => {
     const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => { expect(JSON.parse(String(init?.body)).max_tokens).toBe(16); return json(chat('OK')); });
     const f = fixture(fetcher as typeof fetch); f.store.provider.nativeAdapter = adapter; f.store.models[0].maxOutputTokens = 8;
     const nativeRequest = vi.fn(async (_provider: Provider, _route: string, body: Record<string, unknown>) => {
@@ -111,13 +63,6 @@ describe('native JetBrains connection probe output budget', () => {
     expect((await tester.test('api', { modelId: saved.id })).ok).toBe(true);
     expect(adapter ? nativeRequest : fetcher).toHaveBeenCalledTimes(1);
     expect(adapter ? fetcher : nativeRequest).not.toHaveBeenCalled();
-  });
-  it('does not retry a native test after an empty budget-truncated reply', async () => {
-    const f = fixture(); f.store.provider.nativeAdapter = 'jetbrains-ide';
-    const nativeRequest = vi.fn(async () => json({ choices: [{ message: { role: 'assistant', content: '' }, finish_reason: 'length' }] }));
-    const tester = new ConnectionTester(f.store, { prepareRequest: f.prepareRequest }, { nativeRequest });
-    expect(await tester.test('api', { modelId: saved.id })).toMatchObject({ ok: false, outcome: 'invalid-response' });
-    expect(nativeRequest).toHaveBeenCalledTimes(1);
   });
 });
 

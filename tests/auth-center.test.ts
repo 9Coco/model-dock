@@ -51,12 +51,11 @@ describe('authorization center quota protocols and safe account views', () => {
     store.setSecret(trae.id, { apiKey: 'PRIVATE_RELAY_KEY', accessToken: jwt({ email: 'should-not-decode@example.test' }), refreshToken: 'PRIVATE_RELAY_REFRESH' });
     const fetcher = vi.fn(), oauth = oauthFor(store), center = new AuthCenter(store, oauth, { fetch: fetcher });
     const accounts = center.listAccounts(), relays = accounts.filter(account => account.source === 'relay');
-    expect(relays).toHaveLength(2);
+    expect(relays).toHaveLength(1);
     expect(relays[0]).toMatchObject({ providerId: trae.id, kind: 'trae-cn-relay', relayKeyConfigured: true, authStatus: 'ready', canRefresh: false, usage: { status: 'unavailable', windows: [] } });
-    expect(relays[1]).toMatchObject({ providerId: central.id, kind: 'jetbrains-central', relayKeyConfigured: false, authStatus: 'missing', canRefresh: false });
+    expect(accounts.some(account => account.providerId === central.id)).toBe(false);
     expect(relays.map(account => account.usage.message)).toEqual([
       '此连接使用已有外部接口，请在原客户端或外部服务中管理授权。',
-      '旧连接尚未保存可用的原生授权，请在授权中心重新导入账号。',
     ]);
     expect(accounts.some(account => account.providerId === api.id)).toBe(false);
     expect(JSON.stringify(relays)).not.toMatch(/PRIVATE|accessToken|refreshToken|should-not-decode|expiresAt|accountId|email/);

@@ -74,13 +74,9 @@ export async function verifyRelayQuota(window: BrowserWindow, store: Store, outp
     await click('[role="dialog"] [data-action="copilot-login"]');
     await waitFor(`(async()=>{const values=await window.modelDock.authAccounts();return values.some(item=>item.kind==='copilot'&&item.usage.status==='ready')})()`, 'synthetic Copilot account row');
     if (await evaluate<boolean>(`!!document.querySelector('[role="dialog"]')`)) await closeDialog();
-    store.setManagedState('qa-unified-auth-layout', true); store.setManagedState('qa-jetbrains-ide-mode', 'ready');
-    await click('[data-action="add-subscription-provider"]');
-    await click('[data-preset-id="jetbrains-central"]');
-    await click('[data-action="import-jetbrains-account"]');
-    await waitFor(`(async()=>{const values=await window.modelDock.authAccounts();return values.some(item=>item.clientImport?.client==='jetbrains-ide'&&item.usage.status==='ready')})()`, 'synthetic native JetBrains row');
+    store.setManagedState('qa-unified-auth-layout', true);
     const values = await accounts();
-    const representative = ['copilot', 'codex', 'grok', 'trae-cn-relay', 'jetbrains-central'].map(kind => values.find(account => account.kind === kind && (kind === 'trae-cn-relay' ? account.providerId === managed.id : kind === 'jetbrains-central' ? account.clientImport?.client === 'jetbrains-ide' : kind === 'codex' || kind === 'grok' ? ids.includes(account.providerId) : account.usage.status === 'ready')));
+    const representative = ['copilot', 'codex', 'grok', 'trae-cn-relay'].map(kind => values.find(account => account.kind === kind && (kind === 'trae-cn-relay' ? account.providerId === managed.id : kind === 'codex' || kind === 'grok' ? ids.includes(account.providerId) : account.usage.status === 'ready')));
     assert.ok(representative.every(Boolean), 'Every supported account family has a synthetic row');
     unifiedIds = representative.map(account => account!.providerId);
     original = unchanged();
@@ -100,7 +96,7 @@ export async function verifyRelayQuota(window: BrowserWindow, store: Store, outp
           }} )};
       })()`);
       assert.equal(layout.overflow, false, `Unified account layout has no horizontal overflow: ${theme}/${width}`);
-      assert.equal(layout.rows.length, 5);
+      assert.equal(layout.rows.length, 4);
       const first = layout.rows[0], center = (rect: AuthRowRect) => (rect.top + rect.bottom) / 2;
       for (const item of layout.rows) {
         assert.equal(item.grid, 'grid', `Every family shares the account grid: ${item.kind}`);
@@ -129,15 +125,10 @@ export async function verifyRelayQuota(window: BrowserWindow, store: Store, outp
             if (nativeWindow.expiresAt || account.usage.summary) assert.match(quota.timingText, /到期/, 'Independent grant expiry remains visible');
             else { assert.equal(quota.timingText, ''); assert.equal(quota.timingTitle, ''); assert.equal(quota.timingHidden, true, 'An empty timing cell preserves layout without an accessible unknown reset label'); }
           }
-          if (item.kind === 'jetbrains-central') {
-            assert.equal(quota.text, '3,074,611.8 / 3,500,000 AI Credits', 'The large official-style JetBrains balance retains its exact visible amount');
-            if (width >= 1400) assert.equal(quota.clipped, false, 'Wide layouts show the full large JetBrains amount without ellipsis');
-            else assert.equal(quota.title, quota.text, 'Narrow layouts retain the full large amount in the native title and account details');
-          }
         }
       }
       unifiedLayouts.push({ theme, requestedWidth: width, layout });
-      await capture(`unified-all-five-${theme}-${width}`);
+      await capture(`unified-all-four-${theme}-${width}`);
     }
     for (const id of unifiedIds) {
       await click(`[data-auth-account="${id}"] [data-action="account-menu"]`);
@@ -151,7 +142,6 @@ export async function verifyRelayQuota(window: BrowserWindow, store: Store, outp
       else {
         assert.doesNotMatch(detailsText, /重置|刷新次数/, 'Unsupported reset labels and counts remain absent in account details');
         assert.equal(await evaluate<number>(`document.querySelectorAll('[data-auth-account="${id}"] [data-reset-credits],[data-auth-account="${id}"] [data-reset-expiries]').length`), 0, 'No reset-count controls are added to other subscriptions');
-        if (account.kind === 'jetbrains-central') assert.ok(detailsText.includes('许可证有效期') && detailsText.includes(account.license!.expiresAt!), 'License expiry remains distinct and readable');
       }
       await closeDialog();
       if (account.source === 'relay') {
@@ -210,15 +200,7 @@ export async function verifyRelayQuota(window: BrowserWindow, store: Store, outp
       await evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)};document.documentElement.style.colorScheme=${JSON.stringify(theme)};document.querySelector(${JSON.stringify(row)}).scrollIntoView({block:'nearest'})`);
       await clearToasts(); await capture(`ready-${theme}-${width}`);
       rowHeights.set(width, await evaluate<number>(`document.querySelector(${JSON.stringify(row)}).getBoundingClientRect().height`));
-      // Even when a synthetic Central account is available, opening this guide
-      // must first explain IDE/Air support instead of querying another client.
-      store.setManagedState('qa-relay-client-import-stage', 'success');
-      await click('[data-action="jetbrains-import-options"]');
-      await waitFor(`!!document.querySelector('[data-jetbrains-ide-account-boundary]')`, 'JetBrains native account guide opens');
-      assert.equal(await evaluate<string>(`document.querySelector('[role="dialog"] #modal-title').textContent`), '连接JetBrains账号');
-      assert.equal(await evaluate<boolean>(`!!document.querySelector('[data-jetbrains-ide-account-boundary]')&&!document.querySelector('[role="dialog"] [data-field="relay-import-candidate"]')&&!document.querySelector('[role="dialog"] [role="alert"]')&&document.querySelector('[data-action="import-relay-client-account"]').disabled`), true, 'IDE/Air guidance does not silently inspect or import Central login');
-      assert.equal(await evaluate<number>(`document.querySelectorAll('[role="dialog"] [data-action^="jetbrains-account-help-"]').length`), 2);
-      await capture(`jetbrains-guide-${theme}-${width}`); await closeDialog();
+
     }
     const many = await refresh('many'); assert.equal(many.usage.windows.length, 40);
     assert.equal(many.usage.windows.filter(window => window.resetAt).length, 20, 'Presentation does not remove the original upstream reset timestamps');
@@ -323,10 +305,9 @@ export async function verifyRelayQuota(window: BrowserWindow, store: Store, outp
     }
     assert.deepEqual(unchanged(), original, 'Quota reads and guidance preserve every supplier, credential, model and tool binding');
     assert.deepEqual(store.getManagedState<{ clientImport: unknown }>(`auth-metadata:${managed.id}`, { clientImport: null }).clientImport, provenance);
-    writeFileSync(join(outputDir, 'relay-quota-validation.json'), JSON.stringify({ ok: true, themes: ['light', 'dark'], widths: [1920, 1180, 980], allFiveAccountFamiliesShareColumns: true, resetTimingOnlyForCodexAndGrok: true, otherSubscriptionResetLabelsAndCountsHidden: true, quotaQueryActionsAndAgePreserved: true, upstreamResetDataUnchanged: true, grantAndLicenseExpiryPreserved: true, percentAndAmountQuotaColumnsAlign: true, allFiveCommonActionMenusWork: true, relaySettingsRemainAccessibleFromMenu: true, unifiedLayouts, knownProAndUnknownPlanBadgesVerified: true, managedTraeAutoRefresh: true, managedTraeManualRefresh: true, manualRelayNotQueried: true, officialAmountsAndUnitsShown: true, manyQuotasStayCollapsedAndBounded: true, allFortyIndependentQuotaDetailsAccessible: true, zeroUnknownAndUnlimitedRemainDistinct: true, detailsScrollWithoutHorizontalOverflow: true, shrinkingResultsRemoveExpandAction: true, officialRawGrantParserMatches1813_80: true, officialSourceGroupsPreserve19CheckinsAndMonthly500: true, allTwentyCreditGrantsPreserved: true, grantExpiryNeverPresentedAsReset: true, officialDefaultUsageExplained: true, existingDetailsActionUsesGrants: true, unknownGrantPropagatesWithoutMislabelingKnownLimits: true, currentAccountSeparateFromImportProvenance: true, accountSwitchClearsPreviousIdentity: true, unknownQuotaHasNoInventedPercent: true, failuresClearPreviousBalances: true, jetBrainsGuideDoesNotQueryCentralUntilExplicitCheck: true, privacyVerified: true, configurationsUnchanged: true, noRealRelayOrClientAccess: true, stages, screenshots }, null, 2));
+    writeFileSync(join(outputDir, 'relay-quota-validation.json'), JSON.stringify({ ok: true, themes: ['light', 'dark'], widths: [1920, 1180, 980], allFourAccountFamiliesShareColumns: true, resetTimingOnlyForCodexAndGrok: true, otherSubscriptionResetLabelsAndCountsHidden: true, quotaQueryActionsAndAgePreserved: true, upstreamResetDataUnchanged: true, grantExpiryPreserved: true, percentAndAmountQuotaColumnsAlign: true, allFourCommonActionMenusWork: true, relaySettingsRemainAccessibleFromMenu: true, unifiedLayouts, knownProAndUnknownPlanBadgesVerified: true, managedTraeAutoRefresh: true, managedTraeManualRefresh: true, manualRelayNotQueried: true, officialAmountsAndUnitsShown: true, manyQuotasStayCollapsedAndBounded: true, allFortyIndependentQuotaDetailsAccessible: true, zeroUnknownAndUnlimitedRemainDistinct: true, detailsScrollWithoutHorizontalOverflow: true, shrinkingResultsRemoveExpandAction: true, officialRawGrantParserMatches1813_80: true, officialSourceGroupsPreserve19CheckinsAndMonthly500: true, allTwentyCreditGrantsPreserved: true, grantExpiryNeverPresentedAsReset: true, officialDefaultUsageExplained: true, existingDetailsActionUsesGrants: true, unknownGrantPropagatesWithoutMislabelingKnownLimits: true, currentAccountSeparateFromImportProvenance: true, accountSwitchClearsPreviousIdentity: true, unknownQuotaHasNoInventedPercent: true, failuresClearPreviousBalances: true, privacyVerified: true, configurationsUnchanged: true, noRealRelayOrClientAccess: true, stages, screenshots }, null, 2));
   } finally {
     store.setManagedState('qa-relay-quota-mode', 'unavailable'); store.setManagedState('qa-relay-client-import-stage', 'empty');
-    store.setManagedState('qa-jetbrains-ide-mode', 'empty');
     store.setManagedState('qa-unified-auth-layout', false);
     await evaluate(`(()=>{const original=${JSON.stringify(originalTheme)};if(original.theme===undefined)delete document.documentElement.dataset.theme;else document.documentElement.dataset.theme=original.theme;document.documentElement.style.colorScheme=original.colorScheme})()`);
     window.setMinimumSize(minimum[0], minimum[1]); window.setSize(size[0], size[1]);

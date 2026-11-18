@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowDownToLine, ChevronDown, Clock3, Ellipsis, Info, KeyRound, LogOut, Plus, RefreshCw, Trash2, UserRound } from './MaterialIcon';
 import type { ModelDockApi, Provider } from '../shared/types';
-import type { SettingsSnapshot } from '../shared/settings-types';
-import type { AuthAccount, AuthAccountKind, CopilotImportCandidate, JetBrainsIdeImportResult, QuotaWindow, RelayAccountKind, RelayClientImportCandidate, RelayClientImportProvenance, SubscriptionKind, SubscriptionUsage } from '../shared/auth-types';
+import type { AuthAccount, AuthAccountKind, CopilotImportCandidate, QuotaWindow, RelayAccountKind, RelayClientImportCandidate, RelayClientImportProvenance, SubscriptionKind, SubscriptionUsage } from '../shared/auth-types';
 import { SUBSCRIPTION_NAMES, subscriptionDisplayName } from '../shared/subscription-names';
 import { QUOTA_CACHE_TTL_MS, quotaAmountLabel, quotaCacheExpired, quotaDateLabel, quotaExpiryLabel, quotaPercent, quotaPercentLabel, quotaQueryAge, quotaRefreshDue, quotaResetLabel, quotaRetryAt, resetCreditsLabel } from '../shared/quota-display';
 import { BusyIcon, Modal, type Notify } from './components';
@@ -10,24 +9,23 @@ import { ToolIcon } from './ToolIcon';
 import { AccountAvatar } from './AccountAvatar';
 import { useContextMenu, type ContextMenuItem, type ContextMenuOpenEvent } from './ContextMenu';
 
-const kinds: AuthAccountKind[] = ['copilot', 'codex', 'grok', 'trae-cn-relay', 'jetbrains-central'];
+const kinds = ['copilot', 'codex', 'grok', 'trae-cn-relay'] as const satisfies readonly AuthAccountKind[];
 const titles = SUBSCRIPTION_NAMES;
 const statuses: Record<AuthAccount['authStatus'], string> = { ready: '已授权', missing: '未授权', 'signing-in': '等待登录', error: '需重新授权', expired: '授权已过期' };
 const relayStatus = (account: AuthAccount): string => account.clientImport
   ? account.authStatus !== 'ready' ? statuses[account.authStatus] : account.clientImport.upstreamVerified ? '账号授权已校验' : '本机账号已导入'
   : account.relayKeyConfigured ? '请重新导入账号' : '待连接账号';
-const relayClientNames: Record<RelayClientImportProvenance['client'], string> = { 'trae-cn': 'TRAE 中国版', 'trae-solo-cn': 'TRAE SOLO 中国版', 'jetbrains-central': 'Central CLI', 'jetbrains-ide': 'JetBrains IDE / Air' };
+const relayClientNames: Partial<Record<RelayClientImportProvenance['client'], string>> = { 'trae-cn': 'TRAE 中国版', 'trae-solo-cn': 'TRAE SOLO 中国版' };
 const accountProviderName = (account: AuthAccount): string => subscriptionDisplayName({
   name: account.providerName,
-  kind: account.kind === 'trae-cn-relay' || account.kind === 'jetbrains-central' ? 'openai-compatible' : account.kind,
+  kind: account.kind === 'copilot' || account.kind === 'codex' || account.kind === 'grok' ? account.kind : 'openai-compatible',
   presetId: account.kind === 'codex' ? 'codex-subscription' : account.kind === 'grok' ? 'grok-build' : account.kind === 'copilot' ? 'copilot-subscription' : account.kind,
 });
-type RelayImportDialog = { mode?: 'selection'; source?: 'ide' | 'central'; kind: RelayAccountKind; candidates: RelayClientImportCandidate[]; loading: boolean; checked: boolean; message: string; error?: string };
-const licenseDate = (value: string | undefined): string => value && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : value ? quotaDateLabel(value) : '到期日未知';
+type RelayImportDialog = { kind: 'trae-cn-relay'; candidates: RelayClientImportCandidate[]; loading: boolean; checked: boolean; message: string; error?: string };
 const showsQuotaResets = (kind: AuthAccountKind): boolean => kind === 'codex' || kind === 'grok';
 
 function AccountBrand({ kind }: { kind: AuthAccountKind }) {
-  if (kind === 'trae-cn-relay' || kind === 'jetbrains-central') return <KeyRound size={18} />;
+  if (kind === 'trae-cn-relay') return <KeyRound size={18} />;
   return kind === 'grok' ? <span className="auth-brand-xai" aria-hidden="true">xAI</span> : <ToolIcon tool={kind === 'copilot' ? 'copilot' : 'codex'} />;
 }
 
@@ -101,14 +99,13 @@ function ResetCredits({ usage, now }: { usage: SubscriptionUsage; now: number })
   </div>;
 }
 
-export function AuthPanel({ api, configuredProviders = [], onImportGo, onRemoveSource, onConfirmRemoveSource, platform, notify, onLogin, onCopilotLogin, onChanged, onManageProvider, onAddRelay, onAddSubscription, refreshRevision = 0, importRequest, onImportRequestHandled }: {
+export function AuthPanel({ api, configuredProviders = [], onImportGo, onRemoveSource, onConfirmRemoveSource, notify, onLogin, onCopilotLogin, onChanged, onManageProvider, onAddRelay, onAddSubscription, refreshRevision = 0, importRequest, onImportRequestHandled }: {
   configuredProviders?: Provider[];
   onImportGo: () => Promise<void>;
   onRemoveSource?: (provider: Provider) => void;
   onConfirmRemoveSource: (id: string) => Promise<void>;
   api?: ModelDockApi; notify: Notify;
-  platform?: SettingsSnapshot['platform'];
-  importRequest?: { kind: AuthAccountKind; id: number; options?: boolean };
+  importRequest?: { kind: AuthAccountKind; id: number };
   onImportRequestHandled?: (id: number) => void;
   onLogin: (providerId: string) => void | Promise<void>;
   onCopilotLogin?: () => void | Promise<void>;
@@ -131,7 +128,6 @@ export function AuthPanel({ api, configuredProviders = [], onImportGo, onRemoveS
   const [copilotImportId, setCopilotImportId] = useState('');
   const [relayImport, setRelayImport] = useState<RelayImportDialog | null>(null);
   const [relayImportId, setRelayImportId] = useState('');
-  const ideImportSupported = platform === 'win32' || platform === 'linux';
   const relayPreviewRequest = useRef(0);
   const contextMenu = useContextMenu({ onError: failure => notify(failure instanceof Error ? failure.message : '账号操作失败。', 'error') });
   useEffect(() => { contextMenu.close(); }, [draft, confirm, detailAccount, copilotImport, relayImport, contextMenu.close]);
@@ -175,7 +171,7 @@ export function AuthPanel({ api, configuredProviders = [], onImportGo, onRemoveS
     if (!api) return Promise.resolve();
     if (listRequest.current) return listRequest.current;
     const request = (async () => {
-      try { const result = await api.authAccounts(); if (mounted.current) { setAccounts(result); setError(''); } }
+      try { const result = await api.authAccounts(); if (mounted.current) { setAccounts(result.filter(account => kinds.some(kind => kind === account.kind))); setError(''); } }
       catch (failure) { if (mounted.current) setError(failure instanceof Error ? failure.message : '授权中心读取失败'); }
     })();
     listRequest.current = request;
@@ -268,30 +264,19 @@ export function AuthPanel({ api, configuredProviders = [], onImportGo, onRemoveS
     setCopilotImport(null);
     notify(account.usage.status === 'ready' ? 'GitHub 账号授权与 Copilot 额度已导入，原客户端保持不变。' : 'GitHub 账号授权已导入。' + account.usage.message, account.usage.status === 'ready' ? 'success' : 'info');
   });
-  const checkRelayImport = async (kind: RelayAccountKind) => {
+  const checkRelayImport = async (kind: 'trae-cn-relay') => {
     if (!api) { notify('请在 ModelDock 桌面应用中管理授权。', 'info'); return; }
     if (actions.current.has('import-relay-account')) return;
     const request = ++relayPreviewRequest.current;
-    setRelayImport({ source: kind === 'jetbrains-central' ? 'central' : undefined, kind, candidates: [], loading: true, checked: true, message: '' }); setRelayImportId('');
+    setRelayImport({ kind, candidates: [], loading: true, checked: true, message: '' }); setRelayImportId('');
     try {
       const preview = await api.relayClientImportCandidates(kind);
       if (mounted.current && relayPreviewRequest.current === request) {
-        setRelayImport({ source: kind === 'jetbrains-central' ? 'central' : undefined, kind, candidates: preview.candidates, loading: false, checked: true, message: preview.message });
+        setRelayImport({ kind, candidates: preview.candidates, loading: false, checked: true, message: preview.message });
         setRelayImportId(preview.candidates[0]?.id ?? '');
       }
     } catch (failure) {
-      if (mounted.current && relayPreviewRequest.current === request) setRelayImport({ source: kind === 'jetbrains-central' ? 'central' : undefined, kind, candidates: [], loading: false, checked: true, message: '', error: failure instanceof Error ? failure.message : '客户端账号读取失败，请检查客户端登录状态。' });
-    }
-  };
-  const scanJetBrainsIde = async () => {
-    if (!ideImportSupported || !api?.jetBrainsIdeImportCandidates || actions.current.has('import-relay-account')) return;
-    const request = ++relayPreviewRequest.current;
-    setRelayImport({ source: 'ide', kind: 'jetbrains-central', candidates: [], loading: true, checked: true, message: '' }); setRelayImportId('');
-    try {
-      const preview = await api.jetBrainsIdeImportCandidates();
-      if (mounted.current && relayPreviewRequest.current === request) { setRelayImport({ ...preview, source: 'ide', loading: false, checked: true }); setRelayImportId(preview.candidates[0]?.id ?? ''); }
-    } catch (failure) {
-      if (mounted.current && relayPreviewRequest.current === request) setRelayImport({ source: 'ide', kind: 'jetbrains-central', candidates: [], loading: false, checked: true, message: '', error: failure instanceof Error ? failure.message : 'IDE 账号读取失败，请检查本机登录后重试。' });
+      if (mounted.current && relayPreviewRequest.current === request) setRelayImport({ kind, candidates: [], loading: false, checked: true, message: '', error: failure instanceof Error ? failure.message : '客户端账号读取失败，请检查客户端登录状态。' });
     }
   };
   const acceptRelayAccount = (account: AuthAccount, request: number): boolean => {
@@ -299,41 +284,6 @@ export function AuthPanel({ api, configuredProviders = [], onImportGo, onRemoveS
     setAccounts(current => current.some(item => item.providerId === account.providerId) ? current.map(item => item.providerId === account.providerId ? account : item) : [...current, account]);
     setNow(Date.now()); setRelayImport(null); setRelayImportId(''); return true;
   };
-  const acceptJetBrainsImport = (result: JetBrainsIdeImportResult, request: number): void => {
-    if (!mounted.current || relayPreviewRequest.current !== request) return;
-    if (result.status === 'imported') {
-      const imported = result.accounts ?? [result.account];
-      setAccounts(current => { const next = new Map(current.map(account => [account.providerId, account])); for (const account of imported) next.set(account.providerId, account); return [...next.values()]; });
-      setNow(Date.now()); setRelayImport(null); setRelayImportId('');
-      if (result.failures?.length) notify(`已导入 ${imported.length} 项许可证，${result.failures.length} 项未完成。${[...new Set(result.failures.map(failure => failure.message))].slice(0, 2).join(' ')}`, 'info');
-      return;
-    }
-    if (!result.preview.candidates.length) throw new Error('未找到可导入的 IDE 账号与 AI 许可证，请先在 IDE 登录并选择许可证。');
-    setRelayImport({ mode: 'selection', source: 'ide', kind: 'jetbrains-central', candidates: result.preview.candidates, loading: false, checked: true, message: result.preview.message });
-    setRelayImportId(result.preview.candidates[0]?.id ?? '');
-  };
-  const beginJetBrainsImport = () => run('import-relay-account', async () => {
-    const request = ++relayPreviewRequest.current;
-    setRelayImport(null); setRelayImportId('');
-    if (!ideImportSupported) throw new Error(platform ? '当前系统暂不支持从 IDE / Air 导入，请使用其他连接方式。' : '正在确认系统支持范围，请稍后重试。');
-    if (!api?.beginJetBrainsIdeImport) throw new Error('客户端导入尚未连接，请重启最新版本后重试。');
-    try {
-      const result = await api.beginJetBrainsIdeImport();
-      acceptJetBrainsImport(result, request);
-    } catch (failure) {
-      if (mounted.current && relayPreviewRequest.current === request) throw failure;
-    }
-  });
-  const openJetBrainsImportOptions = () => {
-    if (actions.current.has('import-relay-account')) return;
-    relayPreviewRequest.current++;
-    setRelayImport({ kind: 'jetbrains-central', candidates: [], loading: false, checked: false, message: '' }); setRelayImportId('');
-  };
-  const openRelayImport = (kind: RelayAccountKind) => kind === 'jetbrains-central' ? beginJetBrainsImport() : checkRelayImport(kind);
-  const openJetBrainsHelp = (topic: 'ide' | 'central') => run('jetbrains-help-' + topic, async () => {
-    if (!api?.openJetBrainsAccountHelp) throw new Error('账号帮助尚未连接，请重启最新版本后重试。');
-    await api.openJetBrainsAccountHelp(topic);
-  });
   const openedImportRequest = useRef<number | undefined>(undefined);
   useEffect(() => {
     if (!importRequest || openedImportRequest.current === importRequest.id) return;
@@ -341,11 +291,10 @@ export function AuthPanel({ api, configuredProviders = [], onImportGo, onRemoveS
     // Consume the parent request before asynchronous work. This component is
     // recreated on navigation; its local ref alone cannot prevent a replay.
     onImportRequestHandled?.(importRequest.id);
-    const { kind, options } = importRequest;
+    const { kind } = importRequest;
     if (kind === 'copilot') void openCopilotImport();
     else if (kind === 'codex' || kind === 'grok') void importLocal(kind);
-    else if (kind === 'jetbrains-central' && options) openJetBrainsImportOptions();
-    else void openRelayImport(kind);
+    else if (kind === 'trae-cn-relay') void checkRelayImport(kind);
   }, [importRequest, onImportRequestHandled]);
   const closeRelayImport = () => {
     if (actions.current.has('import-relay-account') || busy['import-relay-account']) return;
@@ -355,7 +304,6 @@ export function AuthPanel({ api, configuredProviders = [], onImportGo, onRemoveS
     if (!relayImport || relayImport.loading || !relayImportId || !relayImport.candidates.some(candidate => candidate.id === relayImportId)) return;
     const request = ++relayPreviewRequest.current;
     try {
-      if (relayImport.source === 'ide') { acceptJetBrainsImport(await api!.beginJetBrainsIdeImport(relayImportId), request); return; }
       const account = await api!.importRelayClientAccount(relayImport.kind, relayImportId);
       if (acceptRelayAccount(account, request)) notify(account.usage.message, 'info');
     } catch (failure) {
@@ -411,10 +359,10 @@ export function AuthPanel({ api, configuredProviders = [], onImportGo, onRemoveS
       const group = accounts.filter(account => account.kind === kind);
       const sources = kind === 'copilot' ? configuredProviders.filter(provider => provider.kind === 'copilot') : [];
       if (!group.length && !sources.length) return null;
-      const relay = kind === 'trae-cn-relay' || kind === 'jetbrains-central';
+      const relay = kind === 'trae-cn-relay';
       return <div className="account-group" key={kind} data-auth-kind={kind}>
         <div className="account-group-header"><h2><AccountBrand kind={kind} />{titles[kind]}<span className="count-tag">{group.length + sources.length}</span></h2><div className="row-actions">
-          {relay ? <><button className="button small secondary" data-auth-import-account={kind} disabled={!!relayImport || busy['import-relay-account'] || kind === 'jetbrains-central' && !ideImportSupported} onClick={() => void openRelayImport(kind)} title={kind === 'trae-cn-relay' ? '读取本机已登录的 TRAE 中国版或 TRAE SOLO 中国版账号' : !ideImportSupported ? platform ? '当前系统暂不支持 IDE / Air 导入，请使用其他连接方式' : '正在确认系统支持范围' : '导入本机 IDE / Air 本人账号下的可用 AI 许可证'}><BusyIcon active={kind === 'jetbrains-central' && !!busy['import-relay-account']}><ArrowDownToLine size={13} /></BusyIcon>从客户端导入</button>{kind === 'jetbrains-central' && <button className="icon-button" data-action="jetbrains-import-options" aria-label="其他连接方式" title="其他连接方式" disabled={!!relayImport || busy['import-relay-account']} onClick={openJetBrainsImportOptions}><Ellipsis size={14} /></button>}<button className="button small secondary" data-auth-add-relay={kind} disabled={!onAddRelay || kind === 'jetbrains-central' && !!busy['import-relay-account']} onClick={() => onAddRelay?.(kind)}><Plus size={13} />添加订阅</button></> : kind === 'copilot' ? <><button className="button small secondary" data-auth-import-account="copilot" disabled={busy['import-copilot-list']} onClick={() => void openCopilotImport()} title="选择已登录的 Copilot CLI 或 GitHub CLI 账号"><BusyIcon active={!!busy['import-copilot-list']}><ArrowDownToLine size={13} /></BusyIcon>从客户端导入</button><button className="button small secondary" data-action="copilot-login" data-auth-add-account={kind} disabled={busy['login-copilot']} onClick={() => void run('login-copilot', loginCopilot)}><Plus size={13} />登录 GitHub</button></> : <>
+          {relay ? <><button className="button small secondary" data-auth-import-account={kind} disabled={!!relayImport || busy['import-relay-account']} onClick={() => void checkRelayImport(kind)} title="读取本机已登录的 TRAE 中国版或 TRAE SOLO 中国版账号"><BusyIcon active={!!busy['import-relay-account']}><ArrowDownToLine size={13} /></BusyIcon>从客户端导入</button><button className="button small secondary" data-auth-add-relay={kind} disabled={!onAddRelay} onClick={() => onAddRelay?.(kind)}><Plus size={13} />添加订阅</button></> : kind === 'copilot' ? <><button className="button small secondary" data-auth-import-account="copilot" disabled={busy['import-copilot-list']} onClick={() => void openCopilotImport()} title="选择已登录的 Copilot CLI 或 GitHub CLI 账号"><BusyIcon active={!!busy['import-copilot-list']}><ArrowDownToLine size={13} /></BusyIcon>从客户端导入</button><button className="button small secondary" data-action="copilot-login" data-auth-add-account={kind} disabled={busy['login-copilot']} onClick={() => void run('login-copilot', loginCopilot)}><Plus size={13} />登录 GitHub</button></> : <>
             <button className="button small secondary" data-auth-import-account={kind} disabled={busy['import-' + kind]} onClick={() => void importLocal(kind)} title="仅在点击时导入本机客户端已有授权"><BusyIcon active={!!busy['import-' + kind]}><ArrowDownToLine size={13} /></BusyIcon>从客户端导入</button>
             <button className="button small secondary" data-auth-add-account={kind} onClick={() => setDraft({ kind, name: titles[kind] + ' ' + (group.length + 1) })}><Plus size={13} />添加账号</button>
           </>}
@@ -435,11 +383,10 @@ export function AuthPanel({ api, configuredProviders = [], onImportGo, onRemoveS
             <div className="account-identity" title={identity + ' · ' + accountProviderName(account)}>
               <AccountAvatar account={isRelay ? { ...account, displayName: identity, email: undefined, avatarUrl: account.accountId ? account.avatarUrl : undefined } : account} />
               <i className={'auth-identity-dot ' + account.authStatus} role="img" aria-label={status} title={status} />
-              <div className={'auth-identity-content' + (account.license ? ' auth-license-identity' : '')}><strong data-relay-quota-account={isRelay ? '' : undefined} title={identity}>{identity}</strong>{(account.plan || isRelay) && <span className="account-plan" data-account-plan={account.plan ?? 'unknown'} title={account.plan ? '当前账号套餐：' + account.plan : '上游尚未返回可识别的套餐类型'}>{account.plan ?? '套餐未知'}</span>}{account.authStatus !== 'ready' && <small className="auth-identity-status" title={status}>{statuses[account.authStatus]}</small>}</div>
+              <div className="auth-identity-content"><strong data-relay-quota-account={isRelay ? '' : undefined} title={identity}>{identity}</strong>{(account.plan || isRelay) && <span className="account-plan" data-account-plan={account.plan ?? 'unknown'} title={account.plan ? '当前账号套餐：' + account.plan : '上游尚未返回可识别的套餐类型'}>{account.plan ?? '套餐未知'}</span>}{account.authStatus !== 'ready' && <small className="auth-identity-status" title={status}>{statuses[account.authStatus]}</small>}</div>
             </div>
             <div className="account-quotas">
               {canQuery && <QuotaWindows usage={account.usage} now={now} showAmounts={isRelay} showResetTiming={showsQuotaResets(kind)} onShowAll={isRelay ? () => setDetailAccount(account) : undefined} />}
-              {account.license && <small className="auth-license-summary" data-account-license title={account.license.label + ' · ' + (account.license.expiresAt ? '有效期至 ' + licenseDate(account.license.expiresAt) : '到期日未知')}><span>{account.license.label}</span><span data-license-expires-at={account.license.expiresAt}>{account.license.expiresAt ? '至 ' + licenseDate(account.license.expiresAt) : '到期日未知'}</span></small>}
               {showQuotaMessage && <p className="quota-unavailable" data-quota-message title={account.usage.message}>{account.usage.message}</p>}
               {kind === 'codex' && <ResetCredits usage={account.usage} now={now} />}
             </div>
@@ -472,12 +419,11 @@ export function AuthPanel({ api, configuredProviders = [], onImportGo, onRemoveS
       <div><dt>账号</dt><dd>{inspectedAccount.source === 'relay' ? inspectedAccount.accountId ? inspectedAccount.email ?? inspectedAccount.displayName ?? inspectedAccount.accountId : '当前账号未确认' : inspectedAccount.email ?? inspectedAccount.displayName ?? accountProviderName(inspectedAccount)}</dd></div>
       <div><dt>账号名称</dt><dd>{accountProviderName(inspectedAccount)}</dd></div>
       <div><dt>平台 / 套餐</dt><dd>{titles[inspectedAccount.kind]}{inspectedAccount.plan ? ' · ' + inspectedAccount.plan : ''}</dd></div>
-      {inspectedAccount.license && <><div data-license-details><dt>AI 许可证</dt><dd>{inspectedAccount.license.label}</dd></div><div><dt>许可证有效期</dt><dd>{licenseDate(inspectedAccount.license.expiresAt)}</dd></div>{inspectedAccount.license.verifiedAt && <div><dt>许可证核验</dt><dd>{quotaDateLabel(inspectedAccount.license.verifiedAt)}（香港时间）</dd></div>}</>}
       <div data-relay-key-configured={inspectedAccount.source === 'relay' ? !!inspectedAccount.relayKeyConfigured : undefined}><dt>{inspectedAccount.source === 'relay' ? '反代配置' : '授权状态'}</dt><dd>{inspectedAccount.source === 'relay' ? relayStatus(inspectedAccount) : statuses[inspectedAccount.authStatus]}</dd></div>
-      {(inspectedAccount.source !== 'relay' || inspectedAccount.license) && <><div><dt>访问凭据到期</dt><dd>{quotaDateLabel(inspectedAccount.expiresAt)}</dd></div>
+      {inspectedAccount.source !== 'relay' && <><div><dt>访问凭据到期</dt><dd>{quotaDateLabel(inspectedAccount.expiresAt)}</dd></div>
       <div><dt>自动续期</dt><dd>{inspectedAccount.canRefresh ? '支持' : '未提供续期凭据'}</dd></div></>}
       <div><dt>授权来源</dt><dd>{inspectedAccount.source === 'relay' ? 'ModelDock 管理账号授权' : inspectedAccount.source === 'client-import' ? '客户端导入' : 'ModelDock 登录'}</dd></div>
-      {inspectedAccount.clientImport && <><div data-relay-client-source={inspectedAccount.clientImport.client}><dt>导入客户端</dt><dd>{relayClientNames[inspectedAccount.clientImport.client]}{inspectedAccount.clientImport.accountLabel ? ' · ' + inspectedAccount.clientImport.accountLabel : ''}</dd></div><div><dt>最近导入</dt><dd>{quotaDateLabel(inspectedAccount.clientImport.importedAt)}（香港时间）</dd></div><div><dt>导入确认</dt><dd>{inspectedAccount.clientImport.upstreamVerified ? inspectedAccount.clientImport.client === 'jetbrains-ide' ? '已校验 IDE 账号的 AI 服务授权与额度；模型推理仍需测试' : '已校验 Central CLI 当前会话；模型权限、额度和推理仍需确认' : '本机账号已保存；云端授权、套餐和推理尚未验证'}</dd></div></>}
+      {inspectedAccount.clientImport && <><div data-relay-client-source={inspectedAccount.clientImport.client}><dt>导入客户端</dt><dd>{relayClientNames[inspectedAccount.clientImport.client]}{inspectedAccount.clientImport.accountLabel ? ' · ' + inspectedAccount.clientImport.accountLabel : ''}</dd></div><div><dt>最近导入</dt><dd>{quotaDateLabel(inspectedAccount.clientImport.importedAt)}（香港时间）</dd></div><div><dt>导入确认</dt><dd>{inspectedAccount.clientImport.upstreamVerified ? '已校验账号授权；模型推理仍需测试' : '本机账号已保存；云端授权、套餐和推理尚未验证'}</dd></div></>}
       {inspectedAccount.source === 'relay' && inspectedAccount.canQueryUsage && <div><dt>额度账号</dt><dd>{inspectedAccount.accountId ? inspectedAccount.displayName ?? inspectedAccount.accountId : '当前账号未确认'}</dd></div>}
       <div><dt>额度查询</dt><dd>{inspectedAccount.source === 'relay' && !inspectedAccount.canQueryUsage ? '请在反代服务或官方客户端查看' : inspectedAccount.usage.queriedAt ? quotaDateLabel(inspectedAccount.usage.queriedAt) + '（香港时间）' : '尚未查询'}</dd></div>
     </dl><p>{inspectedAccount.usage.message}</p>{showsQuotaResets(inspectedAccount.kind) && inspectedAccount.usage.resetCreditsMessage && <p>{inspectedAccount.usage.resetCreditsMessage}</p>}<QuotaDetails usage={inspectedAccount.usage} now={now} showResetTiming={showsQuotaResets(inspectedAccount.kind)} /></div><div className="modal-footer"><button className="button secondary" onClick={() => setDetailAccount(null)}>关闭</button></div></Modal>}
@@ -486,14 +432,13 @@ export function AuthPanel({ api, configuredProviders = [], onImportGo, onRemoveS
       {copilotImport.length ? <label className="form-field">客户端与账号<select data-field="copilot-import-account" value={copilotImportId} disabled={busy['import-copilot-account']} onChange={event => setCopilotImportId(event.target.value)}>{copilotImport.map(candidate => <option key={candidate.id} value={candidate.id}>{candidate.label}</option>)}</select></label> : <p data-copilot-import-empty>未找到可导入的 Copilot CLI 或 GitHub CLI 账号。</p>}
       <p className="feature-footnote">导入时验证账号身份和 Copilot 额度，原客户端保持不变。未列出的桌面端或编辑器账号可使用“登录 GitHub”添加。</p>
     </div><div className="modal-footer"><button className="button small secondary" disabled={busy['import-copilot-account']} onClick={() => setCopilotImport(null)}>取消</button><button className="button small primary" data-action="import-copilot-client-account" disabled={!copilotImportId || busy['import-copilot-account']} onClick={() => void importCopilot()}><BusyIcon active={!!busy['import-copilot-account']}><ArrowDownToLine size={14} /></BusyIcon>导入所选账号</button></div></Modal>}
-    {relayImport && <Modal title={relayImport.mode === 'selection' ? '选择 JetBrains 账号来源' : relayImport.kind === 'jetbrains-central' ? '连接JetBrains账号' : '从客户端导入 ' + titles[relayImport.kind]} subtitle={relayImport.mode === 'selection' ? '选择本次导入的本人账号来源，将分别保存其可用的 AI 许可证。' : relayImport.kind === 'jetbrains-central' ? '查看现有登录的支持范围，再选择连接方式。' : '选择本机客户端已有账号，通过 ModelDock 网关连接。'} onClose={closeRelayImport}><div className="modal-body auth-relay-import" data-relay-client-import={relayImport.kind} aria-busy={relayImport.loading || !!busy['import-relay-account']}>
-      {relayImport.kind === 'jetbrains-central' && relayImport.mode !== 'selection' && <><div data-jetbrains-ide-account-boundary><p>从本机 IDE / Air 的本人账号导入，分别保存官方可用的 AI 许可证、套餐与额度。原客户端登录和配置保持不变。</p><p>支持 Windows / Linux 上的 2026.2 IDE 及其内置 Air；独立 Air 和 macOS 暂不支持。</p>{!ideImportSupported && <p role="status">{platform ? "当前系统暂不支持从 IDE 导入，可使用下方 Central CLI 连接方式。" : "正在确认系统支持范围…"}</p>}<div className="row-actions"><button className="button small primary" data-action="scan-jetbrains-ide" disabled={!ideImportSupported || relayImport.loading || busy['import-relay-account']} onClick={() => void scanJetBrainsIde()}><ArrowDownToLine size={13} />从 IDE / Air 导入</button><button className="button small secondary" data-action="jetbrains-account-help-ide" disabled={!api || busy['jetbrains-help-ide']} onClick={() => void openJetBrainsHelp('ide')}>IDE / Air 账号与额度说明</button></div></div><div className="auth-relay-import-notes"><p>Central CLI 是另一种独立连接方式，仅在你使用该客户端时检查其登录。</p><div className="row-actions"><button className="button small secondary" data-action="check-central-login" disabled={relayImport.loading || busy['import-relay-account']} onClick={() => void checkRelayImport('jetbrains-central')}><BusyIcon active={relayImport.loading && relayImport.source === 'central'}><RefreshCw size={13} /></BusyIcon>检查Central CLI登录</button><button className="button small secondary" data-action="jetbrains-account-help-central" disabled={!api || busy['jetbrains-help-central']} onClick={() => void openJetBrainsHelp('central')}>Central 准备与登录步骤</button></div></div></>}
+    {relayImport && <Modal title={'从客户端导入 ' + titles[relayImport.kind]} subtitle="选择本机客户端已有账号，通过 ModelDock 网关连接。" onClose={closeRelayImport}><div className="modal-body auth-relay-import" data-relay-client-import={relayImport.kind} aria-busy={relayImport.loading || !!busy['import-relay-account']}>
       {relayImport.loading ? <p className="auth-relay-import-loading" role="status"><BusyIcon active><ArrowDownToLine size={14} /></BusyIcon>正在检查本机客户端登录状态…</p> : relayImport.error ? <p className="feature-error" role="alert">{relayImport.error}</p> : relayImport.checked && <>
         {relayImport.candidates.length > 0 && <label className="form-field">客户端与账号<select data-field="relay-import-candidate" value={relayImportId} disabled={busy['import-relay-account']} onChange={event => setRelayImportId(event.target.value)}>{relayImport.candidates.map(candidate => <option key={candidate.id} value={candidate.id}>{candidate.clientName}{candidate.accountLabel ? ' · ' + candidate.accountLabel : ''}</option>)}</select></label>}
         <p className="feature-footnote" data-relay-import-message>{relayImport.message}</p>
       </>}
-      <div className="auth-relay-import-notes">{relayImport.mode === 'selection' ? <p>每项许可证单独保存套餐、有效期与额度；已保存的同一许可证保留原有模型和工具绑定。</p> : relayImport.kind === 'trae-cn-relay' ? <><p>仅读取本机已登录的 TRAE 中国版 / TRAE SOLO 中国版账号，由内置适配器直接接入 ModelDock 网关。</p><p>导入会保存或更新所选账号的授权。原客户端保持不变；导入后可查询官方套餐与额度，模型推理仍需单独测试。</p></> : <p>{relayImport.source === 'ide' ? '确认后向官方服务校验当前账号和 AI 许可证，令牌留在本机。仅发布已核实的兼容模型；模型推理仍需单独测试。' : '检查成功后可连接 Central CLI 当前账号。原客户端保持不变；账号校验不代表模型权限或推理已通过。'}</p>}</div>
-    </div><div className="modal-footer"><button className="button small secondary" disabled={busy['import-relay-account']} onClick={closeRelayImport}>取消</button><button className="button small primary" data-action="import-relay-client-account" disabled={relayImport.loading || !!relayImport.error || !relayImportId || !relayImport.candidates.some(candidate => candidate.id === relayImportId) || busy['import-relay-account']} onClick={() => void importRelay()}><BusyIcon active={!!busy['import-relay-account']}><ArrowDownToLine size={14} /></BusyIcon>{busy['import-relay-account'] ? relayImport.source === 'central' ? '正在连接…' : '正在导入…' : relayImport.source === 'central' ? '连接所选账号' : '导入所选账号'}</button></div></Modal>}
+      <div className="auth-relay-import-notes"><p>仅读取本机已登录的 TRAE 中国版 / TRAE SOLO 中国版账号，由内置适配器直接接入 ModelDock 网关。</p><p>导入会保存或更新所选账号的授权。原客户端保持不变；导入后可查询官方套餐与额度，模型推理仍需单独测试。</p></div>
+    </div><div className="modal-footer"><button className="button small secondary" disabled={busy['import-relay-account']} onClick={closeRelayImport}>取消</button><button className="button small primary" data-action="import-relay-client-account" disabled={relayImport.loading || !!relayImport.error || !relayImportId || !relayImport.candidates.some(candidate => candidate.id === relayImportId) || busy['import-relay-account']} onClick={() => void importRelay()}><BusyIcon active={!!busy['import-relay-account']}><ArrowDownToLine size={14} /></BusyIcon>{busy['import-relay-account'] ? '正在导入…' : '导入所选账号'}</button></div></Modal>}
     {confirm && <Modal title={confirm.action === 'logout' ? '清除本地授权' : confirm.account.kind === 'copilot' ? '移除 GitHub 账号' : '删除账号来源'} onClose={() => setConfirm(null)}><div className="modal-body"><p>{confirm.account.kind === 'copilot' ? '移除“' + accountProviderName(confirm.account) + '”在 ModelDock 中的 GitHub 授权和额度缓存。GitHub 账号与原客户端的登录状态保持不变。' : confirm.action === 'logout' ? '清除“' + accountProviderName(confirm.account) + '”在 ModelDock 中的授权和额度缓存。原客户端登录状态不会改变，来源和模型配置保留。' : '删除“' + accountProviderName(confirm.account) + '”及其模型，工具中的相关来源引用也会移除。原客户端文件不会改变。'}</p></div><div className="modal-footer"><button className="button small secondary" onClick={() => setConfirm(null)}>取消</button><button className="button primary danger" disabled={busy['confirm-' + confirm.account.providerId]} onClick={() => void confirmAction()}>确认{confirm.action === 'logout' ? '注销' : '移除'}</button></div></Modal>}
     {contextMenu.menu}
   </section>;

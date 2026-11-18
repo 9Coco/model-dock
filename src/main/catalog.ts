@@ -15,9 +15,6 @@ import type { PreparedUpstream } from './oauth';
 import { modelCatalogEndpoint } from './oauth';
 import { anthropicEndpoint } from './anthropic-endpoint';
 import { TraeNativeAccountError } from './trae-native-account';
-import { CentralNativeAccountError } from './central-native-account';
-import { JetBrainsIdeAccountError } from './jetbrains-ide-account';
-import { JetBrainsIdeApiError } from './jetbrains-ide-api';
 
 export interface CatalogStore {
   getProvider(id: string): Provider | undefined;
@@ -56,7 +53,6 @@ function safeText(value: unknown, max = 200): string {
 }
 function catalogHistorySource(provider: Provider): NonNullable<DiscoveryResult['history']>['source'] | undefined {
   if (provider.nativeAdapter === 'trae') return 'trae-client';
-  if (provider.nativeAdapter === 'jetbrains-ide') return 'jetbrains-client';
   if (provider.nativeAdapter) return undefined;
   return provider.kind === 'codex' ? 'codex-client' : provider.kind === 'grok' ? 'grok-client'
     : provider.kind === 'copilot' ? 'copilot-client' : undefined;
@@ -369,6 +365,7 @@ export class ModelCatalog {
     let statusCode: number | undefined;
     try {
       if (!provider) throw new CatalogFailure('invalid-provider', '供应商不存在。');
+      if (provider.presetId === 'jetbrains-central') throw new CatalogFailure('invalid-provider', 'JetBrains 订阅接入已移除，请选择其他模型来源。');
       const publicGoCatalog = !provider.hasSecret && provider.kind === 'opencode-go' && provider.baseUrl === OPENCODE_GO_BASE_URL;
       if (!provider.hasSecret && !publicGoCatalog) throw new CatalogFailure('missing-credentials', (provider.kind === 'openai-compatible' || provider.kind === 'opencode-go') ? '请先保存 API Key，再获取模型列表。' : '请先完成订阅授权，再获取模型列表。');
       const signal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
@@ -383,7 +380,6 @@ export class ModelCatalog {
       let request: PreparedUpstream;
       try { request = useNativeCatalog || publicGoCatalog ? { url: expected, headers: {}, body: {} } : await this.oauth.prepareRequest(provider, messagesCatalog ? '/v1/models' : '/models', {}); }
       catch {
-        if (provider.presetId === 'jetbrains-central') throw new CatalogFailure('authentication', '请先在 JetBrains 供应商详情中启动本机反代，再获取模型列表。');
         throw new CatalogFailure('authentication', (provider.kind === 'openai-compatible' || provider.kind === 'opencode-go') ? '无法准备 API 凭据，请重新保存 API Key。' : '无法准备订阅授权，请在授权中心检查账号或重新登录。'); }
       if (provider.kind === 'copilot' ? !isCopilotUpstream(request.url, '/models') : request.url !== expected) throw new CatalogFailure('invalid-provider', '模型目录请求地址与当前供应商不一致。');
       if (messagesCatalog) {
@@ -465,10 +461,7 @@ export class ModelCatalog {
       return { ok: true, providerId, statusCode, message: `已读取模型目录，发现 ${discovered.length} 个模型。目录可见性不代表模型调用已验证。`, models: discovered, ...(history ? { history } : {}) };
     } catch (error) {
       // Upstream bodies and arbitrary exception text can contain credentials.
-      const failure = error instanceof CatalogFailure ? error : error instanceof JetBrainsIdeAccountError || error instanceof JetBrainsIdeApiError
-        ? new CatalogFailure(error.status === 451 || error.status === 402 || error.status === 403 ? 'permission' : error.status === 401 ? 'authentication'
-          : error.status === 429 ? 'rate-limit' : error.status === 504 ? 'timeout' : error.code === 'network' ? 'network' : 'upstream', error.message, error.status)
-        : error instanceof TraeNativeAccountError || error instanceof CentralNativeAccountError
+      const failure = error instanceof CatalogFailure ? error : error instanceof TraeNativeAccountError
         ? new CatalogFailure('authentication', error.message, 401) : error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')
         ? new CatalogFailure('timeout', '获取模型目录超时，请检查网络后重试。')
         : new CatalogFailure('network', '无法读取模型目录，请检查网络、API 地址或订阅授权状态后重试。');

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { Store } from '../src/main/store';
 import { RelayQuotaCenter, RelayQuotaFailure, type RelayQuotaResult } from '../src/main/relay-quota';
 import { RelayClientImportManager, relayAccountView, type RelayImportAdapter } from '../src/main/relay-client-import';
-import { JETBRAINS_RELAY_BASE_URL, TRAE_RELAY_BASE_URL } from '../src/shared/presets';
+import { TRAE_RELAY_BASE_URL } from '../src/shared/presets';
 import { QUOTA_CACHE_TTL_MS } from '../src/shared/quota-display';
 import type { ProviderInput } from '../src/shared/types';
 import type { RelayAccountKind } from '../src/shared/auth-types';
@@ -56,13 +56,12 @@ describe('TRAE quota coordinator with a real private Store', () => {
     held.resolve(f.result()); expect(await first).toEqual(await second);
     await f.center.refresh(f.provider.id); expect(f.query).toHaveBeenCalledTimes(2);
   });
-  it('never queries manual, custom, noncanonical, Central or keyless sources', async () => {
+  it('never queries manual, custom, noncanonical or keyless sources', async () => {
     const f = await fixture();
     const inputs: ProviderInput[] = [
       { name: '手动相同地址', kind: 'openai-compatible', presetId: 'trae-cn-relay', relayMode: 'manual', baseUrl: TRAE_RELAY_BASE_URL, enabled: true, apiKey: KEY },
       { name: '手动其他地址', kind: 'openai-compatible', presetId: 'trae-cn-relay', relayMode: 'manual', baseUrl: 'http://localhost:19090/v1', enabled: true, apiKey: KEY },
       { name: '自定义相同地址', kind: 'openai-compatible', presetId: 'custom', baseUrl: TRAE_RELAY_BASE_URL, enabled: true, apiKey: KEY },
-      { name: 'Central', kind: 'openai-compatible', presetId: 'jetbrains-central', baseUrl: JETBRAINS_RELAY_BASE_URL, enabled: true, apiKey: KEY },
       { name: '没有密钥', kind: 'openai-compatible', presetId: 'trae-cn-relay', relayMode: 'managed', baseUrl: TRAE_RELAY_BASE_URL, enabled: true },
     ];
     for (const input of inputs) { const provider = f.store.saveProvider(input); await expect(f.center.refresh(provider.id)).rejects.toBeInstanceOf(RelayQuotaFailure); }

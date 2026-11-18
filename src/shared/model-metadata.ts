@@ -104,7 +104,7 @@ type Parameters = Partial<Pick<Model, ModelDraftParameterField>>;
 type CatalogModel = Pick<Model, 'wireApi' | 'upstreamId'>;
 
 function supplierGroup(provider: Provider, wire: WireApi): keyof typeof supplierSpecs | undefined {
-  if (provider.nativeAdapter) return provider.nativeAdapter === 'jetbrains-ide' && wire === 'chat-completions' ? 'jetbrains-ide' : undefined;
+  if (provider.nativeAdapter) return undefined;
   const base = canonicalBase(provider.baseUrl);
   const preset = presetById(provider.presetId);
   if (!preset || preset.kind !== provider.kind || preset.baseUrl !== base) return;

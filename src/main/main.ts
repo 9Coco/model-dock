@@ -22,10 +22,6 @@ import { parseTraeQuota } from './trae-relay-usage';
 import { TraeNativeAccounts, TraeNativeAccountError } from './trae-native-account';
 import { TraeGatewayAdapter } from './trae-gateway-adapter';
 import { TraeClientImporter, TraeClientImportError } from './trae-client-import';
-import { CentralApi, CentralApiError } from './central-api';
-import { CentralClientSessionReader } from './central-client-session';
-import { CentralGatewayAdapter } from './central-gateway-adapter';
-import { CentralNativeAccounts, CentralNativeAccountError } from './central-native-account';
 import { RelayClientImportManager, RelayClientImportError, type RelayImportAdapter } from './relay-client-import';
 import { RelayQuotaCenter, RelayQuotaFailure } from './relay-quota';
 import { OAuthManager } from './oauth';
@@ -102,11 +98,6 @@ import { installEditContextMenu } from './edit-context-menu';
 import { verifyContextMenus } from './context-menu-smoke';
 import { acquireLinuxInstanceGuard } from './linux-instance-guard';
 import { applyWaylandColorWorkaround } from './wayland-color';
-import { JetBrainsIdeImporter, JetBrainsIdeImportError } from './jetbrains-ide-import';
-import { JetBrainsIdeApi, JetBrainsIdeApiError } from './jetbrains-ide-api';
-import { JetBrainsIdeAccounts } from './jetbrains-ide-account';
-import { JetBrainsGatewayAdapter } from './jetbrains-gateway-adapter';
-import { createJetBrainsIdeFixture, verifyJetBrainsIdeImport } from './jetbrains-ide-smoke';
 import { finishLocalShutdown } from './shutdown-cleanup';
 import { importSelectedLocalSkill } from './skill-import-dialog';
 import { replacePrivateFile } from './private-file';
@@ -116,10 +107,6 @@ let tray: Tray | null = null;
 let store: Store;
 let runtime: ModelDockRuntime;
 let applicationNetwork: ApplicationNetworkSession;
-let ideAccounts: JetBrainsIdeAccounts;
-let ideGatewayAdapter: JetBrainsGatewayAdapter;
-let centralNativeAccounts: CentralNativeAccounts;
-let centralGatewayAdapter: CentralGatewayAdapter;
 let traeNativeAccounts: TraeNativeAccounts;
 let traeGatewayAdapter: TraeGatewayAdapter;
 let oauth: OAuthManager;
@@ -294,7 +281,7 @@ async function createWindow(forceShow = false) {
         writeFileSync(join(outputDir, 'electron-smoke.json'), JSON.stringify({ ...result, dataDir, windowSize: window!.getSize(), contentSize: window!.getContentSize() }, null, 2));
         writeFileSync(join(outputDir, 'electron-smoke.png'), await captureUi());
         if (process.env.MODELDOCK_SMOKE_NETWORK_ONLY === '1') { await verifyNetworkUi(window!, store, outputDir, captureUi); quitting = true; app.quit(); return; }
-        if (!modelHistoryOnly && process.env.MODELDOCK_SMOKE_OPENCODE_DESKTOP_ONLY !== '1' && process.env.MODELDOCK_SMOKE_JETBRAINS_IDE_ONLY !== '1' && process.env.MODELDOCK_SMOKE_PROVIDER_MANAGEMENT_ONLY !== '1' && process.env.MODELDOCK_SMOKE_RELAY_QUOTA_ONLY !== '1' && process.env.MODELDOCK_SMOKE_RELAY_CLIENT_IMPORT_ONLY !== '1' && process.env.MODELDOCK_SMOKE_SIDEBAR_LAYOUT_ONLY !== '1' && process.env.MODELDOCK_SMOKE_NAVIGATION_CONSOLIDATION_ONLY !== '1' && process.env.MODELDOCK_SMOKE_RELAY_SUBSCRIPTIONS_ONLY !== '1' && process.env.MODELDOCK_SMOKE_JETBRAINS_PLUGIN_ONLY !== '1' && process.env.MODELDOCK_SMOKE_CONTEXT_MENU_ONLY !== '1') await verifyToolIcons(window!, outputDir, captureUi);
+        if (!modelHistoryOnly && process.env.MODELDOCK_SMOKE_OPENCODE_DESKTOP_ONLY !== '1' && process.env.MODELDOCK_SMOKE_PROVIDER_MANAGEMENT_ONLY !== '1' && process.env.MODELDOCK_SMOKE_RELAY_QUOTA_ONLY !== '1' && process.env.MODELDOCK_SMOKE_RELAY_CLIENT_IMPORT_ONLY !== '1' && process.env.MODELDOCK_SMOKE_SIDEBAR_LAYOUT_ONLY !== '1' && process.env.MODELDOCK_SMOKE_NAVIGATION_CONSOLIDATION_ONLY !== '1' && process.env.MODELDOCK_SMOKE_RELAY_SUBSCRIPTIONS_ONLY !== '1' && process.env.MODELDOCK_SMOKE_JETBRAINS_PLUGIN_ONLY !== '1' && process.env.MODELDOCK_SMOKE_CONTEXT_MENU_ONLY !== '1') await verifyToolIcons(window!, outputDir, captureUi);
         if (process.env.MODELDOCK_SMOKE_OPENCODE_DESKTOP_ONLY === '1') {
           await verifyOpenCodeDesktop(window!, store, outputDir, captureUi);
         } else if (modelHistoryOnly) {
@@ -309,8 +296,6 @@ async function createWindow(forceShow = false) {
           await verifyRelaySubscriptions(window!, store, outputDir, captureUi);
         } else if (process.env.MODELDOCK_SMOKE_RELAY_CLIENT_IMPORT_ONLY === '1') {
           await verifyRelayClientImport(window!, store, outputDir, captureUi);
-        } else if (process.env.MODELDOCK_SMOKE_JETBRAINS_IDE_ONLY === '1') {
-          await verifyJetBrainsIdeImport(window!, store, outputDir, captureUi);
         } else if (process.env.MODELDOCK_SMOKE_RELAY_QUOTA_ONLY === '1') {
           await verifyRelayQuota(window!, store, outputDir, captureUi);
         } else if (process.env.MODELDOCK_SMOKE_NAVIGATION_CONSOLIDATION_ONLY === '1') {
@@ -490,7 +475,6 @@ async function createWindow(forceShow = false) {
           const featureDialogs=[];
           for (const [scenario,page,actions,title] of [
             ['auth-account','auth',['[data-auth-add-account="codex"]'],'添加 Codex 订阅 账号'],
-            ['auth-jetbrains','auth',['[data-action="add-subscription-provider"]', '[data-preset-id="jetbrains-central"]', '[data-action="jetbrains-import-options"]'],'连接JetBrains账号'],
             ['service-provider','service',['[data-action="add-api-provider"]'],'添加 API 供应商'],
           ] as const) {
             await window!.webContents.executeJavaScript(`document.querySelector('[data-page="${page}"]').click()`);
@@ -660,7 +644,6 @@ function relayKey(setting: string): string {
 function registerIpc() {
   const { gateway, network } = runtime;
   let providerRemovalPending = false;
-  let jetBrainsImportPending = false;
   let toolRestorePending = false;
   const toolConfigPending = new Set<ToolId>();
   const beforeToolSelections = new Map<ToolId, ToolBinding>();
@@ -722,7 +705,6 @@ function registerIpc() {
     copilotHome: copilot.home, copilotOptions: { openClient: copilot.openClient },
   });
   const assertEditable = (editingBinding?: ToolId) => {
-    if (jetBrainsImportPending) throw new Error('JetBrains 账号正在导入，请等待当前操作完成。');
     if (providerRemovalPending) throw new Error('供应商正在删除并同步，请稍后修改配置。');
     if (toolRestorePending) throw new Error('正在还原官方配置，请稍后修改配置。');
     const savingDuringCopilotSync = editingBinding === 'copilot' && toolConfigPending.size === 1 && toolConfigPending.has('copilot');
@@ -942,8 +924,7 @@ function registerIpc() {
     assertEditable(); providerRemovalPending = true;
     try {
       catalog.invalidate(id); gateway.cancelProvider(id); accounts.cancelProviderOperations(id); copilotProviders.cancel(id);
-      traeNativeAccounts.providerRemoved(id); centralNativeAccounts.providerRemoved(id);
-      await ideAccounts.providerRemoved(id);
+      traeNativeAccounts.providerRemoved(id);
       if (scope === 'local-subscription') {
         const checkpoint = store.beginProviderRemoval(id);
         try {
@@ -993,51 +974,35 @@ function registerIpc() {
     }
     finally { toolRestorePending = false; }
   });
-  let relayImportAdapters: Record<RelayAccountKind, RelayImportAdapter> = {
+  let relayImportAdapters: Partial<Record<RelayAccountKind, RelayImportAdapter>> = {
     'trae-cn-relay': { inspect: async () => [], perform: async () => { throw new RelayClientImportError('请重新选择本机 TRAE 账号。'); } },
-    'jetbrains-central': { inspect: async () => [], perform: async () => { throw new RelayClientImportError('请重新连接 Central 账号。'); } },
   };
   if (__MODELDOCK_SMOKE_BUILD__) {
     // Isolated QA adapters never read native client credentials or launch relays.
-    const qaAdapter = (kind: RelayAccountKind): RelayImportAdapter => ({
+    const qaAdapter = (): RelayImportAdapter => ({
       inspect: async () => store.getManagedState<string>('qa-relay-client-import-stage', 'empty') === 'empty' ? [] : [{
-        sourceId: kind === 'trae-cn-relay' ? 'trae-cn' : 'central-current', client: kind === 'trae-cn-relay' ? 'trae-cn' : 'jetbrains-central',
-        clientName: kind === 'trae-cn-relay' ? 'TRAE 中国版客户端' : 'JetBrains Central CLI（当前已登录账号）',
-        ...(kind === 'trae-cn-relay' ? { accountId: 'qa-native-account', accountLabel: '本机测试账号' } : {}),
+        sourceId: 'trae-cn', client: 'trae-cn', clientName: 'TRAE 中国版客户端',
+        accountId: 'qa-native-account', accountLabel: '本机测试账号',
       }],
       perform: async () => {
         if (store.getManagedState<string>('qa-relay-client-import-stage', 'empty') === 'failure') throw new Error('PRIVATE_RELAY_IMPORT qa-private-relay-token qa-private-relay-stderr qa-private-relay-path');
-        return { upstreamVerified: kind === 'jetbrains-central' };
+        return { upstreamVerified: false };
       },
     });
-    relayImportAdapters = { 'trae-cn-relay': qaAdapter('trae-cn-relay'), 'jetbrains-central': qaAdapter('jetbrains-central') };
+    relayImportAdapters = { 'trae-cn-relay': qaAdapter() };
   }
-  const relayClientImports = new RelayClientImportManager(store, relayImportAdapters, kind => relayKey(kind === 'trae-cn-relay' ? 'trae-relay-api-key' : 'jetbrains-central-relay-key'));
-  handle('relayClientImportCandidates', (kind: RelayAccountKind) => { assertEditable(); return !__MODELDOCK_SMOKE_BUILD__ ? kind === 'trae-cn-relay' ? traeNativeAccounts.preview() : kind === 'jetbrains-central' ? centralNativeAccounts.preview() : Promise.reject(new Error('未知的账号来源。')) : relayClientImports.preview(kind); });
-  const importJetBrains = async <T,>(action: () => Promise<T>): Promise<T> => {
-    assertEditable(); jetBrainsImportPending = true;
-    try { return await action(); } finally { jetBrainsImportPending = false; }
-  };
+  const relayClientImports = new RelayClientImportManager(store, relayImportAdapters, () => relayKey('trae-relay-api-key'));
+  handle('relayClientImportCandidates', (kind: RelayAccountKind) => {
+    assertEditable();
+    if (kind !== 'trae-cn-relay') throw new Error('不支持的账号来源。');
+    return !__MODELDOCK_SMOKE_BUILD__ ? traeNativeAccounts.preview() : relayClientImports.preview(kind);
+  });
   handle('importRelayClientAccount', async (kind: RelayAccountKind, id: string) => {
     assertEditable();
-    const account = kind === 'jetbrains-central' ? await importJetBrains(() => !__MODELDOCK_SMOKE_BUILD__ ? centralNativeAccounts.import(id) : relayClientImports.import(kind, id))
-      : kind === 'trae-cn-relay' ? !__MODELDOCK_SMOKE_BUILD__ ? await traeNativeAccounts.import(id) : await relayClientImports.import(kind, id) : (() => { throw new Error('未知的账号来源。'); })();
+    if (kind !== 'trae-cn-relay') throw new Error('不支持的账号来源。');
+    const account = !__MODELDOCK_SMOKE_BUILD__ ? await traeNativeAccounts.import(id) : await relayClientImports.import(kind, id);
     gateway.cancelProvider(account.providerId); catalog.invalidate(account.providerId); return account;
   });
-  handle('openJetBrainsAccountHelp', async (topic: unknown) => {
-    if (topic !== 'ide' && topic !== 'central') throw new Error('未知的账号帮助页面。');
-    await shell.openExternal(topic === 'ide' ? 'https://www.jetbrains.com/help/air/air-in-ides-authorization.html' : 'https://www.jetbrains.com/help/central-cli/cli-setup.html');
-  });
-  handle('beginJetBrainsIdeImport', (candidateId?: unknown) => importJetBrains(async () => {
-    if (candidateId !== undefined && (typeof candidateId !== 'string' || candidateId.length > 256)) throw new Error('客户端来源选择无效，请重新导入。');
-    const result = await ideAccounts.importDefault(candidateId as string | undefined);
-    if (result.status === 'imported') for (const account of result.accounts ?? [result.account]) { gateway.cancelProvider(account.providerId); catalog.invalidate(account.providerId); }
-    return result;
-  }));
-  handle('jetBrainsIdeImportCandidates', () => { assertEditable(); return ideAccounts.preview(); });
-  handle('importJetBrainsIdeAccount', (id: string) => importJetBrains(async () => { const account = await ideAccounts.import(id); gateway.cancelProvider(account.providerId); catalog.invalidate(account.providerId); return account; }));
-  handle('startJetBrainsRelay', async () => { throw new Error('JetBrains 已通过内置适配器接入网关，请在授权中心连接账号。'); });
-  handle('stopJetBrainsRelay', async () => { /* No independent JetBrains relay process exists. */ });
   handle('startTraeRelay', async () => { throw new Error('TRAE 已通过内置适配器接入网关，请在授权中心从客户端导入账号。'); });
   handle('openTraeRelayLogin', async () => { throw new Error('请在 TRAE 中国版客户端完成登录，再到授权中心导入。'); });
   handle('stopTraeRelay', async () => { /* No independent TRAE relay process exists. */ });
@@ -1102,11 +1067,9 @@ function registerIpc() {
   handle('beginLogin', (id: string) => { assertEditable(); catalog.invalidate(id); return store.getProvider(id)?.kind === 'copilot' ? copilotProviders.beginLogin(id) : oauth.beginLogin(id); });
   handle('authProgress', (id: string) => store.getProvider(id)?.kind === 'copilot' ? copilotProviders.progress(id) : oauth.progress(id));
   handle('cancelLogin', (id: string) => store.getProvider(id)?.kind === 'copilot' ? copilotProviders.cancel(id) : oauth.cancel(id));
-  handle('authAccounts', () => [...accounts.listAccounts().map(account => traeNativeAccounts.decorate(centralNativeAccounts.decorate(ideAccounts.decorate(relayQuotas.decorate(account))))), ...copilotAccounts.listAccounts()]);
+  handle('authAccounts', () => [...accounts.listAccounts().map(account => traeNativeAccounts.decorate(relayQuotas.decorate(account))), ...copilotAccounts.listAccounts()]);
   handle('refreshAccountUsage', (id: string) => {
-    if (ideAccounts.isIdeProvider(id)) return ideAccounts.refreshUsage(id);
     if (traeNativeAccounts.isNativeProvider(id)) return traeNativeAccounts.refreshUsage(id);
-    if (centralNativeAccounts.isNativeProvider(id)) return centralNativeAccounts.refreshUsage(id);
     if (store.getProvider(id)?.presetId === 'trae-cn-relay') return relayQuotas.refresh(id);
     if (isCopilotAccountId(id)) return copilotAccounts.refreshUsage(id);
     if (store.getProvider(id)?.kind === 'copilot') {
@@ -1296,14 +1259,7 @@ function initializeApplication() {
     mcp = new McpManager(store, { homeDir: featureHome, appDataDir: featureAppData, backupDir: join(dataDir, 'backups', 'mcp'), configHome: openCodeConfigHome, codexHome: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.codex') : process.env.CODEX_HOME });
     skills = new SkillManager(store, { homeDir: featureHome, appDataDir: featureAppData, libraryDir: join(dataDir, 'skill-library'), backupDir: join(dataDir, 'backups', 'skills'), configHome: openCodeConfigHome, claudeConfigDir: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.claude') : process.env.CLAUDE_CONFIG_DIR, ...(!__MODELDOCK_SMOKE_BUILD__ ? { codexHome: process.env.CODEX_HOME, dshHome: process.env.DSH_HOME } : {}) });
     // 修改点：Copilot 订阅与其他来源共享目录、连通性及本地网关，凭据准备在主进程分派。
-    const nativeFixture = __MODELDOCK_SMOKE_BUILD__ ? createJetBrainsIdeFixture(store) : undefined;
     const historyModelsFixture = __MODELDOCK_SMOKE_BUILD__ && modelHistoryOnly ? createHistoryModelsFixture(store) : undefined;
-    const ideApi = nativeFixture?.api ?? new JetBrainsIdeApi({ fetch: runtimeFetch });
-    ideAccounts = new JetBrainsIdeAccounts(store, nativeFixture?.reader ?? new JetBrainsIdeImporter({ homeDir: featureHome }), ideApi, undefined, () => relayKey('jetbrains-central-relay-key'), error => error instanceof JetBrainsIdeImportError || error instanceof JetBrainsIdeApiError ? error.message : undefined);
-    ideGatewayAdapter = new JetBrainsGatewayAdapter(ideAccounts, ideApi);
-    const centralApi = new CentralApi({ fetch: runtimeFetch });
-    centralNativeAccounts = new CentralNativeAccounts(store, new CentralClientSessionReader({ homeDir: featureHome }), centralApi, () => relayKey('jetbrains-central-relay-key'), error => error instanceof CentralApiError || error instanceof CentralNativeAccountError ? error.message : undefined);
-    centralGatewayAdapter = new CentralGatewayAdapter(centralNativeAccounts, centralApi);
     const traeApi = new TraeApi({ fetch: runtimeFetch, clientModelOptions: { homeDir: featureHome, ...(__MODELDOCK_SMOKE_BUILD__ ? { env: {} } : {}) } });
     traeNativeAccounts = new TraeNativeAccounts(store, new TraeClientImporter({ homeDir: featureHome, ...(__MODELDOCK_SMOKE_BUILD__ ? { env: {} } : {}) }), traeApi, () => relayKey('trae-relay-api-key'), error => error instanceof TraeClientImportError || error instanceof TraeApiError || error instanceof TraeNativeAccountError ? error.message : undefined);
     traeGatewayAdapter = new TraeGatewayAdapter(traeNativeAccounts, traeApi);
@@ -1311,7 +1267,7 @@ function initializeApplication() {
       if (provider.nativeAdapter) throw new Error('账号来源必须经内置网关适配器调用。');
       return provider.kind === 'copilot' ? copilotProviders.prepareRequest(provider, path, body) : oauth.prepareRequest(provider, path, body);
     } };
-    const nativeAdapter = (provider: Provider) => provider.nativeAdapter === 'trae' ? traeGatewayAdapter : provider.nativeAdapter === 'jetbrains-ide' ? ideGatewayAdapter : provider.nativeAdapter === 'jetbrains-central' ? centralGatewayAdapter : undefined;
+    const nativeAdapter = (provider: Provider) => provider.nativeAdapter === 'trae' ? traeGatewayAdapter : undefined;
     const nativeModels = (provider: Provider, signal: AbortSignal) => {
       if (historyModelsFixture) {
         // This dedicated fixture must never fall through to real account auth or HTTP.
@@ -1392,8 +1348,6 @@ function initializeApplication() {
         { name: 'copilot-accounts', dispose: () => copilotAccounts?.dispose() },
         { name: 'oauth', dispose: () => oauth?.dispose() },
         { name: 'trae-accounts', dispose: () => traeNativeAccounts?.dispose() },
-        { name: 'central-accounts', dispose: () => centralNativeAccounts?.dispose() },
-        { name: 'ide-accounts', dispose: () => ideAccounts?.dispose() },
         { name: 'network-mini', dispose: () => networkMini?.close() },
         { name: 'store', dispose: () => store?.close() },
         { name: 'tray', dispose: () => tray?.destroy() },

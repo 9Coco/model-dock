@@ -4,7 +4,7 @@ import { join, relative, resolve } from 'node:path';
 import type { BrowserWindow } from 'electron';
 import type { Model, Provider, Snapshot } from '../shared/types';
 import type { DiscoveryResult } from '../shared/catalog-types';
-import { TRAE_RELAY_BASE_URL, JETBRAINS_RELAY_BASE_URL } from '../shared/presets';
+import { TRAE_RELAY_BASE_URL } from '../shared/presets';
 import type { Store } from './store';
 
 const IDS_KEY = 'qa-model-history-provider-ids', MODE_KEY = 'qa-model-history-mode', CALLS_KEY = 'qa-model-history-calls';
@@ -234,10 +234,10 @@ const TRAE_PUBLIC_DIRECTORY = [
     "importable": true
   }
 ] as const;
-type Family = 'codex' | 'grok' | 'copilot' | 'trae' | 'jetbrains' | 'api';
-const families: Family[] = ['codex', 'grok', 'copilot', 'trae', 'jetbrains', 'api'];
+type Family = 'codex' | 'grok' | 'copilot' | 'trae' | 'api';
+const families: Family[] = ['codex', 'grok', 'copilot', 'trae', 'api'];
 const id = (family: Family, suffix: string) => `qa-${family}-${suffix}`;
-const source = (family: Family) => family === 'jetbrains' ? 'jetbrains-client' : family + '-client';
+const source = (family: Family) => family + '-client';
 
 /** Main-process fixture only. It supplies the real Catalog's native model port
  * with synthetic data; no renderer API, DOM or real account is replaced. */
@@ -246,12 +246,11 @@ export function createHistoryModelsFixture(store: Store): { now(): number; model
   const ids: Partial<Record<Family, string>> = {}, oldModels: Model[] = [];
   for (const family of families) {
     const kind = family === 'codex' || family === 'grok' || family === 'copilot' ? family : 'openai-compatible';
-    const presetId = family === 'codex' ? 'codex-subscription' : family === 'grok' ? 'grok-build' : family === 'copilot' ? 'copilot-subscription' : family === 'trae' ? 'trae-cn-relay' : family === 'jetbrains' ? 'jetbrains-central' : 'custom';
-    const baseUrl = family === 'codex' ? 'https://chatgpt.com/backend-api/codex' : family === 'grok' ? 'https://cli-chat-proxy.grok.com/v1' : family === 'copilot' ? 'https://api.githubcopilot.com' : family === 'trae' ? TRAE_RELAY_BASE_URL : family === 'jetbrains' ? JETBRAINS_RELAY_BASE_URL : process.env.MODELDOCK_SMOKE_UPSTREAM!;
+    const presetId = family === 'codex' ? 'codex-subscription' : family === 'grok' ? 'grok-build' : family === 'copilot' ? 'copilot-subscription' : family === 'trae' ? 'trae-cn-relay' : 'custom';
+    const baseUrl = family === 'codex' ? 'https://chatgpt.com/backend-api/codex' : family === 'grok' ? 'https://cli-chat-proxy.grok.com/v1' : family === 'copilot' ? 'https://api.githubcopilot.com' : family === 'trae' ? TRAE_RELAY_BASE_URL : process.env.MODELDOCK_SMOKE_UPSTREAM!;
     const provider = store.saveProvider({ name: `${family} · 历史模型界面演示`, kind, presetId, baseUrl, enabled: true, ...(family === 'trae' ? { relayMode: 'managed' as const } : {}), ...(kind === 'openai-compatible' ? { apiKey: PRIVATE_KEY + ':' + family } : {}) });
     if (kind === 'copilot') store.setSecret(provider.id, { copilotAccountId: 'copilot:99887766' });
     else if (kind !== 'openai-compatible') store.setSecret(provider.id, { accessToken: PRIVATE_KEY + ':' + family, expiresAt: Date.now() + 7_200_000 });
-    if (family === 'jetbrains') store.setManagedState(`auth-metadata:${provider.id}`, { clientImport: { client: 'jetbrains-ide' } });
     ids[family] = provider.id;
     oldModels.push(store.saveModel({ providerId: provider.id, upstreamId: id(family, 'history-kept'), alias: `my-preserved-${family}-history`, displayName: '已保存的历史模型自定义名称', wireApi: kind === 'codex' || kind === 'grok' ? 'responses' : 'chat-completions', contextWindow: 12345, maxOutputTokens: 777, tools: false, vision: false, enabled: true }));
   }

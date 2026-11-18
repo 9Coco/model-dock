@@ -1,5 +1,5 @@
 import type { FlowBridgeApi, FlowBridgeSnapshot } from './flowbridge-types';
-import type { AuthAccount, CopilotImportCandidate, JetBrainsIdeImportResult, RelayAccountKind, RelayClientImportPreview, SubscriptionKind } from './auth-types';
+import type { AuthAccount, CopilotImportCandidate, RelayAccountKind, RelayClientImportPreview, SubscriptionKind } from './auth-types';
 import type { McpServer, McpServerInput, McpImportResult, McpConfigPreview, McpApplyResult } from './mcp-types';
 import type { ManagedSkill, SkillSnapshot, SkillRepositoryInput, SkillImportResult, SkillFilePreview, SkillRemovePreview } from './skill-types';
 import type { AppSettings, SettingsSnapshot } from './settings-types';
@@ -253,8 +253,6 @@ export interface ModelDockApi extends FlowBridgeApi {
   previewModelParameters(id: string, includeManufacturer?: boolean): Promise<ParameterPreview>;
   applyModelParameters(id: string, token: string, modelIds: string[], replace: boolean): Promise<number>;
   addDiscoveredModels(id: string, selections: ModelSelection[]): Promise<AddModelsResult>;
-  startJetBrainsRelay(providerId?: string): Promise<{ baseUrl: string; apiKey: string }>;
-  stopJetBrainsRelay(): Promise<void>;
   startTraeRelay(): Promise<{ baseUrl: string; apiKey: string }>;
   openTraeRelayLogin(): Promise<void>;
   stopTraeRelay(): Promise<void>;
@@ -291,10 +289,6 @@ export interface ModelDockApi extends FlowBridgeApi {
   importCopilotClientAccount(candidateId: string): Promise<AuthAccount>;
   relayClientImportCandidates(kind: RelayAccountKind): Promise<RelayClientImportPreview>;
   importRelayClientAccount(kind: RelayAccountKind, candidateId: string): Promise<AuthAccount>;
-  beginJetBrainsIdeImport(candidateId?: string): Promise<JetBrainsIdeImportResult>;
-  jetBrainsIdeImportCandidates(): Promise<RelayClientImportPreview>;
-  importJetBrainsIdeAccount(candidateId: string): Promise<AuthAccount>;
-  openJetBrainsAccountHelp(topic: 'ide' | 'central'): Promise<void>;
   mcpList(): Promise<McpServer[]>;
   mcpSave(input: McpServerInput): Promise<McpServer>;
   mcpDelete(id: string): Promise<void>;

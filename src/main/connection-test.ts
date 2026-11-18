@@ -8,9 +8,6 @@ import { isCopilotUpstream } from './copilot-provider';
 import { anthropicEndpoint } from './anthropic-endpoint';
 import type { DiagnosticContext, DiagnosticEvent, DiagnosticLevel } from '../shared/diagnostic-types';
 import { TraeNativeAccountError } from './trae-native-account';
-import { CentralNativeAccountError } from './central-native-account';
-import { JetBrainsIdeAccountError } from './jetbrains-ide-account';
-import { JetBrainsIdeApiError } from './jetbrains-ide-api';
 
 export interface ConnectionStore {
   getProvider(id: string): Provider | undefined;
@@ -307,16 +304,15 @@ export class ConnectionTester {
     try {
       const provider = this.store.getProvider(providerId);
       if (!provider) throw new ConnectionFailure('configuration', '供应商不存在，请重新选择。');
+      if (provider.presetId === 'jetbrains-central') throw new ConnectionFailure('configuration', 'JetBrains 订阅接入已移除，请选择其他模型来源。');
       if (!input || typeof input !== 'object' || Array.isArray(input)) throw new ConnectionFailure('configuration', '测试模型参数无效。');
       if (!provider.hasSecret) throw new ConnectionFailure('configuration', (provider.kind === 'openai-compatible' || provider.kind === 'opencode-go') ? '请先保存 API Key，再测试连接。' : '请先完成订阅授权，再测试连接。');
-      let modelOutputLimit: number | undefined;
       if (input.modelId !== undefined || input.upstreamId === undefined) {
         const model = input.modelId !== undefined ? typeof input.modelId === 'string' ? this.store.listModels().find(item => item.id === input.modelId) : undefined : firstConnectionModel(providerId, this.store.listModels());
         if (!model && input.modelId === undefined) throw new ConnectionFailure('model-required', '此供应商还没有模型，请先获取模型列表或手动添加模型，再测试连接。');
         if (!model || model.providerId !== providerId) throw new ConnectionFailure('model', '所选模型不存在或不属于当前供应商，请重新选择。');
         testedModel = modelName(model.upstreamId);
         wireApi = model.wireApi;
-        if (positiveCount(model.maxOutputTokens)) modelOutputLimit = model.maxOutputTokens;
       } else {
         testedModel = modelName(input.upstreamId);
         wireApi = input.wireApi ?? presetById(provider.presetId)?.defaultWireApi ?? 'chat-completions';
@@ -331,9 +327,7 @@ export class ConnectionTester {
       catch { throw new ConnectionFailure('configuration', 'API 地址无效，请填写 HTTPS 地址或本机 HTTP 回环地址；地址不能包含凭据、查询或片段。'); }
       // 修改点：Copilot 的实际地址来自官方账户授权，仍限定官方域名及所选模型的推理路由。
       const matchesEndpoint = (url: string) => provider.kind === 'copilot' ? isCopilotUpstream(url, route) : url === expected;
-      // Native JetBrains models can exhaust a tiny budget before emitting text.
-      // Use one bounded probe, respecting a smaller explicit selected-model cap.
-      const testBudget = provider.nativeAdapter === 'jetbrains-ide' ? Math.min(256, modelOutputLimit ?? 256) : wireApi === 'responses' ? 64 : 16;
+      const testBudget = wireApi === 'responses' ? 64 : 16;
       const body: Record<string, unknown> = wireApi === 'responses'
         ? { model: testedModel, input: [{ role: 'user', content: [{ type: 'input_text', text: 'Reply OK.' }] }], stream: false, store: false, max_output_tokens: testBudget }
         : { model: testedModel, messages: [{ role: 'user', content: 'Reply OK.' }], stream: false, ...(provider.nativeAdapter === 'trae' && wireApi === 'chat-completions' ? {} : { max_tokens: testBudget }) };
@@ -350,7 +344,6 @@ export class ConnectionTester {
         try { prepared = await this.oauth.prepareRequest(provider, route, body); }
         catch {
           assertActive(controller.signal);
-          if (provider.presetId === 'jetbrains-central') throw new ConnectionFailure('configuration', '请先在 JetBrains 供应商详情中启动本机反代，再测试模型。');
           throw new ConnectionFailure('authentication', (provider.kind === 'openai-compatible' || provider.kind === 'opencode-go') ? '无法准备 API 凭据，请重新保存 API Key。' : '无法准备或续期订阅授权，请在授权中心检查账号或重新登录。');
         }
         assertActive(controller.signal);
@@ -391,10 +384,7 @@ export class ConnectionTester {
       const message = evidence === 'limited' ? '模型已处理推理请求，连接通顺；本次短测试达到输出上限。' : evidence === 'processed' ? '模型已处理推理请求，连接通顺；本次测试未返回最终回答。' : '模型推理已成功完成，连接通顺。';
       return { ok: true, outcome: 'success', message, testedModel, wireApi, statusCode, durationMs: Date.now() - start };
     } catch (error) {
-      const failure = error instanceof ConnectionFailure ? error : error instanceof JetBrainsIdeAccountError || error instanceof JetBrainsIdeApiError
-        ? new ConnectionFailure(error.status === 451 || error.status === 402 || error.status === 403 ? 'permission' : error.status === 401 ? 'authentication'
-          : error.status === 429 ? 'rate-limit' : error.status === 504 ? 'timeout' : error.code === 'network' ? 'network' : 'upstream', error.message, error.status)
-        : error instanceof TraeNativeAccountError || error instanceof CentralNativeAccountError
+      const failure = error instanceof ConnectionFailure ? error : error instanceof TraeNativeAccountError
         ? new ConnectionFailure('authentication', error.message, 401) : controller.signal.aborted ? new ConnectionFailure('timeout', '推理测试超时（30 秒），请稍后重试或检查网络。') : new ConnectionFailure('network', '无法连接推理接口，请检查网络与 API 地址后重试。');
       return { ok: false, outcome: failure.outcome, message: failure.message, statusCode: failure.statusCode ?? statusCode, durationMs: Date.now() - start, ...(testedModel ? { testedModel } : {}), ...(wireApi ? { wireApi } : {}) };
     } finally { if (timer) clearTimeout(timer); controller.abort(); }

@@ -6,6 +6,12 @@ ModelDock 是跨平台本地模型管理台：全局维护模型来源与别名�
 
 0.4.0 起包含 FlowBridge 的组合发行版采用 [GPL-3.0-or-later](LICENSE)；原 ModelDock 代码及原创应用标记保留 [MIT 授权](LICENSE-MIT)，第三方图标和依赖保留各自的 Apache-2.0、CC-BY-4.0、MIT 或其他许可，详见 [第三方声明](THIRD_PARTY_NOTICES.md)。欢迎按 [贡献指南](CONTRIBUTING.md) 提交修复；敏感问题请遵循 [安全报告流程](SECURITY.md)。
 
+## 0.4.28 · 移除 JetBrains 订阅，保留工具接入
+
+- 移除 JetBrains AI 订阅的添加入口、IDE / Air / Central 账号导入、额度查询和内置账号调用路径。其他订阅与自定义 API 保留。
+- WebStorm、IntelliJ IDEA、Rider、PyCharm 的 AI Assistant / Air，以及 Junie CLI / IDE ACP 继续作为工具使用，可配置其他模型来源；原有同步、补全、预览、导出和还原流程保留。
+- 旧 JetBrains 订阅账号和模型不再显示或参与网关路由；升级只清理 ModelDock 内部对它们的选择，保留原有加密授权数据和选择备份，不在启动时改写外部 IDE / 客户端配置。仅靠名称包含 JetBrains 的自定义 API 不受影响。
+
 ## 0.4.27 · 按产品能力选择供应商
 
 - 统一检查 13 个工具入口。OpenCode TUI / Desktop、VS Code、DSH、Copilot app、Copilot CLI、Junie 支持非聚合多选；新增来源保留已有选择，默认模型的单选不再限制可保存的供应商数量。界面、主进程校验、模型路由与启动迁移共用产品能力表。

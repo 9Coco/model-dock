@@ -4,7 +4,7 @@ import { join, relative, resolve } from 'node:path';
 import { clipboard, ClipboardItem, type BrowserWindow } from 'electron';
 import type { Store } from './store';
 import { revealSmokeNavigationTarget } from './smoke-navigation';
-import { JETBRAINS_RELAY_BASE_URL, TRAE_RELAY_BASE_URL, providerCategory } from '../shared/presets';
+import { TRAE_RELAY_BASE_URL, providerCategory } from '../shared/presets';
 import { SUBSCRIPTION_NAMES } from '../shared/subscription-names';
 
 /** Real navigation/local-connection validation with an isolated synthetic client import. */
@@ -27,7 +27,6 @@ export async function verifyNavigationConsolidation(window: BrowserWindow, store
   const codex = store.saveProvider({ name: 'Codex · 客户端导入', kind: 'codex', presetId: 'codex-subscription', baseUrl: 'https://chatgpt.com/backend-api/codex', enabled: true });
   store.setSecret(codex.id, { accessToken: 'synthetic-navigation-access', refreshToken: 'synthetic-navigation-refresh', expiresAt: Date.now() + 7_200_000 });
   const trae = store.saveProvider({ name: 'TRAE 中国版 · 客户端导入', kind: 'openai-compatible', presetId: 'trae-cn-relay', relayMode: 'manual', baseUrl: TRAE_RELAY_BASE_URL, enabled: true, apiKey: 'synthetic-navigation-trae-key' });
-  const central = store.saveProvider({ name: 'JetBrains AI · IDE 导入', kind: 'openai-compatible', presetId: 'jetbrains-central', baseUrl: JETBRAINS_RELAY_BASE_URL, enabled: true, apiKey: 'synthetic-navigation-central-key' });
   const grok = store.saveProvider({ name: 'xAI / Grok 账号', kind: 'grok', presetId: 'grok-build', baseUrl: 'https://cli-chat-proxy.grok.com/v1', enabled: false });
   const copilot = store.saveProvider({ name: 'GitHub Copilot', kind: 'copilot', presetId: 'copilot-subscription', baseUrl: 'https://api.githubcopilot.com', enabled: false });
   const numbered = store.saveProvider({ name: 'ChatGPT / OpenAI 账号 2', kind: 'codex', presetId: 'codex-subscription', baseUrl: 'https://chatgpt.com/backend-api/codex', enabled: false });
@@ -35,10 +34,10 @@ export async function verifyNavigationConsolidation(window: BrowserWindow, store
   const namingCases = [
     { provider: grok, expected: SUBSCRIPTION_NAMES.grok }, { provider: copilot, expected: SUBSCRIPTION_NAMES.copilot },
     { provider: codex, expected: SUBSCRIPTION_NAMES.codex }, { provider: trae, expected: SUBSCRIPTION_NAMES['trae-cn-relay'] },
-    { provider: central, expected: SUBSCRIPTION_NAMES['jetbrains-central'] }, { provider: numbered, expected: SUBSCRIPTION_NAMES.codex + ' 2' },
+    { provider: numbered, expected: SUBSCRIPTION_NAMES.codex + ' 2' },
     { provider: custom, expected: custom.name },
   ];
-  const subscriptions = [codex, trae, central];
+  const subscriptions = [codex, trae];
   const models = subscriptions.map((provider, index) => store.saveModel({ providerId: provider.id, upstreamId: `private-upstream-navigation-${index}`, alias: `local-navigation-model-${index}`, displayName: `本地调用模型 ${index + 1}`, wireApi: index ? 'chat-completions' : 'responses', contextWindow: 64000, tools: true, vision: false, enabled: true }));
   store.addLog({ id: 'synthetic-navigation-request', time: new Date().toISOString(), alias: models[0].alias, providerName: codex.name, endpoint: '/v1/responses', status: 200, durationMs: 12 });
   const original = { providers: store.listProviders(), models: store.listModels(), bindings: store.listBindings(), exposure: store.gatewayExposure(), secrets: store.listProviders().map(provider => [provider.id, store.getSecret(provider.id)]) };
@@ -73,7 +72,7 @@ export async function verifyNavigationConsolidation(window: BrowserWindow, store
   try {
     window.setMinimumSize(780, 580); window.setSize(1180, 800);
     await click('[aria-label="刷新本机配置"]');
-    await waitFor(`!!document.querySelector('.sidebar [data-source-id="${central.id}"]')`, 'all synthetic sources loaded');
+    await waitFor(`!!document.querySelector('.sidebar [data-source-id="${trae.id}"]')`, 'all synthetic sources loaded');
     assert.equal(await evaluate<number>(`document.querySelectorAll('.sidebar [data-source="aggregate"],.sidebar [data-action="add-subscription-provider"]').length`), 0, 'Sidebar contains grouped sources and no separate aggregate or subscription-add destination');
     for (const category of ['api', 'subscription']) {
       const expected = original.providers.filter(provider => providerCategory(provider) === category).map(provider => provider.id);
@@ -135,10 +134,9 @@ export async function verifyNavigationConsolidation(window: BrowserWindow, store
       await capture(`copilot-import-empty-${theme}`); await click('[aria-label="关闭对话框"]');
       await click('.auth-panel [data-action="add-subscription-provider"]');
       await waitFor(`document.querySelector('[role="dialog"] #modal-title')?.textContent==='添加订阅供应商'`, 'the authorized subscription entry opens its picker');
-      for (const { provider, expected } of namingCases.slice(0, 5)) assert.equal(await evaluate<string>(`document.querySelector('[role="dialog"] [data-preset-id="${provider.presetId}"] strong').textContent`), expected, 'New subscription preset labels match the existing source display names');
-      await click('[data-preset-id="jetbrains-central"]');
-      assert.ok(await evaluate<boolean>(`!!document.querySelector('.form-info [data-action="import-jetbrains-account"].secondary')`));
-      await capture('jetbrains-picker-' + theme);
+      for (const { provider, expected } of namingCases.slice(0, 4)) assert.equal(await evaluate<string>(`document.querySelector('[role="dialog"] [data-preset-id="${provider.presetId}"] strong').textContent`), expected, 'New subscription preset labels match the existing source display names');
+      assert.equal(await evaluate<boolean>(`!!document.querySelector('[data-preset-id="jetbrains-central"]')`), false, 'Retired JetBrains subscriptions are absent from the picker');
+      await capture('subscription-picker-' + theme);
       await click('[aria-label="关闭对话框"]');
       for (const [index, provider] of subscriptions.entries()) {
         const model = models[index], scope = `[data-subscription-connection="${provider.id}"]`;

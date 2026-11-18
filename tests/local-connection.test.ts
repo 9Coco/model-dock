@@ -55,7 +55,7 @@ describe('subscription local calling parameters', () => {
 
   it('groups relays with subscriptions and keeps remote connection details inside the folded explanation', () => {
     const apiProvider: Provider = { ...provider, id: 'api', kind: 'openai-compatible', presetId: 'custom' };
-    const relay: Provider = { ...provider, id: 'relay', kind: 'openai-compatible', presetId: 'jetbrains-central' };
+    const relay: Provider = { ...provider, id: 'relay', kind: 'openai-compatible', presetId: 'trae-cn-relay' };
     const snapshot = { ...data, providers: [apiProvider, provider, relay] };
     const html = renderToStaticMarkup(createElement(AggregatePanel, { data: snapshot, api: undefined, secretRevision: 0, search: '', onSearch: vi.fn(), onChanged: async () => {}, onProvider: vi.fn(), onService, copy, notify, showServiceSummary: false }));
     expect(html).toContain('data-aggregate-category="api"');
@@ -65,7 +65,7 @@ describe('subscription local calling parameters', () => {
     expect(html).not.toContain(model.upstreamId);
     const explanation = renderToStaticMarkup(createElement(ConnectionPrinciples, { providers: [provider, relay], models: [model] }));
     expect(explanation).toContain(provider.baseUrl);
-    expect(explanation).toContain('JetBrains Central CLI');
+    expect(explanation).not.toContain('JetBrains Central CLI');
     expect(explanation).toContain('TRAE');
     expect(explanation).toContain('data-connection-model-mapping');
     expect(explanation).toContain(model.alias);
