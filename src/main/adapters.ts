@@ -169,10 +169,30 @@ const CODEX_REASONING_DESCRIPTIONS: Record<ReasoningEffort, string> = {
   medium: 'Balances speed and reasoning depth', high: 'Greater reasoning depth for complex problems',
   xhigh: 'Extra high reasoning depth for complex problems', max: 'Maximum reasoning depth for the hardest problems',
 };
+const deepSeekResponsesModels = new Set(['deepseek-flash', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp', 'deepseek-v4-pro']);
+
+function isOfficialDeepSeekBase(base: string): boolean {
+  try {
+    const url = new URL(base);
+    return url.origin === 'https://api.deepseek.com' && !url.username && !url.password && !url.search && !url.hash
+      && ['', '/v1'].includes(url.pathname.replace(/\/+$/, ''));
+  } catch { return false; }
+}
+
+function needsVsCodeDeepSeekCompatibility(model: Model, provider: Provider | undefined): boolean {
+  return model.wireApi === 'responses' && deepSeekResponsesModels.has(model.upstreamId)
+    && provider?.kind === 'openai-compatible' && !provider.nativeAdapter && isOfficialDeepSeekBase(provider.baseUrl);
+}
+
 /** Main-process serializer only; exposing schema fields does not expand client/protocol bindings. */
 export function vsCodeModelConfig(model: Model, base: string, key: string, provider?: Provider) {
   const m = traeRelayClientModel('vscode', model, provider);
   const nativeTraeChat = provider?.nativeAdapter === 'trae' && m.wireApi === 'chat-completions';
+  const deepSeekCompatibility = needsVsCodeDeepSeekCompatibility(m, provider);
+  // Copilot's Responses adapter cannot replay DeepSeek's plaintext reasoning.
+  // Keep the picker capability so Copilot sends the explicit `none` effort.
+  const reasoningEfforts = deepSeekCompatibility ? ['none' as const] : m.reasoningEfforts;
+  const defaultReasoningEffort = deepSeekCompatibility ? 'none' : m.defaultReasoningEffort;
   const budget = clientBudget(m);
   return {
     id: m.alias, name: m.displayName || m.alias, apiType: m.wireApi,
@@ -186,11 +206,13 @@ export function vsCodeModelConfig(model: Model, base: string, key: string, provi
     // Suppress only Copilot defaults. Explicit sampling requests still reach
     // the adapter and receive its unsupported-control error.
     ...(nativeTraeChat ? { modelOptions: { temperature: null, top_p: null } } : {}),
-    ...(m.thinking !== undefined || m.reasoningEfforts?.length ? { thinking: m.thinking ?? true } : {}),
+    ...(deepSeekCompatibility ? { statefulResponses: false } : {}),
+    ...(deepSeekCompatibility || m.thinking !== undefined || reasoningEfforts?.length
+      ? { thinking: deepSeekCompatibility || (m.thinking ?? true) } : {}),
     // Without supportsReasoningEffort VS Code shows no Thinking Effort picker.
     // 修改点：档位由保存的模型设置决定；传参格式随当前接口，防止旧
     // Responses 格式跟随已切换到 Chat/Messages 的模型继续导出。
-    ...(m.reasoningEfforts?.length ? { supportsReasoningEffort: [...m.reasoningEfforts], ...(m.defaultReasoningEffort ? { defaultReasoningEffort: m.defaultReasoningEffort } : {}), reasoningEffortFormat: m.wireApi } : {}),
+    ...(reasoningEfforts?.length ? { supportsReasoningEffort: [...reasoningEfforts], ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}), reasoningEffortFormat: m.wireApi } : {}),
     ...(m.wireApi === 'messages' ? {
       ...(m.adaptiveThinking !== undefined ? { adaptiveThinking: m.adaptiveThinking } : {}),
       ...(m.adaptiveThinking !== true && m.minThinkingBudget !== undefined && m.minThinkingBudget > 0 && m.minThinkingBudget < budget.output && m.maxThinkingBudget !== undefined && m.maxThinkingBudget > 0
@@ -262,8 +284,7 @@ export function buildDshPlan(store: AdapterStore, port: number, revealKey = fals
       // Only the official DeepSeek API with the exact upstream ID can replace
       // a legacy DeepSeek dispatch. Similar display names or third-party plans
       // never authorize an automatic cross-model or cross-service fallback.
-      let official = false;
-      try { const url = new URL(group.base); official = group.directApi && url.protocol === 'https:' && url.hostname === 'api.deepseek.com' && (!url.port || url.port === '443') && !url.username && !url.password && !url.search && !url.hash && ['', '/v1'].includes(url.pathname.replace(/\/+$/, '')); } catch { /* Not a verified official source. */ }
+      const official = group.directApi && isOfficialDeepSeekBase(group.base);
       if (syncScope === 'selected' && official) for (const model of distinctModels) if (model.alias === model.upstreamId) legacyCandidates.push({ model: model.upstreamId, targetProvider: route, targetModel: model.alias });
       const preferred = sourceModels.find(model => model.id === binding.defaultModelId);
       if (preferred) defaultModel = { provider: route, model: preferred.alias };
@@ -316,6 +337,8 @@ export function buildConfig(store: AdapterStore, tool: ToolId, port: number, rev
     instructions: connection + '使用 VS Code Copilot Chat 的 Custom Endpoint schema；凭据随每个模型的 requestHeaders 写入（apiKey 明文字段会被 VS Code 当作秘密存储引用忽略）。'
       + (binding.vscodeSyncScope === 'managed' ? '当前范围仅替换 ModelDock 分组，保留其他自定义来源。' : '当前范围仅保留所选自定义供应商：原文件先备份，所有 customendpoint 分组会替换为当前选择；保留其他 vendor 和注释。')
       + '默认仅写入 Code/User/chatLanguageModels.json；其他 profile 需在对应的模型配置文件中手动合并导出内容。同步后重新加载窗口。'
+      + (models.some(model => needsVsCodeDeepSeekCompatibility(model, modelProvider(store, model)))
+        ? 'DeepSeek 官方 Responses 模型在 VS Code 使用 None 思考档位和完整会话历史，以兼容工具调用后的续接。重新同步并重新加载窗口后，请在新聊天中选择该模型并确认思考档位为 None。' : '')
       + (models.some(model => model.wireApi === 'chat-completions' && modelProvider(store, model)?.nativeAdapter === 'trae')
         ? 'TRAE 原生连接的输出预算与采样使用上游原生默认值；思考仍由上游生成，已配置的推理强度选项保留。请重新同步 VS Code 配置并重新加载窗口以使用此适配。' : '')
       + clientBudgetNotice(models),
