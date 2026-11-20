@@ -13,7 +13,6 @@ export async function verifyContextMenus(window: BrowserWindow, store: Store, ou
   assert.ok(child && !child.startsWith('..') && !/^[A-Za-z]:/.test(child));
   assert.equal(process.env.MODELDOCK_SMOKE_AUTH_MOCK, '1');
   const beforeBindings = store.listBindings();
-  const beforePlugin = store.getJetBrainsPlugin('webstorm');
   const originalSize = window.getSize(), originalMinimum = window.getMinimumSize();
   const provider = store.saveProvider({name:'右键验证 API',kind:'openai-compatible',presetId:'custom',baseUrl:'https://context-fixture.invalid/v1',enabled:true,apiKey:'synthetic-context-menu-key'});
   const subscription = store.saveProvider({name:'右键验证订阅',kind:'codex',presetId:'codex-subscription',baseUrl:'https://chatgpt.com/backend-api/codex',enabled:true});
@@ -177,18 +176,18 @@ export async function verifyContextMenus(window: BrowserWindow, store: Store, ou
     }
     assert.deepEqual(store.getSecret(subscription.id),accountSecretBefore,'Cancelling account actions preserves authorization');
     for (const tool of ['junie', 'copilot-cli']) {
-      await click(`[data-tool-category="${tool === 'junie' ? 'jetbrains' : 'agent'}"]`);
+      await click('[data-tool-category="tui"]');
       const toolIds = await context(`.sidebar [data-tool-id="${tool}"]`);
       assert.ok(toolIds.includes('tool-open')&&toolIds.includes('tool-preview')); await click(action('tool-open'));
       await waitFor(`!!document.querySelector('[data-tool-binding="${tool}"]')`,`tool menu opens the clicked ${tool} tool`);
     }
-    store.setJetBrainsPlugin('webstorm','air'); await click('[aria-label="刷新本机配置"]'); await click('[data-tool-category="editor"]');
-    const airIds = await context('.sidebar [data-tool-id="webstorm"]');
+    await click('[data-tool-category="editor"]');
+    const airIds = await context('.sidebar [data-tool-id="air"]');
     for(const forbidden of ['tool-apply','tool-restore','tool-undo']) assert.equal(airIds.includes(forbidden),false,`Air cannot ${forbidden}`); await dismiss();
-    assert.deepEqual(store.listBindings(),beforeBindings.map(binding=>binding.id==='webstorm'?{...binding,jetBrainsPlugin:'air'}:binding),'Menus do not synchronize external tools');
+    assert.deepEqual(store.listBindings(),beforeBindings,'Menus do not synchronize external tools');
     writeFileSync(join(outputDir,'context-menu-validation.json'),JSON.stringify({ok:true,providerSidebarAndCards:true,openingHasNoMutation:true,backgroundPollingPreservesMenu:true,exactNativeClipboard:true,subscriptionTokensNotCopyable:true,editAndDeleteConfirmation:true,modelActions:true,logAndGatewayActions:true,pageActions:true,diagnosticDetailsAndSafeClipboard:true,accountDetailsAndCancelledManagement:true,accountTokensNotExposed:true,keyboardNavigation:true,nativeInputAndTextSelectionPreserved:true,viewportClamping:true,outsideDismissal:true,actualScrollingDismissal:true,toolNavigation:true,airWriteActionsAbsent:true,externalConfigurationWrites:false,layouts},null,2));
   } finally {
-    await clipboard.clear(); store.setJetBrainsPlugin('webstorm',beforePlugin);
+    await clipboard.clear();
     await evaluate(`getSelection()?.removeAllRanges();document.querySelectorAll('[data-secret-field] input').forEach(input=>{input.type='password';input.value='************'})`);
     window.setMinimumSize(originalMinimum[0],originalMinimum[1]); window.setSize(originalSize[0],originalSize[1]);
   }

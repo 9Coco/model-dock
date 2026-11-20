@@ -89,6 +89,56 @@ describe('restoring a captured tool selection', () => {
   });
 });
 
+describe('independent Air binding', () => {
+  it.each(['one', 'matching', 'different', 'assistant'] as const)('upgrades %s legacy selections without changing their bindings', async variant => {
+    const { store, dir, codec } = await setup();
+    const source = store.saveProvider({ name: 'Air source', kind: 'openai-compatible', baseUrl: 'https://air.example/v1', enabled: true, apiKey: 'synthetic' });
+    const chat = store.saveModel(model(source.id, 'air-chat'));
+    const responses = store.saveModel({ ...model(source.id, 'air-responses'), wireApi: 'responses' });
+    function selectLegacy(id: 'rider' | 'webstorm', selectedModelId: string) {
+      const current = store.listBindings().find(binding => binding.id === id)!;
+      store.saveBinding({ ...current, mode: 'aggregate', enabled: true, providerIds: [source.id], modelIds: [selectedModelId],
+        modelSelection: 'selected', defaultModelId: selectedModelId,
+        connectionChoices: { direct: { providerId: source.id, defaultModelId: chat.id, completionModelId: chat.id } },
+      });
+    }
+    selectLegacy('rider', responses.id);
+    if (variant !== 'assistant') store.setJetBrainsPlugin('rider', 'air');
+    if (variant === 'matching' || variant === 'different') {
+      selectLegacy('webstorm', variant === 'matching' ? responses.id : chat.id);
+      store.setJetBrainsPlugin('webstorm', 'air');
+    }
+    const before = store.listBindings().filter(binding => binding.id !== 'air');
+    store.close();
+    const SQL = await initSqlJs({ locateFile: file => join(process.cwd(), 'node_modules/sql.js/dist', file) });
+    const filename = join(dir, 'modeldock.sqlite');
+    const old = new SQL.Database(readFileSync(filename));
+    old.run("DELETE FROM bindings WHERE id='air'");
+    writeFileSync(filename, old.export());
+    old.close();
+
+    const migrated = await Store.create(dir, codec); stores.push(migrated);
+    expect(migrated.listBindings().filter(binding => binding.id !== 'air')).toEqual(before);
+    const air = migrated.listBindings().find(binding => binding.id === 'air')!;
+    if (variant === 'one' || variant === 'matching') {
+      expect(air).toMatchObject({ id: 'air', name: 'Air', enabled: true, mode: 'aggregate', providerIds: [source.id],
+        modelIds: [responses.id], modelSelection: 'selected', defaultModelId: responses.id,
+        connectionChoices: { direct: { providerId: source.id, defaultModelId: chat.id }, aggregate: { modelIds: [responses.id] } },
+      });
+      expect(air.connectionChoices!.direct).not.toHaveProperty('completionModelId');
+      expect(air).not.toHaveProperty('jetBrainsPlugin');
+    } else {
+      expect(air).toMatchObject({ id: 'air', name: 'Air', enabled: false, providerIds: [], modelIds: [], defaultModelId: '' });
+    }
+
+    migrated.saveBinding({ ...air, enabled: false, mode: 'direct', providerIds: [], modelIds: [], defaultModelId: '' });
+    migrated.close();
+    const reopened = await Store.create(dir, codec); stores.push(reopened);
+    expect(reopened.listBindings().find(binding => binding.id === 'air')).toMatchObject({ enabled: false, providerIds: [] });
+    expect(reopened.listBindings().filter(binding => binding.id !== 'air')).toEqual(before);
+  });
+});
+
 describe('model reasoning effort persistence', () => {
   it('round-trips supported levels and the default level through reopen', async () => {
     const { store, dir, codec } = await setup();
@@ -268,14 +318,14 @@ describe('real SQLite storage', () => {
     expect(reopened.listProviders().filter(provider => provider.kind === 'opencode-go')).toHaveLength(1);
   });
 
-  it('seeds unconfigured API sources, no subscriptions or models, and twelve disabled tool bindings', async () => {
+  it('seeds unconfigured API sources and disabled tool bindings', async () => {
     const { store, dir } = await setup();
     expect(store.listProviders()).toHaveLength(6);
     expect(store.listProviders().map(provider => provider.presetId)).toEqual(['openai', 'anthropic', 'deepseek', 'volcengine-agent', 'volcengine-token', 'qwen-token']);
     expect(store.listProviders().every(p => !p.hasSecret && p.authStatus === 'missing')).toBe(true);
     expect(store.listModels()).toEqual([]);
-    expect(store.listBindings()).toHaveLength(13);
-    expect(store.listBindings().map(binding => binding.id)).toEqual(['codex', 'opencode', 'opencode-desktop', 'dsh', 'vscode', 'copilot', 'copilot-cli', 'claude-code', 'junie', 'webstorm', 'intellij-idea', 'rider', 'pycharm']);
+    expect(store.listBindings()).toHaveLength(14);
+    expect(store.listBindings().map(binding => binding.id)).toEqual(['codex', 'opencode', 'opencode-desktop', 'dsh', 'vscode', 'copilot', 'copilot-cli', 'claude-code', 'junie', 'air', 'webstorm', 'intellij-idea', 'rider', 'pycharm']);
     expect(store.listBindings().every(b => !b.enabled && b.modelIds.length === 0 && !b.defaultModelId)).toBe(true);
     expect(readFileSync(join(dir, 'modeldock.sqlite')).subarray(0, 16).toString()).toBe('SQLite format 3\0');
   });
@@ -625,11 +675,11 @@ describe('real SQLite storage', () => {
     const other = store.saveProvider({ name: 'Keep fixture', kind: 'openai-compatible', baseUrl: 'https://keep.example.test/v1', enabled: true });
     const selected = store.saveModel(model(source.id, 'remove/a')), second = store.saveModel(model(source.id, 'remove/b')), kept = store.saveModel(model(other.id, 'keep/a'));
     const claudeModel = store.saveModel({ ...model(source.id, 'remove/claude'), wireApi: 'messages' });
-    for (const binding of store.listBindings()) store.saveBinding({ ...binding, enabled: true, mode: binding.id === 'codex' || binding.id === 'claude-code' || binding.id === 'junie' || binding.id === 'copilot-cli' || ['webstorm','intellij-idea','rider','pycharm'].includes(binding.id) ? 'aggregate' : 'auto', providerIds: binding.id === 'claude-code' ? [source.id] : [source.id, other.id], modelIds: binding.id === 'dsh' ? [selected.id] : [], defaultModelId: binding.id === 'claude-code' ? claudeModel.id : selected.id, note: 'original binding metadata' });
+    for (const binding of store.listBindings()) store.saveBinding({ ...binding, enabled: true, mode: binding.id === 'codex' || binding.id === 'claude-code' || binding.id === 'junie' || binding.id === 'copilot-cli' || ['air','webstorm','intellij-idea','rider','pycharm'].includes(binding.id) ? 'aggregate' : 'auto', providerIds: binding.id === 'claude-code' ? [source.id] : [source.id, other.id], modelIds: binding.id === 'dsh' ? [selected.id] : [], defaultModelId: binding.id === 'claude-code' ? claudeModel.id : selected.id, note: 'original binding metadata' });
     store.setManagedState(`auth-metadata:${source.id}`, { identity: 'SYNTHETIC_ACCOUNT_ID' }); store.setManagedState(`auth-usage:${source.id}`, { status: 'ready', remaining: 72 });
     const beforeProvider = store.getProvider(source.id), beforeModels = store.listModels(), beforeBindings = store.listBindings(), beforeSecret = store.getSecret(source.id);
     const checkpoint = store.beginProviderRemoval(source.id);
-    expect(new Set(checkpoint.affectedToolIds)).toEqual(new Set(['codex', 'opencode', 'opencode-desktop', 'dsh', 'vscode', 'copilot', 'copilot-cli', 'claude-code', 'junie', 'webstorm', 'intellij-idea', 'rider', 'pycharm']));
+    expect(new Set(checkpoint.affectedToolIds)).toEqual(new Set(['codex', 'opencode', 'opencode-desktop', 'dsh', 'vscode', 'copilot', 'copilot-cli', 'claude-code', 'junie', 'air', 'webstorm', 'intellij-idea', 'rider', 'pycharm']));
     expect(checkpoint.beforeBindings).toEqual(beforeBindings); expect(checkpoint.afterBindings.every(binding => !binding.providerIds?.includes(source.id))).toBe(true);
     expect(store.getProvider(source.id)).toBeUndefined(); expect(store.getSecret(source.id)).toBeUndefined(); expect(store.listModels().map(model => model.id)).toEqual([kept.id]);
     expect(store.getManagedState(`auth-metadata:${source.id}`, null)).toBeNull(); expect(store.getManagedState(`auth-usage:${source.id}`, null)).toBeNull();
@@ -729,7 +779,7 @@ describe('real SQLite storage', () => {
     expect(migrated.getSecret('old-vol')?.apiKey).toBe('legacy-vol-key'); expect(migrated.gatewayKey()).toBe('legacy-local-key');
     const binding = migrated.listBindings().find(item => item.id === 'dsh')!;
     expect(binding).toMatchObject({ mode: 'aggregate', providerIds: ['old-gpt'], modelIds: ['old-model'], defaultModelId: 'old-model', note: 'keep binding' });
-    expect(migrated.listBindings().map(item => item.id)).toEqual(['codex', 'opencode', 'opencode-desktop', 'dsh', 'vscode', 'copilot', 'copilot-cli', 'claude-code', 'junie', 'webstorm', 'intellij-idea', 'rider', 'pycharm']);
+    expect(migrated.listBindings().map(item => item.id)).toEqual(['codex', 'opencode', 'opencode-desktop', 'dsh', 'vscode', 'copilot', 'copilot-cli', 'claude-code', 'junie', 'air', 'webstorm', 'intellij-idea', 'rider', 'pycharm']);
     migrated.saveProvider({ ...migrated.getProvider('old-vol')!, name: 'Updated legacy name' });
     migrated.close();
     const reopened = await Store.create(dir, codec); stores.push(reopened);

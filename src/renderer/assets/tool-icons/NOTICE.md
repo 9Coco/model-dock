@@ -29,6 +29,8 @@ this directory ship with the app.
 
 - **Claude Code compatibility label**: Original letter C SVG by ModelDock contributors, authored 2026-10-09. This is not an official Claude or Anthropic brand mark. License: MIT, `LICENSE-modeldock.txt`. Local geometry and SHA-256 provenance are recorded in `manifest.json`.
 
+- **Air compatibility label**: Original letter A SVG by ModelDock contributors, authored 2026-11-20 under MIT, `LICENSE-modeldock.txt`. The SHA-256 is recorded in `manifest.json`.
+
 - **WebStorm, IntelliJ IDEA, JetBrains Rider and PyCharm product icons**: JetBrains s.r.o.; downloaded 2026-10-09 from the [official brand page](https://www.jetbrains.com/company/brand/) and its linked SVG files. Preserved unmodified, displayed in their original colors, and scaled proportionally. Product names and logos are JetBrains trademarks. These assets follow the JetBrains Brand Guidelines and are excluded from ModelDock's MIT artwork license. See `LICENSE-jetbrains-brand.txt` for attribution and authoritative links, and `manifest.json` for source URLs and SHA-256 records.
 
 

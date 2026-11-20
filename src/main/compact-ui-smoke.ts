@@ -165,12 +165,11 @@ export async function verifyCompactUi(window: BrowserWindow, store: Store, outpu
       assert.ok(icon.decorative && !icon.focusable && !icon.externalNode, `Inline decorative icon must not add a focus stop or remote reference: ${icon.symbol}`);
       assert.ok(icon.controlNamed, `An icon control must retain its text, title or ARIA name: ${icon.symbol}`);
     }
-    assert.deepEqual(value.brand.tools.map(item => item.tool).sort(), ['codex', 'claude-code', 'junie', 'opencode', 'dsh', 'vscode', 'copilot', 'copilot-cli', 'webstorm', 'intellij-idea', 'rider', 'pycharm'].sort(), 'Every supported tool retains its brand asset independently of sidebar grouping');
+    assert.deepEqual(value.brand.tools.map(item => item.tool).sort(), ['codex', 'claude-code', 'junie', 'opencode', 'opencode-desktop', 'dsh', 'vscode', 'air', 'copilot', 'copilot-cli'].sort(), 'Every supported tool retains its brand asset independently of sidebar grouping');
     assert.equal(value.brand.appRowRemoved, true, 'The sidebar brand row is removed');
     assert.ok(value.brand.tools.every(item => !item.material), 'Tool identities remain local brand assets');
     for (const item of value.brand.tools) {
-      const colorLogo = ['webstorm', 'intellij-idea', 'rider', 'pycharm'].includes(item.tool);
-      assert.ok(colorLogo ? item.image && !item.mask && item.imageComplete && item.naturalWidth > 0 && item.naturalHeight > 0 && item.filter === 'none' : item.mask.startsWith('url(') && !item.image, `Tool brand must retain its image or mask rendering: ${item.tool}`);
+      assert.ok(item.mask.startsWith('url(') && !item.image, `Tool icon must retain its mask rendering: ${item.tool}`);
     }
     if (!originalBrand) originalBrand = value.brand;
     else assert.deepEqual(value.brand, originalBrand, 'Functional icon replacement must preserve brand resource identities');

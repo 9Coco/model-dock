@@ -7,7 +7,7 @@ import { applyConfig, buildConfig } from '../src/main/adapters';
 import { openCodeConfigTargets } from '../src/main/opencode-paths';
 import { ToolSyncUndoManager, toolSyncUndoKey } from '../src/main/tool-sync-undo';
 import { restoreOfficialConfig } from '../src/main/tool-restore';
-import { toolCategories, toolCategoryFor } from '../src/shared/tool-categories';
+import { activeToolIds, isActiveToolId, toolCategories, toolCategoryFor } from '../src/shared/tool-categories';
 import { Store } from '../src/main/store';
 import { Gateway } from '../src/main/gateway';
 
@@ -40,8 +40,9 @@ describe('OpenCode Desktop and TUI targets', () => {
     expect(f.store.listBindings().find(b => b.id === 'opencode')).not.toEqual(tui);
     expect(readFileSync(f.target, 'utf8')).toBe(f.original);
     const bindings = f.store.listBindings();
-    expect(toolCategories.map(c => bindings.filter(b => toolCategoryFor(b.id) === c.id).length)).toEqual([5, 4, 4]);
-    expect(bindings.every(b => !!toolCategoryFor(b.id))).toBe(true);
+    expect(new Set(bindings.map(b => b.id).filter(isActiveToolId))).toEqual(new Set(activeToolIds));
+    expect(toolCategories.map(c => bindings.filter(b => toolCategoryFor(b.id) === c.id).length)).toEqual([2, 4, 4]);
+    expect(bindings.filter(b => !isActiveToolId(b.id)).map(b => b.id)).toEqual(['webstorm', 'intellij-idea', 'rider', 'pycharm']);
   });
   it('keeps Desktop on global XDG while TUI honors explicit file/directory and rejects ambiguous relative or inline overrides', async () => {
     const f = await fixture(), configHome = join(f.root, '配置 空间'), file = join(f.root, '终端.jsonc'), dir = join(f.root, 'terminal-config');

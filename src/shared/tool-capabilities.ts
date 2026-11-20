@@ -1,14 +1,13 @@
 import type { ToolId } from './types';
 
-/** The configured product surface, not the number of defaults it exposes.
- * Codex's active model_provider, Claude's active gateway and the JetBrains
- * AI Assistant OpenAI-compatible slot each consume one endpoint. Air accounts
- * are managed manually in Air; this slot only prepares one account's parameters.
+/** An active Codex connection, Claude gateway, or prepared Air account each
+ * consume one endpoint. The legacy JetBrains routes keep the same constraint.
  * Registries and Junie's discovered model profiles support multiple sources.
  */
 export const TOOL_CONNECTION_CAPABILITIES = {
   codex: 'single-endpoint',
   'claude-code': 'single-endpoint',
+  air: 'single-endpoint',
   webstorm: 'single-endpoint',
   'intellij-idea': 'single-endpoint',
   rider: 'single-endpoint',

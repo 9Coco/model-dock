@@ -6,6 +6,12 @@ ModelDock 是跨平台本地模型管理台：全局维护模型来源与别名�
 
 0.4.0 起包含 FlowBridge 的组合发行版采用 [GPL-3.0-or-later](LICENSE)；原 ModelDock 代码及原创应用标记保留 [MIT 授权](LICENSE-MIT)，第三方图标和依赖保留各自的 Apache-2.0、CC-BY-4.0、MIT 或其他许可，详见 [第三方声明](THIRD_PARTY_NOTICES.md)。欢迎按 [贡献指南](CONTRIBUTING.md) 提交修复；敏感问题请遵循 [安全报告流程](SECURITY.md)。
 
+## 0.4.30 · Air 独立接入
+
+- 编辑器工具区保留 VS Code，并把四个 JetBrains IDE 的工具入口合并为一个 Air。Air 使用单独的模型选择和聚合地址 `/tool/air/v1`。
+- 在 Air 的 Accounts 页面手工添加提供商。ModelDock 提供 URL、Key 和参考模型，账户由 Air 保存。
+- 升级保留旧 IDE 绑定和网关地址。旧版已明确选择 Air 且接入选择一致时，首次升级会沿用这些选择；旧选择不一致时，Air 使用独立的空配置。
+
 ## 0.4.29 · GPT-6.2 模型参数与手机代理连接
 
 - 补齐 OpenAI 官方 API 的 GPT-6.2 Sol / Astra 参数。两款模型均为 1,050,000 上下文、922,000 最大输入、128,000 最大输出，可用思考档位为 low、medium、high、xhigh、max。已有模型可在供应商页使用「补全模型参数」校准，再同步使用这些模型的工具。OpenCode TUI / Desktop 会将 Responses 模型配置的思考档位同步为模型变体。
@@ -299,45 +305,19 @@ WebStorm、IntelliJ IDEA、Rider、PyCharm 的接入参数页分别提供「AI A
 - 授权生命周期对照 CC Switch 的设备码实现：xAI 校验 OIDC issuer，续期显式携带原权限 scope；ID Token 只保存在主进程加密凭据中，界面取得账号元数据。临时续期网络失败保留原授权状态；明确拒绝或过期停止轮询。导入凭据前取消旧登录、刷新和额度查询，提交刷新前检查原凭据，防止晚回复覆盖新授权。
 - 模型：填写 API Key 后从供应商获取真实模型列表，搜索、勾选并批量添加。不同供应商可用相同模型简称及显示名称，列表和工具中按「套餐名 - 模型名」展示；系统维护唯一的聚合接口 ID。支持真实上游 ID、协议、上下文、工具、视觉与思考强度能力。默认来源未授权、模型列表为空，能力由实际配置确定。
 - Codex 兼容模型目录带独立的 `client_version` 和对应版本请求头，使用原生 `slug` 作为上游 ID，解析显示名称、上下文和明确的能力字段。默认候选隐藏 `hide / none` 条目，已保存和手动添加的模型保留；目录可见性不代表实际模型权限。API / Grok 来源不携带 Codex 目录版本参数。
-- 工具：Codex、Claude Code、Junie CLI / IDE ACP、OpenCode、DSH、VS Code Copilot Chat、Copilot app、独立 Copilot CLI，以及 WebStorm、IntelliJ IDEA、Rider、PyCharm 的 AI Assistant / Air。Codex、Claude Code、Junie、Copilot CLI 与四个 JetBrains IDE 每次只配置一个入口：供应商直连只选择一家支持原生协议的 API，使用供应商地址、API Key 和真实模型 ID；使用聚合接口只连接一个 ModelDock 本机地址，来源与模型多选均在聚合接口内部配置，模型映射列表在右侧独立滚动。直连与聚合的选择分别保存，往返切换保留原聚合模型范围。订阅及不兼容的直连来源只能在兼容的聚合入口内使用，不会暗中退回单家本机协议桥。已有工具支持还原官方配置，Junie、Copilot CLI 和 JetBrains 可恢复同步前设置；工具交互触发自动同步并先备份，应用启动不会写外部客户端配置。OpenCode、DSH、VS Code 和 Copilot app 保留原有多入口与连接方式。
+- 工具包括 VS Code、Air、Claude Code、Junie、OpenCode TUI / Desktop、Copilot CLI、Copilot app、Codex 和 DSH。Codex、Claude Code 和 Air 的直连配置各使用一个原生供应商端点。开启聚合时使用一个 ModelDock 本机入口，可分别管理来源和精确模型范围。直连与聚合选项独立保存。
 - 本地网关：固定监听 `127.0.0.1`，默认 `18181`；本地 Key 鉴权、标准模型目录、Chat Completions/Responses、流式转发、请求日志。
 - SQLite：保存来源、模型、绑定与日志；敏感凭据由主进程加密，预览和快照不包含上游密钥。
 - 配置接入：工具支持预览 / 导出，并按各自能力在用户修改勾选或模型偏好后自动同步，写入前备份。VS Code 默认只保留所选自定义供应商，可关闭此选项来保留原有自定义来源；其他 vendor 与 JSONC 注释保留。OpenCode 保留其他供应商、MCP 和非受管 JSONC 注释；Codex 的 TOML 重写保留配置字段，但不保证原注释。Copilot app 通过运行实例的原生接口同步来源、模型和凭据，预览是同步计划参考，不需要再手工导入；Copilot CLI 使用独立的官方来源注册表和设置文件。DSH 写入 home 插件覆盖与凭据 refs，同步前保存加密恢复记录，清空后恢复原覆盖。
 - 托盘：关闭主窗口可留在后台运行；退出应用会停止网关。
 
-## JetBrains AI Assistant 模型接入
+## Air 模型接入
 
-WebStorm、IntelliJ IDEA、Rider、PyCharm 使用同一套 AI Assistant 设置格式，当前文件同步适配已核实的 2026.2 / build 262 profile。供应商直连只使用一家原生 Chat API，写入供应商 URL、真实模型 ID，并在 IDE 填写该供应商 API Key。官方 DeepSeek、火山及已确认千问入口可复用现有 Responses 模型条目进行原生 Chat 调用，不会更改全局模型协议或影响 Codex。仅支持 Responses 的未知自定义服务不能假设支持原生 Chat，应通过兼容的聚合入口使用。聚合模式只配置 `/tool/<工具 ID>/v1` 一个本机入口，使用固定本机 Key，供应商与映射模型在聚合接口内部管理。轮换 OAuth 凭据留在 ModelDock。
+1. 在 ModelDock 选择「编辑器 → Air」，选择供应商和模型。直连支持原生 Chat Completions 或 Responses 的 API。聚合使用 ModelDock 的本机 Air 地址和模型别名，调用时保持 ModelDock 运行。
+2. 在 JetBrains IDE 打开「设置 → AI → Air → Accounts」，选择「More Providers → OpenAI」，填写名称和 ModelDock 提供的 URL、API Key，并测试连接后保存。
+3. 在 Air 会话里选择这个授权来源，再选择兼容的 Agent 和模型。Agent 需支持所选模型的协议。
 
-Windows 使用已安装 IDE 的 `product-info.json`、缓存中的 `.home` 指针和公开进程身份确认当前配置目录；旧 2026.1 与当前 2026.2 共存不会仅因目录数量而阻断同步，也不会根据更新时间猜测目标。残留或复用的 `.pid`、Toolbox 后台服务及普通构建 Java 进程不会当成运行中的 IDE。进程身份、权限或自定义路径无法确认时保持禁止写入，并明确显示「需确认 IDE 配置」，只有真实 IDE 进程运行才显示等待退出。点击「检查 IDE 状态」会立即尝试已有待办；写入前重新确认状态，旧档案和密码存储保持不变。
-
-1. 在工具页选择供应商直连，使用单个供应商下拉和模型选项；或开启「使用聚合接口」，进入聚合接口内部配置，选择内部来源和精确映射模型。用户变更后在确认 IDE 已退出且 profile 兼容时自动备份同步；运行或状态未知时保留最新待办，每 15 秒检查。启动、导航不写文件。直连与聚合草稿独立保存，聚合全部停用保持精确空映射，切换不会重新启用未勾选模型。
-2. 退出 IDE 后会自动同步本次交互的最新待办，也可点击接入参数顶部的「同步 IDE 设置」重新应用，可一次写入 聊天 URL、HTTP/1.1、核心 / 轻量模型，以及独立 AI 补全的地址、模型和提示架构，同步前自动备份。「准备本机连接」只启动 ModelDock 本地服务。无法同步时，在 IDE 的「设置 → 工具 → AI Assistant → 提供商与 API 密钥」选择「兼容 OpenAI」，复制页面参数手工填写；工具调用与上下文建议须以套餐实际能力和限制为准。
-3. API Key 首次接入时需在每个 IDE 中手工粘贴一次；切换连接方式或来源后请更新密钥。ModelDock 不读取或写入 JetBrains PasswordSafe。点击 IDE 的「测试连接」后，再发送实际聊天 / 工具请求确认推理可用；模型目录返回成功不能代替推理验证。
-4. 同步只处理已发现的配置 profile，备份后更新 AI Assistant 地址、HTTP 版本、工具调用及核心 / 轻量模型字段，保留其他设置。IDE 运行中、运行状态未知或未找到兼容 profile 时不写文件，待办期间继续检查，也可手工填写接入参数。同步写入失败时停止自动重试并显示原因，处理后可手动重新同步。关闭 ModelDock 会丢弃尚未应用的待办；下次打开保留本机选择，但不会自动重放写入。重新打开 IDE 后确认 API Key；「设置文件已同步」不表示登录或真实账号调用已通过。
-5. 「还原同步前设置」同样要求 IDE 退出，恢复本次受管字段；IDE 凭据存储中的 Key 请在 IDE 内自行确认或更换。「导出参考参数」生成手工填写用 JSON，不能直接导入 IDE。
-
-JetBrains 聚合接口支持将 Responses 的推理文本和工具调用转换为 Chat SSE，包括火山的 `reasoning_text` / `reasoning_raw_text`。0.3.76 起所有客户端都即时接收增量；JetBrains 只保留少量终态尾帧，校验完整结束后再发送成功标志。32 MiB 上限用流式计数实现，不再缓存整段。首块前的失败返回 HTTP 错误，首块后的失败会中断流且不发送成功终态；旧 Koog 客户端可能仍把中断显示为完成，真实 IDE 行为需单独验收。
-
-Responses 的 `*.added` 开始事件允许仅包含类型、尚无文本；方舟的 `response.reasoning_summary_part.added` 会使用这种结构。开始事件按空内容初始化，后续增量和最终文本仍严格验证，避免把合法的流式开始错误转换为 502。完成事件缺失、错误帧、截断和超限仍拒绝；此兼容并不放宽终止判定。参考 [方舟流式输出](https://docs.volcengine.com/docs/ark/streaming-output?lang=zh)。
-
-Koog 会将显示用的 `assistant.reasoning_content` 回传下一轮。Responses 转换仅保留回答与工具历史，省略这个显示字段，不将它伪造为原生推理项或指令；原生 Chat 来源保留该字段。此转换不承诺完整保留推理历史。
-
-配置流程参考 JetBrains 官方 [自定义模型](https://www.jetbrains.com/help/ai-assistant/use-custom-models.html)及[提供商与 API 密钥设置](https://www.jetbrains.com/help/ai-assistant/settings-reference-providers-and-api-keys.html)。
-
-此接入管理 AI Assistant 聊天、核心 / 轻量模型与独立 AI 补全参数。Junie、Claude Agent、Codex、Gemini CLI 及各自独立的账号 / 模型配置仍由 IDE 管理。ModelDock 本次不导入或部署 JetBrains MCP / Skills，也不读取 IDE 聊天记录；本机网关保留请求状态与耗时日志。协议转换、配置文件和隔离 Electron 验证，与真实 IDE 界面和上游账号调用分别记录。
-
-### 独立 AI 补全
-
-AI 补全使用独立的 `NextEditProviderSettings` 配置和独立 Key，不与聊天提供商共用设置槽。每次同步会更新补全地址、模型、明确的 `(fim) Generic` 提示架构，并清除指向旧聊天模型的关联。直连 DeepSeek Flash / Pro 使用 `https://api.deepseek.com/beta`；聚合补全使用同一个本机工具入口的 `/completions`，只路由已映射且确认支持原生补全的模型。两种模式分别记住补全模型，默认跟随聊天模型，也可在软件中选择当前范围内的兼容补全模型。
-
-聊天映射数量与 AI 补全候选数量分别显示。即使聚合了 14 个聊天模型，下拉框仍只列已确认支持原生 FIM 的模型及「跟随聊天默认模型」；当前两个 DeepSeek 候选对应三项，不代表聊天映射丢失。跟随的模型若尚未确认 FIM，补全保持停用，并禁用补全密钥复制，避免把 Chat/Responses 能力推断为 FIM。参考 [JetBrains 自定义模型说明](https://www.jetbrains.com/help/ai-assistant/use-custom-models.html)及 [DeepSeek FIM 接口](https://api-docs.deepseek.com/api/create-completion/)。
-
-切换其他供应商也会更新补全地址和模型；尚未确认补全协议的来源会明确提示，并保持补全停用，不保留上一家的地址，也不把聊天接口伪装成文本补全接口。目前自动确认的原生补全为官方 DeepSeek `deepseek-flash` / `deepseek-v4-pro`。
-
-补全 Key 使用固定独立凭据槽。为避免换地址后自动携带上一家的 Key，地址、供应商账号或连接方式改变时，同步新参数并设为合法停用状态。重新打开 IDE 后，在 AI 补全区选择「兼容 OpenAI」、粘贴此模式对应的 Key，再启用。只改模型且已确认的补全地址/账号一致时，可保留启用状态。ModelDock 不读取或写入 PasswordSafe，也不伪造 Key 已确认标记。
-
-保留现有补全上下文与其他参数，只有超过原生接口已确认限制的输出预算才降到 `4096`；原生设置中的预算以字符串保存。聊天及补全四文件统一备份和回滚，兼容升级前只有三文件的恢复记录。`(fim) Generic` 当前客户端使用前缀补全，不发送后缀；这里不宣称已验证完整 FIM 或下一处编辑预测。真实编辑器补全与供应商调用需另行确认。
+Air 账户由 IDE 中的 Air 管理。ModelDock 的预览隐藏 Key，复制 Key 和导出参数由用户明确触发。参考 [JetBrains Air 授权说明](https://www.jetbrains.com/help/air/air-in-ides-authorization.html)。
 
 ## 授权、MCP 和 Skills
 
@@ -348,8 +328,6 @@ AI 补全使用独立的 `NextEditProviderSettings` 配置和独立 Key，不与
 深色主题采用黑灰背景、蓝色强调，覆盖侧栏、卡片、菜单、设置、表单和弹窗。品牌图标统一为深灰白色 M 与蓝色连接标记；窗口、托盘、网页图标和 Windows EXE 使用同一套素材。`npm run build` 会生成七档 ICO 与 PNG / SVG；打包保留 Windows 图标资源编辑并关闭签名。
 
 导航和常用操作采用 [Google Material Symbols Rounded](https://fonts.google.com/icons?icon.style=Rounded)：聚合节点、MCP 服务、Skills 书籍、授权钥匙、供应商模型及服务监控使用统一的圆角线条。图标使用本地 SVG 路径和主题颜色，离线可用，无需加载 Google 字体；各工具的品牌图标与 ModelDock 应用标记保留。素材来自 [Google 官方图标仓库](https://github.com/google/material-design-icons)，选取记录与 Apache 2.0 许可随源码及 Windows 包提供。
-
-WebStorm、IntelliJ IDEA、Rider 和 PyCharm 使用 [JetBrains 官方品牌页](https://www.jetbrains.com/company/brand/)的彩色 SVG，与 Toolbox 的 WS / IJ / RD / PC 标识一致。侧栏与详情页共用同一份本地资源，等比例显示；亮暗主题均保留官方配色，不通过单色遮罩重绘。图标归属和来源哈希记录在工具图标 manifest / notice 中，不属于 ModelDock 原创 MIT 图标。
 
 授权中心按 GitHub Copilot、ChatGPT / OpenAI、xAI / Grok 分组展示账号。已授权账号进入页面后自动查询额度，并显示剩余百分比、上游提供的实际单位、重置倒计时、查询时间和旧结果状态。列表每 5 秒只读取本机缓存；额度缓存默认 5 分钟，已知重置时间到达后可提前查询，失败按 5 / 10 / 20 / 30 分钟延后，也可手动刷新。
 
@@ -477,11 +455,11 @@ npx electron-builder --dir --config.electronDist=node_modules/electron/dist --co
 | 开启「使用聚合接口」 | 选择多家来源，并逐个勾选允许使用的模型。客户端使用一个 `http://127.0.0.1:<端口>/tool/<工具 ID>/v1` 入口、固定本机 Key 和唯一模型别名；未启用模型不开放。Claude Code 的基地址不含 `/v1`，客户端调用其 `/v1/messages`。 |
 | Codex 聚合模型 | 仅提供 Responses 模型。 |
 | Claude Code 聚合模型 | 提供 Messages 入口，复用所选 API / 订阅的已有模型；原生 Messages 来源按对应鉴权转发，Chat / Responses 来源通过协议桥调用。 |
-| JetBrains 单来源 | 所选单 API 模型均使用 Chat Completions 时直连上游；Responses 或账号订阅使用仅包含该来源的本机入口。切换后会在确认 IDE 退出时自动更新 URL 和模型；Key 仍需在 IDE 手工更新。 |
+| Air | 直连使用所选 API 的原生地址和 Key；聚合使用 `/tool/air/v1` 和本机 Key。在 Air Accounts 内手工配置。 |
 
-关闭聚合时保留默认模型所在供应商；没有对应来源时保留首个已选来源。开启聚合时保留已有来源、默认模型及精确模型范围。聚合模型列表明确保存，新增模型不会自动加入已有选择。全部停用保持空列表，网关拒绝调用未启用模型，显式同步会清理对应客户端入口；JetBrains 全部停用只保存空绑定并取消自动同步待办，不自动清理 IDE 文件。
+关闭聚合时保留默认模型所在供应商；没有对应来源时保留首个已选来源。开启聚合时保留已有来源、默认模型及精确模型范围。聚合模型列表明确保存，新增模型不会自动加入已有选择。全部停用保持空列表，网关拒绝调用未启用模型，显式同步会清理对应客户端入口。Air 全部停用时保存空绑定。
 
-API 原生直连不依赖本地网关。预览隐藏 API Key；前六种工具在用户修改来源、默认模型或聚合选项后自动保存并同步，已有配置先备份。JetBrains 在用户更改来源、模式或默认模型后也会尝试自动同步；IDE 运行时只保存最新待办，确认退出后再应用，保留手动同步与还原。API Key 仍需在 IDE 手工更新。订阅访问及刷新令牌始终留在主进程，由本机入口续期；使用本机入口期间须保持 ModelDock 运行，自动同步会按需启动网关。
+API 原生直连不依赖本地网关。预览隐藏 API Key；支持自动同步的工具在用户更改选择后先备份再写入配置。Air 的选择保存在 ModelDock 内，账户仍在 Air 中更新。订阅令牌留在主进程，由本机入口续期。
 
 旧绑定加载时保留原直连 / 聚合 / 自动连接及部分模型范围，不会在启动或切换导航时同步客户端。旧的多供应商直连绑定保留来源与模型范围，并迁移为等价的自动连接元数据（`mode: "auto"`），外部配置保持原样，界面显示沿用已有连接；修改默认模型或来源不会自动迁移连接方式。明确切换聚合选项后采用新的单来源或聚合方式。DSH 同时写入模型与对应凭据；Copilot app 通过自身原生接口更新，不由 ModelDock 直接改写其数据库。
 
@@ -529,9 +507,9 @@ Copilot 默认开启「仅保留所选供应商」，同步会先备份，再清
 
 ## 自动同步与撤销
 
-非 JetBrains 工具的来源、连接方式、默认模型和范围修改立即保存到 ModelDock，停止操作 400 毫秒后才合并写入外部配置并备份；连续点选只同步最后一次选择。各工具的待办独立保存，实际写入按主进程锁串行执行。切换页面不创建新的同步请求，应用启动不重放上次待办；同步失败后保留选择，等待新的用户操作或点击「重新同步」。
+支持自动同步的工具在来源、连接方式、默认模型和范围变更时立即保存到 ModelDock，停止操作 400 毫秒后才合并写入外部配置并备份；连续点选只同步最后一次选择。各工具的待办独立保存，实际写入按主进程锁串行执行。切换页面不创建新的同步请求，应用启动不重放上次待办；同步失败后保留选择，等待新的用户操作或点击「重新同步」。
 
-「重新同步」立即处理当前待办，不再追加延后的第二次写入。「撤销上次同步」取消尚未写入的新选择，恢复上次成功同步前的配置、管理记录和工具选择；原文件或凭据被外部修改时拒绝覆盖。每个工具仅保留最新一份撤销记录，内容在主进程加密保存，不传给界面。重复同步未变化的配置不会覆盖上一份有效记录。Copilot 通过原生接口恢复供应商注册表及精确备份的系统凭据；JetBrains 保留原有退出 IDE 后同步和同步前还原流程。
+「重新同步」立即处理当前待办，不再追加延后的第二次写入。「撤销上次同步」取消尚未写入的新选择，恢复上次成功同步前的配置、管理记录和工具选择；原文件或凭据被外部修改时拒绝覆盖。每个工具仅保留最新一份撤销记录，内容在主进程加密保存，不传给界面。重复同步未变化的配置不会覆盖上一份有效记录。Copilot 通过原生接口恢复供应商注册表及精确备份的系统凭据。
 
 本版移除本地用量统计、Token 采集、价格估算和客户端历史导入，也不再提供全局模型目录页。模型在供应商详情中添加、获取和编辑；聚合映射与工具选择继续使用现有模型。旧数据库中的历史统计表不删除，也不再追加记录。账号授权中心的供应商额度信息及 API 响应本身的 usage 字段保留。
 

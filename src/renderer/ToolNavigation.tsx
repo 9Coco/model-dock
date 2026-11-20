@@ -13,8 +13,8 @@ type ToolNavigationProps = {
 };
 
 export function ToolNavigation({ tools, selectedTool, active, onSelect }: ToolNavigationProps) {
-  const [category, setCategory] = useState<ToolCategory>(() => categoryFor(selectedTool));
-  useEffect(() => { setCategory(categoryFor(selectedTool)); }, [selectedTool]);
+  const [category, setCategory] = useState<ToolCategory>(() => categoryFor(selectedTool) ?? 'desktop');
+  useEffect(() => { setCategory(categoryFor(selectedTool) ?? 'desktop'); }, [selectedTool]);
   const changeCategory = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
     const next = event.key === 'ArrowRight' ? (index + 1) % categories.length
       : event.key === 'ArrowLeft' ? (index + categories.length - 1) % categories.length

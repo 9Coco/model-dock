@@ -31,6 +31,39 @@ function nativeFixture(ids = ['provider-a', 'provider-b', 'subscription']) {
   };
 }
 describe('tool adapters', () => {
+  it('exports a single manual Air account with native model protocols and mode-specific credentials', () => {
+    const f = nativeFixture();
+    const catalog = [f.catalog[0], { ...f.catalog[0], id: 'native-chat', alias: 'local-chat', upstreamId: 'native-chat', wireApi: 'chat-completions' as const },
+      f.catalog[2]];
+    let binding: ToolBinding = { id: 'air', name: 'Air', enabled: true, mode: 'direct', providerIds: ['provider-a'],
+      modelIds: [], modelSelection: 'all', defaultModelId: catalog[1].id, note: '' };
+    const air = { ...f, listModels: () => catalog, listBindings: () => [binding] };
+    const preview = buildConfig(air, 'air', 18181);
+    expect(preview).toMatchObject({ filename: 'modeldock-air-connection-guide.json', canApply: false });
+    expect(preview.instructions).toContain('Accounts → More Providers → OpenAI');
+    expect(JSON.parse(preview.content)).toMatchObject({ provider: 'OpenAI', baseUrl: 'https://api-a.test/v1',
+      apiKey: '__PROVIDER_API_KEY__', suggestedModel: 'native-chat', models: [
+        { id: 'shared-upstream', wireApi: 'responses' }, { id: 'native-chat', wireApi: 'chat-completions' },
+      ] });
+    expect(f.getSecret).not.toHaveBeenCalled();
+    expect(JSON.parse(buildConfig(air, 'air', 18181, true).content).apiKey).toBe('SYNTHETIC_KEY_provider-a');
+    expect(connectionKey(air, 'air')).toBe('SYNTHETIC_KEY_provider-a');
+    const dir = mkdtempSync(join(tmpdir(), 'modeldock-air-guide-')); roots.push(dir);
+    expect(() => applyConfig(air, 'air', 18181, dir, dir, dir)).toThrow('Air');
+    expect(readdirSync(dir)).toEqual([]);
+    binding = { ...binding, providerIds: ['subscription'], defaultModelId: catalog[2].id };
+    expect(JSON.parse(buildConfig(air, 'air', 18181).content)).toEqual({});
+    expect(() => connectionKey(air, 'air')).toThrow();
+    binding = { ...binding, mode: 'aggregate', providerIds: ['provider-a', 'subscription'],
+      modelIds: [catalog[1].id, catalog[2].id], modelSelection: 'selected', defaultModelId: catalog[2].id };
+    expect(JSON.parse(buildConfig(air, 'air', 18181).content).apiKey).toBe('__MODELDOCK_LOCAL_KEY__');
+    const exported = buildConfig(air, 'air', 18181, true);
+    expect(JSON.parse(exported.content)).toMatchObject({ baseUrl: 'http://127.0.0.1:18181/tool/air/v1', apiKey: 'local-test-secret',
+      suggestedModel: catalog[2].alias, models: [{ id: 'local-chat' }, { id: catalog[2].alias }] });
+    expect(exported.content).not.toMatch(/PRIVATE_OAUTH|SYNTHETIC_KEY/);
+    expect(connectionKey(air, 'air')).toBe('local-test-secret');
+  });
+
   it.each(['chat-completions', 'responses', 'messages'] as const)('exports saved user levels using the current %s format without mutating stale metadata', wireApi => {
     const configured: Model = { ...models[0], wireApi, thinking: true, reasoningEfforts: ['minimal', 'medium', 'xhigh'], defaultReasoningEffort: 'medium', reasoningEffortFormat: wireApi === 'responses' ? 'chat-completions' : 'responses' };
     const before = structuredClone(configured);

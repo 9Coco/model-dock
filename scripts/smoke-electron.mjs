@@ -40,7 +40,6 @@ delete env.MODELDOCK_DEV_URL;
 let noCatalogModelRequests = 0, connectionTestPosts = 0, codexModelRequests = 0;
 const connectionRequests = [];
 let claudeMessagesRequests = 0;
-const jetBrainsRequests = [];
 const aggregateRequests = [];
 const upstream = createServer((req,res) => {
   if (req.method === 'POST' && /^\/aggregate\/(?:a\/v1\/(?:responses|chat\/completions)|b\/v1\/(?:responses|chat\/completions)|native-[ab]\/v1\/messages)$/.test(req.url ?? '')) {
@@ -51,16 +50,6 @@ const upstream = createServer((req,res) => {
       const text=`MOCK_${side.toUpperCase()}`;
       res.end(JSON.stringify(!ok?{error:{message:'Synthetic aggregation contract failed'}}:native?{id:'msg_aggregate',type:'message',role:'assistant',model:body.model,content:[{type:'text',text}],stop_reason:'end_turn',usage:{input_tokens:7,output_tokens:2}}:responses?{id:'resp_aggregate',object:'response',status:'completed',model:body.model,output:[{id:'msg_aggregate',type:'message',role:'assistant',content:[{type:'output_text',text}]}],usage:{input_tokens:7,output_tokens:2}}:{id:'chat_aggregate',object:'chat.completion',model:body.model,choices:[{index:0,message:{role:'assistant',content:text},finish_reason:'stop'}],usage:{prompt_tokens:7,completion_tokens:2}}));
     });return;
-  }
-
-  if (req.method === 'POST' && ['/jetbrains/v1/chat/completions', '/jetbrains/v1/responses'].includes(req.url)) {
-    const parts = []; req.on('data', part => parts.push(part)); req.on('end', () => {
-      const body = JSON.parse(Buffer.concat(parts).toString('utf8'));
-      const responses = req.url.endsWith('/responses');
-      const ok = req.headers.authorization === 'Bearer synthetic-only' && body.model === (responses ? 'jb-responses-native' : 'jb-chat-native') && Array.isArray(responses ? body.input : body.messages);
-      jetBrainsRequests.push({path:req.url,model:body.model,ok}); res.writeHead(ok ? 200 : 400, {'content-type':'application/json'});
-      res.end(JSON.stringify(!ok ? {error:{message:'Synthetic JetBrains contract failed'}} : responses ? { id:'resp_jb',object:'response',status:'completed',model:body.model,output:[{id:'msg_jb',type:'message',role:'assistant',content:[{type:'output_text',text:'OK'}]}],usage:{input_tokens:8,output_tokens:2} } : { id:'chat_jb',object:'chat.completion',model:body.model,choices:[{index:0,message:{role:'assistant',content:'OK'},finish_reason:'stop'}],usage:{prompt_tokens:8,completion_tokens:2} }));
-    }); return;
   }
 
   if (req.url === '/claude/v1/messages' && req.method === 'POST') {
@@ -176,8 +165,8 @@ child.on('exit', code => {
     }
     if (env.MODELDOCK_SMOKE_JETBRAINS_PLUGIN_ONLY === '1') {
       const result = JSON.parse(readFileSync(resolve(output, 'jetbrains-plugin-validation.json'), 'utf8'));
-      if (!result.ok) throw new Error('JetBrains plugin switch validation failed');
-      console.log(JSON.stringify({ exitCode: code, bridge: value.bridge, jetBrainsPluginSwitch: true, output }));
+      if (!result.ok) throw new Error('Air tool validation failed');
+      console.log(JSON.stringify({ exitCode: code, bridge: value.bridge, air: true, output }));
       process.exit(code || 0);
     }
     if (env.MODELDOCK_SMOKE_PROVIDER_MANAGEMENT_ONLY === '1') {
@@ -218,29 +207,16 @@ child.on('exit', code => {
     }
     if (env.MODELDOCK_SMOKE_TOOL_ICONS_ONLY === '1') {
       const icons = JSON.parse(readFileSync(resolve(output, 'tool-icons-validation.json'), 'utf8'));
-      if (icons.tools.length !== 13 || icons.jetBrainsTools.length !== 4 || !icons.copilotCliPreview?.qualifiedDefault || !icons.copilotCliPreview?.keyRedacted || !icons.originalUiRestored || !icons.savedSettingsUnchanged || !icons.toolSelectionsUnchanged || icons.configurationSyncInvoked !== false) throw new Error('Tool icon validation failed');
+      if (icons.tools.length !== 10 || icons.airTool !== 'air' || !icons.copilotCliPreview?.qualifiedDefault || !icons.copilotCliPreview?.keyRedacted || !icons.originalUiRestored || !icons.savedSettingsUnchanged || !icons.toolSelectionsUnchanged || icons.configurationSyncInvoked !== false) throw new Error('Tool icon validation failed');
       console.log(JSON.stringify({ exitCode: code, bridge: value.bridge, tools: icons.tools.length, layouts: icons.layouts.length, originalUiRestored: icons.originalUiRestored, output }));
       return;
     }
     if (env.MODELDOCK_SMOKE_AGGREGATE_ONLY === '1') {
       const result=JSON.parse(readFileSync(resolve(output,'aggregate-modes-validation.json'),'utf8'));
-      if(!result.ok||result.tools.length!==13||aggregateRequests.length!==26||aggregateRequests.some(request=>!request.ok))throw new Error('All-tool aggregation/UI routing verification failed');
+      if(!result.ok||result.tools.length!==10||aggregateRequests.length!==20||aggregateRequests.some(request=>!request.ok))throw new Error('All-tool aggregation/UI routing verification failed');
       writeFileSync(resolve(output,'aggregate-network-validation.json'),JSON.stringify({requests:aggregateRequests},null,2));
       console.log(JSON.stringify({exitCode:code,bridge:value.bridge,tools:result.tools.length,layouts:result.layouts.length,mockRequests:aggregateRequests.length,output}));
       process.exit(code||0);
-    }
-    if (env.MODELDOCK_SMOKE_JETBRAINS_WINDOWS_ONLY === '1') {
-      const result = JSON.parse(readFileSync(resolve(output, 'jetbrains-windows-ui-validation.json'), 'utf8'));
-      if (!result.ok) throw new Error('Windows JetBrains profile and automatic synchronization verification failed');
-      console.log(JSON.stringify({ exitCode: code, bridge: value.bridge, jetBrainsWindows: result, output }));
-      return;
-    }
-    if (env.MODELDOCK_SMOKE_JETBRAINS_ONLY === '1') {
-      const result = JSON.parse(readFileSync(resolve(output,'jetbrains-ui-validation.json'),'utf8'));
-      if (!result.ok || result.products.length !== 4 || jetBrainsRequests.length !== 4 || jetBrainsRequests.some(request=>!request.ok)) throw new Error('JetBrains UI/native gateway contract failed');
-      writeFileSync(resolve(output,'jetbrains-network-validation.json'),JSON.stringify({requests:jetBrainsRequests},null,2));
-      console.log(JSON.stringify({exitCode:code,bridge:value.bridge,jetBrains:result,requests:jetBrainsRequests,output}));
-      process.exit(code || 0);
     }
     if (env.MODELDOCK_SMOKE_TOOL_SYNC_ONLY === '1') {
       const result = JSON.parse(readFileSync(resolve(output, 'tool-auto-sync-validation.json'), 'utf8'));

@@ -106,6 +106,19 @@
       "note": "Original letter C geometry; not the official Claude or Anthropic brand mark."
     },
     {
+      "file": "air.svg",
+      "label": "Air compatibility label - original letter A",
+      "sourceType": "original",
+      "author": "ModelDock contributors",
+      "createdAt": "2026-11-20",
+      "sourcePath": "src/renderer/assets/tool-icons/air.svg",
+      "sha256": "812f79cd8a264b978f3fac90c101273f3de06cb28398e6de5c4fcca23c24cd29",
+      "viewBox": "0 0 24 24",
+      "license": "MIT",
+      "licenseRecord": "modeldock",
+      "note": "Original letter A geometry for the Air compatibility entry."
+    },
+    {
       "file": "webstorm.svg",
       "label": "WebStorm official product icon",
       "sourceType": "official-brand-download",

@@ -111,12 +111,12 @@ export async function verifySidebarScroll(window: BrowserWindow, store: Store, o
       assert.ok(start.lists[1].scrollHeight > start.lists[1].clientHeight, 'Many synthetic providers must exercise provider scrolling');
       assert.equal(start.lists[0].rows.length, 4, 'Desktop category shows four tools');
       await clickVisible('[data-tool-category="editor"]');
-      await waitFor(`document.querySelector('[data-tool-category="editor"]')?.getAttribute('aria-selected')==='true'`, 'JetBrains category');
+      await waitFor(`document.querySelector('[data-tool-category="editor"]')?.getAttribute('aria-selected')==='true'`, 'editor category');
       await evaluate(`document.querySelector('[data-sidebar-scroll="tools"]').scrollTop=1e6`);
-      const jetBrains = await evaluate<SidebarReadback>(readScript); validate(jetBrains);
-      assert.equal(jetBrains.lists[0].rows.length, 5, 'Editor category shows VS Code and four JetBrains IDEs');
-      assert.ok(jetBrains.lists[0].lastVisible, 'Last JetBrains IDE is reachable inside the tool viewport');
-      writeFileSync(join(outputDir, `electron-sidebar-jetbrains-${theme}-${requestedSize[0]}.png`), await captureUi());
+      const editors = await evaluate<SidebarReadback>(readScript); validate(editors);
+      assert.equal(editors.lists[0].rows.length, 2, 'Editor category shows VS Code and Air');
+      assert.ok(editors.lists[0].lastVisible, 'Air is reachable inside the tool viewport');
+      writeFileSync(join(outputDir, `electron-sidebar-editors-${theme}-${requestedSize[0]}.png`), await captureUi());
       await clickVisible('[data-tool-category="desktop"]');
       await waitFor(`document.querySelector('[data-tool-category="desktop"]')?.getAttribute('aria-selected')==='true'`, 'regular Agent category');
 

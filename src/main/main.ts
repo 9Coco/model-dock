@@ -65,11 +65,7 @@ import { ToolSyncUndoManager } from './tool-sync-undo';
 import { verifyToolAutoSync } from './tool-auto-sync-smoke';
 import { removeProviderAndSync } from './provider-removal';
 import { restoreOfficialConfig } from './tool-restore';
-import { jetBrainsStatus, type JetBrainsConfigOptions } from './jetbrains-config';
-import { isJetBrainsTool } from '../shared/jetbrains';
 import { verifyClaudeConfiguration } from './claude-config-smoke';
-import { verifyJetBrainsConnections } from './jetbrains-smoke';
-import { jetBrainsWindowsSmokeOptions, verifyJetBrainsWindowsProfiles } from './jetbrains-windows-smoke';
 import { verifyAggregateModes } from './aggregate-modes-smoke';
 import { restoreToolBinding } from './tool-restore-binding';
 import { importOpenCodeGo } from './opencode-go-import';
@@ -82,7 +78,8 @@ import { bindingConnectionPolicy } from '../shared/bindings';
 import { writeClipboardText } from './clipboard-text';
 import { localGatewayKey, providerApiKey } from './connection-keys';
 import { createVault } from './vault';
-import { buildConfig, buildCopilotDesktopPlan, buildDshPlan, applyConfig, connectionKey } from './adapters';
+import { AIR_MANUAL_SETUP, buildConfig, buildCopilotDesktopPlan, buildDshPlan, applyConfig, connectionKey } from './adapters';
+import { isActiveToolId } from '../shared/tool-categories';
 import { applyDshConfig } from './dsh-config';
 import { resolveDshProfile } from './dsh-profile';
 import type { ModelDockApi, ModelInput, Provider, ProviderInput, ToolBinding, ToolId } from '../shared/types';
@@ -177,10 +174,9 @@ if (runtimeConfig.dataDir) {
   app.setPath('userData', runtimeConfig.dataDir);
   app.setPath('sessionData', runtimeConfig.dataDir);
 }
-const toolIds = new Set(['codex', 'opencode', 'opencode-desktop', 'dsh', 'vscode', 'copilot', 'copilot-cli', 'claude-code', 'junie', 'webstorm', 'intellij-idea', 'rider', 'pycharm']);
 function toolId(value: unknown): ToolId {
-  if (typeof value !== 'string' || !toolIds.has(value)) throw new Error('无法识别的工具。');
-  return value as ToolId;
+  if (!isActiveToolId(value)) throw new Error('无法识别的工具。');
+  return value;
 }
 function appIcon() {
   return getAppIcon();
@@ -306,10 +302,6 @@ async function createWindow(forceShow = false) {
           // Icon validation above uses navigation only and never applies tool configuration.
         } else if (process.env.MODELDOCK_SMOKE_AGGREGATE_ONLY === '1') {
           await verifyAggregateModes(window!, store, outputDir, captureUi);
-        } else if (process.env.MODELDOCK_SMOKE_JETBRAINS_WINDOWS_ONLY === '1') {
-          await verifyJetBrainsWindowsProfiles(window!, store, outputDir, captureUi);
-        } else if (process.env.MODELDOCK_SMOKE_JETBRAINS_ONLY === '1') {
-          await verifyJetBrainsConnections(window!, store, outputDir, captureUi);
         } else if (process.env.MODELDOCK_SMOKE_TOOL_SYNC_ONLY === '1') {
           await verifyToolAutoSync(window!, store, outputDir, captureUi);
         } else if (process.env.MODELDOCK_SMOKE_CLAUDE_ONLY === '1') {
@@ -618,19 +610,6 @@ function copilotTarget() {
   return { home: process.env.COPILOT_HOME ? resolve(process.env.COPILOT_HOME) : join(app.getPath('home'), '.copilot'), openClient: undefined };
 }
 
-// 修改点：IDE 文件状态只读查询；测试使用隔离目录和受控进程探针。
-function jetBrainsOptions(): JetBrainsConfigOptions {
-  if (__MODELDOCK_SMOKE_BUILD__) {
-    if (process.env.MODELDOCK_SMOKE_JETBRAINS_WINDOWS_ONLY === '1') return jetBrainsWindowsSmokeOptions(dataDir);
-    const home = join(dataDir, 'feature-home');
-    return { profileRoot: join(home, '.config', 'JetBrains'), cacheRoot: join(home, '.cache', 'JetBrains'), platform: 'linux', processProbe: pid => pid === process.pid ? 'running' : 'stopped' };
-  }
-  return process.platform === 'linux' ? {
-    profileRoot: join(process.env.XDG_CONFIG_HOME?.trim() || join(app.getPath('home'), '.config'), 'JetBrains'),
-    cacheRoot: join(process.env.XDG_CACHE_HOME?.trim() || join(app.getPath('home'), '.cache'), 'JetBrains'),
-  } : {};
-}
-
 // Per-service local keys survive restarts. Upstream account tokens stay with the respective relay.
 function relayKey(setting: string): string {
   let apiKey = store.getManagedState<string | null>(setting, null);
@@ -711,12 +690,12 @@ function registerIpc() {
     if (toolConfigPending.size && !savingDuringCopilotSync) throw new Error('工具配置正在同步，请稍后修改配置。');
   };
   async function synchronizeTool(id: ToolId): Promise<string> {
+    if (id === 'air') throw new Error(AIR_MANUAL_SETUP);
     if (toolRestorePending || toolConfigPending.has(id)) throw new Error('此工具配置正在更新，请稍后再试。');
     toolConfigPending.add(id);
     try {
     const binding = store.listBindings().find(item => item.id === id);
-    if (isJetBrainsTool(id) && store.getJetBrainsPlugin(id) === 'air') throw new Error('请在 Air Accounts 的 More Providers → OpenAI 中添加提供商并填写 URL 和 Key；Air 不支持无密钥的离线账户同步。');
-    const preview = buildConfig(store, id, gateway.status().port, true, __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home') : app.getPath('home'), { ...openCodeOptions, jetBrainsOptions: jetBrainsOptions(), junieHome, copilotCliHome, copilotCliProvidersConfig });
+    const preview = buildConfig(store, id, gateway.status().port, true, __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home') : app.getPath('home'), { ...openCodeOptions, junieHome, copilotCliHome, copilotCliProvidersConfig });
     if (!preview.canApply) throw new Error('此工具使用导出配置入口。');
     const usesGateway = binding && bindingConnectionPolicy(binding, store.listModels(), store.listProviders()).groups.some(group => group.connection === 'local-managed' && group.modelIds.length > 0);
     if (usesGateway && !gateway.status().running) {
@@ -747,7 +726,6 @@ function registerIpc() {
       claudeConfigDir: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome!, '.claude') : process.env.CLAUDE_CONFIG_DIR,
       junieHome,
       copilotCliHome, copilotCliProvidersConfig,
-      jetBrainsOptions: jetBrainsOptions(),
     });
     }
     // Global deletion has its own recovery transaction; its removed references cannot be reintroduced by a tool undo.
@@ -807,7 +785,7 @@ function registerIpc() {
     recordDiagnostic('info', 'diagnostics.exported', { operation: 'exportDiagnostics' });
     return result.filePath;
   });
-  handle('snapshot', () => ({ providers: store.listProviders(), models: store.listModels(), bindings: store.listBindings(),
+  handle('snapshot', () => ({ providers: store.listProviders(), models: store.listModels(), bindings: store.listBindings().filter(binding => isActiveToolId(binding.id)),
     gateway: gateway.status(), gatewayExposure: store.gatewayExposure(), logs: store.logs(100), dataDir, version: app.getVersion() }));
   handle('runtimeSnapshot', () => runtime.snapshot());
   handle('networkSnapshot', () => network.snapshot());
@@ -943,18 +921,16 @@ function registerIpc() {
     const id = toolId(binding.id), before = store.listBindings().find(value => value.id === id);
     assertEditable(id);
     store.saveBinding({ ...binding, id });
-    if (!isJetBrainsTool(id) && before && !beforeToolSelections.has(id)) beforeToolSelections.set(id, structuredClone(before));
+    if (id !== 'air' && before && !beforeToolSelections.has(id)) beforeToolSelections.set(id, structuredClone(before));
   });
-  handle('setJetBrainsPlugin', (value: ToolId, plugin: unknown) => {
-    assertEditable();
+  handle('toolSyncUndoStatus', (value: ToolId) => {
     const id = toolId(value);
-    if (!isJetBrainsTool(id) || plugin !== 'ai-assistant' && plugin !== 'air') throw new Error('JetBrains 插件选择无效。');
-    store.setJetBrainsPlugin(id, plugin);
+    return id === 'air' ? { available: false, reason: AIR_MANUAL_SETUP } : undoManager.status(id);
   });
-  handle('toolSyncUndoStatus', (value: ToolId) => undoManager.status(toolId(value)));
   handle('undoToolSync', async (value: ToolId) => {
     assertEditable();
     const id = toolId(value);
+    if (id === 'air') throw new Error(AIR_MANUAL_SETUP);
     toolRestorePending = true;
     const current = store.listBindings().find(binding => binding.id === id);
     const draftBefore = beforeToolSelections.get(id);
@@ -1020,15 +996,9 @@ function registerIpc() {
   handle('revealProviderKey', (id: unknown) => providerApiKey(store, id));
   handle('revealGatewayKey', () => localGatewayKey(store));
   handle('copyConnectionKey', (tool: ToolId) => writeClipboardText(connectionKey(store, toolId(tool)), text => clipboard.writeText(text)));
-  handle('jetBrainsStatus', (value: unknown, refresh?: unknown) => {
-    if (!isJetBrainsTool(value)) throw new Error('不是支持的 JetBrains 工具。');
-    if (refresh !== undefined && typeof refresh !== 'boolean') throw new Error('IDE 状态刷新参数无效。');
-    const home = __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home') : app.getPath('home');
-    return jetBrainsStatus(value, home, { ...jetBrainsOptions(), plugin: store.getJetBrainsPlugin(value), refreshProcessEvidence: refresh === true });
-  });
-  handle('previewConfig', (tool: ToolId) => buildConfig(store, toolId(tool), gateway.status().port, false, __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home') : app.getPath('home'), { ...openCodeOptions, jetBrainsOptions: jetBrainsOptions(), junieHome, copilotCliHome, copilotCliProvidersConfig }));
+  handle('previewConfig', (tool: ToolId) => buildConfig(store, toolId(tool), gateway.status().port, false, __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home') : app.getPath('home'), { ...openCodeOptions, junieHome, copilotCliHome, copilotCliProvidersConfig }));
   handle('exportConfig', async (tool: ToolId) => {
-    const config = buildConfig(store, toolId(tool), gateway.status().port, true, __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home') : app.getPath('home'), { ...openCodeOptions, jetBrainsOptions: jetBrainsOptions(), junieHome, copilotCliHome, copilotCliProvidersConfig });
+    const config = buildConfig(store, toolId(tool), gateway.status().port, true, __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home') : app.getPath('home'), { ...openCodeOptions, junieHome, copilotCliHome, copilotCliProvidersConfig });
     const result = await dialog.showSaveDialog(window!, { defaultPath: config.filename });
     if (result.canceled || !result.filePath) return null;
     replacePrivateFile(result.filePath, config.content); return result.filePath;
@@ -1037,6 +1007,7 @@ function registerIpc() {
   handle('restoreOfficialConfig', async (value: ToolId) => {
     assertEditable();
     const id = toolId(value);
+    if (id === 'air') throw new Error(AIR_MANUAL_SETUP);
     toolRestorePending = true;
     try {
       const featureHome = __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home') : app.getPath('home');
@@ -1056,7 +1027,6 @@ function registerIpc() {
         claudeConfigDir: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.claude') : process.env.CLAUDE_CONFIG_DIR,
         junieHome,
         copilotCliHome, copilotCliProvidersConfig,
-        jetBrainsOptions: jetBrainsOptions(),
         dshHome, dshOptions, copilotHome: target.home, copilotOptions: { openClient: target.openClient },
       }));
       undoManager.clear(id); beforeToolSelections.delete(id);

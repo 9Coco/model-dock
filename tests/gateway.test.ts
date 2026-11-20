@@ -32,6 +32,43 @@ async function requestBody(req: IncomingMessage) { const chunks: Buffer[] = []; 
 function event(value: unknown) { return `data: ${JSON.stringify(value)}\n\n`; }
 
 describe('loopback gateway', () => {
+  it('scopes the consolidated Air endpoint and forwards native Chat and Responses requests', async () => {
+    const requests: { url: string; auth: string | undefined; model: string }[] = [];
+    const mock = await upstream(async (req, res) => {
+      const body = await requestBody(req);
+      requests.push({ url: req.url!, auth: req.headers.authorization, model: body.model });
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify(req.url?.endsWith('/responses')
+        ? { id: 'response_air', object: 'response', status: 'completed', model: body.model, output: [] }
+        : { id: 'chat_air', object: 'chat.completion', model: body.model, choices: [{ message: { role: 'assistant', content: 'OK' } }] }));
+    });
+    const f = await fixture(mock.url);
+    const responseModel = f.store.saveModel({ ...f.model, id: undefined, upstreamId: 'responses-real-id', alias: 'air-responses', wireApi: 'responses' });
+    const legacyModel = f.store.saveModel({ ...f.model, id: undefined, upstreamId: 'legacy-real-id', alias: 'legacy-rider' });
+    const air = f.store.listBindings().find(binding => binding.id === 'air')!;
+    const rider = f.store.listBindings().find(binding => binding.id === 'rider')!;
+    const active = { enabled: true, mode: 'aggregate' as const, providerIds: [f.provider.id], modelSelection: 'selected' as const };
+    f.store.saveBinding({ ...air, ...active, modelIds: [f.model.id, responseModel.id], defaultModelId: responseModel.id });
+    f.store.saveBinding({ ...rider, ...active, modelIds: [legacyModel.id], defaultModelId: legacyModel.id });
+    const gatewayOrigin = new URL(f.url).origin;
+    const airUrl = gatewayOrigin + '/tool/air/v1';
+    expect((await fetch(airUrl + '/models')).status).toBe(401);
+    expect((await (await fetch(airUrl + '/models', { headers: f.headers })).json()).data.map((model: Model) => model.id)).toEqual([f.model.alias, responseModel.alias]);
+    expect((await (await fetch(gatewayOrigin + '/tool/rider/v1/models', { headers: f.headers })).json()).data).toMatchObject([{ id: legacyModel.alias }]);
+    const send = (route: string, body: Record<string, unknown>) => fetch(airUrl + route, { method: 'POST', headers: f.headers, body: JSON.stringify(body) });
+    expect((await send('/chat/completions', { model: legacyModel.alias, messages: [] })).status).toBe(403);
+    expect((await send('/completions', { model: f.model.alias, prompt: 'fixture' })).status).toBe(404);
+    expect((await send('/chat/completions', { model: responseModel.alias, messages: [] })).status).toBe(400);
+    expect((await send('/chat/completions', { model: f.model.alias, messages: [{ role: 'user', content: 'hello' }] })).status).toBe(200);
+    expect((await send('/responses', { model: responseModel.alias, input: 'hello' })).status).toBe(200);
+    expect(requests).toEqual([
+      { url: '/v1/chat/completions', auth: 'Bearer upstream-private-key', model: f.model.upstreamId },
+      { url: '/v1/responses', auth: 'Bearer upstream-private-key', model: responseModel.upstreamId },
+    ]);
+    f.store.saveBinding({ ...air, ...active, mode: 'direct', modelIds: [], modelSelection: 'all', defaultModelId: responseModel.id });
+    expect((await fetch(airUrl + '/models', { headers: f.headers })).status).toBe(403);
+  });
+
   it('discovers Go models and forwards Chat and Responses using the workspace key and client session', async () => {
     const seen: { url: string; headers: Headers; model?: string }[] = [];
     const fetchGo: typeof fetch = async (input, init) => {

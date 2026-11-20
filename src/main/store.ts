@@ -37,7 +37,7 @@ interface ProviderRemovalData {
   bindingsBefore: Record<string, unknown>[];
   bindingsAfter: Record<string, unknown>[];
 }
-const TOOL_NAMES: Record<ToolId, string> = { codex: 'Codex', opencode: 'OpenCode TUI', 'opencode-desktop': 'OpenCode Desktop', dsh: 'DeepSeek Harness', vscode: 'VS Code', copilot: 'GitHub Copilot', 'copilot-cli': 'Copilot CLI', 'claude-code': 'Claude Code', junie: 'Junie', webstorm: 'WebStorm', 'intellij-idea': 'IntelliJ IDEA', rider: 'Rider', pycharm: 'PyCharm' };
+const TOOL_NAMES: Record<ToolId, string> = { codex: 'Codex', opencode: 'OpenCode TUI', 'opencode-desktop': 'OpenCode Desktop', dsh: 'DeepSeek Harness', vscode: 'VS Code', copilot: 'GitHub Copilot', 'copilot-cli': 'Copilot CLI', 'claude-code': 'Claude Code', junie: 'Junie', air: 'Air', webstorm: 'WebStorm', 'intellij-idea': 'IntelliJ IDEA', rider: 'Rider', pycharm: 'PyCharm' };
 const kinds = new Set(['openai-compatible', 'codex', 'grok', 'copilot', 'opencode-go']);
 let sqlPromise: Promise<SqlJsStatic> | undefined;
 
@@ -98,9 +98,11 @@ export class Store {
         const ids = row.provider_ids === null ? [] : JSON.parse(String(row.provider_ids));
         if (Array.isArray(ids) && ids.length > 1) db.run("UPDATE bindings SET mode='auto' WHERE id=?", [String(row.id)]);
       }
+      const firstAirBinding = !store.one("SELECT id FROM bindings WHERE id='air'");
       for (const [tool, name] of Object.entries(TOOL_NAMES)) db.run('INSERT OR IGNORE INTO bindings(id,name,enabled,model_ids,default_model_id,note,mode,provider_ids,vscode_sync_scope,copilot_sync_scope,dsh_sync_scope) VALUES(?,?,?,?,?,?,?,?,?,?,?)', [tool, name, 0, '[]', '', '', isJetBrainsTool(tool) ? 'aggregate' : 'direct', '[]', tool === 'vscode' ? 'selected' : 'managed', tool === 'copilot' ? 'selected' : 'managed', tool === 'dsh' ? 'selected' : 'managed']);
       store.retireJetBrainsSubscriptions();
       store.migrateSingleEntryBindings();
+      if (firstAirBinding) store.inheritLegacyAirBinding();
       if (!store.one("SELECT value FROM settings WHERE key='gateway_key'")) db.run('INSERT INTO settings(key,value) VALUES(?,?)', ['gateway_key', codec.encrypt(store.newKey())]);
       store.persist();
       return store;
@@ -450,7 +452,7 @@ export class Store {
       } catch (error) { canMerge = false; message = error instanceof Error ? error.message : '当前重复供应商无法安全合并。'; }
       const proposed = this.mergedBindings(providerIds, target.id);
       const updatedModels = models.map(model => providerIds.includes(model.providerId) ? { ...model, providerId: target.id } : model);
-      const affectedTools = bindings.flatMap((binding, index) => [...(binding.providerIds ?? []), ...(binding.connectionChoices?.aggregate?.providerIds ?? []), binding.connectionChoices?.direct?.providerId ?? ''].some(providerId => providerIds.includes(providerId)) ? [{ id: binding.id, name: binding.name, beforeModels: resolveBindingModels(binding, models, providers).length, afterModels: resolveBindingModels(proposed[index], updatedModels, providers).length }] : []);
+      const affectedTools = bindings.flatMap((binding, index) => !isJetBrainsTool(binding.id) && [...(binding.providerIds ?? []), ...(binding.connectionChoices?.aggregate?.providerIds ?? []), binding.connectionChoices?.direct?.providerId ?? ''].some(providerId => providerIds.includes(providerId)) ? [{ id: binding.id, name: binding.name, beforeModels: resolveBindingModels(binding, models, providers).length, afterModels: resolveBindingModels(proposed[index], updatedModels, providers).length }] : []);
       return { name: target.name, baseUrl: target.baseUrl, providerIds, targetProviderId: target.id, totalModels: group.reduce((count, provider) => count + this.providerModelCount(provider.id), 0), providers: group.map(provider => ({ id: provider.id, name: provider.name, hasSecret: provider.hasSecret, modelCount: this.providerModelCount(provider.id), enabled: provider.enabled })), canMerge, message, fingerprint: this.duplicateFingerprint(providerIds), affectedTools };
     });
   }
@@ -674,6 +676,29 @@ export class Store {
       const updated = updateSingleEntryBinding({ ...binding, mode }, {}, models, providers);
       this.db.run('UPDATE bindings SET mode=?,connection_choices=? WHERE id=?', [mode, JSON.stringify(updated.connectionChoices), binding.id]);
     }
+  }
+  private inheritLegacyAirBinding(): void {
+    const selections = this.allBindings().filter(binding => binding.enabled && binding.jetBrainsPlugin === 'air').map(binding => {
+      const { mode, providerIds = [], modelIds, modelSelection, defaultModelId } = binding;
+      const choice = binding.connectionChoices;
+      const connectionChoices = structuredClone(choice ?? {});
+      if (connectionChoices.direct) delete connectionChoices.direct.completionModelId;
+      if (connectionChoices.aggregate) delete connectionChoices.aggregate.completionModelId;
+      return { mode: mode === 'direct' ? 'direct' as const : 'aggregate' as const, providerIds, modelIds, modelSelection, defaultModelId, connectionChoices };
+    });
+    const [selection] = selections;
+    // Compare both drafts with the active selection before inheriting a legacy
+    // Air connection. Old routes retain their original per-IDE bindings.
+    if (!selection || selections.some(item => !isDeepStrictEqual(item, selection))) return;
+    if (selection.mode === 'direct' && selection.providerIds.length !== 1) return;
+    const models = this.listModels(), providers = this.listProviders();
+    const binding = updateSingleEntryBinding({ ...selection, id: 'air', name: 'Air', note: '', enabled: true }, {}, models, providers);
+    const available = resolveBindingModels(binding, models, providers);
+    if (!available.length || binding.defaultModelId && !available.some(model => model.id === binding.defaultModelId)) return;
+    try { this.validateConnectionChoices(binding.connectionChoices, models, providers); }
+    catch { return; }
+    this.db.run("UPDATE bindings SET enabled=1,mode=?,provider_ids=?,model_ids=?,model_selection=?,default_model_id=?,connection_choices=? WHERE id='air'",
+      [selection.mode, JSON.stringify(selection.providerIds), JSON.stringify(selection.modelIds), selection.modelSelection ?? null, selection.defaultModelId, JSON.stringify(binding.connectionChoices)]);
   }
   getJetBrainsPlugin(tool: ToolId): JetBrainsPlugin {
     if (!isJetBrainsTool(tool)) throw new Error('此工具不支持 JetBrains 插件选择。');

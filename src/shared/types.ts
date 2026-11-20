@@ -7,7 +7,7 @@ import type { DiscoveryResult, ModelSelection, AddModelsResult, ParameterPreview
 import type { ConnectionResult, ConnectionTestInput } from './connection-types';
 export type { ConnectionResult, ConnectionTestInput } from './connection-types';
 export type ProviderKind = 'openai-compatible' | 'codex' | 'grok' | 'copilot' | 'opencode-go';
-export type ToolId = 'codex' | 'opencode' | 'opencode-desktop' | 'dsh' | 'vscode' | 'copilot' | 'copilot-cli' | 'claude-code' | 'junie' | 'webstorm' | 'intellij-idea' | 'rider' | 'pycharm';
+export type ToolId = 'codex' | 'opencode' | 'opencode-desktop' | 'dsh' | 'vscode' | 'copilot' | 'copilot-cli' | 'claude-code' | 'junie' | 'air' | 'webstorm' | 'intellij-idea' | 'rider' | 'pycharm';
 export type WireApi = 'chat-completions' | 'responses' | 'messages';
 export type ToolMode = 'direct' | 'aggregate' | 'auto';
 /** Thinking levels recognized by client tools (VS Code picker labels these; unknown levels are not written to client configs). */
@@ -230,7 +230,6 @@ export interface AuthProgress {
 }
 export type { DiagnosticEntry, DiagnosticQuery, DiagnosticSnapshot } from './diagnostic-types';
 export interface ModelDockApi extends FlowBridgeApi {
-  jetBrainsStatus(tool: import('./jetbrains').JetBrainsToolId, refresh?: boolean): Promise<import('./jetbrains').JetBrainsStatus>;
   /** Only a fixed failure kind/name can be reported; never arbitrary log text. */
   reportRendererError(input: { kind: 'error' | 'unhandled-rejection'; errorName?: string }): Promise<void>;
   queryDiagnostics(query?: import('./diagnostic-types').DiagnosticQuery): Promise<import('./diagnostic-types').DiagnosticSnapshot>;
@@ -247,7 +246,6 @@ export interface ModelDockApi extends FlowBridgeApi {
   saveModel(input: ModelInput): Promise<Model>;
   deleteModel(id: string): Promise<void>;
   saveBinding(binding: ToolBinding): Promise<void>;
-  setJetBrainsPlugin(tool: import('./jetbrains').JetBrainsToolId, plugin: JetBrainsPlugin): Promise<void>;
   testProvider(id: string, input?: ConnectionTestInput): Promise<ConnectionResult>;
   discoverModels(id: string): Promise<DiscoveryResult>;
   previewModelParameters(id: string, includeManufacturer?: boolean): Promise<ParameterPreview>;

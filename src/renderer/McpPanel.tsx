@@ -1,14 +1,13 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { Download, Eye, Pencil, Plus, Search, Server, Trash2, Upload } from './MaterialIcon';
 import type { ModelDockApi, ToolId } from '../shared/types';
-import { isJetBrainsTool, JETBRAINS_TOOLS, JETBRAINS_TOOL_IDS } from '../shared/jetbrains';
+import { isJetBrainsTool } from '../shared/jetbrains';
 import type { McpServer, McpServerInput, McpConfigPreview } from '../shared/mcp-types';
 import { BusyIcon, EmptyState, Modal, type Notify } from './components';
 
 const TOOLS: { id: ToolId; name: string }[] = [
   { id: 'codex', name: 'Codex' }, { id: 'claude-code', name: 'Claude Code（暂不支持）' }, { id: 'opencode', name: 'OpenCode' }, { id: 'dsh', name: 'DSH' },
   { id: 'vscode', name: 'VS Code' }, { id: 'copilot', name: 'Copilot' },
-  ...JETBRAINS_TOOL_IDS.map(id => ({ id, name: `${JETBRAINS_TOOLS[id].name}（暂不支持）` })),
 ];
 const unsupportedTool = (tool: ToolId) => tool === 'claude-code' || isJetBrainsTool(tool);
 const parseStringMap = (value: string, label: string): Record<string, string> => {
@@ -98,7 +97,6 @@ export function McpPanel({ api, notify }: { api?: ModelDockApi; notify: Notify }
         <button className="primary small" disabled={!api || busy} onClick={() => setEditor('new')}><Plus size={16} />添加 MCP</button>
       </div>
     </div>
-    {isJetBrainsTool(tool) && <p className="form-note" role="status">JetBrains MCP 导入、预览和应用暂不支持。请在 IDE 内独立配置；模型接入不会修改 MCP 设置。</p>}
     {tool === 'claude-code' && <p className="form-note" role="status">Claude Code MCP 导入、预览和应用暂不支持。请在 Claude Code 中独立配置；ModelDock 不会修改其 MCP 设置。</p>}
     <p className="form-note">勾选仅保存目录中的工具选择。点击“预览 / 应用”才会备份并同步工具配置；MCP 命令由工具启动。</p>
     <div className="panel table-scroll"><table className="feature-table"><thead><tr><th>名称 / 配置</th>{TOOLS.map(entry => <th key={entry.id} className="feature-tool-column" title={isJetBrainsTool(entry.id) ? 'JetBrains MCP 暂不支持，请在 IDE 内独立配置' : entry.id === 'claude-code' ? 'Claude Code MCP 暂不支持，不读取或写入配置' : entry.id === 'dsh' ? '尚无已核实的统一配置路径，仅提供导出片段' : entry.id === 'copilot' ? 'GitHub Copilot CLI 用户配置，桌面应用加载待验证' : entry.name}>{entry.name}<span>{servers.filter(server => server.enabledTools.includes(entry.id)).length}</span></th>)}<th>操作</th></tr></thead>

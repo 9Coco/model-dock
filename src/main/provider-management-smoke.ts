@@ -121,17 +121,16 @@ export async function verifyProviderManagement(window: BrowserWindow, store: Sto
     assert.equal(await evaluate<number>(`document.querySelectorAll('.sidebar [data-page="mcp"],.sidebar [data-page="skills"]').length`), 0, 'MCP and Skills destinations are removed');
     assert.equal(await evaluate<number>(`document.querySelectorAll('.sidebar [data-tool-id="trae"]').length`), 0, 'Removed client is absent from tool navigation');
     const categories = await evaluate<string[]>(`[...document.querySelectorAll('[data-tool-category]')].map(item=>item.dataset.toolCategory)`);
-    assert.deepEqual(categories, ['agent', 'jetbrains'], 'The requested regular Agent and JetBrains categories are available');
+    assert.deepEqual(categories, ['editor', 'tui', 'desktop'], 'The tool categories are available');
     const categoryTools: Record<string, string[]> = {};
     for (const category of categories) {
       await click(`[data-tool-category="${category}"]`);
       categoryTools[category] = await evaluate<string[]>(`[...document.querySelectorAll('.sidebar [role="tabpanel"]:not([hidden]) [data-page="tools"][data-tool-id]')].map(item=>item.dataset.toolId)`);
       assert.deepEqual(store.listBindings(), originalBindings, 'Category switching never writes tool bindings');
     }
-    assert.equal(new Set(Object.values(categoryTools).flat()).size, originalBindings.length, 'Every supported tool appears in one category');
-    assert.equal(Object.values(categoryTools).flat().length, originalBindings.length, 'Tool categories do not duplicate entries');
-    assert.equal(categoryTools.agent.length, originalBindings.length - 5, 'Regular Agent tools exclude the JetBrains tools');
-    assert.deepEqual(new Set(categoryTools.jetbrains), new Set(['junie', 'webstorm', 'intellij-idea', 'rider', 'pycharm']), 'Junie and all four JetBrains IDEs share the JetBrains category');
+    assert.deepEqual(categoryTools.editor, ['vscode', 'air'], 'VS Code and one Air entry appear under editors');
+    assert.equal(Object.values(categoryTools).flat().length, 10, 'The navigation exposes ten tools');
+    assert.equal(new Set(Object.values(categoryTools).flat()).size, 10, 'Tool categories do not duplicate entries');
     await selectProvider(provider.id);
     await masked();
     await assertClipboard('.connection-fields [aria-label="复制供应商 URL"]', provider.baseUrl);
