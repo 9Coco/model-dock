@@ -70,29 +70,32 @@ else:
 
     def probe_global_proxy(endpoint, *, cancel_event, progress):
         check_global_upstream_route(endpoint)
-        if cancel_event.is_set():
-            raise InterruptedError('连接已取消。')
         target = 'example.com'
+        alternate = 'www.microsoft.com'
         address = endpoint.display.removeprefix('http://')
-        try:
-            connectivity.probe_global_proxy(endpoint, tcp_target=target)
-            return
-        except (connectivity.GlobalProbeTargetTimeout, connectivity.GlobalProbeTargetRejected) as error:
-            target = 'www.microsoft.com'
-            message = f'{error}。正在通过同一代理验证备用目标 {target}…'
-        except (connectivity.GlobalProbeTimeout, connectivity.GlobalProbeTransient) as error:
-            message = f'{error}。正在重试 {address}…'
-        if cancel_event.is_set():
-            raise InterruptedError('连接已取消。')
-        progress(message)
-        if cancel_event.wait(.5):
-            raise InterruptedError('连接已取消。')
-        try:
-            connectivity.probe_global_proxy(endpoint, tcp_target=target)
-        except (connectivity.GlobalProbeTransient, connectivity.GlobalProbeTimeout) as error:
+        # The hotspot address can stay the same while its TCP or UDP path is
+        # still starting. Keep probing this endpoint within a finite budget.
+        retry_delays = (.5, 1.5, 3)
+        attempts = len(retry_delays) + 1
+        for attempt in range(1, attempts + 1):
             if cancel_event.is_set():
-                raise InterruptedError('连接已取消。') from None
-            raise OSError(f'{address} 已检测两次。{error}') from None
+                raise InterruptedError('连接已取消。')
+            try:
+                connectivity.probe_global_proxy(endpoint, tcp_target=target)
+                return
+            except (connectivity.GlobalProbeTransient, connectivity.GlobalProbeTimeout) as error:
+                if cancel_event.is_set():
+                    raise InterruptedError('连接已取消。') from None
+                target_rejected = isinstance(error, connectivity.GlobalProbeTargetRejected)
+                if attempt == attempts or (target_rejected and target == alternate):
+                    raise OSError(f'{address} 已检测 {attempt} 次。{error}') from None
+                if target != alternate and isinstance(error, (connectivity.GlobalProbeTargetTimeout, connectivity.GlobalProbeTargetRejected)):
+                    target = alternate
+                    progress(f'{error}。正在通过同一代理验证备用目标 {target}…')
+                else:
+                    progress(f'{error}。正在重试 {address}（第 {attempt + 1}/{attempts} 次）…')
+                if cancel_event.wait(retry_delays[attempt - 1]):
+                    raise InterruptedError('连接已取消。') from None
 
 output_lock = threading.Lock()
 def emit(value):

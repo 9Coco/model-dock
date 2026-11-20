@@ -2100,6 +2100,98 @@
     },
     {
       "ids": [
+        "gpt-6.2-sol"
+      ],
+      "vendor": "openai",
+      "contextWindow": 1050000,
+      "contextLimitType": "combined",
+      "maxInputTokens": 922000,
+      "maxOutputTokens": 128000,
+      "vision": true,
+      "tools": true,
+      "toolsByWireApi": {
+        "responses": true,
+        "chat-completions": false
+      },
+      "thinking": true,
+      "thinkingCanDisable": false,
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "defaultReasoningEffort": "medium",
+      "reasoningApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "supportedWireApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "verifiedAt": "2026-11-20",
+      "sourceUrls": [
+        "https://developers.openai.com/api/docs/models/gpt-6.2-sol",
+        "https://developers.openai.com/api/docs/guides/latest-model"
+      ],
+      "notes": [
+        "Public API limits; native Codex subscription limits come from the account catalog.",
+        "Tool calling requires Responses. Medium is the integration guide's recommended starting effort."
+      ],
+      "uiNotes": [
+        "公共 API 规格不能直接覆盖账号订阅目录返回的限制。"
+      ]
+    },
+    {
+      "ids": [
+        "gpt-6.2-astra"
+      ],
+      "vendor": "openai",
+      "contextWindow": 1050000,
+      "contextLimitType": "combined",
+      "maxInputTokens": 922000,
+      "maxOutputTokens": 128000,
+      "vision": true,
+      "tools": true,
+      "toolsByWireApi": {
+        "responses": true,
+        "chat-completions": false
+      },
+      "thinking": true,
+      "thinkingCanDisable": false,
+      "reasoningEfforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "defaultReasoningEffort": "medium",
+      "reasoningApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "supportedWireApis": [
+        "chat-completions",
+        "responses"
+      ],
+      "verifiedAt": "2026-11-20",
+      "sourceUrls": [
+        "https://developers.openai.com/api/docs/models/gpt-6.2-astra",
+        "https://developers.openai.com/api/docs/guides/latest-model"
+      ],
+      "notes": [
+        "Public API limits; native Codex subscription limits come from the account catalog.",
+        "Tool calling requires Responses. Medium is the integration guide's recommended starting effort."
+      ],
+      "uiNotes": [
+        "公共 API 规格不能直接覆盖账号订阅目录返回的限制。"
+      ]
+    },
+    {
+      "ids": [
         "gpt-6-astra"
       ],
       "vendor": "openai",

@@ -6,6 +6,11 @@ ModelDock 是跨平台本地模型管理台：全局维护模型来源与别名�
 
 0.4.0 起包含 FlowBridge 的组合发行版采用 [GPL-3.0-or-later](LICENSE)；原 ModelDock 代码及原创应用标记保留 [MIT 授权](LICENSE-MIT)，第三方图标和依赖保留各自的 Apache-2.0、CC-BY-4.0、MIT 或其他许可，详见 [第三方声明](THIRD_PARTY_NOTICES.md)。欢迎按 [贡献指南](CONTRIBUTING.md) 提交修复；敏感问题请遵循 [安全报告流程](SECURITY.md)。
 
+## 0.4.29 · GPT-6.2 模型参数与手机代理连接
+
+- 补齐 OpenAI 官方 API 的 GPT-6.2 Sol / Astra 参数。两款模型均为 1,050,000 上下文、922,000 最大输入、128,000 最大输出，可用思考档位为 low、medium、high、xhigh、max。已有模型可在供应商页使用「补全模型参数」校准，再同步使用这些模型的工具。OpenCode TUI / Desktop 会将 Responses 模型配置的思考档位同步为模型变体。
+- Linux 全局模式直接验证已填写的 SOCKS5 地址。遇到暂时性的 TCP 或 UDP 探测故障时，继续尝试同一个代理，最多验证四次。连接无需先查询热点地址。
+
 ## 0.4.28 · 移除 JetBrains 订阅，保留工具接入
 
 - 移除 JetBrains AI 订阅的添加入口、IDE / Air / Central 账号导入、额度查询和内置账号调用路径。其他订阅与自定义 API 保留。

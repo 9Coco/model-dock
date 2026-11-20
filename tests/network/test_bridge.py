@@ -161,23 +161,58 @@ class BridgeTests(unittest.TestCase):
     def test_only_target_failures_switch_tcp_targets_and_retry_is_bounded(self):
         probe_api = bridge.connectivity
         endpoint = bridge.Endpoint('192.0.2.1', 38473)
-        for failure, target in [
-            (probe_api.GlobalProbeTargetRejected('example.com', 4), 'www.microsoft.com'),
-            (probe_api.GlobalProbeTargetTimeout('target timed out'), 'www.microsoft.com'),
-            (probe_api.GlobalProbeTimeout('upstream timed out'), 'example.com'),
-            (probe_api.GlobalProbeTransient('UDP transport failed'), 'example.com'),
+        primary, alternate = 'example.com', 'www.microsoft.com'
+        for failure, targets in [
+            (probe_api.GlobalProbeTargetRejected(primary, 4), [primary, alternate]),
+            (probe_api.GlobalProbeTargetTimeout('target timed out'), [primary, alternate, alternate, alternate]),
+            (probe_api.GlobalProbeTimeout('upstream timed out'), [primary] * 4),
+            (probe_api.GlobalProbeTransient('UDP transport failed'), [primary] * 4),
         ]:
             cancel = Mock()
             cancel.is_set.return_value = cancel.wait.return_value = False
             progress = Mock()
             with self.subTest(failure=failure), patch.object(bridge, 'check_global_upstream_route'), \
-                 patch.object(probe_api, 'probe_global_proxy', side_effect=[failure, failure]) as probe:
-                with self.assertRaisesRegex(OSError, r'192\.0\.2\.1:38473 已检测两次') as caught:
+                 patch.object(probe_api, 'probe_global_proxy', side_effect=[failure] * len(targets)) as probe:
+                with self.assertRaisesRegex(OSError, rf'192\.0\.2\.1:38473 已检测 {len(targets)} 次') as caught:
                     bridge.probe_global_proxy(endpoint, cancel_event=cancel, progress=progress)
                 self.assertIn(str(failure), str(caught.exception))
-                self.assertEqual(probe.call_args_list, [call(endpoint, tcp_target='example.com'),
-                                                       call(endpoint, tcp_target=target)])
-                progress.assert_called_once()
+                self.assertEqual(probe.call_args_list, [call(endpoint, tcp_target=target) for target in targets])
+                self.assertEqual(cancel.wait.call_args_list, [call(.5), call(1.5), call(3)][:len(targets) - 1])
+                self.assertEqual(progress.call_count, len(targets) - 1)
+
+    @unittest.skipUnless(sys.platform.startswith('linux'), 'Linux hotspot not ready on first attempts')
+    def test_connect_retries_same_saved_endpoint_without_hotspot_lookup(self):
+        endpoint = bridge.Endpoint('192.0.2.1', 38473)
+        settings = {'mode': 'global', 'address': 'socks5://192.0.2.1:38473'}
+        marker = self.session.directory / 'global-lease.json'
+        failures = iter([
+            bridge.connectivity.GlobalProbeTimeout('phone proxy temporarily unreachable'),
+            bridge.connectivity.GlobalProbeTargetTimeout('proxy TCP destination timed out'),
+            None,
+        ])
+
+        def probe_until_ready(*_args, **_kwargs):
+            self.assertFalse(marker.exists())
+            failure = next(failures)
+            if failure:
+                raise failure
+
+        with patch.object(bridge, 'check_global_upstream_route') as route, \
+             patch.object(bridge, 'TunController') as controller, \
+             patch.object(self.session.cancelled, 'wait', return_value=False) as wait, \
+             patch.object(bridge.connectivity, 'probe_global_proxy', side_effect=probe_until_ready) as probe:
+            controller.return_value.info = {'proxy_port': 30000}
+            controller.return_value.snapshot.return_value = {'running': True}
+            self.assertTrue(self.session.connect(settings, True)['running'])
+            self.assertEqual(probe.call_args_list, [
+                call(endpoint, tcp_target='example.com'),
+                call(endpoint, tcp_target='example.com'),
+                call(endpoint, tcp_target='www.microsoft.com'),
+            ])
+            self.assertEqual(wait.call_args_list, [call(.5), call(1.5)])
+            route.assert_called_once_with(endpoint)
+            controller.assert_called_once_with(endpoint, bypass_addresses=[])
+            controller.return_value.start.assert_called_once()
 
     @unittest.skipUnless(sys.platform.startswith('linux'), 'Linux SOCKS5 retries')
     def test_protocol_failure_and_cancel_during_retry_never_probe_again(self):

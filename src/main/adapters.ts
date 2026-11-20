@@ -315,6 +315,10 @@ export function buildConfig(store: AdapterStore, tool: ToolId, port: number, rev
       provider: { npm: model.wireApi === 'responses' ? '@ai-sdk/openai' : '@ai-sdk/openai-compatible' },
       limit: clientBudget(model),
       tool_call: model.tools, modalities: { input: model.vision ? ['text', 'image'] : ['text'], output: ['text'] },
+      ...(model.wireApi === 'responses' && model.reasoningEfforts?.length ? {
+        variants: Object.fromEntries(model.reasoningEfforts.map(reasoningEffort => [reasoningEffort, { reasoningEffort }])),
+        ...(model.defaultReasoningEffort ? { options: { reasoningEffort: model.defaultReasoningEffort } } : {}),
+      } : {}),
     }])) }]));
     const defaultGroup = defaultModel && groups.find(group => group.models.some(model => model.id === defaultModel.id));
     let targetNotice: string, canApply = true;

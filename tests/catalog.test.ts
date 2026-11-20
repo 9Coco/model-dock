@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createServer, type Server } from 'node:http';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Model, ModelInput, Provider, ToolBinding } from '../src/shared/types';
 import { ModelCatalog, type CatalogStore } from '../src/main/catalog';
 import { Store } from '../src/main/store';
-import { buildConfig, buildCopilotDesktopPlan } from '../src/main/adapters';
+import { applyConfig, buildConfig, buildCopilotDesktopPlan } from '../src/main/adapters';
 import { modelCatalogEndpoint, prepareUpstream } from '../src/main/oauth';
 import { lookupModelMetadata } from '../src/shared/model-metadata';
 import { presetById } from '../src/shared/presets';
@@ -65,6 +65,66 @@ async function reopenAndSerializeVsCode(f: Awaited<ReturnType<typeof persistentC
 
 describe('real model catalog discovery and batch selection', () => {
   const legacyModel: Model = { id: 'saved', providerId: 'api', upstreamId: 'test-model', alias: 'my-route', displayName: '我的模型', wireApi: 'chat-completions', contextWindow: 0, enabled: true, tools: false, vision: false };
+
+  it('fills GPT-6.2 API models on discovery and repairs saved unknown budgets for tool export', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'modeldock-gpt-6-2-')); persistentFolders.push(dir);
+    const store = await Store.create(dir, syntheticCodec); persistentStores.push(store);
+    const source = store.saveProvider({ name: 'OpenAI', kind: 'openai-compatible', presetId: 'openai',
+      baseUrl: 'https://api.openai.com/v1', enabled: true, apiKey: 'SYNTHETIC_ONLY' });
+    const ids = ['gpt-6.2-sol', 'gpt-6.2-astra'];
+    const catalog = new ModelCatalog(store, {
+      prepareRequest: async (provider, path, body) => prepareUpstream(provider, { apiKey: 'SYNTHETIC_ONLY' }, path, body),
+    }, { fetch: async () => json({ data: ids.map(id => ({ id })) }) });
+    const legacy = store.saveModel({ ...legacyModel, id: undefined, providerId: source.id,
+      upstreamId: ids[0], alias: ids[0], wireApi: 'responses' });
+    const budgets = { contextWindow: 1050000, maxInputTokens: 922000, maxOutputTokens: 128000 };
+    const capabilities = { vision: true, tools: true, thinking: true, reasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      defaultReasoningEffort: 'medium', reasoningEffortFormat: 'responses' };
+
+    const discovery = await catalog.discover(source.id);
+    expect(discovery.models.find(model => model.upstreamId === ids[1])).toMatchObject({ ...budgets, ...capabilities });
+    const { added: [added] } = catalog.addSelected(source.id, [{ upstreamId: ids[1] }]);
+    expect(added).toMatchObject({ ...budgets, ...capabilities });
+    expect(lookupModelMetadata(ids[0], source, 'chat-completions')).toMatchObject({ ...budgets, tools: false });
+
+    for (const tool of ['opencode', 'vscode', 'codex', 'copilot']) {
+      const binding = store.listBindings().find(item => item.id === tool)!;
+      store.saveBinding({ ...binding, enabled: true, mode: 'aggregate', providerIds: [source.id],
+        modelIds: [legacy.id, added.id], defaultModelId: legacy.id });
+    }
+    const before = JSON.parse(buildConfig(store, 'opencode', 18181).content).provider.modeldock.models;
+    expect(before[legacy.alias].limit).toMatchObject({ context: 32768, output: 4096 });
+    expect(before[legacy.alias]).not.toHaveProperty('variants');
+
+    const preview = await catalog.previewParameters(source.id);
+    const row = preview.rows.find(model => model.id === legacy.id)!;
+    expect(row.missing).toContainEqual({ field: 'contextWindow', before: 0, after: 1050000, source: 'dictionary' });
+    expect(catalog.applyParameters(source.id, preview.token, [legacy.id], true)).toBe(1);
+    expect(store.listModels().find(model => model.id === legacy.id)).toMatchObject({
+      ...budgets, ...capabilities, id: legacy.id, alias: legacy.alias, displayName: legacy.displayName,
+    });
+    const after = JSON.parse(buildConfig(store, 'opencode', 18181).content).provider.modeldock.models;
+    const variants = Object.fromEntries(capabilities.reasoningEfforts.map(level => [level, { reasoningEffort: level }]));
+    expect(after[legacy.alias]).toMatchObject({ limit: { context: 1050000, output: 128000 }, tool_call: true,
+      options: { reasoningEffort: capabilities.defaultReasoningEffort } });
+    expect(after[legacy.alias].variants).toEqual(variants);
+    expect(after[added.alias].variants).toEqual(variants);
+
+    const vscode = JSON.parse(buildConfig(store, 'vscode', 18181).content)[0].models;
+    expect(vscode.find((model: { id: string }) => model.id === legacy.alias)).toMatchObject({
+      maxInputTokens: budgets.maxInputTokens, maxOutputTokens: budgets.maxOutputTokens,
+      supportsReasoningEffort: capabilities.reasoningEfforts, defaultReasoningEffort: capabilities.defaultReasoningEffort,
+    });
+    const copilot = buildCopilotDesktopPlan(store, 18181).providers[0].models;
+    expect(copilot.find(model => model.modelId === legacy.alias)?.supportedReasoningEfforts).toEqual(capabilities.reasoningEfforts);
+
+    const codexHome = join(dir, 'codex');
+    applyConfig(store, 'codex', 18181, dir, join(dir, 'backups'), dir, { codexHome });
+    const codex = JSON.parse(readFileSync(join(codexHome, 'modeldock-models.json'), 'utf8')).models;
+    const codexLegacy = codex.find((model: { slug: string }) => model.slug === legacy.alias);
+    expect(codexLegacy).toMatchObject({ context_window: budgets.contextWindow, default_reasoning_level: capabilities.defaultReasoningEffort });
+    expect(codexLegacy.supported_reasoning_levels.map((level: { effort: string }) => level.effort)).toEqual(capabilities.reasoningEfforts);
+  });
 
   it('applies explicit parameter calibration to the same saved model and carries its capabilities into VS Code', async () => {
     const f = await persistentCatalogFixture({ context_window: 64000, input_modalities: ['text', 'image'], tools: true, effort: { supported_levels: ['low', 'high'], default_level: 'high' } });
