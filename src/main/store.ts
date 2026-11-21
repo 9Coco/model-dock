@@ -94,15 +94,14 @@ export class Store {
       }
       // 修改点：旧版其他工具允许 direct 多入口，转为等价的 auto 元数据；不改外部配置或所选来源。
       for (const row of store.rows("SELECT id,provider_ids FROM bindings WHERE mode='direct'")) {
-        if (!Object.hasOwn(TOOL_NAMES, String(row.id)) || row.id === 'codex' || row.id === 'claude-code' || supportsMultipleSources(row.id as ToolId)) continue;
+        if (!Object.hasOwn(TOOL_NAMES, String(row.id)) || row.id === 'air' || row.id === 'codex' || row.id === 'claude-code' || supportsMultipleSources(row.id as ToolId)) continue;
         const ids = row.provider_ids === null ? [] : JSON.parse(String(row.provider_ids));
         if (Array.isArray(ids) && ids.length > 1) db.run("UPDATE bindings SET mode='auto' WHERE id=?", [String(row.id)]);
       }
-      const firstAirBinding = !store.one("SELECT id FROM bindings WHERE id='air'");
+      // Keep retired Air metadata for existing scoped routes; never adopt or enable it.
       for (const [tool, name] of Object.entries(TOOL_NAMES)) db.run('INSERT OR IGNORE INTO bindings(id,name,enabled,model_ids,default_model_id,note,mode,provider_ids,vscode_sync_scope,copilot_sync_scope,dsh_sync_scope) VALUES(?,?,?,?,?,?,?,?,?,?,?)', [tool, name, 0, '[]', '', '', isJetBrainsTool(tool) ? 'aggregate' : 'direct', '[]', tool === 'vscode' ? 'selected' : 'managed', tool === 'copilot' ? 'selected' : 'managed', tool === 'dsh' ? 'selected' : 'managed']);
       store.retireJetBrainsSubscriptions();
       store.migrateSingleEntryBindings();
-      if (firstAirBinding) store.inheritLegacyAirBinding();
       if (!store.one("SELECT value FROM settings WHERE key='gateway_key'")) db.run('INSERT INTO settings(key,value) VALUES(?,?)', ['gateway_key', codec.encrypt(store.newKey())]);
       store.persist();
       return store;
@@ -666,7 +665,7 @@ export class Store {
   private migrateSingleEntryBindings(): void {
     const models = this.listModels(), providers = this.listProviders();
     for (const binding of this.allBindings()) {
-      if (!isSingleEntryTool(binding.id) || binding.connectionChoices) continue;
+      if (binding.id === 'air' || !isSingleEntryTool(binding.id) || binding.connectionChoices) continue;
       const ids = binding.providerIds ?? [];
       const provider = providers.find(provider => provider.id === ids[0]);
       const scoped = resolveBindingModels({ ...binding, mode: 'aggregate', enabled: true }, models, providers);
@@ -676,29 +675,6 @@ export class Store {
       const updated = updateSingleEntryBinding({ ...binding, mode }, {}, models, providers);
       this.db.run('UPDATE bindings SET mode=?,connection_choices=? WHERE id=?', [mode, JSON.stringify(updated.connectionChoices), binding.id]);
     }
-  }
-  private inheritLegacyAirBinding(): void {
-    const selections = this.allBindings().filter(binding => binding.enabled && binding.jetBrainsPlugin === 'air').map(binding => {
-      const { mode, providerIds = [], modelIds, modelSelection, defaultModelId } = binding;
-      const choice = binding.connectionChoices;
-      const connectionChoices = structuredClone(choice ?? {});
-      if (connectionChoices.direct) delete connectionChoices.direct.completionModelId;
-      if (connectionChoices.aggregate) delete connectionChoices.aggregate.completionModelId;
-      return { mode: mode === 'direct' ? 'direct' as const : 'aggregate' as const, providerIds, modelIds, modelSelection, defaultModelId, connectionChoices };
-    });
-    const [selection] = selections;
-    // Compare both drafts with the active selection before inheriting a legacy
-    // Air connection. Old routes retain their original per-IDE bindings.
-    if (!selection || selections.some(item => !isDeepStrictEqual(item, selection))) return;
-    if (selection.mode === 'direct' && selection.providerIds.length !== 1) return;
-    const models = this.listModels(), providers = this.listProviders();
-    const binding = updateSingleEntryBinding({ ...selection, id: 'air', name: 'Air', note: '', enabled: true }, {}, models, providers);
-    const available = resolveBindingModels(binding, models, providers);
-    if (!available.length || binding.defaultModelId && !available.some(model => model.id === binding.defaultModelId)) return;
-    try { this.validateConnectionChoices(binding.connectionChoices, models, providers); }
-    catch { return; }
-    this.db.run("UPDATE bindings SET enabled=1,mode=?,provider_ids=?,model_ids=?,model_selection=?,default_model_id=?,connection_choices=? WHERE id='air'",
-      [selection.mode, JSON.stringify(selection.providerIds), JSON.stringify(selection.modelIds), selection.modelSelection ?? null, selection.defaultModelId, JSON.stringify(binding.connectionChoices)]);
   }
   getJetBrainsPlugin(tool: ToolId): JetBrainsPlugin {
     if (!isJetBrainsTool(tool)) throw new Error('此工具不支持 JetBrains 插件选择。');

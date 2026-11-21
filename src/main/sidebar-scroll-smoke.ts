@@ -109,16 +109,18 @@ export async function verifySidebarScroll(window: BrowserWindow, store: Store, o
       await pause(100);
       const start = await evaluate<SidebarReadback>(readScript); validate(start);
       assert.ok(start.lists[1].scrollHeight > start.lists[1].clientHeight, 'Many synthetic providers must exercise provider scrolling');
-      assert.equal(start.lists[0].rows.length, 4, 'Desktop category shows four tools');
-      await clickVisible('[data-tool-category="editor"]');
-      await waitFor(`document.querySelector('[data-tool-category="editor"]')?.getAttribute('aria-selected')==='true'`, 'editor category');
+      assert.equal(start.lists[0].rows.length, 5, 'Desktop category shows five tools including VS Code');
+      assert.equal(await evaluate<number>(`document.querySelectorAll('[data-tool-category="editor"],.sidebar [data-tool-id="air"]').length`), 0, 'Retired editor and Air entries are absent');
       await evaluate(`document.querySelector('[data-sidebar-scroll="tools"]').scrollTop=1e6`);
-      const editors = await evaluate<SidebarReadback>(readScript); validate(editors);
-      assert.equal(editors.lists[0].rows.length, 2, 'Editor category shows VS Code and Air');
-      assert.ok(editors.lists[0].lastVisible, 'Air is reachable inside the tool viewport');
-      writeFileSync(join(outputDir, `electron-sidebar-editors-${theme}-${requestedSize[0]}.png`), await captureUi());
+      await clickVisible('.sidebar [data-tool-id="vscode"]');
+      await waitFor(`!!document.querySelector('[data-tool-binding="vscode"]')`, 'VS Code opens from Desktop App');
+      writeFileSync(join(outputDir, `electron-sidebar-vscode-${theme}-${requestedSize[0]}.png`), await captureUi());
+      await clickVisible('[data-tool-category="tui"]');
+      await waitFor(`document.querySelector('[data-tool-category="tui"]')?.getAttribute('aria-selected')==='true'`, 'TUI category');
+      const terminal = await evaluate<SidebarReadback>(readScript); validate(terminal);
+      assert.equal(terminal.lists[0].rows.length, 4, 'TUI retains all four terminal tools');
       await clickVisible('[data-tool-category="desktop"]');
-      await waitFor(`document.querySelector('[data-tool-category="desktop"]')?.getAttribute('aria-selected')==='true'`, 'regular Agent category');
+      await waitFor(`document.querySelector('[data-tool-category="desktop"]')?.getAttribute('aria-selected')==='true'`, 'Desktop App category');
 
       await evaluate(`document.querySelector('[data-sidebar-scroll="tools"]').scrollTop=1e6`);
       const toolsBottom = await evaluate<SidebarReadback>(readScript);

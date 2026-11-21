@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import type { BrowserWindow } from 'electron';
 import type { ConfigPreview, Snapshot, ToolBinding, ToolId } from '../shared/types';
 
-const toolIds = ['codex', 'claude-code', 'junie', 'opencode', 'opencode-desktop', 'dsh', 'vscode', 'air', 'copilot', 'copilot-cli'] as const;
+const toolIds = ['codex', 'claude-code', 'junie', 'opencode', 'opencode-desktop', 'dsh', 'vscode', 'copilot', 'copilot-cli'] as const;
 
 interface IconReadback {
   tool: string;
@@ -53,6 +53,7 @@ export async function verifyToolIcons(window: BrowserWindow, outputDir: string, 
     throw new Error(`Tool icon validation timed out: ${label}`);
   }
   await waitFor(`!!document.querySelector('.app-shell')&&document.querySelectorAll('.sidebar [data-page="tools"][data-tool-id]').length===${toolIds.length}`, 'tool navigation');
+  assert.equal(await evaluate<number>(`document.querySelectorAll('[data-tool-category="editor"],.sidebar [data-tool-id="air"]').length`), 0, 'The retired editor category and standalone Air entry are absent');
   const size = window.getSize();
   const uiSnapshot = `(async()=>{
     const root=document.documentElement,active=document.querySelector('.sidebar [aria-current="page"]');
@@ -128,8 +129,9 @@ export async function verifyToolIcons(window: BrowserWindow, outputDir: string, 
         assert.equal(new Set(value.sidebar.map(icon => icon.source)).size, toolIds.length - 2, 'OpenCode and Copilot share their respective Desktop/TUI logos');
         assert.equal(value.sidebar.find(icon => icon.tool === 'copilot-cli')?.source, value.sidebar.find(icon => icon.tool === 'copilot')?.source, 'Both Copilot tools use the same official product logo');
         assert.equal(value.documentOverflow, false, 'Tool logos must not introduce horizontal document overflow');
-        assert.deepEqual(value.categories.map(category => category.category), ['editor', 'tui', 'desktop'], 'Three product categories remain available');
-        assert.deepEqual(value.categories.map(category => category.tools.length), [2, 4, 4], 'Product category counts match their tools');
+        assert.deepEqual(value.categories.map(category => category.category), ['tui', 'desktop'], 'Only TUI and Desktop App categories remain');
+        assert.deepEqual(value.categories.map(category => category.tools.length), [4, 5], 'Product category counts match their tools');
+        assert.ok(value.categories.find(category => category.category === 'desktop')?.tools.includes('vscode'), 'VS Code appears in Desktop App');
         if (height === 1440) assert.ok(value.allToolsVisibleInCategory, 'Tall overview must display all tools together within each category');
         const headers: IconReadback[] = [];
         const screenshots: string[] = [];
@@ -149,14 +151,14 @@ export async function verifyToolIcons(window: BrowserWindow, outputDir: string, 
             const entries = await evaluate<{ cli: boolean; independent: boolean; mode: boolean; preview: boolean; apply: boolean; restore: boolean }>(`(()=>{const guide=document.querySelector('[data-copilot-cli-entry-guide]');return {cli:guide?.textContent.includes('/model')===true,independent:guide?.textContent.includes('无需打开 Copilot app')===true,mode:!!document.querySelector('[data-tool-binding="copilot-cli"] [data-action="tool-use-aggregate"]'),preview:!!document.querySelector('[data-tool-binding="copilot-cli"] [data-action="preview-tool-config"]'),apply:!!document.querySelector('[data-tool-binding="copilot-cli"] [data-action="apply-tool-config"]'),restore:!!document.querySelector('[data-tool-binding="copilot-cli"] [data-action="restore-official-tool-config"]')}})()`);
             assert.deepEqual(entries, { cli: true, independent: true, mode: true, preview: true, apply: true, restore: true }, 'Copilot CLI has an independent terminal guide and shared configuration controls');
           }
-          if (height === 880 && (tool === 'air' || tool === 'junie' || tool === 'copilot-cli' || tool === 'opencode-desktop')) {
+          if (height === 880 && (tool === 'vscode' || tool === 'junie' || tool === 'copilot-cli' || tool === 'opencode-desktop')) {
             const screenshot = `electron-tool-icons-${theme}-${tool}-detail.png`;
             writeFileSync(join(outputDir, screenshot), await captureUi());
             screenshots.push(screenshot);
           }
         }
-        for (const category of ['editor', 'tui', 'desktop']) {
-          await selectTool(category === 'desktop' ? 'opencode-desktop' : category === 'tui' ? 'opencode' : 'air');
+        for (const category of ['tui', 'desktop']) {
+          await selectTool(category === 'desktop' ? 'vscode' : 'opencode');
           if (height === 1440) await evaluate(`document.querySelector('[data-sidebar-scroll="tools"]').scrollTop=0`);
           const screenshot = `electron-tool-icons-${theme}-${category}-${width}-${height}.png`;
           writeFileSync(join(outputDir, screenshot), await captureUi());
@@ -241,5 +243,5 @@ export async function verifyToolIcons(window: BrowserWindow, outputDir: string, 
     assert.ok(restoredSize.every((value, index) => Math.abs(value - size[index]) <= sizeTolerance), 'Icon validation must restore the window size within Win32 DPI rounding');
     restored = true;
   }
-  writeFileSync(join(outputDir, 'tool-icons-validation.json'), JSON.stringify({ tools: [...toolIds], airTool: 'air', layouts, juniePreview, copilotCliPreview, originalUiRestored: restored, windowSize: { before: size, after: restoredSize, tolerancePixels: sizeTolerance }, savedSettingsUnchanged: true, toolSelectionsUnchanged: true, configurationSyncInvoked: false }, null, 2));
+  writeFileSync(join(outputDir, 'tool-icons-validation.json'), JSON.stringify({ tools: [...toolIds], airEntryAbsent: true, editorCategoryAbsent: true, vscodeInDesktop: true, layouts, juniePreview, copilotCliPreview, originalUiRestored: restored, windowSize: { before: size, after: restoredSize, tolerancePixels: sizeTolerance }, savedSettingsUnchanged: true, toolSelectionsUnchanged: true, configurationSyncInvoked: false }, null, 2));
 }

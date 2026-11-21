@@ -78,7 +78,7 @@ import { bindingConnectionPolicy } from '../shared/bindings';
 import { writeClipboardText } from './clipboard-text';
 import { localGatewayKey, providerApiKey } from './connection-keys';
 import { createVault } from './vault';
-import { AIR_MANUAL_SETUP, buildConfig, buildCopilotDesktopPlan, buildDshPlan, applyConfig, connectionKey } from './adapters';
+import { buildConfig, buildCopilotDesktopPlan, buildDshPlan, applyConfig, connectionKey } from './adapters';
 import { isActiveToolId } from '../shared/tool-categories';
 import { applyDshConfig } from './dsh-config';
 import { resolveDshProfile } from './dsh-profile';
@@ -690,7 +690,7 @@ function registerIpc() {
     if (toolConfigPending.size && !savingDuringCopilotSync) throw new Error('工具配置正在同步，请稍后修改配置。');
   };
   async function synchronizeTool(id: ToolId): Promise<string> {
-    if (id === 'air') throw new Error(AIR_MANUAL_SETUP);
+    toolId(id);
     if (toolRestorePending || toolConfigPending.has(id)) throw new Error('此工具配置正在更新，请稍后再试。');
     toolConfigPending.add(id);
     try {
@@ -921,16 +921,15 @@ function registerIpc() {
     const id = toolId(binding.id), before = store.listBindings().find(value => value.id === id);
     assertEditable(id);
     store.saveBinding({ ...binding, id });
-    if (id !== 'air' && before && !beforeToolSelections.has(id)) beforeToolSelections.set(id, structuredClone(before));
+    if (before && !beforeToolSelections.has(id)) beforeToolSelections.set(id, structuredClone(before));
   });
   handle('toolSyncUndoStatus', (value: ToolId) => {
     const id = toolId(value);
-    return id === 'air' ? { available: false, reason: AIR_MANUAL_SETUP } : undoManager.status(id);
+    return undoManager.status(id);
   });
   handle('undoToolSync', async (value: ToolId) => {
     assertEditable();
     const id = toolId(value);
-    if (id === 'air') throw new Error(AIR_MANUAL_SETUP);
     toolRestorePending = true;
     const current = store.listBindings().find(binding => binding.id === id);
     const draftBefore = beforeToolSelections.get(id);
@@ -1007,7 +1006,6 @@ function registerIpc() {
   handle('restoreOfficialConfig', async (value: ToolId) => {
     assertEditable();
     const id = toolId(value);
-    if (id === 'air') throw new Error(AIR_MANUAL_SETUP);
     toolRestorePending = true;
     try {
       const featureHome = __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home') : app.getPath('home');

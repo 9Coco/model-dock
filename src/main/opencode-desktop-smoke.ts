@@ -53,13 +53,13 @@ export async function verifyOpenCodeDesktop(window: BrowserWindow, store: Store,
   await click('[data-tool-id="opencode-desktop"][data-page="tools"]');
   await wait(`!!document.querySelector('[data-tool-binding="opencode-desktop"]')`);
   const categories = await evaluate<{ id: string; count: number; label: string }[]>(`[...document.querySelectorAll('[data-tool-category]')].map(el=>({id:el.dataset.toolCategory,count:Number(el.querySelector('span').textContent),label:el.textContent}))`);
-  assert.deepEqual(categories.map(c => [c.id, c.count]), [['editor', 5], ['tui', 4], ['desktop', 4]]);
+  assert.deepEqual(categories.map(c => [c.id, c.count]), [['tui', 4], ['desktop', 5]]);
   assert.equal(readFileSync(target, 'utf8'), original, 'Navigation never writes client configuration');
   // Actual Electron key events exercise the tablist's roving focus and wrapping.
   await evaluate(`document.querySelector('[data-tool-category="desktop"]').focus()`);
   window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Right' });
   window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Right' });
-  await wait(`document.activeElement?.dataset.toolCategory==='editor' && document.activeElement.getAttribute('aria-selected')==='true'`);
+  await wait(`document.activeElement?.dataset.toolCategory==='tui' && document.activeElement.getAttribute('aria-selected')==='true'`);
   await click('[data-tool-category="desktop"]');
   assert.ok(await evaluate<boolean>('window.modelDock.startGateway(0).then(status => status.running)'));
   await click(`input[data-action="select-tool-provider"][data-provider-id="${provider.id}"]`);

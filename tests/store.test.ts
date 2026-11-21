@@ -89,8 +89,8 @@ describe('restoring a captured tool selection', () => {
   });
 });
 
-describe('independent Air binding', () => {
-  it.each(['one', 'matching', 'different', 'assistant'] as const)('upgrades %s legacy selections without changing their bindings', async variant => {
+describe('retained Air compatibility data', () => {
+  it.each(['one', 'matching', 'different', 'assistant'] as const)('preserves %s legacy selections without adopting them into a retired Air connection', async variant => {
     const { store, dir, codec } = await setup();
     const source = store.saveProvider({ name: 'Air source', kind: 'openai-compatible', baseUrl: 'https://air.example/v1', enabled: true, apiKey: 'synthetic' });
     const chat = store.saveModel(model(source.id, 'air-chat'));
@@ -120,22 +120,30 @@ describe('independent Air binding', () => {
     const migrated = await Store.create(dir, codec); stores.push(migrated);
     expect(migrated.listBindings().filter(binding => binding.id !== 'air')).toEqual(before);
     const air = migrated.listBindings().find(binding => binding.id === 'air')!;
-    if (variant === 'one' || variant === 'matching') {
-      expect(air).toMatchObject({ id: 'air', name: 'Air', enabled: true, mode: 'aggregate', providerIds: [source.id],
-        modelIds: [responses.id], modelSelection: 'selected', defaultModelId: responses.id,
-        connectionChoices: { direct: { providerId: source.id, defaultModelId: chat.id }, aggregate: { modelIds: [responses.id] } },
-      });
-      expect(air.connectionChoices!.direct).not.toHaveProperty('completionModelId');
-      expect(air).not.toHaveProperty('jetBrainsPlugin');
-    } else {
-      expect(air).toMatchObject({ id: 'air', name: 'Air', enabled: false, providerIds: [], modelIds: [], defaultModelId: '' });
-    }
+    expect(air).toMatchObject({ id: 'air', name: 'Air', enabled: false, providerIds: [], modelIds: [], defaultModelId: '' });
+    expect(air).not.toHaveProperty('connectionChoices');
 
     migrated.saveBinding({ ...air, enabled: false, mode: 'direct', providerIds: [], modelIds: [], defaultModelId: '' });
     migrated.close();
     const reopened = await Store.create(dir, codec); stores.push(reopened);
     expect(reopened.listBindings().find(binding => binding.id === 'air')).toMatchObject({ enabled: false, providerIds: [] });
     expect(reopened.listBindings().filter(binding => binding.id !== 'air')).toEqual(before);
+  });
+
+  it('keeps an existing Air route selection and its mode drafts on reopen', async () => {
+    const { store, dir, codec } = await setup();
+    const source = store.saveProvider({ name: 'Retained Air source', kind: 'openai-compatible', baseUrl: 'https://air.example/v1', enabled: true, apiKey: 'synthetic' });
+    const selected = store.saveModel({ ...model(source.id, 'retained-air'), wireApi: 'responses' });
+    const air = store.listBindings().find(binding => binding.id === 'air')!;
+    store.saveBinding({ ...air, enabled: true, mode: 'aggregate', providerIds: [source.id], modelIds: [selected.id],
+      modelSelection: 'selected', defaultModelId: selected.id, note: 'existing compatibility route',
+      connectionChoices: { direct: { providerId: source.id, defaultModelId: selected.id } },
+    });
+    const before = store.listBindings();
+    store.close();
+    const reopened = await Store.create(dir, codec); stores.push(reopened);
+    expect(reopened.listBindings()).toEqual(before);
+    expect(resolveBindingModels(reopened.listBindings().find(binding => binding.id === 'air')!, reopened.listModels(), reopened.listProviders()).map(item => item.id)).toEqual([selected.id]);
   });
 });
 

@@ -165,7 +165,7 @@ export async function verifyCompactUi(window: BrowserWindow, store: Store, outpu
       assert.ok(icon.decorative && !icon.focusable && !icon.externalNode, `Inline decorative icon must not add a focus stop or remote reference: ${icon.symbol}`);
       assert.ok(icon.controlNamed, `An icon control must retain its text, title or ARIA name: ${icon.symbol}`);
     }
-    assert.deepEqual(value.brand.tools.map(item => item.tool).sort(), ['codex', 'claude-code', 'junie', 'opencode', 'opencode-desktop', 'dsh', 'vscode', 'air', 'copilot', 'copilot-cli'].sort(), 'Every supported tool retains its brand asset independently of sidebar grouping');
+    assert.deepEqual(value.brand.tools.map(item => item.tool).sort(), ['codex', 'claude-code', 'junie', 'opencode', 'opencode-desktop', 'dsh', 'vscode', 'copilot', 'copilot-cli'].sort(), 'Every supported tool retains its brand asset independently of sidebar grouping');
     assert.equal(value.brand.appRowRemoved, true, 'The sidebar brand row is removed');
     assert.ok(value.brand.tools.every(item => !item.material), 'Tool identities remain local brand assets');
     for (const item of value.brand.tools) {

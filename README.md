@@ -6,13 +6,19 @@ ModelDock 是跨平台本地模型管理台：全局维护模型来源与别名�
 
 0.4.0 起包含 FlowBridge 的组合发行版采用 [GPL-3.0-or-later](LICENSE)；原 ModelDock 代码及原创应用标记保留 [MIT 授权](LICENSE-MIT)，第三方图标和依赖保留各自的 Apache-2.0、CC-BY-4.0、MIT 或其他许可，详见 [第三方声明](THIRD_PARTY_NOTICES.md)。欢迎按 [贡献指南](CONTRIBUTING.md) 提交修复；敏感问题请遵循 [安全报告流程](SECURITY.md)。
 
+## 0.4.34 · 简化工具入口
+
+- 移除 ModelDock 的 Air 独立 BYOK 参数页、模型选择、参数预览/导出和密钥复制入口。Air 内使用 Claude Code、OpenCode 或 Junie 时，通过对应工具配置模型。
+- 工具分类只保留「TUI / 桌面 App」。VS Code 移到「桌面 App」，取消「编辑器」分类；共 9 个工具入口。
+- 保留既有 Air / JetBrains IDE 绑定与旧网关兼容，不清理外部客户端的配置、账号、凭据或备份。Claude Code、OpenCode、Junie、VS Code 等工具的 BYOK 和同步功能继续保留。
+
 ## 0.4.33 · Junie IDE 安装识别
 
 - Junie 同步可以复用 JetBrains IDE 已安装的 Junie 原生程序，修复仅安装 IDE 版本时无法同步的问题；独立 CLI 的安装和 PATH 仍优先使用。
 - 未找到可用程序时，显示具体安装提示，避免误报为“此工具使用导出配置入口”。模型文件、默认选择和 ACP 入口仍沿用原有备份、事务同步及撤销流程。
 - IDE 使用独立的「Junie · ModelDock」ACP 入口。需要终端中的 `junie` 命令时，请另外安装 Junie CLI；复用 IDE 程序不会修改 PATH。
 
-## 0.4.30 · Air 独立接入
+## 0.4.30 · Air 独立接入（历史功能，0.4.34 移除入口）
 
 - 编辑器工具区保留 VS Code，并把四个 JetBrains IDE 的工具入口合并为一个 Air。Air 使用单独的模型选择和聚合地址 `/tool/air/v1`。
 - 在 Air 的 Accounts 页面手工添加提供商。ModelDock 提供 URL、Key 和参考模型，账户由 Air 保存。
@@ -311,19 +317,17 @@ WebStorm、IntelliJ IDEA、Rider、PyCharm 的接入参数页分别提供「AI A
 - 授权生命周期对照 CC Switch 的设备码实现：xAI 校验 OIDC issuer，续期显式携带原权限 scope；ID Token 只保存在主进程加密凭据中，界面取得账号元数据。临时续期网络失败保留原授权状态；明确拒绝或过期停止轮询。导入凭据前取消旧登录、刷新和额度查询，提交刷新前检查原凭据，防止晚回复覆盖新授权。
 - 模型：填写 API Key 后从供应商获取真实模型列表，搜索、勾选并批量添加。不同供应商可用相同模型简称及显示名称，列表和工具中按「套餐名 - 模型名」展示；系统维护唯一的聚合接口 ID。支持真实上游 ID、协议、上下文、工具、视觉与思考强度能力。默认来源未授权、模型列表为空，能力由实际配置确定。
 - Codex 兼容模型目录带独立的 `client_version` 和对应版本请求头，使用原生 `slug` 作为上游 ID，解析显示名称、上下文和明确的能力字段。默认候选隐藏 `hide / none` 条目，已保存和手动添加的模型保留；目录可见性不代表实际模型权限。API / Grok 来源不携带 Codex 目录版本参数。
-- 工具包括 VS Code、Air、Claude Code、Junie、OpenCode TUI / Desktop、Copilot CLI、Copilot app、Codex 和 DSH。Codex、Claude Code 和 Air 的直连配置各使用一个原生供应商端点。开启聚合时使用一个 ModelDock 本机入口，可分别管理来源和精确模型范围。直连与聚合选项独立保存。
+- 工具分为「TUI / 桌面 App」：TUI 包括 Claude Code、Junie、OpenCode TUI 和 Copilot CLI；桌面 App 包括 VS Code、Codex、OpenCode Desktop、Copilot app 和 DSH。Codex 和 Claude Code 的直连配置各使用一个原生供应商端点。开启聚合时使用一个 ModelDock 本机入口，可分别管理来源和精确模型范围。直连与聚合选项独立保存。
 - 本地网关：固定监听 `127.0.0.1`，默认 `18181`；本地 Key 鉴权、标准模型目录、Chat Completions/Responses、流式转发、请求日志。
 - SQLite：保存来源、模型、绑定与日志；敏感凭据由主进程加密，预览和快照不包含上游密钥。
 - 配置接入：工具支持预览 / 导出，并按各自能力在用户修改勾选或模型偏好后自动同步，写入前备份。VS Code 默认只保留所选自定义供应商，可关闭此选项来保留原有自定义来源；其他 vendor 与 JSONC 注释保留。OpenCode 保留其他供应商、MCP 和非受管 JSONC 注释；Codex 的 TOML 重写保留配置字段，但不保证原注释。Copilot app 通过运行实例的原生接口同步来源、模型和凭据，预览是同步计划参考，不需要再手工导入；Copilot CLI 使用独立的官方来源注册表和设置文件。DSH 写入 home 插件覆盖与凭据 refs，同步前保存加密恢复记录，清空后恢复原覆盖。
 - 托盘：关闭主窗口可留在后台运行；退出应用会停止网关。
 
-## Air 模型接入
+## 在 Air 中使用已配置的 Agent
 
-1. 在 ModelDock 选择「编辑器 → Air」，选择供应商和模型。直连支持原生 Chat Completions 或 Responses 的 API。聚合使用 ModelDock 的本机 Air 地址和模型别名，调用时保持 ModelDock 运行。
-2. 在 JetBrains IDE 打开「设置 → AI → Air → Accounts」，选择「More Providers → OpenAI」，填写名称和 ModelDock 提供的 URL、API Key，并测试连接后保存。
-3. 在 Air 会话里选择这个授权来源，再选择兼容的 Agent 和模型。Agent 需支持所选模型的协议。
+ModelDock 不再提供单独的 Air BYOK 参数页。Claude Code、OpenCode 等 Agent 的模型和凭据通过各自工具页同步，再由 Air 启动 Agent 读取相应配置；Junie 使用独立的「Junie · ModelDock」ACP 入口。Air 自己的账户选择由 Air 管理。
 
-Air 账户由 IDE 中的 Air 管理。ModelDock 的预览隐藏 Key，复制 Key 和导出参数由用户明确触发。参考 [JetBrains Air 授权说明](https://www.jetbrains.com/help/air/air-in-ides-authorization.html)。
+旧版本的 Air 绑定和专用网关地址只保留兼容，不会在升级时删除外部 IDE 配置或凭据。Air 中的登录标签不代表实际模型来源，应结合 Agent 配置与请求结果判断。参考 [JetBrains Air 授权说明](https://www.jetbrains.com/help/air/air-in-ides-authorization.html)。
 
 ## 授权、MCP 和 Skills
 
@@ -453,7 +457,7 @@ npx electron-builder --dir --config.electronDist=node_modules/electron/dist --co
 
 ## 单来源与聚合接口
 
-十个工具页均提供「使用聚合接口」复选框。不同工具分别保存连接方式、来源与模型范围，开启后不会自动加入其他供应商或扩大已有的精确模型列表。
+九个工具页均提供「使用聚合接口」复选框。不同工具分别保存连接方式、来源与模型范围，开启后不会自动加入其他供应商或扩大已有的精确模型列表。
 
 | 选项与来源 | 接入方式 |
 | --- | --- |
@@ -461,11 +465,10 @@ npx electron-builder --dir --config.electronDist=node_modules/electron/dist --co
 | 开启「使用聚合接口」 | 选择多家来源，并逐个勾选允许使用的模型。客户端使用一个 `http://127.0.0.1:<端口>/tool/<工具 ID>/v1` 入口、固定本机 Key 和唯一模型别名；未启用模型不开放。Claude Code 的基地址不含 `/v1`，客户端调用其 `/v1/messages`。 |
 | Codex 聚合模型 | 仅提供 Responses 模型。 |
 | Claude Code 聚合模型 | 提供 Messages 入口，复用所选 API / 订阅的已有模型；原生 Messages 来源按对应鉴权转发，Chat / Responses 来源通过协议桥调用。 |
-| Air | 直连使用所选 API 的原生地址和 Key；聚合使用 `/tool/air/v1` 和本机 Key。在 Air Accounts 内手工配置。 |
 
-关闭聚合时保留默认模型所在供应商；没有对应来源时保留首个已选来源。开启聚合时保留已有来源、默认模型及精确模型范围。聚合模型列表明确保存，新增模型不会自动加入已有选择。全部停用保持空列表，网关拒绝调用未启用模型，显式同步会清理对应客户端入口。Air 全部停用时保存空绑定。
+关闭聚合时，单入口工具保留默认模型所在供应商；没有对应来源时保留首个已选来源。支持多来源的工具保留已有选择。开启聚合时保留已有来源、默认模型及精确模型范围。聚合模型列表明确保存，新增模型不会自动加入已有选择。全部停用保持空列表，网关拒绝调用未启用模型，显式同步会清理对应客户端入口。
 
-API 原生直连不依赖本地网关。预览隐藏 API Key；支持自动同步的工具在用户更改选择后先备份再写入配置。Air 的选择保存在 ModelDock 内，账户仍在 Air 中更新。订阅令牌留在主进程，由本机入口续期。
+API 原生直连不依赖本地网关。预览隐藏 API Key；支持自动同步的工具在用户更改选择后先备份再写入配置。订阅令牌留在主进程，由本机入口续期。
 
 旧绑定加载时保留原直连 / 聚合 / 自动连接及部分模型范围，不会在启动或切换导航时同步客户端。旧的多供应商直连绑定保留来源与模型范围，并迁移为等价的自动连接元数据（`mode: "auto"`），外部配置保持原样，界面显示沿用已有连接；修改默认模型或来源不会自动迁移连接方式。明确切换聚合选项后采用新的单来源或聚合方式。DSH 同时写入模型与对应凭据；Copilot app 通过自身原生接口更新，不由 ModelDock 直接改写其数据库。
 

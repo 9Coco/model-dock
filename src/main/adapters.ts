@@ -23,7 +23,9 @@ import { isJetBrainsTool } from '../shared/jetbrains';
 import { applyJetBrainsConfig, buildJetBrainsConfig, type JetBrainsConfigOptions } from './jetbrains-config';
 
 const PLACEHOLDER = '__MODELDOCK_LOCAL_KEY__';
-export const AIR_MANUAL_SETUP = '请在 Air 的「设置 → AI → Air → Accounts → More Providers → OpenAI」中填写 URL 和 Key。';
+function assertConfigurationSupported(tool: ToolId): void {
+  if (tool === 'air') throw new Error('Air 独立连接配置已移除，请在实际使用的 Agent 中配置模型。');
+}
 // These are client request budgets, not inferred upstream model specifications.
 const UNKNOWN_CONTEXT_BUDGET = 32768;
 const UNKNOWN_OUTPUT_BUDGET = 4096;
@@ -159,6 +161,7 @@ export function editJsonc(text: string, edits: Edit[]): string {
 }
 /** Only call from a trusted main-process copy/export action. */
 export function connectionKey(store: AdapterStore, tool: ToolId): string {
+  assertConfigurationSupported(tool);
   const { binding } = selected(store, tool);
   const groups = connectionGroups(store, tool, binding, 18181, true);
   if (groups.length !== 1) throw new Error('此工具使用多个供应商的独立凭据，请导出配置；没有共用的单一连接密钥。');
@@ -297,6 +300,7 @@ export function buildDshPlan(store: AdapterStore, port: number, revealKey = fals
   return { syncScope, providers, credentials, ...(defaultModel ? { defaultModel } : {}), ...(mappings.length ? { legacyDispatch: { version: 1 as const, mappings } } : {}) };
 }
 export function buildConfig(store: AdapterStore, tool: ToolId, port: number, revealKey = false, homeDirectory = homedir(), options: OpenCodePathOptions & { jetBrainsOptions?: JetBrainsConfigOptions; junieHome?: string; copilotCliHome?: string; copilotCliProvidersConfig?: string } = {}): ConfigPreview {
+  assertConfigurationSupported(tool);
   if (isJetBrainsTool(tool)) return buildJetBrainsConfig(store, tool, port, revealKey, homeDirectory, options.jetBrainsOptions);
   // 修改点：Claude Code 按原生 Messages 入口或本机协议桥生成配置，不能落入其他工具适配分支。
   if (tool === 'claude-code') return buildClaudeConfig(store, revealKey, port);
@@ -315,18 +319,6 @@ export function buildConfig(store: AdapterStore, tool: ToolId, port: number, rev
       : binding.mode === 'direct' && !supportsMultipleSources(tool) ? '订阅单源模式：只使用所选订阅，由本机入口管理授权续期，不把 OAuth 凭据写入工具。'
         : '通过本机入口按模型别名分发到所选供应商，不把 OAuth 凭据写入工具。';
   const defaultModel = models.find(m => m.id === binding.defaultModelId) ?? models[0];
-  if (tool === 'air') return {
-    filename: 'modeldock-air-connection-guide.json',
-    canApply: false,
-    content: JSON.stringify(first ? {
-      provider: 'OpenAI', name: 'ModelDock · Air', baseUrl: first.base, apiKey: first.key,
-      models: models.map(model => ({ id: model.alias, name: model.displayName || model.alias, wireApi: model.wireApi })),
-      suggestedModel: defaultModel?.alias,
-    } : {}, null, 2),
-    instructions: first
-      ? AIR_MANUAL_SETUP + '保存后，在 Air 会话中选择该提供商及兼容模型。' + (first.directApi ? '' : '使用聚合接口时，请保持 ModelDock 的本地服务运行。')
-      : '请先为 Air 选择可用的 Chat Completions 或 Responses 模型。',
-  };
   if (tool === 'vscode') return {
     filename: 'modeldock-vscode.json', content: JSON.stringify(vscode(store, groups), null, 2), canApply: true,
     instructions: connection + '使用 VS Code Copilot Chat 的 Custom Endpoint schema；凭据随每个模型的 requestHeaders 写入（apiKey 明文字段会被 VS Code 当作秘密存储引用忽略）。'
@@ -390,7 +382,7 @@ export function buildConfig(store: AdapterStore, tool: ToolId, port: number, rev
   };
 }
 export function applyConfig(store: AdapterStore, tool: ToolId, port: number, appData: string, backups: string, homeDirectory = homedir(), options: OpenCodePathOptions & { codexHome?: string; configHome?: string; claudeConfigDir?: string; junieHome?: string; copilotCliHome?: string; copilotCliProvidersConfig?: string; jetBrainsOptions?: JetBrainsConfigOptions } = {}): string {
-  if (tool === 'air') throw new Error(AIR_MANUAL_SETUP);
+  assertConfigurationSupported(tool);
   if (isJetBrainsTool(tool)) return applyJetBrainsConfig(store, tool, backups, homeDirectory, { ...options.jetBrainsOptions, port });
   if (tool === 'claude-code') return applyClaudeConfig(store, backups, homeDirectory, { claudeConfigDir: options.claudeConfigDir, port });
   if (tool === 'junie') return applyJunieConfig(store, backups, homeDirectory, { junieHome: options.junieHome, port });

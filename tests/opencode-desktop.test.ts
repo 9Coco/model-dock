@@ -41,8 +41,12 @@ describe('OpenCode Desktop and TUI targets', () => {
     expect(readFileSync(f.target, 'utf8')).toBe(f.original);
     const bindings = f.store.listBindings();
     expect(new Set(bindings.map(b => b.id).filter(isActiveToolId))).toEqual(new Set(activeToolIds));
-    expect(toolCategories.map(c => bindings.filter(b => toolCategoryFor(b.id) === c.id).length)).toEqual([2, 4, 4]);
-    expect(bindings.filter(b => !isActiveToolId(b.id)).map(b => b.id)).toEqual(['webstorm', 'intellij-idea', 'rider', 'pycharm']);
+    expect(toolCategories.map(c => c.id)).toEqual(['tui', 'desktop']);
+    expect(toolCategories.map(c => bindings.filter(b => toolCategoryFor(b.id) === c.id).length)).toEqual([4, 5]);
+    expect(toolCategoryFor('vscode')).toBe('desktop');
+    expect(isActiveToolId('air')).toBe(false);
+    expect(toolCategoryFor('air')).toBeUndefined();
+    expect(bindings.filter(b => !isActiveToolId(b.id)).map(b => b.id)).toEqual(['air', 'webstorm', 'intellij-idea', 'rider', 'pycharm']);
   });
   it('keeps Desktop on global XDG while TUI honors explicit file/directory and rejects ambiguous relative or inline overrides', async () => {
     const f = await fixture(), configHome = join(f.root, '配置 空间'), file = join(f.root, '终端.jsonc'), dir = join(f.root, 'terminal-config');

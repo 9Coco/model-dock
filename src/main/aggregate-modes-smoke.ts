@@ -8,7 +8,7 @@ import { bindingConnectionPolicy } from '../shared/bindings';
 import { supportsMultipleSources } from '../shared/tool-capabilities';
 import { isSingleEntryTool } from '../shared/single-entry';
 
-const tools: ToolId[] = ['codex', 'claude-code', 'opencode', 'opencode-desktop', 'junie', 'copilot-cli', 'dsh', 'vscode', 'copilot', 'air'];
+const tools: ToolId[] = ['codex', 'claude-code', 'opencode', 'opencode-desktop', 'junie', 'copilot-cli', 'dsh', 'vscode', 'copilot'];
 /** 修改点：验证真实React切换与IPC保存，外部客户端写入仅限隔离的假home。 */
 export async function verifyAggregateModes(window: BrowserWindow, store: Store, outputDir: string, captureUi: () => Promise<Buffer>): Promise<void> {
   assert.equal(resolve(outputDir), resolve(process.env.MODELDOCK_SMOKE!)); assert.equal(resolve(store.dataDir), resolve(process.env.MODELDOCK_DATA_DIR!));
@@ -36,11 +36,10 @@ export async function verifyAggregateModes(window: BrowserWindow, store: Store, 
   }
   const stored = (tool: ToolId) => store.listBindings().find(binding => binding.id === tool)!;
   async function idle(tool: ToolId): Promise<void> {
-    // Air saves only the binding. Copilot serialization
-    // fixtures have no running desktop registry; its expected failed write must
+    // Copilot serialization fixtures have no running desktop registry; its expected failed write must
     // settle before another selection replaces it. Other clients must finish
     // their isolated configuration write, including the short debounce window.
-    const completed = tool === 'air' ? "status?.dataset.toolApplicationState==='saved'" : tool === 'copilot'
+    const completed = tool === 'copilot'
       ? `['synced','cleared','error'].includes(status?.dataset.toolApplicationState)`
       : `status?.dataset.toolApplicationState===(summary?.dataset.selectedModelCount==='0'?'cleared':'synced')`;
     await waitFor(`(()=>{const summary=document.querySelector('[data-tool-binding="${tool}"]'),status=document.querySelector('[data-tool-application-status]');return !!summary&&${completed}&&!document.querySelector('[data-action="tool-use-aggregate"]').disabled&&(summary.dataset.selectedModelCount==='0'||!document.querySelector('[data-action="tool-default-model"]').disabled);})()`, `${tool} synchronization settled`);
@@ -94,7 +93,7 @@ export async function verifyAggregateModes(window: BrowserWindow, store: Store, 
       const layout = await evaluate<any>(`(()=>{const main=document.querySelector('.main-content'),rect=document.querySelector('[data-action="tool-use-aggregate"]').getBoundingClientRect();return {horizontalOverflow:main.scrollWidth>main.clientWidth+1,toggleVisible:rect.top>=0&&rect.bottom<=innerHeight+1,checked:document.querySelector('[data-action="tool-use-aggregate"]').checked};})()`);
       assert.equal(layout.horizontalOverflow, false); assert.equal(layout.toggleVisible, true); assert.equal(layout.checked, true);
       layouts.push({ tool, theme, width, height, ...layout });
-      if (['claude-code', 'air', 'opencode', 'codex', 'junie', 'copilot-cli', 'vscode'].includes(tool)) writeFileSync(join(outputDir, `${tool}-aggregate-${theme}-${width}.png`), await captureUi());
+      if (['claude-code', 'opencode', 'codex', 'junie', 'copilot-cli', 'vscode'].includes(tool)) writeFileSync(join(outputDir, `${tool}-aggregate-${theme}-${width}.png`), await captureUi());
     }
     await click('[data-action="tool-use-aggregate"]');
     if (isSingleEntryTool(tool)) {
@@ -127,7 +126,7 @@ export async function verifyAggregateModes(window: BrowserWindow, store: Store, 
       assert.deepEqual(new Set(stored(tool).providerIds), new Set(providers.map(provider => provider.id)));
       assert.deepEqual(new Set(stored(tool).modelIds), new Set(chosen.map(model => model.id)));
     }
-    results.push({ tool, twoSourceAggregate: true, oneEndpoint: true, exactModels: true, routedAAndB: true, defaultProviderRetainedOnDirect: true, directUsesNativeApi: true, directProviderCount: supportsMultipleSources(tool) ? 2 : 1, excludedModelRejected: true, externalSync: tool === 'copilot' ? 'serialization-only-no-running-client' : tool === 'air' ? 'manual-air-boundary' : 'isolated-fixture' });
+    results.push({ tool, twoSourceAggregate: true, oneEndpoint: true, exactModels: true, routedAAndB: true, defaultProviderRetainedOnDirect: true, directUsesNativeApi: true, directProviderCount: supportsMultipleSources(tool) ? 2 : 1, excludedModelRejected: true, externalSync: tool === 'copilot' ? 'serialization-only-no-running-client' : 'isolated-fixture' });
   }
   writeFileSync(join(outputDir, 'aggregate-modes-validation.json'), JSON.stringify({ ok: true, tools: results, layouts, allToolToggles: true, mockInferenceRequests: results.length * 2, nativeJunieNotExecuted: true, noActualClientProfiles: true }, null, 2));
 }

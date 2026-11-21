@@ -64,37 +64,24 @@ describe('tool adapters', () => {
     expect(f.catalog[0]).toMatchObject({ reasoningEfforts: ['low', 'high', 'max'], defaultReasoningEffort: 'high' });
   });
 
-  it('exports a single manual Air account with native model protocols and mode-specific credentials', () => {
+  it.each(['direct', 'aggregate'] as const)('rejects retired Air %s configuration before reading credentials or changing client files', mode => {
     const f = nativeFixture();
-    const catalog = [f.catalog[0], { ...f.catalog[0], id: 'native-chat', alias: 'local-chat', upstreamId: 'native-chat', wireApi: 'chat-completions' as const },
-      f.catalog[2]];
-    let binding: ToolBinding = { id: 'air', name: 'Air', enabled: true, mode: 'direct', providerIds: ['provider-a'],
-      modelIds: [], modelSelection: 'all', defaultModelId: catalog[1].id, note: '' };
-    const air = { ...f, listModels: () => catalog, listBindings: () => [binding] };
-    const preview = buildConfig(air, 'air', 18181);
-    expect(preview).toMatchObject({ filename: 'modeldock-air-connection-guide.json', canApply: false });
-    expect(preview.instructions).toContain('Accounts → More Providers → OpenAI');
-    expect(JSON.parse(preview.content)).toMatchObject({ provider: 'OpenAI', baseUrl: 'https://api-a.test/v1',
-      apiKey: '__PROVIDER_API_KEY__', suggestedModel: 'native-chat', models: [
-        { id: 'shared-upstream', wireApi: 'responses' }, { id: 'native-chat', wireApi: 'chat-completions' },
-      ] });
-    expect(f.getSecret).not.toHaveBeenCalled();
-    expect(JSON.parse(buildConfig(air, 'air', 18181, true).content).apiKey).toBe('SYNTHETIC_KEY_provider-a');
-    expect(connectionKey(air, 'air')).toBe('SYNTHETIC_KEY_provider-a');
+    const binding: ToolBinding = { id: 'air', name: 'Air', enabled: true, mode, providerIds: ['provider-a'],
+      modelIds: [], modelSelection: 'all', defaultModelId: f.catalog[0].id, note: 'retained legacy selection' };
+    const air = { ...f, listBindings: vi.fn(() => [binding]), gatewayKey: vi.fn(() => 'local-test-secret') };
     const dir = mkdtempSync(join(tmpdir(), 'modeldock-air-guide-')); roots.push(dir);
-    expect(() => applyConfig(air, 'air', 18181, dir, dir, dir)).toThrow('Air');
-    expect(readdirSync(dir)).toEqual([]);
-    binding = { ...binding, providerIds: ['subscription'], defaultModelId: catalog[2].id };
-    expect(JSON.parse(buildConfig(air, 'air', 18181).content)).toEqual({});
-    expect(() => connectionKey(air, 'air')).toThrow();
-    binding = { ...binding, mode: 'aggregate', providerIds: ['provider-a', 'subscription'],
-      modelIds: [catalog[1].id, catalog[2].id], modelSelection: 'selected', defaultModelId: catalog[2].id };
-    expect(JSON.parse(buildConfig(air, 'air', 18181).content).apiKey).toBe('__MODELDOCK_LOCAL_KEY__');
-    const exported = buildConfig(air, 'air', 18181, true);
-    expect(JSON.parse(exported.content)).toMatchObject({ baseUrl: 'http://127.0.0.1:18181/tool/air/v1', apiKey: 'local-test-secret',
-      suggestedModel: catalog[2].alias, models: [{ id: 'local-chat' }, { id: catalog[2].alias }] });
-    expect(exported.content).not.toMatch(/PRIVATE_OAUTH|SYNTHETIC_KEY/);
-    expect(connectionKey(air, 'air')).toBe('local-test-secret');
+    const existing = join(dir, 'existing-client-config.json');
+    writeFileSync(existing, '{"keep":"user configuration"}\n');
+    const before = readFileSync(existing, 'utf8');
+    expect(() => buildConfig(air, 'air', 18181)).toThrow('Air 独立连接配置已移除');
+    expect(() => buildConfig(air, 'air', 18181, true)).toThrow('Air 独立连接配置已移除');
+    expect(() => connectionKey(air, 'air')).toThrow('Air 独立连接配置已移除');
+    expect(() => applyConfig(air, 'air', 18181, dir, dir, dir)).toThrow('Air 独立连接配置已移除');
+    expect(air.listBindings).not.toHaveBeenCalled();
+    expect(f.getSecret).not.toHaveBeenCalled();
+    expect(air.gatewayKey).not.toHaveBeenCalled();
+    expect(readdirSync(dir)).toEqual(['existing-client-config.json']);
+    expect(readFileSync(existing, 'utf8')).toBe(before);
   });
 
   it.each(['chat-completions', 'responses', 'messages'] as const)('exports saved user levels using the current %s format without mutating stale metadata', wireApi => {

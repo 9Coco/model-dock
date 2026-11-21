@@ -181,9 +181,12 @@ export async function verifyContextMenus(window: BrowserWindow, store: Store, ou
       assert.ok(toolIds.includes('tool-open')&&toolIds.includes('tool-preview')); await click(action('tool-open'));
       await waitFor(`!!document.querySelector('[data-tool-binding="${tool}"]')`,`tool menu opens the clicked ${tool} tool`);
     }
-    await click('[data-tool-category="editor"]');
-    const airIds = await context('.sidebar [data-tool-id="air"]');
-    for(const forbidden of ['tool-apply','tool-restore','tool-undo']) assert.equal(airIds.includes(forbidden),false,`Air cannot ${forbidden}`); await dismiss();
+    await click('[data-tool-category="desktop"]');
+    assert.equal(await evaluate<number>(`document.querySelectorAll('[data-tool-category="editor"],.sidebar [data-tool-id="air"]').length`), 0, 'Retired Air navigation cannot expose a context menu');
+    const vscodeIds = await context('.sidebar [data-tool-id="vscode"]');
+    assert.ok(vscodeIds.includes('tool-open') && vscodeIds.includes('tool-preview'));
+    await click(action('tool-open'));
+    await waitFor(`!!document.querySelector('[data-tool-binding="vscode"]')`, 'Desktop App context menu opens VS Code');
     assert.deepEqual(store.listBindings(),beforeBindings,'Menus do not synchronize external tools');
     writeFileSync(join(outputDir,'context-menu-validation.json'),JSON.stringify({ok:true,providerSidebarAndCards:true,openingHasNoMutation:true,backgroundPollingPreservesMenu:true,exactNativeClipboard:true,subscriptionTokensNotCopyable:true,editAndDeleteConfirmation:true,modelActions:true,logAndGatewayActions:true,pageActions:true,diagnosticDetailsAndSafeClipboard:true,accountDetailsAndCancelledManagement:true,accountTokensNotExposed:true,keyboardNavigation:true,nativeInputAndTextSelectionPreserved:true,viewportClamping:true,outsideDismissal:true,actualScrollingDismissal:true,toolNavigation:true,airWriteActionsAbsent:true,externalConfigurationWrites:false,layouts},null,2));
   } finally {
