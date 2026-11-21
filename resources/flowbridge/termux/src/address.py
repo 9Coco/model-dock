@@ -9,8 +9,10 @@ This module only reads local interface information; it does not scan a network.
 
 import argparse
 import ctypes
+import getpass
 import ipaddress
 import json
+import os
 import re
 import socket
 import struct
@@ -129,8 +131,12 @@ def via_ioctl():
             request = struct.pack("256s", name.encode()[:15])
             try:
                 flags = fcntl.ioctl(handle.fileno(), 0x8913, request)  # SIOCGIFFLAGS
-                if not struct.unpack_from("H", flags, 16)[0] & 1:
-                    continue
+            except OSError:
+                # Android may deny reading flags but allow reading the IPv4 address.
+                flags = None
+            if flags is not None and not struct.unpack_from("H", flags, 16)[0] & 1:
+                continue
+            try:
                 response = fcntl.ioctl(handle.fileno(), 0x8915, request)  # SIOCGIFADDR
                 result.append((name, socket.inet_ntoa(response[20:24])))
             except OSError:
@@ -138,11 +144,35 @@ def via_ioctl():
     return result
 
 
+def via_ifconfig():
+    # Without -a, ifconfig lists active interfaces. Termux versions use either
+    # "inet IP" or "inet addr:IP"; older ones print interface flags after the IP.
+    process = subprocess.run(["ifconfig"], text=True, capture_output=True, timeout=2, check=False)
+    result = []
+    for section in re.split(r"(?=^\S)", process.stdout, flags=re.MULTILINE):
+        if not section.strip():
+            continue
+        header = section.splitlines()[0]
+        name = header.split()[0].rstrip(":")
+        flags = re.search(r"\bflags=[^<\s]*<([^>]*)>", header)
+        if flags and "UP" not in flags.group(1).split(","):
+            continue
+        legacy_flags = re.search(r"^\s*([A-Z0-9_ ]+)\s+MTU:", section, re.MULTILINE)
+        if legacy_flags and "UP" not in legacy_flags.group(1).split():
+            continue
+        for address in re.findall(r"\binet\s+(?:addr:\s*)?([0-9.]+)(?=\s|$)", section):
+            if usable_ipv4(address):
+                result.append((name, address))
+    if process.returncode and not result:
+        raise OSError("ifconfig 无法读取接口信息")
+    return result
+
+
 def discover():
     found = {}
     methods = []
     errors = []
-    for name, reader in (("getifaddrs", via_getifaddrs), ("ip", via_ip), ("ioctl", via_ioctl)):
+    for name, reader in (("getifaddrs", via_getifaddrs), ("ip", via_ip), ("ioctl", via_ioctl), ("ifconfig", via_ifconfig)):
         try:
             for interface, address in reader():
                 item = candidate(interface, address)
@@ -154,17 +184,76 @@ def discover():
     return sorted(found.values(), key=lambda item: (item["priority"], item["interface"], int(ipaddress.IPv4Address(item["address"])))), methods, errors
 
 
+def hotspot_address(items, manual):
+    # Some Android devices expose a dedicated AP interface. The verified
+    # phone uses wlan2 as its hotspot gateway and wlan0 for its upstream Wi-Fi.
+    addresses = {item["address"] for item in items if item["kind"] == "hotspot"}
+    if not addresses:
+        addresses = {item["address"] for item in items if item["interface"] == "wlan2"}
+    if manual in addresses:
+        return manual
+    return next(iter(addresses)) if len(addresses) == 1 else None
+
+
+def ssh_destination():
+    fields = os.environ.get("SSH_CONNECTION", "").split()
+    if len(fields) == 4:
+        try:
+            address = ipaddress.ip_address(fields[2])
+            port = int(fields[3])
+            if not address.is_loopback and not address.is_unspecified and 0 < port <= 65535:
+                return str(address), port
+        except ValueError:
+            pass
+    return None, 8022
+
+
+def print_connections(items, port, manual):
+    hotspot = hotspot_address(items, manual)
+    session, ssh_port = ssh_destination()
+    user = getpass.getuser()
+
+    def ssh_command(label, address):
+        print(f"  {label}\n    ssh -p {ssh_port} {user}@{address}")
+
+    print("【1. 从电脑用 SSH 登录手机】")
+    if session:
+        ssh_command("电脑保持当前网络，重新登录用：", session)
+    else:
+        wifi = next((item["address"] for item in items if item["interface"] == "wlan0"), None)
+        if wifi and wifi != hotspot:
+            ssh_command("电脑和手机连同一个 Wi-Fi 时用：", wifi)
+        if hotspot:
+            ssh_command("电脑连手机开的热点时用：", hotspot)
+        if not wifi and not hotspot:
+            print("  手机连上 Wi-Fi 或开启热点后，执行 hotspot-proxy info 查看地址。")
+
+    print("\n【2. 电脑连手机热点，通过手机代理上网】")
+    if hotspot:
+        print(f"  电脑 Wi-Fi 连上手机热点后，代理填：{hotspot}:{port}（HTTP / SOCKS5 共用）")
+        print("  如需核对，在 Windows 运行 ipconfig，查看无线网卡的 IPv4 默认网关。")
+    else:
+        print(f"  开启热点并让电脑连上后，代理服务器填无线网卡的 IPv4 默认网关，端口填 {port}（HTTP / SOCKS5 共用）。")
+        print("  Windows 可运行 ipconfig，或在 ModelDock 中查询热点地址。")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=38473)
     parser.add_argument("--manual", metavar="IP", help="手动指定电脑热点连接中显示的手机 IPv4 网关")
-    parser.add_argument("--json", action="store_true", help="输出结构化结果")
+    output = parser.add_mutually_exclusive_group()
+    output.add_argument("--json", action="store_true", help="输出结构化结果")
+    output.add_argument("--connections", action="store_true", help="按 SSH 登录和热点代理两种用途显示当前地址")
     args = parser.parse_args(argv)
     if not 1 <= args.port <= 65535:
         parser.error("端口应为 1 到 65535")
+    if args.manual is not None and not usable_ipv4(args.manual):
+        parser.error("--manual 应填写手机的可连接 IPv4 地址，不能填 0.0.0.0 或回环地址")
+    if args.connections:
+        items, _, _ = discover()
+        print_connections(items, args.port, args.manual)
+        return 0
     if args.manual is not None:
-        if not usable_ipv4(args.manual):
-            parser.error("--manual 应填写手机的可连接 IPv4 地址，不能填 0.0.0.0 或回环地址")
         items = [{"interface": "", "address": str(ipaddress.IPv4Address(args.manual)), "kind": "manual", "priority": -1}]
         methods, errors = [], []
     else:

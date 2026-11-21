@@ -27,6 +27,7 @@ import { NativeMessagesError, prepareNativeMessagesRequest, toNativeMessagesResp
 import { normalizeNativeMessagesError } from './native-messages-errors';
 import { nativeJetBrainsCompletion } from '../shared/jetbrains-completion';
 import { JetBrainsCompletionError, parseJetBrainsCompletionRequest, normalizeJetBrainsCompletionResponse, createJetBrainsCompletionStream, jetBrainsCompletionToSse } from './jetbrains-completion';
+import { isVsCodeDeepSeekModel, vsCodeDeepSeekModel, vsCodeDeepSeekProvider } from '../shared/vscode-deepseek';
 
 export interface PreparedRequest { url: string; headers: Record<string, string>; body: Json }
 export interface GatewayOptions {
@@ -336,7 +337,8 @@ export class Gateway {
     try { validateUpstreamUrl(nativeMessages && provider.kind === 'openai-compatible' ? nativeClaudeBaseUrl(provider) ?? provider.baseUrl : provider.baseUrl, this.state.port); return true; } catch { return false; }
   }
   private allowedModels(tool?: ToolId): Model[] {
-    const models = this.store.listModels().filter(model => this.available(model, tool === 'claude-code'));
+    const models = this.store.listModels().filter(model => this.available(model, tool === 'claude-code'
+      || tool === 'vscode' && isVsCodeDeepSeekModel(model, this.store.getProvider(model.providerId))));
     if (!tool) {
       const exposure = this.store.gatewayExposure();
       return models.filter(model => !exposure.excludedProviderIds.includes(model.providerId) && !exposure.excludedModelIds.includes(model.id));
@@ -413,14 +415,15 @@ export class Gateway {
       if (request.method === 'GET' && route.endpoint === '/v1/models') {
         const data = this.allowedModels(route.tool).map(model => {
           const provider = this.store.getProvider(model.providerId)!;
-          return { id: model.alias, object: 'model', created: 0, owned_by: provider.name, display_name: modelDisplayLabel(model, provider), context_window: model.contextWindow, wire_api: model.wireApi, capabilities: { tools: model.tools, vision: model.vision } };
+          const clientModel = route.tool === 'vscode' ? vsCodeDeepSeekModel(model, provider) : model;
+          return { id: model.alias, object: 'model', created: 0, owned_by: provider.name, display_name: modelDisplayLabel(model, provider), context_window: model.contextWindow, wire_api: clientModel.wireApi, capabilities: { tools: model.tools, vision: model.vision } };
         });
         jsonResponse(response, 200, { object: 'list', data }); return;
       }
       const completion = route.endpoint === '/v1/completions';
       if (request.method !== 'POST' || !['/v1/chat/completions', '/v1/responses', '/v1/messages', '/v1/completions'].includes(route.endpoint)
         || completion && !isJetBrainsTool(route.tool)) throw new GatewayError(404, '接口不存在。');
-      if (anthropic && route.tool && route.tool !== 'claude-code'
+      if (anthropic && route.tool && route.tool !== 'claude-code' && route.tool !== 'vscode'
         || route.tool === 'claude-code' && !anthropic) throw new GatewayError(404, '此工具不使用该协议入口。');
       const body = await readBody(request, response);
       if (body.stream !== undefined && typeof body.stream !== 'boolean') throw new GatewayError(400, 'stream 必须是布尔值。');
@@ -434,8 +437,14 @@ export class Gateway {
       const saved = this.store.listModels().find(item => item.alias === requested);
       if (!saved || !saved.enabled) throw new GatewayError(404, '模型别名不存在或未启用。');
       const provider = this.store.getProvider(saved.providerId);
+      // Use signed Messages for thinking, or native Responses when the user
+      // explicitly disabled it. Saved protocols and other tools stay intact.
+      const vsCodeModel = route.tool === 'vscode' && isVsCodeDeepSeekModel(saved, provider) ? vsCodeDeepSeekModel(saved, provider) : undefined;
+      const vsCodeDeepSeek = anthropic && vsCodeModel?.wireApi === 'messages'
+        || route.endpoint === '/v1/responses' && vsCodeModel?.wireApi === 'responses';
+      if (anthropic && route.tool === 'vscode' && (!vsCodeDeepSeek || vsCodeModel?.wireApi !== 'messages')) throw new GatewayError(404, '此模型不使用该协议入口。');
       const expectedWire = route.endpoint === '/v1/responses' ? 'responses' : 'chat-completions';
-      const model = completion ? saved : traeRelayWireModel(saved, provider, anthropic ? 'messages' : expectedWire);
+      const model = vsCodeDeepSeek && vsCodeModel ? vsCodeModel : completion ? saved : traeRelayWireModel(saved, provider, anthropic ? 'messages' : expectedWire);
       if (!route.tool) {
         const exposure = this.store.gatewayExposure();
         if (exposure.excludedProviderIds.includes(model.providerId) || exposure.excludedModelIds.includes(model.id)) throw new GatewayError(403, '此模型未加入本地聚合接口。');
@@ -450,7 +459,7 @@ export class Gateway {
       if (completion && !nativeCompletion) throw new GatewayError(400, '此模型尚未确认原生 FIM 补全能力；请为 AI 补全选择兼容模型，不使用聊天协议代替。');
       const responsesBridge = anthropic && route.tool === 'claude-code' && provider && preferClaudeResponsesBridge(provider, model);
       const nativeMessages = anthropic && !responsesBridge && provider?.kind === 'openai-compatible'
-        && (model.wireApi === 'messages' || Boolean(nativeClaudeBaseUrl(provider)));
+        && (vsCodeDeepSeek || model.wireApi === 'messages' || Boolean(nativeClaudeBaseUrl(provider)));
       if (provider && provider.kind !== 'openai-compatible' && ('previous_response_id' in body || 'conversation' in body)) {
         throw new GatewayError(400, '订阅来源不支持服务端会话续接；请移除 previous_response_id / conversation，并在 input 中发送完整会话历史。');
       }
@@ -464,7 +473,8 @@ export class Gateway {
       // 修改点：Claude Messages 在本机转换成来源原生协议，订阅凭据继续由主进程续期。
       const upstreamBody = completion ? parseJetBrainsCompletionRequest(body, model.upstreamId, nativeCompletion?.maxOutputTokens) : nativeMessages ? { ...body, model: model.upstreamId } : anthropic ? { ...parseAnthropicRequest(body, model.wireApi), model: model.upstreamId } : chatResponses ? { ...parseChatResponsesRequest(jetBrainsResponsesHistory(body)), model: model.upstreamId } : { ...body, model: model.upstreamId };
       const upstreamPath = completion ? '/v1/completions' : nativeMessages ? '/v1/messages' : chatResponses ? '/v1/responses' : anthropic ? model.wireApi === 'responses' ? '/v1/responses' : '/v1/chat/completions' : route.endpoint;
-      await this.forward(request, response, provider, model, upstreamPath, normalizeUpstreamReasoning(provider, upstreamPath, upstreamBody), observe, anthropic || chatResponses ? { stream: body.stream === true, kind: nativeMessages ? 'native-messages' : chatResponses ? 'chat-responses' : 'anthropic' } : undefined, route.tool, nativeCompletion?.baseUrl);
+      const upstreamProvider = vsCodeDeepSeek ? vsCodeDeepSeekProvider(provider) : provider;
+      await this.forward(request, response, upstreamProvider, model, upstreamPath, normalizeUpstreamReasoning(upstreamProvider, upstreamPath, upstreamBody), observe, anthropic || chatResponses ? { stream: body.stream === true, kind: nativeMessages ? 'native-messages' : chatResponses ? 'chat-responses' : 'anthropic' } : undefined, route.tool, nativeCompletion?.baseUrl);
       logStatus = upstreamFailed ? upstreamFailureStatus ?? 502 : response.statusCode;
     } catch (error) {
       diagnosticError = describeError(error);

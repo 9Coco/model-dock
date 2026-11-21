@@ -215,15 +215,13 @@ addresses() {
     if [[ -s "$CONFIG_DIR/phone-ip" ]]; then
         args+=(--manual "$(cat "$CONFIG_DIR/phone-ip")")
     fi
-    "$PYTHON" "$APP_DIR/address.py" "${args[@]}"
+    "$PYTHON" "$APP_DIR/address.py" "${args[@]}" "$@"
 }
 
 banner() {
     echo
-    addresses
-    echo "HTTP / HTTPS 和 SOCKS5 共用入口端口 $PROXY_PORT，支持 TCP 与标准 SOCKS5 UDP 转发。"
-    echo '电脑打开 ModelDock 侧栏的“网络接管”，选择“全局流量”，查询并选中热点地址，再点击“连接”。'
-    echo '全局模式由电脑接管普通 TCP、UDP 和 DNS；手机需先更新到本版代理。'
+    addresses --connections
+    echo '电脑打开 ModelDock 侧栏的“网络接管”，选择“全局流量”即可代理 TCP、UDP 和 DNS。'
     echo '实时上传 / 下载：hotspot-proxy monitor'
     echo '重新查看地址：hotspot-proxy info'
     echo '停止代理：hotspot-proxy stop'
@@ -402,6 +400,7 @@ main() {
             [[ $# == 1 ]] || { usage; return 1; }
             if [[ "$1" == auto ]]; then
                 rm -f "$CONFIG_DIR/phone-ip"
+                addresses --connections
             else
                 "$PYTHON" - "$1" <<'PY'
 import ipaddress, sys
@@ -413,8 +412,8 @@ except ValueError:
     sys.exit('请输入电脑热点连接中的 IPv4 网关地址。')
 PY
                 printf '%s\n' "$1" > "$CONFIG_DIR/phone-ip"
+                addresses
             fi
-            addresses
             ;;
         set-port)
             [[ $# == 1 ]] || { usage; return 1; }

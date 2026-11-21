@@ -1,5 +1,6 @@
 import type { Model, Provider, ToolBinding } from './types';
 import { traeRelayClientModel } from './trae-relay-models';
+import { isVsCodeDeepSeekModel } from './vscode-deepseek';
 import { claudeConnectionKind, claudeModelsForProvider } from './claude';
 import { isJetBrainsTool } from './jetbrains';
 import { directModelsForProvider, isSingleEntryTool, nativeDirectBaseUrl } from './single-entry';
@@ -23,13 +24,14 @@ export function resolveBindingModels(binding: ToolBinding, models: Model[], prov
   const providerIds = binding.providerIds;
   const claude = binding.id === 'claude-code';
   const singleSource = binding.mode === 'direct' && !supportsMultipleSources(binding.id) || claude && binding.mode !== 'aggregate';
-  // 修改点：Claude 使用官方 Messages 入口或本机协议桥，其他适配器仍不消费 Messages。
+  // Claude consumes Messages generally; VS Code only consumes the verified
+  // official DeepSeek native Messages route. Other tool boundaries stay intact.
   const claudeIds = claude && providers ? new Set(providers.filter(provider => provider.enabled).flatMap(provider => binding.mode === 'aggregate'
     ? models.filter(model => model.providerId === provider.id && model.enabled)
     : claudeModelsForProvider(provider, models)).map(model => model.id)) : undefined;
   const nativeIds = binding.mode === 'direct' && isSingleEntryTool(binding.id) && providers ? new Set(providers.flatMap(provider => directModelsForProvider(binding.id, provider, models)).map(model => model.id)) : undefined;
   const sources = new Map(providers?.map(provider => [provider.id, provider]));
-  let result = models.map(model => traeRelayClientModel(binding.id, model, sources.get(model.providerId))).filter(model => model.enabled && (claude ? !claudeIds || claudeIds.has(model.id) : model.wireApi !== 'messages')
+  let result = models.map(model => traeRelayClientModel(binding.id, model, sources.get(model.providerId))).filter(model => model.enabled && (claude ? !claudeIds || claudeIds.has(model.id) : model.wireApi !== 'messages' || binding.id === 'vscode' && isVsCodeDeepSeekModel(model, sources.get(model.providerId)))
     && (!providers || providers.some(p => p.id === model.providerId && p.enabled)) && (!nativeIds || nativeIds.has(model.id)));
   if (providerIds !== undefined) {
     const allowed = singleSource ? providerIds.slice(0, 1) : providerIds;

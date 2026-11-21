@@ -6,8 +6,9 @@ Real protocol checks: FLOWBRIDGE_GOST_BIN=/absolute/path/gost python3 -m unittes
 Socket cleanup checks use temporary Unix sockets. The latter additionally needs
 permission to open temporary local TCP/UDP listening sockets.
 """
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stdout
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -30,6 +31,9 @@ SPEC = importlib.util.spec_from_file_location('flowbridge_phone_monitor_v04', SO
 MONITOR = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = MONITOR
 SPEC.loader.exec_module(MONITOR)
+ADDRESS_SPEC = importlib.util.spec_from_file_location('flowbridge_phone_address', SOURCE / 'address.py')
+ADDRESS = importlib.util.module_from_spec(ADDRESS_SPEC)
+ADDRESS_SPEC.loader.exec_module(ADDRESS)
 
 
 def installer_text():
@@ -40,6 +44,55 @@ def installer_text():
                      (SOURCE / name).read_text().rstrip() + '\n' + marker + '\n')
     parts.append((SOURCE / 'install-suffix.sh').read_text())
     return '\n'.join(parts)
+
+
+class ConnectionBannerTests(unittest.TestCase):
+    def sections(self, interfaces, ssh_connection=''):
+        candidates = [ADDRESS.candidate(name, ip) for name, ip in interfaces]
+        output = io.StringIO()
+        with patch.object(ADDRESS, 'discover', return_value=(candidates, [], [])), \
+                patch.dict(os.environ, SSH_CONNECTION=ssh_connection), redirect_stdout(output):
+            self.assertEqual(ADDRESS.main(['--connections', '--port', '41573']), 0)
+        ssh, proxy = output.getvalue().split('【2. 电脑连手机热点，通过手机代理上网】')
+        self.assertIn('【1. 从电脑用 SSH 登录手机】', ssh)
+        return ssh, proxy
+
+    def test_current_ssh_destination_is_independent_of_changing_hotspot(self):
+        for hotspot in ('10.20.30.1', '10.21.40.1'):
+            with self.subTest(hotspot=hotspot):
+                ssh, proxy = self.sections(
+                    [('vgate0', '172.18.8.9'), ('wlan0', '192.168.8.15'), ('wlan2', hotspot)],
+                    '10.20.30.2 49999 172.18.8.9 8033')
+                self.assertEqual(ssh.count('ssh -p '), 1)
+                self.assertIn('ssh -p 8033', ssh)
+                self.assertIn('@172.18.8.9', ssh)
+                self.assertEqual(proxy.count(':41573'), 1)
+                self.assertIn(f'{hotspot}:41573', proxy)
+                self.assertNotIn('172.18.8.9', proxy)
+                self.assertNotIn('192.168.8.15', proxy)
+
+    def test_local_shell_and_hotspot_off(self):
+        ssh, proxy = self.sections([('vgate0', '172.18.8.9'), ('wlan0', '192.168.8.15')])
+        self.assertIn('ssh -p 8022', ssh)
+        self.assertIn('@192.168.8.15', ssh)
+        self.assertNotIn('192.168.8.15', proxy)
+        self.assertNotIn('172.18.8.9', proxy)
+        self.assertIn('默认网关', proxy)
+        self.assertIn('41573', proxy)
+
+    def test_dedicated_access_point_precedes_wlan2(self):
+        ssh, proxy = self.sections([('wlan2', '10.21.40.1'), ('ap0', '10.33.44.1')])
+        self.assertIn('@10.33.44.1', ssh)
+        self.assertIn('10.33.44.1:41573', proxy)
+        self.assertNotIn('10.21.40.1', proxy)
+
+    def test_explicit_manual_json_still_returns_requested_endpoint(self):
+        output = io.StringIO()
+        with redirect_stdout(output):
+            self.assertEqual(ADDRESS.main(['--manual', '192.168.9.1', '--port', '41573', '--json']), 0)
+        result = json.loads(output.getvalue())
+        self.assertTrue(result['manual'])
+        self.assertEqual([item['proxy_url'] for item in result['candidates']], ['http://192.168.9.1:41573'])
 
 
 class ScriptTests(unittest.TestCase):
@@ -163,7 +216,8 @@ class ScriptTests(unittest.TestCase):
         shutil.copy2(SOURCE / 'address.py', self.app / 'address.py')
         result = self.run_proxy('info')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('192.168.9.1:38473', result.stdout)
+        self.assertNotIn('192.168.9.1', result.stdout)
+        self.assertIn('【2. 电脑连手机热点，通过手机代理上网】', result.stdout)
         self.assertIn('SOCKS5', result.stdout)
         self.assertIn('TCP', result.stdout)
         self.assertIn('UDP', result.stdout)

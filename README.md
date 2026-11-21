@@ -566,6 +566,9 @@ API 来源按名称、类型和规范化地址防重复：添加预设时复用�
 - DSH 旧 DeepSeek 会话仍可能引用 `deepseek-official` / `deepseek-account`。独占模式选择官方 DeepSeek API 来源时，ModelDock 会安装无凭据的受管同模型兼容插件，让这些旧引用调用所选来源中的同一上游模型；聊天日志、模型选择及原请求对象不改写。相似显示名、其他套餐、不同模型或无法确定的重复来源不自动映射。兼容路由没有可配置目录和模型枚举，模型设置页与新会话选择器仍只展示所选来源。插件源、配置及凭据一同纳入加密备份与失败恢复；关闭独占或清空选择会撤销插件，静态无凭据代码文件留在本地作为非活动文件。未包含旧模型时，请在 DSH 切换模型或新建会话。
 - Copilot app 接入使用桌面应用的本机原生供应商接口，按 1.1.26 的协议实现，不把 CLI `providers.json` 或 SDK 会话参数当成桌面配置。预览只是原生同步计划参考，需要应用运行才能同步；版本接口变化会明确报错。Windows 隔离原生实例已核对。Linux 原生连接支持系统管理员安装的 /usr/bin/github：校验 root 文件和目录、UID、进程启动时间、执行文件身份及回环监听 socket，信任来源是本机系统安装，不是 GitHub 厂商签名；用户可写 AppImage 暂不支持。OpenCode 使用各模型的 npm SDK 配置选择 Chat/Responses 协议，保存时合并 JSON/JSONC。
 - VS Code 接入目标是 Copilot Chat 的 Custom Endpoint，默认写入用户配置 `Code/User/chatLanguageModels.json`。默认范围会替换该文件中的全部 `customendpoint` 分组；关闭「仅保留所选供应商」后只更新 ModelDock 分组。应用不会自动识别其他 profile；使用其他 profile 时请预览 / 导出后手工合并到对应位置。同步只是注册模型来源，实际聊天模型须在 VS Code 选择器中选择；此接入不能据此宣称所有编辑器 AI 功能都被替换。
+- DeepSeek 官方 API 在 VS Code 使用原生 Anthropic Messages 接口（`https://api.deepseek.com/anthropic/v1/messages`），通过 adaptive thinking 保留连续对话及工具调用中的思考内容和签名，沿用 `low/high/max` 档位；不再默认关闭思考。只适配已核实的官方地址与模型，保存的模型协议及其他工具保持不变；聚合模式复用 `/tool/vscode/v1/messages` 和现有主进程 Gateway。显式关闭思考的模型使用官方 Responses 的 `none`，这是用户选择的关闭状态。升级后需重新同步、重新加载 VS Code，并新建聊天；旧 Responses 会话已丢失的思考历史无法补回。参考 [DeepSeek Anthropic 兼容说明](https://api-docs.deepseek.com/guides/anthropic_api/) 与 [Messages API](https://api-docs.deepseek.com/api/create-message/)。
+
+开发验证：`node scripts/verify-vscode-deepseek-client.mjs --extension-dir <Copilot扩展目录>` 可针对已核查的 Copilot Chat 0.75.0 提取实际客户端函数，验证流式思考/签名、跨用户轮次历史和档位序列化。脚本仅使用合成数据，不读取密钥或聊天配置；客户端版本或提取标记变化会停止验证。此离线检查不能代替真实 VS Code 界面及供应商调用验收。
 - 模型列表、上下文和工具/视觉声明不会授予上游权限；错误会明确返回，日志不记录请求正文与密钥。
 
 ### 适配与导入维护记录

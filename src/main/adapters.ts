@@ -6,6 +6,7 @@ import { parse as parseToml, stringify as stringifyToml } from '@iarna/toml';
 import { parse as parseJsonc, modify, applyEdits, createScanner, SyntaxKind, type Edit, type ParseError } from 'jsonc-parser';
 import type { ConfigPreview, Model, Provider, ProviderSecret, ReasoningEffort, ToolBinding, ToolId } from '../shared/types';
 import { traeRelayClientModel } from '../shared/trae-relay-models';
+import { DEEPSEEK_MESSAGES_BASE, isVsCodeDeepSeekModel, vsCodeDeepSeekModel } from '../shared/vscode-deepseek';
 import { bindingConnectionPolicy, resolveBindingModels } from '../shared/bindings';
 import { modelDisplayLabel, modelLocalAlias } from '../shared/model-names';
 import { subscriptionDisplayName } from '../shared/subscription-names';
@@ -169,8 +170,6 @@ const CODEX_REASONING_DESCRIPTIONS: Record<ReasoningEffort, string> = {
   medium: 'Balances speed and reasoning depth', high: 'Greater reasoning depth for complex problems',
   xhigh: 'Extra high reasoning depth for complex problems', max: 'Maximum reasoning depth for the hardest problems',
 };
-const deepSeekResponsesModels = new Set(['deepseek-flash', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp', 'deepseek-v4-pro']);
-
 function isOfficialDeepSeekBase(base: string): boolean {
   try {
     const url = new URL(base);
@@ -178,25 +177,21 @@ function isOfficialDeepSeekBase(base: string): boolean {
       && ['', '/v1'].includes(url.pathname.replace(/\/+$/, ''));
   } catch { return false; }
 }
-
-function needsVsCodeDeepSeekCompatibility(model: Model, provider: Provider | undefined): boolean {
-  return model.wireApi === 'responses' && deepSeekResponsesModels.has(model.upstreamId)
-    && provider?.kind === 'openai-compatible' && !provider.nativeAdapter && isOfficialDeepSeekBase(provider.baseUrl);
-}
-
 /** Main-process serializer only; exposing schema fields does not expand client/protocol bindings. */
 export function vsCodeModelConfig(model: Model, base: string, key: string, provider?: Provider) {
-  const m = traeRelayClientModel('vscode', model, provider);
+  const m = vsCodeDeepSeekModel(traeRelayClientModel('vscode', model, provider), provider);
   const nativeTraeChat = provider?.nativeAdapter === 'trae' && m.wireApi === 'chat-completions';
-  const deepSeekCompatibility = needsVsCodeDeepSeekCompatibility(m, provider);
-  // Copilot's Responses adapter cannot replay DeepSeek's plaintext reasoning.
-  // Keep the picker capability so Copilot sends the explicit `none` effort.
-  const reasoningEfforts = deepSeekCompatibility ? ['none' as const] : m.reasoningEfforts;
-  const defaultReasoningEffort = deepSeekCompatibility ? 'none' : m.defaultReasoningEffort;
+  const deepSeekCompatibility = isVsCodeDeepSeekModel(m, provider);
+  const reasoningEfforts = m.reasoningEfforts;
+  const defaultReasoningEffort = m.defaultReasoningEffort;
+  // An aggregate group keeps its tool-scoped local address. Direct official
+  // sources use the documented Anthropic base, including custom-named sources.
+  const endpointBase = deepSeekCompatibility && base.replace(/\/+$/, '') === provider!.baseUrl.replace(/\/+$/, '')
+    ? m.wireApi === 'messages' ? DEEPSEEK_MESSAGES_BASE : 'https://api.deepseek.com' : base;
   const budget = clientBudget(m);
   return {
     id: m.alias, name: m.displayName || m.alias, apiType: m.wireApi,
-    url: m.wireApi === 'messages' ? anthropicEndpoint(base, '/messages') : base + (m.wireApi === 'responses' ? '/responses' : '/chat/completions'),
+    url: m.wireApi === 'messages' ? anthropicEndpoint(endpointBase, '/messages') : endpointBase + (m.wireApi === 'responses' ? '/responses' : '/chat/completions'),
     toolCalling: m.tools, vision: m.vision,
     // VS Code treats contextWindow as source of truth. With a separately
     // published input cap, omit it so maxInputTokens + output stays consistent.
@@ -206,9 +201,9 @@ export function vsCodeModelConfig(model: Model, base: string, key: string, provi
     // Suppress only Copilot defaults. Explicit sampling requests still reach
     // the adapter and receive its unsupported-control error.
     ...(nativeTraeChat ? { modelOptions: { temperature: null, top_p: null } } : {}),
-    ...(deepSeekCompatibility ? { statefulResponses: false } : {}),
+    ...(deepSeekCompatibility && m.wireApi === 'responses' ? { statefulResponses: false } : {}),
     ...(deepSeekCompatibility || m.thinking !== undefined || reasoningEfforts?.length
-      ? { thinking: deepSeekCompatibility || (m.thinking ?? true) } : {}),
+      ? { thinking: m.thinking ?? true } : {}),
     // Without supportsReasoningEffort VS Code shows no Thinking Effort picker.
     // 修改点：档位由保存的模型设置决定；传参格式随当前接口，防止旧
     // Responses 格式跟随已切换到 Chat/Messages 的模型继续导出。
@@ -337,8 +332,8 @@ export function buildConfig(store: AdapterStore, tool: ToolId, port: number, rev
     instructions: connection + '使用 VS Code Copilot Chat 的 Custom Endpoint schema；凭据随每个模型的 requestHeaders 写入（apiKey 明文字段会被 VS Code 当作秘密存储引用忽略）。'
       + (binding.vscodeSyncScope === 'managed' ? '当前范围仅替换 ModelDock 分组，保留其他自定义来源。' : '当前范围仅保留所选自定义供应商：原文件先备份，所有 customendpoint 分组会替换为当前选择；保留其他 vendor 和注释。')
       + '默认仅写入 Code/User/chatLanguageModels.json；其他 profile 需在对应的模型配置文件中手动合并导出内容。同步后重新加载窗口。'
-      + (models.some(model => needsVsCodeDeepSeekCompatibility(model, modelProvider(store, model)))
-        ? 'DeepSeek 官方 Responses 模型在 VS Code 使用 None 思考档位和完整会话历史，以兼容工具调用后的续接。重新同步并重新加载窗口后，请在新聊天中选择该模型并确认思考档位为 None。' : '')
+      + (models.some(model => isVsCodeDeepSeekModel(model, modelProvider(store, model)))
+        ? 'DeepSeek 官方模型的思考模式通过原生 Anthropic Messages 接口保留思考内容、签名和工具调用历史，思考档位沿用模型设置；明确关闭思考时使用 Responses 的 None。重新同步并重新加载窗口后，请在新聊天中选择该模型；旧 Responses 聊天缺失的思考历史无法补回。其他工具的模型协议不受影响。' : '')
       + (models.some(model => model.wireApi === 'chat-completions' && modelProvider(store, model)?.nativeAdapter === 'trae')
         ? 'TRAE 原生连接的输出预算与采样使用上游原生默认值；思考仍由上游生成，已配置的推理强度选项保留。请重新同步 VS Code 配置并重新加载窗口以使用此适配。' : '')
       + clientBudgetNotice(models),
