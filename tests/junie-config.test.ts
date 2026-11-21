@@ -4,11 +4,12 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { applyJunieConfig, buildJunieConfig, junieConfigDirectory, junieConfigTargets, junieHistoryKey, restoreJunieOfficialConfig, type JunieConfigOptions } from '../src/main/junie-config';
 import { JUNIE_ACP_NAME } from '../src/main/junie-acp';
+import * as junieAcp from '../src/main/junie-acp';
 import * as privateFiles from '../src/main/private-file';
 import type { Model, Provider, ToolBinding } from '../src/shared/types';
 
 const roots: string[] = [];
-afterEach(() => { vi.unstubAllEnvs(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true, maxRetries: 5 }); });
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true, maxRetries: 5 }); });
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'modeldock-junie-config-')); roots.push(root);
   const targets = junieConfigTargets(root), backups = join(root, 'backups'), states = new Map<string, unknown>(), journals: unknown[] = [];
@@ -93,8 +94,37 @@ describe('Junie CLI and IDE custom profile configuration', () => {
     expect(value.profile).toEqual({ id: 'native-model-id', baseUrl: 'https://api.fixture.invalid/v1/responses', apiType: 'OpenAIResponses', apiKey: '__PROVIDER_API_KEY__', displayName: 'Selected fixture model · ModelDock 默认', providerName: 'Fixture API', maxContextLength: 64000 });
     expect(value.acp).toEqual({ command: process.execPath, args: ['--acp', 'true', '--model', 'custom:modeldock'], env: { JUNIE_HOME: join(f.root, '.junie') } });
     expect(preview.canApply).toBe(true); expect(preview.instructions).toContain('全部所选模型分别写入');
+    expect(preview).not.toHaveProperty('applyUnavailableReason');
     expect(f.store.getSecret).not.toHaveBeenCalled(); expect(f.files()).toEqual([null, null, null]); expect(f.states.size).toBe(0);
     expect(preview.content).not.toMatch(/SYNTHETIC_|aggregate-model-alias/);
+  });
+
+  it('reports the same actionable missing-launcher reason in preview and apply without writing configuration', () => {
+    const f = fixture();
+    vi.spyOn(junieAcp, 'resolveJunieCommand').mockReturnValue(undefined);
+    const preview = buildJunieConfig(f.store, false, 19191, f.root);
+    expect(preview.canApply).toBe(false);
+    expect(preview.applyUnavailableReason).toBe('未找到可用的 Junie 启动程序。请先安装 Junie CLI，或在支持 ACP 的 JetBrains IDE 中安装 Junie，再重新同步。');
+    expect(preview.instructions).toContain(preview.applyUnavailableReason);
+    expect(JSON.parse(preview.content)).not.toHaveProperty('acp');
+    expect(preview.content).toContain('__PROVIDER_API_KEY__');
+    expect(f.store.getSecret).not.toHaveBeenCalled();
+    expect(() => applyJunieConfig(f.store, f.backups, f.root)).toThrow(preview.applyUnavailableReason);
+    expect(f.files()).toEqual([null, null, null]);
+    expect(f.states.size).toBe(0); expect(f.journals).toHaveLength(0);
+  });
+
+  it('can clear an existing selection without a launcher or an unavailable reason', () => {
+    const f = fixture(); f.apply();
+    const resolver = vi.spyOn(junieAcp, 'resolveJunieCommand').mockReturnValue(undefined);
+    f.binding.modelSelection = 'selected'; f.binding.modelIds = [];
+    const preview = buildJunieConfig(f.store, false, 19191, f.root);
+    expect(preview).toMatchObject({ canApply: true, content: '' });
+    expect(preview).not.toHaveProperty('applyUnavailableReason');
+    expect(applyJunieConfig(f.store, f.backups, f.root)).toBe(f.targets.configPath);
+    expect(resolver).not.toHaveBeenCalled();
+    expect(f.files()).toEqual([null, null, null]);
+    expect(f.store.getManagedState(junieHistoryKey(f.targets.configPath), null)).toBeNull();
   });
 
   it('uses full Chat endpoint URLs and omits an unknown context instead of inventing a budget', () => {

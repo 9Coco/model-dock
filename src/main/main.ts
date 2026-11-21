@@ -696,7 +696,7 @@ function registerIpc() {
     try {
     const binding = store.listBindings().find(item => item.id === id);
     const preview = buildConfig(store, id, gateway.status().port, true, __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home') : app.getPath('home'), { ...openCodeOptions, junieHome, copilotCliHome, copilotCliProvidersConfig });
-    if (!preview.canApply) throw new Error('此工具使用导出配置入口。');
+    if (!preview.canApply) throw new Error(preview.applyUnavailableReason ?? '此工具使用导出配置入口。');
     const usesGateway = binding && bindingConnectionPolicy(binding, store.listModels(), store.listProviders()).groups.some(group => group.connection === 'local-managed' && group.modelIds.length > 0);
     if (usesGateway && !gateway.status().running) {
       const status = await runtime.startGateway();

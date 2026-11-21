@@ -53,6 +53,7 @@ export interface JunieModelProfile {
   displayName: string; providerName: string; maxContextLength?: number;
 }
 const profileId = 'custom:modeldock';
+const launcherUnavailableReason = '未找到可用的 Junie 启动程序。请先安装 Junie CLI，或在支持 ACP 的 JetBrains IDE 中安装 Junie，再重新同步。';
 const maximumFileSize = 2 * 1024 * 1024;
 const json = (value: unknown) => JSON.stringify(value, null, 2) + '\n';
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -118,10 +119,12 @@ export function buildJunieConfig(store: JunieConfigStore, revealKey = false, por
   const targets = junieConfigTargets(homeDirectory, options), selected = selection(store, revealKey, port), profile = selected?.profile;
   const command = profile ? options.junieCommand ?? resolveJunieCommand(homeDirectory) : undefined;
   const acp = profile && command ? buildJunieAcpEntry(profileId, junieConfigDirectory(homeDirectory, options.junieHome), command) : undefined;
+  const applyUnavailableReason = profile && !command ? launcherUnavailableReason : undefined;
   return { filename: 'modeldock-junie.json', canApply: !profile || !!command,
+    ...(applyUnavailableReason ? { applyUnavailableReason } : {}),
     content: profile ? json({ config: { model: profileId }, profile, profiles: selected!.profiles, ...(acp ? { acp } : {}) }) : '',
     instructions: profile
-      ? `将默认模型写入 ${targets.profilePath}，只合并 ${targets.configPath} 的 model 字段；在 ${targets.acpPath} 添加独立的 Junie · ModelDock 代理，保留 IDE 其他代理和 MCP 设置。Junie 的 baseUrl 使用完整推理端点，Responses 与 Chat Completions 保持所选协议。全部所选模型分别写入 models/modeldock-*.json，可在 /model 中独立选择。modeldock.json 保留为当前默认模型的快捷配置，切换默认模型不会改动其他模型配置的标识。预览隐藏密钥，导出或应用时才写入所用 API Key；订阅令牌留在 ModelDock。终端使用 junie --model custom:modeldock 或在 /model 的 Custom 标签选择；IDE 在 AI Chat 选择 Junie · ModelDock 代理。项目 config.json、命令行和 Junie settings.json 可能影响最终选择；配置写入不代表实际推理已通过。${command ? '' : '未找到支持的 Junie CLI 启动程序，请先安装 Junie CLI 后重新预览。'}`
+      ? `将默认模型写入 ${targets.profilePath}，只合并 ${targets.configPath} 的 model 字段；在 ${targets.acpPath} 添加独立的 Junie · ModelDock 代理，保留 IDE 其他代理和 MCP 设置。Junie 的 baseUrl 使用完整推理端点，Responses 与 Chat Completions 保持所选协议。全部所选模型分别写入 models/modeldock-*.json，可在 /model 中独立选择。modeldock.json 保留为当前默认模型的快捷配置，切换默认模型不会改动其他模型配置的标识。预览隐藏密钥，导出或应用时才写入所用 API Key；订阅令牌留在 ModelDock。终端使用 junie --model custom:modeldock 或在 /model 的 Custom 标签选择；IDE 在 AI Chat 选择 Junie · ModelDock 代理。项目 config.json、命令行和 Junie settings.json 可能影响最终选择；配置写入不代表实际推理已通过。${applyUnavailableReason ?? ''}`
       : '移除仍属于 ModelDock 的 Junie 配置并恢复原有默认模型；保留其他模型、账号、MCP、Hooks 与用户设置。没有管理记录时不修改文件。',
   };
 }
@@ -243,7 +246,7 @@ export function applyJunieConfig(store: JunieConfigStore, _backups: string, home
   if (!selected) return restore(state, homeDirectory, options);
   const { profile } = selected;
   const command = options.junieCommand ?? resolveJunieCommand(homeDirectory);
-  if (!command) throw new Error('未找到支持的 Junie CLI 启动程序，请先安装 Junie CLI，再同步终端和 IDE 配置。');
+  if (!command) throw new Error(launcherUnavailableReason);
   const { configPath, profilePath, acpPath } = junieConfigTargets(homeDirectory, options);
   const before = history(state, configPath, profilePath, acpPath);
   const original = read(configPath), oldProfile = read(profilePath), acp = read(acpPath), config = parseConfig(original);

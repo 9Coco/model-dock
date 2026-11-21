@@ -1,6 +1,7 @@
-import { accessSync, constants, lstatSync, readFileSync } from 'node:fs';
+import { accessSync, constants, lstatSync, readFileSync, readdirSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { isDeepStrictEqual } from 'node:util';
-import { delimiter, isAbsolute, join } from 'node:path';
+import { delimiter, isAbsolute, join, resolve } from 'node:path';
 
 export const JUNIE_ACP_NAME = 'Junie · ModelDock';
 export interface JunieCommand { command: string; args: string[]; env?: Record<string, string> }
@@ -49,6 +50,53 @@ function executable(filename: string, windows: boolean): boolean {
   } catch { return false; }
 }
 
+function directory(filename: string): boolean {
+  try { return lstatSync(filename).isDirectory(); }
+  catch { return false; }
+}
+function directoryEntries(filename: string) {
+  try { return readdirSync(filename, { withFileTypes: true }); }
+  catch { return []; }
+}
+
+// ACP registry installs use a numeric package version and record the executable
+// relative to that package in .installed. Do not follow shims or directory links.
+function resolveIdeManagedJunie(home: string, env: NodeJS.ProcessEnv, explicitEnv: boolean): JunieCommand | undefined {
+  const inheritedHome = resolve(home).toLowerCase() === resolve(homedir()).toLowerCase();
+  const localAppData = (explicitEnv || inheritedHome)
+    ? Object.entries(env).find(([name]) => name.toLowerCase() === 'localappdata')?.[1]
+    : undefined;
+  const local = localAppData ?? join(home, 'AppData', 'Local');
+  if (!isAbsolute(local) || /[\x00-\x1f\x7f]/.test(local)) return;
+  const root = join(local, 'JetBrains');
+  if (!directory(local) || !directory(root)) return;
+  const candidates: { command: string; version: number[] }[] = [];
+  for (const ide of directoryEntries(root)) {
+    if (!ide.isDirectory() || !/^(?:IntelliJIdea|IdeaIC|WebStorm|PyCharm(?:CE)?|Rider)\d{4}\.\d+(?:\.\d+)?$/.test(ide.name)) continue;
+    const ideRoot = join(root, ide.name), agents = join(ideRoot, 'acp-agents'), junie = join(agents, 'junie');
+    if (![ideRoot, agents, junie].every(directory)) continue;
+    for (const entry of directoryEntries(junie)) {
+      if (!entry.isDirectory() || !/^(?:0|[1-9]\d{0,8})\.(?:0|[1-9]\d{0,8})\.(?:0|[1-9]\d{0,8})$/.test(entry.name)) continue;
+      const install = join(junie, entry.name), native = join(install, 'junie');
+      if (!directory(install) || !directory(native)) continue;
+      try {
+        const marker = join(install, '.installed'), info = lstatSync(marker);
+        if (!info.isFile() || info.size > 256 || readFileSync(marker, 'utf8').trim() !== './junie/junie.exe') continue;
+        const command = join(native, 'junie.exe');
+        if (executable(command, true)) candidates.push({ command, version: entry.name.split('.').map(Number) });
+      } catch { /* An incomplete or removed package is not a launch candidate. */ }
+    }
+  }
+  candidates.sort((left, right) => {
+    for (let index = 0; index < 3; index++) {
+      const order = right.version[index] - left.version[index];
+      if (order) return order;
+    }
+    return left.command < right.command ? -1 : left.command > right.command ? 1 : 0;
+  });
+  return candidates[0] ? { command: candidates[0].command, args: [] } : undefined;
+}
+
 /** Resolve an executable, never a Windows batch file that requires shell parsing. */
 export function resolveJunieCommand(home: string, options: { platform?: NodeJS.Platform; env?: NodeJS.ProcessEnv } = {}): JunieCommand | undefined {
   const windows = (options.platform ?? process.platform) === 'win32';
@@ -76,6 +124,9 @@ export function resolveJunieCommand(home: string, options: { platform?: NodeJS.P
     const command = join(data, 'versions', version, 'junie', 'junie.exe');
     if (executable(command, true)) return { command, args: [] };
   } catch { /* Junie is not installed in the managed location. */ }
+  // An explicit standalone location is authoritative, including when broken.
+  if (env.JUNIE_DATA_DIR !== undefined || env.JUNIE_DATA !== undefined) return;
+  return resolveIdeManagedJunie(home, env, options.env !== undefined);
 }
 
 export function buildJunieAcpEntry(profile: string, junieHome: string, launch: JunieCommand): JunieAcpEntry {

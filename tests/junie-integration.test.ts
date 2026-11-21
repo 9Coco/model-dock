@@ -1,18 +1,18 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { Store } from '../src/main/store';
 import { Gateway } from '../src/main/gateway';
-import { buildConfig } from '../src/main/adapters';
+import { applyConfig, buildConfig } from '../src/main/adapters';
 import { applyJunieConfig, buildJunieConfig, junieConfigTargets } from '../src/main/junie-config';
 import { ToolSyncUndoManager } from '../src/main/tool-sync-undo';
 import { switchSingleEntryMode } from '../src/shared/single-entry';
 import type { WireApi } from '../src/shared/types';
 
 const cleanup: (() => void | Promise<void>)[] = [];
-afterEach(async () => { for (const task of cleanup.splice(0).reverse()) await task(); });
+afterEach(async () => { vi.unstubAllEnvs(); for (const task of cleanup.splice(0).reverse()) await task(); });
 async function fixture(wireApi: WireApi = 'responses') {
   const home = mkdtempSync(join(tmpdir(), 'modeldock-junie-integration-'));
   const store = await Store.create(join(home, 'data'), { encrypt: value => Buffer.from(value).toString('base64'), decrypt: value => Buffer.from(value, 'base64').toString() });
@@ -27,6 +27,60 @@ async function fixture(wireApi: WireApi = 'responses') {
 }
 
 describe('Junie tool integration', () => {
+  it.skipIf(process.platform !== 'win32')('synchronizes a verified IDE-managed Junie through the normal adapter when standalone CLI is absent', async () => {
+    const f = await fixture();
+    // The adapter resolves the real filesystem without an injected launcher.
+    // Keep only OS utilities needed by the private-file ACL writer on PATH.
+    const windows = process.env.SystemRoot ?? 'C:\\Windows';
+    for (const name of Object.keys(process.env).filter(name => /^(?:path|localappdata|junie_data_dir|junie_data)$/i.test(name))) vi.stubEnv(name, undefined);
+    vi.stubEnv('PATH', [join(windows, 'System32'), join(windows, 'System32', 'WindowsPowerShell', 'v1.0')].join(';'));
+    vi.stubEnv('LOCALAPPDATA', join(f.home, 'unrelated-local-appdata'));
+    const binding = f.store.listBindings().find(item => item.id === 'junie')!;
+    f.store.saveBinding({ ...binding, mode: 'direct' });
+    const beforeInstall = buildConfig(f.store, 'junie', 18181, false, f.home);
+    expect(beforeInstall.canApply).toBe(false);
+    expect(beforeInstall.applyUnavailableReason).toContain('未找到可用的 Junie 启动程序');
+
+    const install = join(f.home, 'AppData', 'Local', 'JetBrains', 'IntelliJIdea2026.3', 'acp-agents', 'junie', '4100.11.0');
+    const command = join(install, 'junie', 'junie.exe');
+    mkdirSync(dirname(command), { recursive: true });
+    writeFileSync(join(install, '.installed'), './junie/junie.exe');
+    writeFileSync(command, 'SYNTHETIC_NATIVE_JUNIE_NOT_EXECUTED');
+    const preview = buildConfig(f.store, 'junie', 18181, false, f.home), planned = JSON.parse(preview.content);
+    expect(preview.canApply).toBe(true); expect(preview).not.toHaveProperty('applyUnavailableReason');
+    expect(planned.acp.command).toBe(command);
+    expect(planned.profile.apiKey).toBe('__PROVIDER_API_KEY__');
+    expect(preview.content).not.toContain('synthetic-junie-upstream-key');
+
+    const targets = junieConfigTargets(f.home);
+    const originalConfig = '{"model":"previous-model","hooks":{"keep":[]},"brave":false}\n';
+    const originalAcp = '{"agent_servers":{"Other":{"command":"keep-other-agent"}},"default_mcp_settings":{"use_idea_mcp":false}}\n';
+    for (const [path, content] of [[targets.configPath, originalConfig], [targets.acpPath, originalAcp]]) {
+      mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, content);
+    }
+    const appData = join(f.home, 'appdata');
+    const manager = new ToolSyncUndoManager(f.store, { appData, homeDirectory: f.home });
+    await manager.run('junie', f.before, () => applyConfig(f.store, 'junie', 18181, appData, join(f.home, 'backups'), f.home));
+    expect(JSON.parse(readFileSync(targets.configPath, 'utf8'))).toEqual({ ...JSON.parse(originalConfig), model: 'custom:modeldock' });
+    expect(JSON.parse(readFileSync(targets.acpPath, 'utf8'))).toEqual({ ...JSON.parse(originalAcp), agent_servers: {
+      Other: { command: 'keep-other-agent' }, 'Junie · ModelDock': {
+        command, args: ['--acp', 'true', '--model', 'custom:modeldock'], env: { JUNIE_HOME: join(f.home, '.junie') },
+      },
+    } });
+    expect(JSON.parse(readFileSync(targets.profilePath, 'utf8'))).toMatchObject({ id: f.model.upstreamId,
+      apiType: 'OpenAIResponses', baseUrl: `${f.source.baseUrl}/responses`, apiKey: 'synthetic-junie-upstream-key' });
+    const modelFiles = Object.keys(planned.profiles).map(name => join(dirname(targets.profilePath), name));
+    expect(modelFiles).toHaveLength(1); expect(modelFiles.every(existsSync)).toBe(true);
+
+    expect(manager.status('junie').available).toBe(true);
+    expect(await manager.undo('junie')).toBe(targets.configPath);
+    expect(readFileSync(targets.configPath, 'utf8')).toBe(originalConfig);
+    expect(readFileSync(targets.acpPath, 'utf8')).toBe(originalAcp);
+    expect([targets.profilePath, ...modelFiles].some(existsSync)).toBe(false);
+    expect(readFileSync(command, 'utf8')).toBe('SYNTHETIC_NATIVE_JUNIE_NOT_EXECUTED');
+    expect(f.store.listBindings().find(item => item.id === 'junie')).toMatchObject({ enabled: false, providerIds: [], defaultModelId: '' });
+  });
+
   it('undoes added and removed model profiles together and rejects edits in any extra profile', async () => {
     const f = await fixture(), manager = new ToolSyncUndoManager(f.store, { homeDirectory: f.home, appData: join(f.home, 'appdata') });
     const apply = () => applyJunieConfig(f.store, join(f.home, 'backups'), f.home, f.options);

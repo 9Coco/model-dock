@@ -214,7 +214,11 @@ export interface Snapshot {
   dataDir: string;
   version: string;
 }
-export interface ConfigPreview { filename: string; content: string; instructions: string; canApply: boolean }
+export interface ConfigPreview {
+  filename: string; content: string; instructions: string; canApply: boolean;
+  /** Safe, actionable explanation when synchronization is temporarily unavailable. */
+  applyUnavailableReason?: string;
+}
 export type AuthStage = 'device-code' | 'device-poll' | 'token-exchange' | 'account-info' | 'refresh' | 'discovery';
 export type AuthFailureCategory = 'network' | 'timeout' | 'region' | 'device-disabled' | 'denied' | 'expired' | 'rate-limit' | 'blocked' | 'invalid-response' | 'upstream';
 export interface AuthProgress {

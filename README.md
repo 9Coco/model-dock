@@ -6,6 +6,12 @@ ModelDock 是跨平台本地模型管理台：全局维护模型来源与别名�
 
 0.4.0 起包含 FlowBridge 的组合发行版采用 [GPL-3.0-or-later](LICENSE)；原 ModelDock 代码及原创应用标记保留 [MIT 授权](LICENSE-MIT)，第三方图标和依赖保留各自的 Apache-2.0、CC-BY-4.0、MIT 或其他许可，详见 [第三方声明](THIRD_PARTY_NOTICES.md)。欢迎按 [贡献指南](CONTRIBUTING.md) 提交修复；敏感问题请遵循 [安全报告流程](SECURITY.md)。
 
+## 0.4.33 · Junie IDE 安装识别
+
+- Junie 同步可以复用 JetBrains IDE 已安装的 Junie 原生程序，修复仅安装 IDE 版本时无法同步的问题；独立 CLI 的安装和 PATH 仍优先使用。
+- 未找到可用程序时，显示具体安装提示，避免误报为“此工具使用导出配置入口”。模型文件、默认选择和 ACP 入口仍沿用原有备份、事务同步及撤销流程。
+- IDE 使用独立的「Junie · ModelDock」ACP 入口。需要终端中的 `junie` 命令时，请另外安装 Junie CLI；复用 IDE 程序不会修改 PATH。
+
 ## 0.4.30 · Air 独立接入
 
 - 编辑器工具区保留 VS Code，并把四个 JetBrains IDE 的工具入口合并为一个 Air。Air 使用单独的模型选择和聚合地址 `/tool/air/v1`。
