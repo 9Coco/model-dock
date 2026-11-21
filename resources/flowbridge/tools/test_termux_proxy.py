@@ -47,43 +47,73 @@ def installer_text():
 
 
 class ConnectionBannerTests(unittest.TestCase):
+    proxy_heading = '【2. 电脑或安卓设备连手机热点，通过手机代理上网】'
+
     def sections(self, interfaces, ssh_connection=''):
         candidates = [ADDRESS.candidate(name, ip) for name, ip in interfaces]
         output = io.StringIO()
         with patch.object(ADDRESS, 'discover', return_value=(candidates, [], [])), \
                 patch.dict(os.environ, SSH_CONNECTION=ssh_connection), redirect_stdout(output):
             self.assertEqual(ADDRESS.main(['--connections', '--port', '41573']), 0)
-        ssh, proxy = output.getvalue().split('【2. 电脑连手机热点，通过手机代理上网】')
+        ssh, proxy = output.getvalue().split(self.proxy_heading)
         self.assertIn('【1. 从电脑用 SSH 登录手机】', ssh)
         return ssh, proxy
 
     def test_current_ssh_destination_is_independent_of_changing_hotspot(self):
-        for hotspot in ('10.20.30.1', '10.21.40.1'):
-            with self.subTest(hotspot=hotspot):
+        for shared, gateway in [('172.18.8.9', '10.20.30.1'), ('172.19.9.10', '10.21.40.1')]:
+            with self.subTest(shared=shared, gateway=gateway):
                 ssh, proxy = self.sections(
-                    [('vgate0', '172.18.8.9'), ('wlan0', '192.168.8.15'), ('wlan2', hotspot)],
-                    '10.20.30.2 49999 172.18.8.9 8033')
+                    [('vgate0', shared), ('wlan0', '192.168.8.15'), ('wlan2', gateway)],
+                    '10.20.30.2 49999 192.168.8.15 8033')
                 self.assertEqual(ssh.count('ssh -p '), 1)
                 self.assertIn('ssh -p 8033', ssh)
-                self.assertIn('@172.18.8.9', ssh)
-                self.assertEqual(proxy.count(':41573'), 1)
-                self.assertIn(f'{hotspot}:41573', proxy)
-                self.assertNotIn('172.18.8.9', proxy)
+                self.assertIn('@192.168.8.15', ssh)
+                self.assertEqual(proxy.count(':41573'), 2)
+                shared_line, alternate_line = [line for line in proxy.splitlines() if ':41573' in line]
+                self.assertIn(f'{shared}:41573', shared_line)
+                self.assertIn('安卓', shared_line)
+                self.assertIn(f'{gateway}:41573', alternate_line)
+                self.assertRegex(alternate_line, '电脑|Windows')
                 self.assertNotIn('192.168.8.15', proxy)
 
     def test_local_shell_and_hotspot_off(self):
-        ssh, proxy = self.sections([('vgate0', '172.18.8.9'), ('wlan0', '192.168.8.15')])
+        ssh, proxy = self.sections([('wlan0', '192.168.8.15')])
         self.assertIn('ssh -p 8022', ssh)
         self.assertIn('@192.168.8.15', ssh)
         self.assertNotIn('192.168.8.15', proxy)
-        self.assertNotIn('172.18.8.9', proxy)
+        self.assertNotIn(':41573', proxy)
         self.assertIn('默认网关', proxy)
         self.assertIn('41573', proxy)
+
+    def test_vgate_without_visible_gateway_is_an_option_after_joining_hotspot(self):
+        _, proxy = self.sections([('vgate0', '172.18.8.9')])
+        self.assertEqual(proxy.count('172.18.8.9:41573'), 1)
+        self.assertIn('热点', proxy)
+        self.assertIn('默认网关', proxy)
+        self.assertIn('安卓', proxy)
+
+    def test_matching_gateway_is_not_repeated_as_an_alternate(self):
+        _, proxy = self.sections([('vgate0', '10.14.15.1'), ('wlan2', '10.14.15.1')])
+        self.assertEqual(proxy.count('10.14.15.1:41573'), 1)
+
+    @unittest.skipUnless(sys.platform.startswith('linux'), 'Linux interface ioctl ABI')
+    def test_vgate_discovery_with_android_interface_enumeration_restricted(self):
+        def ioctl(fd, operation, request):
+            if operation == 0x8915 and request.split(b'\0', 1)[0] == b'vgate0':
+                return bytes(20) + socket.inet_aton('172.18.8.9')
+            raise PermissionError
+
+        with patch.object(socket, 'if_nameindex', side_effect=PermissionError), \
+                patch('fcntl.ioctl', side_effect=ioctl):
+            self.assertIn(('vgate0', '172.18.8.9'), ADDRESS.via_ioctl())
 
     def test_dedicated_access_point_precedes_wlan2(self):
         ssh, proxy = self.sections([('wlan2', '10.21.40.1'), ('ap0', '10.33.44.1')])
         self.assertIn('@10.33.44.1', ssh)
         self.assertIn('10.33.44.1:41573', proxy)
+        gateway_line = next(line for line in proxy.splitlines() if '10.33.44.1:41573' in line)
+        self.assertRegex(gateway_line, '电脑|Windows')
+        self.assertNotIn('安卓', gateway_line)
         self.assertNotIn('10.21.40.1', proxy)
 
     def test_explicit_manual_json_still_returns_requested_endpoint(self):
@@ -217,7 +247,7 @@ class ScriptTests(unittest.TestCase):
         result = self.run_proxy('info')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn('192.168.9.1', result.stdout)
-        self.assertIn('【2. 电脑连手机热点，通过手机代理上网】', result.stdout)
+        self.assertIn(ConnectionBannerTests.proxy_heading, result.stdout)
         self.assertIn('SOCKS5', result.stdout)
         self.assertIn('TCP', result.stdout)
         self.assertIn('UDP', result.stdout)

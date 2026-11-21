@@ -353,6 +353,7 @@ usage() {
     cat <<'EOF'
 hotspot-proxy start           启动并显示地址（重复执行不会重复启动）
 hotspot-proxy info            显示运行状态、地址和监控命令
+hotspot-proxy connections     仅显示当前 SSH 和热点代理地址，供登录脚本调用
 hotspot-proxy monitor         每秒显示电脑上传 / 下载；Ctrl+C 只退出监控
 hotspot-proxy stop            停止本脚本启动的代理
 hotspot-proxy restart         重启代理并重新读取配置
@@ -390,6 +391,7 @@ main() {
             if pid=$(owned_pid); then echo "代理进程：运行中（PID $pid）。"; else echo '代理进程：未运行。'; fi
             banner
             ;;
+        connections) addresses --connections ;;
         monitor)
             exec "$PYTHON" "$APP_DIR/monitor.py" --url "http://127.0.0.1:$METRICS_PORT/metrics" --service "$SERVICE" \
                 --api-socket "$API_SOCKET" --gost-version "$(cat "$VERSION_FILE" 2>/dev/null || true)" "$@"

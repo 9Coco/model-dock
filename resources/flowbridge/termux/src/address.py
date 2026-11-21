@@ -2,8 +2,8 @@
 """Best-effort local IPv4 candidates for a phone-hosted proxy.
 
 Android may deny interface enumeration even though listening sockets work.
-Candidates therefore never claim to identify the hotspot conclusively.  The
-computer's IPv4 gateway after joining the hotspot is the source of truth.
+Reachability depends on the connecting client. The computer's IPv4 gateway
+after joining the hotspot can be another address of the same phone.
 This module only reads local interface information; it does not scan a network.
 """
 
@@ -118,7 +118,7 @@ def via_ioctl():
     """Read individual interfaces if netlink-based enumeration is denied."""
     import fcntl
 
-    names = {"ap0", "ap1", "swlan0", "softap0", "wlan0", "wlan1", "wlan2", "eth0", "rndis0", "usb0"}
+    names = {"ap0", "ap1", "swlan0", "softap0", "vgate0", "wlan0", "wlan1", "wlan2", "eth0", "rndis0", "usb0"}
     try:
         names.update(name for _, name in socket.if_nameindex())
     except OSError:
@@ -209,7 +209,11 @@ def ssh_destination():
 
 
 def print_connections(items, port, manual):
-    hotspot = hotspot_address(items, manual)
+    gateway = hotspot_address(items, manual)
+    # On the tested phone both Android and Windows clients could reach vgate0,
+    # while only the Windows client could use the Wi-Fi gateway as its proxy.
+    vgate_addresses = {item["address"] for item in items if item["interface"] == "vgate0"}
+    vgate = next(iter(vgate_addresses)) if len(vgate_addresses) == 1 else None
     session, ssh_port = ssh_destination()
     user = getpass.getuser()
 
@@ -221,20 +225,25 @@ def print_connections(items, port, manual):
         ssh_command("电脑保持当前网络，重新登录用：", session)
     else:
         wifi = next((item["address"] for item in items if item["interface"] == "wlan0"), None)
-        if wifi and wifi != hotspot:
+        hotspot_ssh = vgate or gateway
+        if wifi and wifi != hotspot_ssh:
             ssh_command("电脑和手机连同一个 Wi-Fi 时用：", wifi)
-        if hotspot:
-            ssh_command("电脑连手机开的热点时用：", hotspot)
-        if not wifi and not hotspot:
+        if hotspot_ssh:
+            ssh_command("电脑连手机开的热点时用：", hotspot_ssh)
+        if not wifi and not hotspot_ssh:
             print("  手机连上 Wi-Fi 或开启热点后，执行 hotspot-proxy info 查看地址。")
 
-    print("\n【2. 电脑连手机热点，通过手机代理上网】")
-    if hotspot:
-        print(f"  电脑 Wi-Fi 连上手机热点后，代理填：{hotspot}:{port}（HTTP / SOCKS5 共用）")
-        print("  如需核对，在 Windows 运行 ipconfig，查看无线网卡的 IPv4 默认网关。")
+    print("\n【2. 电脑或安卓设备连手机热点，通过手机代理上网】")
+    if vgate:
+        print(f"  安卓和电脑连上本手机热点后，代理优先填：{vgate}:{port}（HTTP / SOCKS5 共用）")
+        print("  安卓 Wi-Fi 选“手动代理”，将上面的 IP 和端口分开填写。")
     else:
-        print(f"  开启热点并让电脑连上后，代理服务器填无线网卡的 IPv4 默认网关，端口填 {port}（HTTP / SOCKS5 共用）。")
-        print("  Windows 可运行 ipconfig，或在 ModelDock 中查询热点地址。")
+        print("  当前未读到明确的 vgate0 地址。安卓设备连上热点后，可执行 hotspot-proxy info 再查看。")
+    if gateway and gateway != vgate:
+        label = "电脑备用" if vgate else "电脑连上本手机热点后"
+        print(f"  {label}，代理可填热点网关：{gateway}:{port}（HTTP / SOCKS5 共用）")
+    if not gateway:
+        print(f"  电脑连上热点后，可运行 ipconfig 查看无线网卡的 IPv4 默认网关，代理端口填 {port}（HTTP / SOCKS5 共用）。")
 
 
 def main(argv=None):

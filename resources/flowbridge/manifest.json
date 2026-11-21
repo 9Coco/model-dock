@@ -32,13 +32,13 @@
       "source": "termux/README.md",
       "path": "termux/README.md",
       "upstreamSha256": "e49cc32aa3f09f908fba65abde2c54cc5d925fb5fdf30b7e4127f45c6af1b05d",
-      "sha256": "e5fde0f382ca9b89b93a276e3c946e1b46d86feee650903c1901dc1655f31882"
+      "sha256": "26f76c136fe861b9d2d3133812bd0bd8bd45ad6a6085d546b13ad961866a65ec"
     },
     {
       "source": "termux/termux-hotspot-proxy.sh",
       "path": "termux/termux-hotspot-proxy.sh",
       "upstreamSha256": "26dc871c4dd55362cf5a361f9bb49e6f0d2b394e1e7c019f74129fcf70cb4853",
-      "sha256": "6a0c541aaed9e2609eb672cd1ee6cb2eb131af1c31d309b2ea59511e4f6f3d69"
+      "sha256": "9f4ae4528e101aa25822bcd749aa5bedce4aeac7bb21c024e5242480b75392ff"
     },
     {
       "source": "tools/fetch_tun_core.py",
@@ -295,7 +295,7 @@
       "source": "termux/src/address.py",
       "path": "termux/src/address.py",
       "upstreamSha256": "380f6e94288c6ed8556953dd5f3edf1557c2b2c79cfb4982b6222c922a44e811",
-      "sha256": "066ff261e850db2109b91771f24cbc37a12da0c0aefabbeeddcd6f756c6a9bd0"
+      "sha256": "50a651f533027d72cdb09643456552b733a4af10a52315b372e41d955a909342"
     },
     {
       "source": "termux/src/monitor.py",
@@ -307,7 +307,7 @@
       "source": "termux/src/proxy.sh",
       "path": "termux/src/proxy.sh",
       "upstreamSha256": "2e23ce2977334c12ec44f6cd97f4f3875f686903ff8979066bf1887461288ef1",
-      "sha256": "72e19bb791d331edeb6b7635c4f84dee1244fc64cb07723b6f85f8d08924e9be"
+      "sha256": "a4c39f6fc92f4c6eeb8456f9bcd998b5f265852bb4c9b2ba7af69c524d2f1497"
     },
     {
       "source": "tools/build_termux.py",
@@ -319,7 +319,7 @@
       "source": "tools/test_termux_proxy.py",
       "path": "tools/test_termux_proxy.py",
       "upstreamSha256": "adca25eec36c7a5350d0c18ed6192c829dedde6a727fd1d8d3577c3ecb89e58c",
-      "sha256": "333fb7f29613c5c83655c98eff82e286f3f6e31fccc2408f47af78e672ac48b8"
+      "sha256": "66e3ba381cbdecd84e2c812b203afaba729719540c7a6c3b08eba836379d37a5"
     },
     {
       "source": "tools/test_tun_namespace.py",
