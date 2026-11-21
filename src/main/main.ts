@@ -80,6 +80,7 @@ import { localGatewayKey, providerApiKey } from './connection-keys';
 import { createVault } from './vault';
 import { buildConfig, buildCopilotDesktopPlan, buildDshPlan, applyConfig, connectionKey } from './adapters';
 import { isActiveToolId } from '../shared/tool-categories';
+import { AIR_MANUAL_SETUP } from '../shared/air';
 import { applyDshConfig } from './dsh-config';
 import { resolveDshProfile } from './dsh-profile';
 import type { ModelDockApi, ModelInput, Provider, ProviderInput, ToolBinding, ToolId } from '../shared/types';
@@ -691,6 +692,7 @@ function registerIpc() {
   };
   async function synchronizeTool(id: ToolId): Promise<string> {
     toolId(id);
+    if (id === 'air') throw new Error(AIR_MANUAL_SETUP);
     if (toolRestorePending || toolConfigPending.has(id)) throw new Error('此工具配置正在更新，请稍后再试。');
     toolConfigPending.add(id);
     try {
@@ -921,15 +923,16 @@ function registerIpc() {
     const id = toolId(binding.id), before = store.listBindings().find(value => value.id === id);
     assertEditable(id);
     store.saveBinding({ ...binding, id });
-    if (before && !beforeToolSelections.has(id)) beforeToolSelections.set(id, structuredClone(before));
+    if (id !== 'air' && before && !beforeToolSelections.has(id)) beforeToolSelections.set(id, structuredClone(before));
   });
   handle('toolSyncUndoStatus', (value: ToolId) => {
     const id = toolId(value);
-    return undoManager.status(id);
+    return id === 'air' ? { available: false, reason: AIR_MANUAL_SETUP } : undoManager.status(id);
   });
   handle('undoToolSync', async (value: ToolId) => {
     assertEditable();
     const id = toolId(value);
+    if (id === 'air') throw new Error(AIR_MANUAL_SETUP);
     toolRestorePending = true;
     const current = store.listBindings().find(binding => binding.id === id);
     const draftBefore = beforeToolSelections.get(id);
@@ -1006,6 +1009,7 @@ function registerIpc() {
   handle('restoreOfficialConfig', async (value: ToolId) => {
     assertEditable();
     const id = toolId(value);
+    if (id === 'air') throw new Error(AIR_MANUAL_SETUP);
     toolRestorePending = true;
     try {
       const featureHome = __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home') : app.getPath('home');

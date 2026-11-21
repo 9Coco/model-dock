@@ -8,7 +8,7 @@ import { bindingConnectionPolicy } from '../shared/bindings';
 import { supportsMultipleSources } from '../shared/tool-capabilities';
 import { isSingleEntryTool } from '../shared/single-entry';
 
-const tools: ToolId[] = ['codex', 'claude-code', 'opencode', 'opencode-desktop', 'junie', 'copilot-cli', 'dsh', 'vscode', 'copilot'];
+const tools: ToolId[] = ['codex', 'claude-code', 'opencode', 'opencode-desktop', 'junie', 'copilot-cli', 'dsh', 'vscode', 'copilot', 'air'];
 /** 修改点：验证真实React切换与IPC保存，外部客户端写入仅限隔离的假home。 */
 export async function verifyAggregateModes(window: BrowserWindow, store: Store, outputDir: string, captureUi: () => Promise<Buffer>): Promise<void> {
   assert.equal(resolve(outputDir), resolve(process.env.MODELDOCK_SMOKE!)); assert.equal(resolve(store.dataDir), resolve(process.env.MODELDOCK_DATA_DIR!));
@@ -39,7 +39,7 @@ export async function verifyAggregateModes(window: BrowserWindow, store: Store, 
     // Copilot serialization fixtures have no running desktop registry; its expected failed write must
     // settle before another selection replaces it. Other clients must finish
     // their isolated configuration write, including the short debounce window.
-    const completed = tool === 'copilot'
+    const completed = tool === 'air' ? `!document.querySelector('[data-action="air-provider-type"]').disabled` : tool === 'copilot'
       ? `['synced','cleared','error'].includes(status?.dataset.toolApplicationState)`
       : `status?.dataset.toolApplicationState===(summary?.dataset.selectedModelCount==='0'?'cleared':'synced')`;
     await waitFor(`(()=>{const summary=document.querySelector('[data-tool-binding="${tool}"]'),status=document.querySelector('[data-tool-application-status]');return !!summary&&${completed}&&!document.querySelector('[data-action="tool-use-aggregate"]').disabled&&(summary.dataset.selectedModelCount==='0'||!document.querySelector('[data-action="tool-default-model"]').disabled);})()`, `${tool} synchronization settled`);
@@ -93,7 +93,7 @@ export async function verifyAggregateModes(window: BrowserWindow, store: Store, 
       const layout = await evaluate<any>(`(()=>{const main=document.querySelector('.main-content'),rect=document.querySelector('[data-action="tool-use-aggregate"]').getBoundingClientRect();return {horizontalOverflow:main.scrollWidth>main.clientWidth+1,toggleVisible:rect.top>=0&&rect.bottom<=innerHeight+1,checked:document.querySelector('[data-action="tool-use-aggregate"]').checked};})()`);
       assert.equal(layout.horizontalOverflow, false); assert.equal(layout.toggleVisible, true); assert.equal(layout.checked, true);
       layouts.push({ tool, theme, width, height, ...layout });
-      if (['claude-code', 'opencode', 'codex', 'junie', 'copilot-cli', 'vscode'].includes(tool)) writeFileSync(join(outputDir, `${tool}-aggregate-${theme}-${width}.png`), await captureUi());
+      if (['claude-code', 'opencode', 'codex', 'junie', 'copilot-cli', 'vscode', 'air'].includes(tool)) writeFileSync(join(outputDir, `${tool}-aggregate-${theme}-${width}.png`), await captureUi());
     }
     await click('[data-action="tool-use-aggregate"]');
     if (isSingleEntryTool(tool)) {

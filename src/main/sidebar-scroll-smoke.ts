@@ -109,8 +109,8 @@ export async function verifySidebarScroll(window: BrowserWindow, store: Store, o
       await pause(100);
       const start = await evaluate<SidebarReadback>(readScript); validate(start);
       assert.ok(start.lists[1].scrollHeight > start.lists[1].clientHeight, 'Many synthetic providers must exercise provider scrolling');
-      assert.equal(start.lists[0].rows.length, 5, 'Desktop category shows five tools including VS Code');
-      assert.equal(await evaluate<number>(`document.querySelectorAll('[data-tool-category="editor"],.sidebar [data-tool-id="air"]').length`), 0, 'Retired editor and Air entries are absent');
+      assert.equal(start.lists[0].rows.length, 6, 'Desktop category shows six tools including VS Code and Air');
+      assert.equal(await evaluate<number>(`document.querySelectorAll('[data-tool-category="editor"]').length`), 0, 'The editor category stays absent');
       await evaluate(`document.querySelector('[data-sidebar-scroll="tools"]').scrollTop=1e6`);
       await clickVisible('.sidebar [data-tool-id="vscode"]');
       await waitFor(`!!document.querySelector('[data-tool-binding="vscode"]')`, 'VS Code opens from Desktop App');

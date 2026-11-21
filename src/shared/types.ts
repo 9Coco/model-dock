@@ -165,6 +165,8 @@ export interface ToolBinding {
   dshSyncScope?: 'managed' | 'selected';
   /** 修改点：Claude Code 默认关闭遥测和非必要联网；仅在用户同步时写入。 */
   claudeDisableTelemetry?: boolean;
+  /** Account type prepared for Air's own Accounts UI; omitted preserves OpenAI. */
+  airProvider?: 'openai' | 'anthropic';
 }
 export interface GatewayStatus {
   running: boolean;

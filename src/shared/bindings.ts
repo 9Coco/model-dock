@@ -5,6 +5,7 @@ import { claudeConnectionKind, claudeModelsForProvider } from './claude';
 import { isJetBrainsTool } from './jetbrains';
 import { directModelsForProvider, isSingleEntryTool, nativeDirectBaseUrl } from './single-entry';
 import { supportsMultipleSources } from './tool-capabilities';
+import { isAirAnthropic } from './air';
 
 export interface BindingConnectionGroup {
   /** Direct API groups contain exactly one provider, hence one credential. */
@@ -23,15 +24,16 @@ export function resolveBindingModels(binding: ToolBinding, models: Model[], prov
   if (!binding.enabled) return [];
   const providerIds = binding.providerIds;
   const claude = binding.id === 'claude-code';
+  const messagesClient = claude || isAirAnthropic(binding);
   const singleSource = binding.mode === 'direct' && !supportsMultipleSources(binding.id) || claude && binding.mode !== 'aggregate';
   // Claude consumes Messages generally; VS Code only consumes the verified
   // official DeepSeek native Messages route. Other tool boundaries stay intact.
   const claudeIds = claude && providers ? new Set(providers.filter(provider => provider.enabled).flatMap(provider => binding.mode === 'aggregate'
     ? models.filter(model => model.providerId === provider.id && model.enabled)
     : claudeModelsForProvider(provider, models)).map(model => model.id)) : undefined;
-  const nativeIds = binding.mode === 'direct' && isSingleEntryTool(binding.id) && providers ? new Set(providers.flatMap(provider => directModelsForProvider(binding.id, provider, models)).map(model => model.id)) : undefined;
+  const nativeIds = binding.mode === 'direct' && isSingleEntryTool(binding.id) && providers ? new Set(providers.flatMap(provider => directModelsForProvider(binding.id, provider, models, binding.airProvider)).map(model => model.id)) : undefined;
   const sources = new Map(providers?.map(provider => [provider.id, provider]));
-  let result = models.map(model => traeRelayClientModel(binding.id, model, sources.get(model.providerId))).filter(model => model.enabled && (claude ? !claudeIds || claudeIds.has(model.id) : model.wireApi !== 'messages' || binding.id === 'vscode' && isVsCodeDeepSeekModel(model, sources.get(model.providerId)))
+  let result = models.map(model => traeRelayClientModel(binding.id, model, sources.get(model.providerId))).filter(model => model.enabled && (claude ? !claudeIds || claudeIds.has(model.id) : messagesClient || model.wireApi !== 'messages' || binding.id === 'vscode' && isVsCodeDeepSeekModel(model, sources.get(model.providerId)))
     && (!providers || providers.some(p => p.id === model.providerId && p.enabled)) && (!nativeIds || nativeIds.has(model.id)));
   if (providerIds !== undefined) {
     const allowed = singleSource ? providerIds.slice(0, 1) : providerIds;
@@ -58,7 +60,7 @@ export function bindingConnectionPolicy(binding: ToolBinding, models: Model[], p
     if (requestedIds.length !== 1) throw new Error('单供应商模式必须只选择一个来源。');
     if (!selectedIds.length) return { kind: 'direct', groups: [] };
     const provider = providers?.find(item => item.id === selectedIds[0]);
-    return { kind: 'direct', groups: provider && nativeDirectBaseUrl(binding.id, provider, resolved) ? [{ connection: 'direct-api', providerIds: selectedIds, modelIds: resolved.map(model => model.id) }] : [] };
+    return { kind: 'direct', groups: provider && nativeDirectBaseUrl(binding.id, provider, resolved, binding.airProvider) ? [{ connection: 'direct-api', providerIds: selectedIds, modelIds: resolved.map(model => model.id) }] : [] };
   }
   if (isJetBrainsTool(binding.id)) {
     const providerIds = [...new Set(binding.providerIds ?? resolved.map(model => model.providerId))].filter(providerId => !providers || providers.some(provider => provider.id === providerId && provider.enabled));

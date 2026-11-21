@@ -13,6 +13,8 @@ import { subscriptionDisplayName } from '../shared/subscription-names';
 import type { CopilotDesktopPlan } from './copilot-desktop';
 import { dshPatchPreview, type DshPlan, type DshProviderProfile } from './dsh-config';
 import { supportsMultipleSources } from '../shared/tool-capabilities';
+import { nativeDirectBaseUrl } from '../shared/single-entry';
+import { AIR_MANUAL_SETUP, airGatewayBaseUrl, airProviderFor, airProviderLabel, airSettingsPath } from '../shared/air';
 import { isOpenCodeTool, openCodeConfigTargets, type OpenCodePathOptions } from './opencode-paths';
 import { replacePrivateFile } from './private-file';
 import { applyClaudeConfig, buildClaudeConfig } from './claude-config';
@@ -23,9 +25,6 @@ import { isJetBrainsTool } from '../shared/jetbrains';
 import { applyJetBrainsConfig, buildJetBrainsConfig, type JetBrainsConfigOptions } from './jetbrains-config';
 
 const PLACEHOLDER = '__MODELDOCK_LOCAL_KEY__';
-function assertConfigurationSupported(tool: ToolId): void {
-  if (tool === 'air') throw new Error('Air 独立连接配置已移除，请在实际使用的 Agent 中配置模型。');
-}
 // These are client request budgets, not inferred upstream model specifications.
 const UNKNOWN_CONTEXT_BUDGET = 32768;
 const UNKNOWN_OUTPUT_BUDGET = 4096;
@@ -98,13 +97,18 @@ function connectionGroups(store: AdapterStore, tool: ToolId, binding: ToolBindin
   const allModels = store.listModels();
   const providers = store.listProviders?.() ?? (store.getProvider ? [...new Set(allModels.map(model => model.providerId))].flatMap(id => { const p = store.getProvider!(id); return p ? [p] : []; }) : undefined);
   const policy = bindingConnectionPolicy(binding, allModels, providers);
+  if (tool === 'air' && (policy.groups.length > 1 || binding.mode !== 'aggregate' && policy.groups.some(group => group.connection !== 'direct-api'))) {
+    throw new Error('Air 每次准备一个原生 API 账户；多个来源或订阅请启用聚合接口。');
+  }
   return policy.groups.filter(group => group.modelIds.length > 0).map(group => {
     const provider = providers?.find(item => item.id === group.providerIds[0]);
     const directApi = group.connection === 'direct-api';
     if (directApi && (!provider || group.providerIds.length !== 1)) throw new Error('供应商直连配置无效，请重新选择。');
     const id = policy.kind === 'native' ? `modeldock-${encodeURIComponent(group.providerIds[0])}` : 'modeldock';
     const name = policy.kind === 'native' ? `ModelDock · ${provider?.name ?? '订阅来源'}` : 'ModelDock';
-    const base = directApi ? provider!.baseUrl.replace(/\/+$/, '') : `http://127.0.0.1:${port}/tool/${tool}/v1`;
+    const base = tool === 'air'
+      ? directApi ? nativeDirectBaseUrl(tool, provider!, allModels.filter(model => group.modelIds.includes(model.id)), airProviderFor(binding)) ?? '' : airGatewayBaseUrl(airProviderFor(binding), port)
+      : directApi ? provider!.baseUrl.replace(/\/+$/, '') : `http://127.0.0.1:${port}/tool/${tool}/v1`;
     if (!base) throw new Error('请先为供应商填写套餐专属地址。');
     const apiKey = directApi && revealKey ? store.getSecret?.(provider!.id)?.apiKey : undefined;
     if (directApi && revealKey && !apiKey) throw new Error('直连供应商尚未填写 API Key。');
@@ -161,7 +165,6 @@ export function editJsonc(text: string, edits: Edit[]): string {
 }
 /** Only call from a trusted main-process copy/export action. */
 export function connectionKey(store: AdapterStore, tool: ToolId): string {
-  assertConfigurationSupported(tool);
   const { binding } = selected(store, tool);
   const groups = connectionGroups(store, tool, binding, 18181, true);
   if (groups.length !== 1) throw new Error('此工具使用多个供应商的独立凭据，请导出配置；没有共用的单一连接密钥。');
@@ -300,7 +303,6 @@ export function buildDshPlan(store: AdapterStore, port: number, revealKey = fals
   return { syncScope, providers, credentials, ...(defaultModel ? { defaultModel } : {}), ...(mappings.length ? { legacyDispatch: { version: 1 as const, mappings } } : {}) };
 }
 export function buildConfig(store: AdapterStore, tool: ToolId, port: number, revealKey = false, homeDirectory = homedir(), options: OpenCodePathOptions & { jetBrainsOptions?: JetBrainsConfigOptions; junieHome?: string; copilotCliHome?: string; copilotCliProvidersConfig?: string } = {}): ConfigPreview {
-  assertConfigurationSupported(tool);
   if (isJetBrainsTool(tool)) return buildJetBrainsConfig(store, tool, port, revealKey, homeDirectory, options.jetBrainsOptions);
   // 修改点：Claude Code 按原生 Messages 入口或本机协议桥生成配置，不能落入其他工具适配分支。
   if (tool === 'claude-code') return buildClaudeConfig(store, revealKey, port);
@@ -319,6 +321,22 @@ export function buildConfig(store: AdapterStore, tool: ToolId, port: number, rev
       : binding.mode === 'direct' && !supportsMultipleSources(tool) ? '订阅单源模式：只使用所选订阅，由本机入口管理授权续期，不把 OAuth 凭据写入工具。'
         : '通过本机入口按模型别名分发到所选供应商，不把 OAuth 凭据写入工具。';
   const defaultModel = models.find(m => m.id === binding.defaultModelId) ?? models[0];
+  if (tool === 'air') {
+    const provider = airProviderFor(binding), label = airProviderLabel(provider);
+    return {
+      filename: 'modeldock-air-connection-guide.json', canApply: false, applyUnavailableReason: AIR_MANUAL_SETUP,
+      content: JSON.stringify(first ? {
+        manualSetup: true, provider: label, settingsPath: airSettingsPath(provider), description: `ModelDock · ${first.directApi ? first.singleSource?.name ?? 'Air' : 'Air'} · ${label}`,
+        baseUrl: first.base, apiKey: first.key,
+        models: models.map(model => ({ id: model.alias, name: model.displayName || model.alias, wireApi: provider === 'anthropic' ? 'messages' : model.wireApi })),
+        suggestedModel: defaultModel?.alias,
+      } : {}, null, 2),
+      instructions: `在「${airSettingsPath(provider)}」中填写 API Key 和 Description，展开高级选项填写 Base URL，测试连接后保存。`
+        + '此 JSON 仅供手动填写参考，不能导入 Air；请在 Air 会话中选择该账户及兼容模型。' + AIR_MANUAL_SETUP
+        + (provider === 'anthropic' && first?.directApi ? 'Air 使用 x-api-key 认证；仅接受 Bearer 的来源请使用聚合接口，网关会按保存的 messagesAuth 发送认证。' : '')
+        + (first && !first.directApi ? '使用聚合接口时请保持 ModelDock 本机服务运行。' : ''),
+    };
+  }
   if (tool === 'vscode') return {
     filename: 'modeldock-vscode.json', content: JSON.stringify(vscode(store, groups), null, 2), canApply: true,
     instructions: connection + '使用 VS Code Copilot Chat 的 Custom Endpoint schema；凭据随每个模型的 requestHeaders 写入（apiKey 明文字段会被 VS Code 当作秘密存储引用忽略）。'
@@ -382,7 +400,7 @@ export function buildConfig(store: AdapterStore, tool: ToolId, port: number, rev
   };
 }
 export function applyConfig(store: AdapterStore, tool: ToolId, port: number, appData: string, backups: string, homeDirectory = homedir(), options: OpenCodePathOptions & { codexHome?: string; configHome?: string; claudeConfigDir?: string; junieHome?: string; copilotCliHome?: string; copilotCliProvidersConfig?: string; jetBrainsOptions?: JetBrainsConfigOptions } = {}): string {
-  assertConfigurationSupported(tool);
+  if (tool === 'air') throw new Error(AIR_MANUAL_SETUP);
   if (isJetBrainsTool(tool)) return applyJetBrainsConfig(store, tool, backups, homeDirectory, { ...options.jetBrainsOptions, port });
   if (tool === 'claude-code') return applyClaudeConfig(store, backups, homeDirectory, { claudeConfigDir: options.claudeConfigDir, port });
   if (tool === 'junie') return applyJunieConfig(store, backups, homeDirectory, { junieHome: options.junieHome, port });

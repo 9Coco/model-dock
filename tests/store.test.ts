@@ -9,6 +9,7 @@ import { resolveBindingModels } from '../src/shared/bindings';
 import { restoreToolBinding } from '../src/main/tool-restore-binding';
 import initSqlJs from 'sql.js';
 import type { ProviderInput, ModelInput } from '../src/shared/types';
+import { airProviderFor } from '../src/shared/air';
 
 const folders: string[] = [];
 const stores: Store[] = [];
@@ -89,8 +90,8 @@ describe('restoring a captured tool selection', () => {
   });
 });
 
-describe('retained Air compatibility data', () => {
-  it.each(['one', 'matching', 'different', 'assistant'] as const)('preserves %s legacy selections without adopting them into a retired Air connection', async variant => {
+describe('Air account settings and compatibility data', () => {
+  it.each(['one', 'matching', 'different', 'assistant'] as const)('preserves %s legacy selections without automatically adopting an Air account', async variant => {
     const { store, dir, codec } = await setup();
     const source = store.saveProvider({ name: 'Air source', kind: 'openai-compatible', baseUrl: 'https://air.example/v1', enabled: true, apiKey: 'synthetic' });
     const chat = store.saveModel(model(source.id, 'air-chat'));
@@ -144,6 +145,28 @@ describe('retained Air compatibility data', () => {
     const reopened = await Store.create(dir, codec); stores.push(reopened);
     expect(reopened.listBindings()).toEqual(before);
     expect(resolveBindingModels(reopened.listBindings().find(binding => binding.id === 'air')!, reopened.listModels(), reopened.listProviders()).map(item => item.id)).toEqual([selected.id]);
+  });
+
+  it('persists the Air account protocol independently and rejects protocol metadata on other tools', async () => {
+    const { store, dir, codec } = await setup();
+    const source = store.saveProvider({ name: 'DeepSeek Air', kind: 'openai-compatible', presetId: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', enabled: true, apiKey: 'synthetic' });
+    const selected = store.saveModel({ ...model(source.id, 'deepseek-flash'), wireApi: 'responses' });
+    const air = store.listBindings().find(binding => binding.id === 'air')!;
+    expect(airProviderFor(air)).toBe('openai');
+    store.saveBinding({ ...air, enabled: true, mode: 'direct', providerIds: [source.id], modelIds: [], modelSelection: 'all', defaultModelId: selected.id, airProvider: 'anthropic' });
+    const captured = store.listBindings().find(binding => binding.id === 'air')!;
+    expect(captured.airProvider).toBe('anthropic');
+    store.saveBinding({ ...captured, airProvider: undefined, note: 'keep current account type' });
+    expect(store.listBindings().find(binding => binding.id === 'air')?.airProvider).toBe('anthropic');
+    expect(() => store.saveBinding({ ...captured, airProvider: 'invalid' as never })).toThrow('Air 账户类型无效');
+    expect(() => store.saveBinding({ ...store.listBindings().find(binding => binding.id === 'vscode')!, airProvider: 'anthropic' })).toThrow('Air 账户类型无效');
+    store.saveBinding({ ...captured, airProvider: 'openai' });
+    store.restoreBindingSelection(captured);
+    const before = store.listBindings();
+    store.close();
+    const reopened = await Store.create(dir, codec); stores.push(reopened);
+    expect(reopened.listBindings()).toEqual(before);
+    expect(reopened.listBindings().find(binding => binding.id === 'air')?.airProvider).toBe('anthropic');
   });
 });
 

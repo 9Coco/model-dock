@@ -129,10 +129,9 @@ export async function verifyProviderManagement(window: BrowserWindow, store: Sto
       assert.deepEqual(store.listBindings(), originalBindings, 'Category switching never writes tool bindings');
     }
     assert.deepEqual(categoryTools.tui, ['claude-code', 'junie', 'opencode', 'copilot-cli']);
-    assert.deepEqual(categoryTools.desktop, ['codex', 'opencode-desktop', 'dsh', 'vscode', 'copilot'], 'VS Code belongs to Desktop App');
-    assert.equal(Object.values(categoryTools).flat().includes('air'), false, 'The standalone Air tool is absent');
-    assert.equal(Object.values(categoryTools).flat().length, 9, 'The navigation exposes nine tools');
-    assert.equal(new Set(Object.values(categoryTools).flat()).size, 9, 'Tool categories do not duplicate entries');
+    assert.deepEqual(categoryTools.desktop, ['codex', 'opencode-desktop', 'dsh', 'vscode', 'copilot', 'air'], 'VS Code and Air belong to Desktop App');
+    assert.equal(Object.values(categoryTools).flat().length, 10, 'The navigation exposes ten tools');
+    assert.equal(new Set(Object.values(categoryTools).flat()).size, 10, 'Tool categories do not duplicate entries');
     await selectProvider(provider.id);
     await masked();
     await assertClipboard('.connection-fields [aria-label="复制供应商 URL"]', provider.baseUrl);

@@ -3,21 +3,23 @@ import { supportsMultipleSources } from './tool-capabilities';
 import { traeRelayClientModel } from './trae-relay-models';
 import { claudeModelsForProvider, nativeClaudeBaseUrl } from './claude';
 import { isJetBrainsTool, nativeJetBrainsBaseUrl } from './jetbrains';
+import { airAccountBaseUrl, isAirAnthropic, type AirProvider } from './air';
 
 /** 修改点：这些客户端只消费一个入口，来源多选只属于聚合入口内部。 */
 export function isSingleEntryTool(tool: ToolId): boolean { return !supportsMultipleSources(tool); }
-export function directModelsForProvider(tool: ToolId, provider: Provider, models: readonly Model[]): Model[] {
+export function directModelsForProvider(tool: ToolId, provider: Provider, models: readonly Model[], airProvider: AirProvider = 'openai'): Model[] {
   if (!provider.enabled || provider.kind !== 'openai-compatible' || provider.nativeAdapter) return [];
   const available = models.filter(model => model.enabled && model.providerId === provider.id).map(model => traeRelayClientModel(tool, model, provider));
   if (tool === 'codex') return available.filter(model => model.wireApi === 'responses');
-  if (tool === 'claude-code') return nativeClaudeBaseUrl(provider) ? claudeModelsForProvider(provider, available) : available.filter(model => model.wireApi === 'messages');
+  if (tool === 'claude-code' || tool === 'air' && airProvider === 'anthropic') return nativeClaudeBaseUrl(provider) ? claudeModelsForProvider(provider, available) : available.filter(model => model.wireApi === 'messages');
   if (isJetBrainsTool(tool)) return available.filter(model => model.wireApi === 'chat-completions' || nativeJetBrainsBaseUrl(provider) && model.wireApi === 'responses');
   return available.filter(model => model.wireApi !== 'messages');
 }
-export function nativeDirectBaseUrl(tool: ToolId, provider: Provider, models: readonly Model[]): string | undefined {
+export function nativeDirectBaseUrl(tool: ToolId, provider: Provider, models: readonly Model[], airProvider: AirProvider = 'openai'): string | undefined {
   if (provider.kind !== 'openai-compatible' || provider.nativeAdapter || !provider.enabled || !models.length) return;
-  const eligible = new Set(directModelsForProvider(tool, provider, models).map(model => model.id));
+  const eligible = new Set(directModelsForProvider(tool, provider, models, airProvider).map(model => model.id));
   if (models.some(model => !eligible.has(model.id))) return;
+  if (tool === 'air') return airAccountBaseUrl(airProvider, airProvider === 'anthropic' ? nativeClaudeBaseUrl(provider) ?? provider.baseUrl : provider.baseUrl);
   if (tool === 'claude-code') return nativeClaudeBaseUrl(provider) ?? provider.baseUrl.replace(/\/+$/, '');
   if (isJetBrainsTool(tool)) return nativeJetBrainsBaseUrl(provider) ?? provider.baseUrl.replace(/\/+$/, '');
   return provider.baseUrl.replace(/\/+$/, '');
@@ -36,17 +38,17 @@ export function switchSingleEntryMode(binding: ToolBinding, mode: 'direct' | 'ag
     if (!choices.direct) {
       const defaultModel = models.find(model => model.id === binding.defaultModelId);
       const provider = providers.find(provider => provider.id === defaultModel?.providerId);
-      const eligible = provider && directModelsForProvider(binding.id, provider, models);
+      const eligible = provider && directModelsForProvider(binding.id, provider, models, binding.airProvider);
       choices.direct = { providerId: eligible?.some(model => model.id === defaultModel?.id) ? provider!.id : '', defaultModelId: eligible?.some(model => model.id === defaultModel?.id) ? defaultModel!.id : '' };
     }
     const choice = choices.direct;
     const provider = providers.find(provider => provider.id === choice.providerId);
-    const enabled = Boolean(provider && directModelsForProvider(binding.id, provider, models).some(model => model.id === choice.defaultModelId));
+    const enabled = Boolean(provider && directModelsForProvider(binding.id, provider, models, binding.airProvider).some(model => model.id === choice.defaultModelId));
     return { ...binding, mode, providerIds: choice.providerId ? [choice.providerId] : [], modelIds: [], modelSelection: 'all', defaultModelId: choice.defaultModelId, enabled, connectionChoices: choices };
   }
   if (!choices.aggregate) choices.aggregate = { providerIds: [...(binding.providerIds ?? [])], modelIds: [...binding.modelIds], defaultModelId: binding.defaultModelId, modelSelection: binding.modelSelection ?? 'all' };
   const choice = choices.aggregate;
-  const available = models.filter(model => model.enabled && (binding.id === 'claude-code' || traeRelayClientModel(binding.id, model, providers.find(p => p.id === model.providerId)).wireApi !== 'messages') && choice.providerIds.includes(model.providerId) && providers.some(provider => provider.id === model.providerId && provider.enabled) && (choice.modelSelection === 'all' || choice.modelSelection === undefined && !choice.modelIds.length || choice.modelIds.includes(model.id)));
+  const available = models.filter(model => model.enabled && (binding.id === 'claude-code' || isAirAnthropic(binding) || traeRelayClientModel(binding.id, model, providers.find(p => p.id === model.providerId)).wireApi !== 'messages') && choice.providerIds.includes(model.providerId) && providers.some(provider => provider.id === model.providerId && provider.enabled) && (choice.modelSelection === 'all' || choice.modelSelection === undefined && !choice.modelIds.length || choice.modelIds.includes(model.id)));
   const enabled = available.length > 0 && (!choice.defaultModelId || available.some(model => model.id === choice.defaultModelId));
   return { ...binding, mode, providerIds: [...choice.providerIds], modelIds: [...choice.modelIds], modelSelection: choice.modelSelection, defaultModelId: choice.defaultModelId, enabled, connectionChoices: choices };
 }

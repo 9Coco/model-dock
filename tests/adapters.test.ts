@@ -7,6 +7,7 @@ import { parse as parseToml } from '@iarna/toml';
 import { parse as parseYaml } from 'yaml';
 import { buildConfig, buildCopilotDesktopPlan, buildDshPlan, applyConfig, connectionKey, vsCodeModelConfig } from '../src/main/adapters';
 import type { Model, Provider, ToolBinding } from '../src/shared/types';
+import { airAccountBaseUrl, airGatewayBaseUrl, airProviderFor } from '../src/shared/air';
 
 const roots: string[] = [];
 function dshProviders(content: string) { return parseYaml(content).find((row: any) => row.id === 'llm-pi-ai').config.providers; }
@@ -64,24 +65,57 @@ describe('tool adapters', () => {
     expect(f.catalog[0]).toMatchObject({ reasoningEfforts: ['low', 'high', 'max'], defaultReasoningEffort: 'high' });
   });
 
-  it.each(['direct', 'aggregate'] as const)('rejects retired Air %s configuration before reading credentials or changing client files', mode => {
+  it.each(['openai', 'anthropic'] as const)('prepares one native Air %s account with redacted previews and no client file writes', airProvider => {
     const f = nativeFixture();
-    const binding: ToolBinding = { id: 'air', name: 'Air', enabled: true, mode, providerIds: ['provider-a'],
+    f.providers[0] = { ...f.providers[0], presetId: 'deepseek', baseUrl: 'https://api.deepseek.com/v1' };
+    f.catalog[0] = { ...f.catalog[0], upstreamId: 'deepseek-flash' };
+    const binding: ToolBinding = { id: 'air', name: 'Air', enabled: true, mode: 'direct', airProvider, providerIds: ['provider-a'],
       modelIds: [], modelSelection: 'all', defaultModelId: f.catalog[0].id, note: 'retained legacy selection' };
     const air = { ...f, listBindings: vi.fn(() => [binding]), gatewayKey: vi.fn(() => 'local-test-secret') };
     const dir = mkdtempSync(join(tmpdir(), 'modeldock-air-guide-')); roots.push(dir);
     const existing = join(dir, 'existing-client-config.json');
     writeFileSync(existing, '{"keep":"user configuration"}\n');
     const before = readFileSync(existing, 'utf8');
-    expect(() => buildConfig(air, 'air', 18181)).toThrow('Air 独立连接配置已移除');
-    expect(() => buildConfig(air, 'air', 18181, true)).toThrow('Air 独立连接配置已移除');
-    expect(() => connectionKey(air, 'air')).toThrow('Air 独立连接配置已移除');
-    expect(() => applyConfig(air, 'air', 18181, dir, dir, dir)).toThrow('Air 独立连接配置已移除');
-    expect(air.listBindings).not.toHaveBeenCalled();
+    const preview = buildConfig(air, 'air', 18181);
+    expect(preview).toMatchObject({ canApply: false, filename: 'modeldock-air-connection-guide.json' });
+    expect(JSON.parse(preview.content)).toMatchObject({ manualSetup: true, provider: airProvider === 'anthropic' ? 'Anthropic' : 'OpenAI',
+      baseUrl: airProvider === 'anthropic' ? 'https://api.deepseek.com/anthropic' : 'https://api.deepseek.com/v1', apiKey: '__PROVIDER_API_KEY__',
+      suggestedModel: 'deepseek-flash', models: [{ id: 'deepseek-flash', wireApi: airProvider === 'anthropic' ? 'messages' : 'responses' }] });
     expect(f.getSecret).not.toHaveBeenCalled();
+    expect(JSON.parse(buildConfig(air, 'air', 18181, true).content).apiKey).toBe('SYNTHETIC_KEY_provider-a');
+    expect(connectionKey(air, 'air')).toBe('SYNTHETIC_KEY_provider-a');
+    expect(() => applyConfig(air, 'air', 18181, dir, dir, dir)).toThrow('Air 自己的 Accounts');
     expect(air.gatewayKey).not.toHaveBeenCalled();
     expect(readdirSync(dir)).toEqual(['existing-client-config.json']);
     expect(readFileSync(existing, 'utf8')).toBe(before);
+  });
+
+  it.each(['openai', 'anthropic'] as const)('exports an Air %s aggregate account with only the local key and protocol-compatible models', airProvider => {
+    const f = nativeFixture();
+    f.catalog[1] = { ...f.catalog[1], wireApi: 'messages' };
+    const binding: ToolBinding = { id: 'air', name: 'Air', airProvider, mode: 'aggregate', enabled: true,
+      providerIds: f.providers.map(provider => provider.id), modelIds: [], modelSelection: 'all', defaultModelId: f.catalog[0].id, note: '' };
+    const air = { ...f, listBindings: () => [binding] };
+    const preview = JSON.parse(buildConfig(air, 'air', 19234).content);
+    expect(preview.baseUrl).toBe(airGatewayBaseUrl(airProvider, 19234));
+    expect(preview.apiKey).toBe('__MODELDOCK_LOCAL_KEY__');
+    expect(preview.models.map((model: {id: string}) => model.id)).toEqual(f.catalog.filter(model => airProvider === 'anthropic' || model.wireApi !== 'messages').map(model => model.alias));
+    const exported = buildConfig(air, 'air', 19234, true).content;
+    expect(JSON.parse(exported).apiKey).toBe('local-test-secret');
+    expect(exported).not.toMatch(/PRIVATE_OAUTH|SYNTHETIC_KEY/);
+    expect(f.getSecret).not.toHaveBeenCalled();
+    expect(connectionKey(air, 'air')).toBe('local-test-secret');
+  });
+
+  it('keeps legacy Air OpenAI defaults and rejects mixed native accounts before reading any upstream key', () => {
+    expect(airProviderFor()).toBe('openai');
+    expect(airAccountBaseUrl('anthropic', 'https://fixture.test/prefix/v1/')).toBe('https://fixture.test/prefix');
+    expect(airAccountBaseUrl('openai', 'https://fixture.test/prefix/v1/')).toBe('https://fixture.test/prefix/v1');
+    const f = nativeFixture();
+    const binding: ToolBinding = { id: 'air', name: 'Air', enabled: true, mode: 'auto', providerIds: ['provider-a', 'provider-b'], modelIds: [], defaultModelId: f.catalog[0].id, note: '' };
+    const air = { ...f, listBindings: () => [binding] };
+    expect(() => buildConfig(air, 'air', 18181, true)).toThrow('每次准备一个原生 API 账户');
+    expect(f.getSecret).not.toHaveBeenCalled();
   });
 
   it.each(['chat-completions', 'responses', 'messages'] as const)('exports saved user levels using the current %s format without mutating stale metadata', wireApi => {

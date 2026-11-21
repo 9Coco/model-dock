@@ -8,8 +8,8 @@ export const toolCategories: { id: ToolCategory; label: string }[] = [
 const categories = {
   codex: 'desktop', 'claude-code': 'tui', junie: 'tui', opencode: 'tui',
   'opencode-desktop': 'desktop', dsh: 'desktop', vscode: 'desktop',
-  copilot: 'desktop', 'copilot-cli': 'tui',
-} as const satisfies Record<Exclude<ToolId, JetBrainsToolId | 'air'>, ToolCategory>;
+  copilot: 'desktop', 'copilot-cli': 'tui', air: 'desktop',
+} as const satisfies Record<Exclude<ToolId, JetBrainsToolId>, ToolCategory>;
 type ActiveToolId = keyof typeof categories;
 export const activeToolIds = Object.keys(categories) as ActiveToolId[];
 export function isActiveToolId(tool: unknown): tool is ActiveToolId {

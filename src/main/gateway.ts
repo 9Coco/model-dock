@@ -15,6 +15,7 @@ import type { DiagnosticContext, DiagnosticEvent, DiagnosticLevel } from '../sha
 import { describeError } from './diagnostic-log';
 import { normalizeUpstreamReasoning } from './upstream-compat';
 import { AnthropicBridgeError, parseAnthropicRequest, toAnthropicResponse, createAnthropicStream, collectAnthropicStream, anthropicMessageToSse } from './anthropic-bridge';
+import { isAirAnthropic } from '../shared/air';
 import { ChatResponsesBridgeError, parseChatResponsesRequest, responsesToChat, createResponsesChatStream, collectResponsesChatStream, chatResponseToSse } from './chat-responses-bridge';
 import { ResponsesChatBridgeError } from './responses-chat-bridge';
 import { TraeApiError } from './trae-api';
@@ -320,7 +321,14 @@ export class Gateway {
       const actual = Buffer.from(key);
       return actual.length === expected.length && timingSafeEqual(actual, expected);
     };
-    return matches(bearer);
+    if (matches(bearer)) return true;
+    // Air's native Anthropic account probes /models with x-api-key. Restrict
+    // that alternative credential form to the explicitly configured Air scope.
+    if (!/^\/tool\/air\/v1\/(?:models|messages)$/.test(endpoint)) return false;
+    const binding = this.store.listBindings().find(item => item.id === 'air');
+    const apiKey = request.headers['x-api-key'];
+    return Boolean(binding?.enabled && binding.mode === 'aggregate' && isAirAnthropic(binding)
+      && typeof apiKey === 'string' && matches(apiKey));
   }
   private route(path: string): { endpoint: string; tool?: ToolId } {
     if (path.startsWith('/tool/')) {
@@ -337,13 +345,13 @@ export class Gateway {
     try { validateUpstreamUrl(nativeMessages && provider.kind === 'openai-compatible' ? nativeClaudeBaseUrl(provider) ?? provider.baseUrl : provider.baseUrl, this.state.port); return true; } catch { return false; }
   }
   private allowedModels(tool?: ToolId): Model[] {
-    const models = this.store.listModels().filter(model => this.available(model, tool === 'claude-code'
+    const binding = tool ? this.store.listBindings().find(item => item.id === tool) : undefined;
+    const models = this.store.listModels().filter(model => this.available(model, tool === 'claude-code' || isAirAnthropic(binding)
       || tool === 'vscode' && isVsCodeDeepSeekModel(model, this.store.getProvider(model.providerId))));
     if (!tool) {
       const exposure = this.store.gatewayExposure();
       return models.filter(model => !exposure.excludedProviderIds.includes(model.providerId) && !exposure.excludedModelIds.includes(model.id));
     }
-    const binding = this.store.listBindings().find(item => item.id === tool);
     return binding ? resolveBindingModels(binding, models, this.store.listProviders()) : [];
   }
   /** 修改点：每次 HTTP 请求建立独立关联，不继承启动监听器时的 IPC 关联。 */
@@ -407,27 +415,27 @@ export class Gateway {
       if (!this.authenticated(request, endpoint)) throw new GatewayError(401, '需要有效的 ModelDock API Key。');
       const route = this.route(endpoint);
       tool = route.tool;
+      const binding = route.tool ? this.store.listBindings().find(item => item.id === route.tool) : undefined;
+      const airAnthropic = isAirAnthropic(binding);
       // 修改点：单入口工具关闭聚合后，旧本地地址也不能隐式继续充当单家协议桥。
       if (route.tool && isSingleEntryTool(route.tool)) {
-        const binding = this.store.listBindings().find(item => item.id === route.tool);
         if (binding?.enabled && binding.mode !== 'aggregate') throw new GatewayError(403, '此工具使用供应商直连，请使用供应商地址；本机入口仅在使用聚合接口时开放。');
       }
       if (request.method === 'GET' && route.endpoint === '/v1/models') {
         const data = this.allowedModels(route.tool).map(model => {
           const provider = this.store.getProvider(model.providerId)!;
           const clientModel = route.tool === 'vscode' ? vsCodeDeepSeekModel(model, provider) : model;
-          return { id: model.alias, object: 'model', created: 0, owned_by: provider.name, display_name: modelDisplayLabel(model, provider), context_window: model.contextWindow, wire_api: clientModel.wireApi, capabilities: { tools: model.tools, vision: model.vision } };
+          return { id: model.alias, object: 'model', created: 0, owned_by: provider.name, display_name: modelDisplayLabel(model, provider), context_window: model.contextWindow, wire_api: airAnthropic ? 'messages' : clientModel.wireApi, capabilities: { tools: model.tools, vision: model.vision }, ...(airAnthropic ? { type: 'model', created_at: '1970-01-01T00:00:00Z' } : {}) };
         });
-        jsonResponse(response, 200, { object: 'list', data }); return;
+        jsonResponse(response, 200, { object: 'list', data, ...(airAnthropic ? { has_more: false, first_id: data[0]?.id ?? null, last_id: data.at(-1)?.id ?? null } : {}) }); return;
       }
       const completion = route.endpoint === '/v1/completions';
       if (request.method !== 'POST' || !['/v1/chat/completions', '/v1/responses', '/v1/messages', '/v1/completions'].includes(route.endpoint)
         || completion && !isJetBrainsTool(route.tool)) throw new GatewayError(404, '接口不存在。');
-      if (anthropic && route.tool && route.tool !== 'claude-code' && route.tool !== 'vscode'
-        || route.tool === 'claude-code' && !anthropic) throw new GatewayError(404, '此工具不使用该协议入口。');
+      if (anthropic && route.tool && route.tool !== 'claude-code' && route.tool !== 'vscode' && !airAnthropic
+        || (route.tool === 'claude-code' || airAnthropic) && !anthropic) throw new GatewayError(404, '此工具不使用该协议入口。');
       const body = await readBody(request, response);
       if (body.stream !== undefined && typeof body.stream !== 'boolean') throw new GatewayError(400, 'stream 必须是布尔值。');
-      const binding = route.tool ? this.store.listBindings().find(item => item.id === route.tool) : undefined;
       if (route.tool && !binding?.enabled) throw new GatewayError(403, '此工具尚未启用。');
       const selectedModels = binding ? resolveBindingModels(binding, this.store.listModels(), this.store.listProviders()) : undefined;
       if (selectedModels && !selectedModels.length) throw new GatewayError(403, '此工具尚未启用任何模型。');
@@ -457,7 +465,7 @@ export class Gateway {
       if (!anthropic && !chatResponses && !completion && model.wireApi !== expectedWire) throw new GatewayError(400, '该模型使用不同协议，请选择对应的接口；本版本不进行跨协议转换。');
       const nativeCompletion = completion && provider ? nativeJetBrainsCompletion(model, provider) : undefined;
       if (completion && !nativeCompletion) throw new GatewayError(400, '此模型尚未确认原生 FIM 补全能力；请为 AI 补全选择兼容模型，不使用聊天协议代替。');
-      const responsesBridge = anthropic && route.tool === 'claude-code' && provider && preferClaudeResponsesBridge(provider, model);
+      const responsesBridge = anthropic && (route.tool === 'claude-code' || airAnthropic) && provider && preferClaudeResponsesBridge(provider, model);
       const nativeMessages = anthropic && !responsesBridge && provider?.kind === 'openai-compatible'
         && (vsCodeDeepSeek || model.wireApi === 'messages' || Boolean(nativeClaudeBaseUrl(provider)));
       if (provider && provider.kind !== 'openai-compatible' && ('previous_response_id' in body || 'conversation' in body)) {

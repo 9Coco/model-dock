@@ -6,7 +6,15 @@ ModelDock 是跨平台本地模型管理台：全局维护模型来源与别名�
 
 0.4.0 起包含 FlowBridge 的组合发行版采用 [GPL-3.0-or-later](LICENSE)；原 ModelDock 代码及原创应用标记保留 [MIT 授权](LICENSE-MIT)，第三方图标和依赖保留各自的 Apache-2.0、CC-BY-4.0、MIT 或其他许可，详见 [第三方声明](THIRD_PARTY_NOTICES.md)。欢迎按 [贡献指南](CONTRIBUTING.md) 提交修复；敏感问题请遵循 [安全报告流程](SECURITY.md)。
 
-## 0.4.34 · 简化工具入口
+## 0.4.35 · Air 原生 BYOK 账户接入
+
+- Air 回到「桌面 App」分类，与 VS Code 同类；工具导航仍只有 TUI 和桌面 App，共 10 个入口。
+- Air 页针对「设置 → AI → Air → 账户」准备 OpenAI / Anthropic 账户参数：可复制描述、Base URL、Key、参考模型，预览脱敏，导出的是填写参考。直连使用供应商原生地址、真实模型 ID 和 API Key；聚合使用既有本机 Gateway 和本地 Key。
+- 按 Air 原生请求规则分别生成 URL：OpenAI 聚合填 `/tool/air/v1`，Anthropic 聚合填 `/tool/air`，避免重复 `/v1`。Anthropic 聚合复用主进程 Messages 转换、流式处理与取消链路；模型范围和协议按 Air 账户类型隔离。
+- Air 自身支持多个账户，本页一次准备一个账户；原生直连选择一家 API 来源，聚合可选择多个来源。既有 Air 选择与独立连接模式草稿继续保留。
+- 完整账户仍需在 Air 原生界面保存到 PasswordSafe；ModelDock 不生成不完整 XML 账户，不把参考 JSON 描述为可导入配置，也不声称已替 Agent 完成授权或推理验证。详见 [Air BYOK 实现依据](docs/air-byok-integration.md)。
+
+## 0.4.34 · 简化工具入口（Air 已于 0.4.35 恢复）
 
 - 移除 ModelDock 的 Air 独立 BYOK 参数页、模型选择、参数预览/导出和密钥复制入口。Air 内使用 Claude Code、OpenCode 或 Junie 时，通过对应工具配置模型。
 - 工具分类只保留「TUI / 桌面 App」。VS Code 移到「桌面 App」，取消「编辑器」分类；共 9 个工具入口。
@@ -18,7 +26,7 @@ ModelDock 是跨平台本地模型管理台：全局维护模型来源与别名�
 - 未找到可用程序时，显示具体安装提示，避免误报为“此工具使用导出配置入口”。模型文件、默认选择和 ACP 入口仍沿用原有备份、事务同步及撤销流程。
 - IDE 使用独立的「Junie · ModelDock」ACP 入口。需要终端中的 `junie` 命令时，请另外安装 Junie CLI；复用 IDE 程序不会修改 PATH。
 
-## 0.4.30 · Air 独立接入（历史功能，0.4.34 移除入口）
+## 0.4.30 · Air 独立接入（历史版本）
 
 - 编辑器工具区保留 VS Code，并把四个 JetBrains IDE 的工具入口合并为一个 Air。Air 使用单独的模型选择和聚合地址 `/tool/air/v1`。
 - 在 Air 的 Accounts 页面手工添加提供商。ModelDock 提供 URL、Key 和参考模型，账户由 Air 保存。
@@ -323,11 +331,15 @@ WebStorm、IntelliJ IDEA、Rider、PyCharm 的接入参数页分别提供「AI A
 - 配置接入：工具支持预览 / 导出，并按各自能力在用户修改勾选或模型偏好后自动同步，写入前备份。VS Code 默认只保留所选自定义供应商，可关闭此选项来保留原有自定义来源；其他 vendor 与 JSONC 注释保留。OpenCode 保留其他供应商、MCP 和非受管 JSONC 注释；Codex 的 TOML 重写保留配置字段，但不保证原注释。Copilot app 通过运行实例的原生接口同步来源、模型和凭据，预览是同步计划参考，不需要再手工导入；Copilot CLI 使用独立的官方来源注册表和设置文件。DSH 写入 home 插件覆盖与凭据 refs，同步前保存加密恢复记录，清空后恢复原覆盖。
 - 托盘：关闭主窗口可留在后台运行；退出应用会停止网关。
 
-## 在 Air 中使用已配置的 Agent
+## 配置 Air 自己的 BYOK 账户
 
-ModelDock 不再提供单独的 Air BYOK 参数页。Claude Code、OpenCode 等 Agent 的模型和凭据通过各自工具页同步，再由 Air 启动 Agent 读取相应配置；Junie 使用独立的「Junie · ModelDock」ACP 入口。Air 自己的账户选择由 Air 管理。
+在「桌面 App → Air」选择 OpenAI 或 Anthropic 账户类型，再选择直连供应商或开启聚合并选择模型来源。复制页面给出的参数，在 IDE 的「设置 → AI → Air → 账户 → 更多供应商」选择对应类型：API Key 填主字段，描述用于辨认账户，Base URL 在高级选项中填写。测试连接并保存后，在支持相应协议的 Agent 会话里选择该账户和模型。Air 支持多个账户，可重复上述步骤逐个添加；本页一次准备一个账户。
 
-旧版本的 Air 绑定和专用网关地址只保留兼容，不会在升级时删除外部 IDE 配置或凭据。Air 中的登录标签不代表实际模型来源，应结合 Agent 配置与请求结果判断。参考 [JetBrains Air 授权说明](https://www.jetbrains.com/help/air/air-in-ides-authorization.html)。
+直连使用原生 API Key 和模型 ID。聚合时保持 ModelDock 服务运行，OpenAI 的 Base URL 为 `http://127.0.0.1:18181/tool/air/v1`，Anthropic 为 `http://127.0.0.1:18181/tool/air`（端口以界面为准）；DeepSeek 官方 Anthropic 直连为 `https://api.deepseek.com/anthropic`。模型选择约束 ModelDock 聚合目录，参考模型不等于已写入 Air 的默认模型。Air 的连接测试读取模型目录，仍需在实际 Agent 中发送消息验证推理。
+
+ModelDock 保存接入选择并提供复制、脱敏预览与参考参数导出；Air 原生界面负责保存账户与密码库。导出 JSON 不是 Air 的导入文件，页面没有自动同步、撤销同步或还原账户按钮。现有 IDE 配置、账户、凭据和备份不会因打开页面或改变选择而被修改。当前页面提供 OpenAI / Anthropic 兼容接入；Gemini 等其他原生类型仍在 Air 自行配置。
+
+Air 自己的 BYOK 账户与 Agent 的终端配置是两种接入方式。Claude Code、OpenCode 的本地配置仍通过对应工具页管理，Junie 的自定义接入仍是「Junie · ModelDock」ACP。Air 默认 GitHub Copilot 入口有独立的 GitHub 授权要求，添加 Air BYOK 账户不会替它完成登录。参考 [JetBrains Air 授权说明](https://www.jetbrains.com/help/air/air-in-ides-authorization.html) 与 [本机实现核对](docs/air-byok-integration.md)。
 
 ## 授权、MCP 和 Skills
 

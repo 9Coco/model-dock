@@ -182,7 +182,12 @@ export async function verifyContextMenus(window: BrowserWindow, store: Store, ou
       await waitFor(`!!document.querySelector('[data-tool-binding="${tool}"]')`,`tool menu opens the clicked ${tool} tool`);
     }
     await click('[data-tool-category="desktop"]');
-    assert.equal(await evaluate<number>(`document.querySelectorAll('[data-tool-category="editor"],.sidebar [data-tool-id="air"]').length`), 0, 'Retired Air navigation cannot expose a context menu');
+    assert.equal(await evaluate<number>(`document.querySelectorAll('[data-tool-category="editor"]').length`), 0, 'The editor category stays absent');
+    const airIds = await context('.sidebar [data-tool-id="air"]');
+    assert.ok(airIds.includes('tool-open') && airIds.includes('tool-preview'));
+    assert.ok(!airIds.includes('tool-apply') && !airIds.includes('tool-undo') && !airIds.includes('tool-restore'), 'Air offers reference parameters without file synchronization actions');
+    await click(action('tool-open'));
+    await waitFor(`!!document.querySelector('[data-air-connection="air"]')`, 'Desktop App context menu opens Air BYOK');
     const vscodeIds = await context('.sidebar [data-tool-id="vscode"]');
     assert.ok(vscodeIds.includes('tool-open') && vscodeIds.includes('tool-preview'));
     await click(action('tool-open'));
