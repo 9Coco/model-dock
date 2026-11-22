@@ -15,6 +15,7 @@ const rendererErrorNames = new Set(['Error', 'TypeError', 'ReferenceError', 'Syn
 const api: ModelDockApi = {
   runtimeSnapshot: () => call('runtimeSnapshot'),
   networkSnapshot: () => call('networkSnapshot'), saveNetworkSettings: (patch, options) => call('saveNetworkSettings', patch, options),
+  discoverNetworkUpstream: input => call('discoverNetworkUpstream', input),
   connectNetwork: upstream => call('connectNetwork', upstream), disconnectNetwork: () => call('disconnectNetwork'),
   checkNetworkSite: site => call('checkNetworkSite', site), networkHotspotCandidates: () => call('networkHotspotCandidates'),
   measureNetworkSites: async (address, onResult) => {

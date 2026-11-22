@@ -10,12 +10,30 @@ import type { FlowBridgeSnapshot, NetworkEngineStatus } from '../shared/flowbrid
 import { NETWORK_PROBE_URLS, NETWORK_SITES } from '../shared/flowbridge-types';
 import type { Store } from './store';
 import type { NetworkEngine } from './flowbridge-engine';
+import type { TermuxDiscovery } from './network-discovery';
 import { measureSiteLatency } from './proxy-speed-test';
 
 const cancellationAddress = 'socks5://192.0.2.31:38473';
 const unavailableAddress = 'socks5://192.0.2.32:38473';
 const recoveryAddress = 'socks5://192.0.2.33:38473';
 const delayedCleanupAddress = 'socks5://192.0.2.36:38473';
+let smokePhoneHost = '192.0.2.1';
+let smokeVpnPort = 19321;
+let smokeSocksOnly = false;
+let smokeSourceReady = true;
+
+export const smokeProxyDiscovery = {
+  async local() {
+    if (!smokeSourceReady) return [];
+    const socks = 'socks5://127.0.0.1:' + smokeVpnPort, http = 'http://127.0.0.1:' + smokeVpnPort;
+    if (process.platform === 'linux') return [http];
+    return smokeSocksOnly ? [socks] : [socks, http];
+  },
+  async phone({ mode, port }: TermuxDiscovery) {
+    if (!smokeSourceReady) return null;
+    return `${mode === 'global' ? 'socks5' : 'http'}://${smokePhoneHost}:${port}`;
+  },
+};
 
 async function verifyAnonymousRedirectProbe() {
   const requests: { method: string | undefined; path: string | undefined; authenticated: boolean }[] = [];
@@ -58,7 +76,7 @@ export function createNetworkSmokeEngine(): NetworkEngine {
     async request<T>(method: string, args?: Record<string, unknown>) {
       switch (method) {
         case 'localProxies':
-          return ['socks5://127.0.0.1:19321'] as T;
+          return await smokeProxyDiscovery.local() as T;
         case 'connect': {
           const settings = args?.settings as FlowBridgeSnapshot['settings'];
           if (settings.address === unavailableAddress) throw new Error('上游代理连接超时');
@@ -114,8 +132,8 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
   const modelConfig = () => ({ providers: store.listProviders(), models: store.listModels(), bindings: store.listBindings() });
   const before = modelConfig();
   const evaluate = <T>(script: string): Promise<T> => window.webContents.executeJavaScript(script);
-  async function wait(expression: string, contents = window.webContents) {
-    for (let i = 0; i < 100; i++) {
+  async function wait(expression: string, contents = window.webContents, attempts = 100) {
+    for (let i = 0; i < attempts; i++) {
       if (await contents.executeJavaScript(expression)) return;
       await delay(50);
     }
@@ -201,6 +219,20 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
   assert.equal(await evaluate(gatewayState('stopped')), true);
   const idle = await network();
   const windowsNetwork = idle.platform === 'win32';
+  const phoneAddress = 'http://192.0.2.1:38473';
+  const localAddress = 'http://127.0.0.1:19321';
+  async function verifyAutoFill(expected: string) {
+    await wait(`${query('#network-address')}.value===${JSON.stringify(expected)} && !${query(connectButton)}.disabled`);
+    assert.equal((await network()).state, 'idle', 'Discovery must not connect');
+  }
+  const sourceSelect = '[data-network-panel] select[aria-label="代理来源"]';
+  async function selectSource(source: 'local' | 'termux') {
+    await wait(`!!${query(sourceSelect)} && !${query(sourceSelect)}.disabled`);
+    await evaluate(`(() => {const select=${query(sourceSelect)}; select.value=${JSON.stringify(source)}; select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    await wait(`${query(sourceSelect)}.value===${JSON.stringify(source)} && !${query(sourceSelect)}.disabled`);
+    assert.equal((await network()).settings.source, source);
+    assert.equal(await evaluate(`!!${query('.phone-proxy-panel')}`), source === 'termux');
+  }
   assert.equal(idle.state, 'idle');
   assert.equal(idle.settings.autoConnect, false);
 
@@ -212,7 +244,8 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
   await openPage('network');
   await verifyNoSaveButton();
   await verifySessionAction(connectButton, /连接/);
-  assert.equal(await evaluate(`${query(connectButton)}.disabled`), true);
+  await verifyAutoFill(windowsNetwork ? localAddress : phoneAddress);
+  assert.deepEqual((await network()).settings, idle.settings, 'Passive probe must not save or take over the network');
   assert.deepEqual(idle.settings.bypassAddresses, []);
   assert.equal(await evaluate(`!!${query(bypassToggle)}`), false, 'HTTP mode must hide the TUN allowlist');
   await click(globalMode);
@@ -243,10 +276,39 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
   await click(bypassToggle);
   await click(httpMode);
   await wait(`!${query(bypassToggle)}`);
+  const initialSource = idle.settings.source;
+  assert.equal(initialSource, windowsNetwork ? 'local' : 'termux');
+  smokeSourceReady = false;
+  await selectSource(windowsNetwork ? 'termux' : 'local');
+  assert.match(await evaluate<string>(`${query(discoverButton)}.textContent`), windowsNetwork ? /查询热点地址/ : /查找本机代理/);
+  await wait(`!!${query('[data-network-discovery="empty"]')}`);
+  smokeSourceReady = true;
+  if (windowsNetwork) await evaluate("window.dispatchEvent(new Event('online'))");
+  // Starting a local VPN need not emit any OS network-change notification.
+  await wait(`!!${query('[data-network-discovery="found"]')}`, window.webContents, windowsNetwork ? 100 : 420);
+  const alternate = windowsNetwork ? phoneAddress : localAddress;
+  await verifyAutoFill(alternate);
+  assert.equal((await network()).settings.address, '');
+  // The hotspot gateway or VPN port can change while the card is already open.
+  if (windowsNetwork) smokePhoneHost = '192.0.2.2';
+  else smokeVpnPort = 19323;
+  const updated = windowsNetwork ? 'http://192.0.2.2:38473' : 'http://127.0.0.1:19323';
+  await click(connectButton);
+  await wait(networkState('connected'));
+  assert.equal((await network()).settings.address, updated, 'Connect must recheck the discovered upstream');
+  assert.equal(await evaluate(`${query(sourceSelect)}.disabled`), true);
+  await click(disconnectButton);
+  await wait(networkState('idle'));
+  await selectSource(initialSource);
+  await verifyAutoFill(windowsNetwork ? localAddress : phoneAddress);
+  await selectSource(windowsNetwork ? 'termux' : 'local');
+  await verifyAutoFill(updated);
+  if (windowsNetwork) smokeSocksOnly = true;
+  await selectSource(initialSource);
   if (windowsNetwork) {
     assert.equal(await evaluate("document.body.innerText.includes('手机热点')"), false);
-    await click(discoverButton);
-    await wait(`!!${query('.network-candidates button')}`);
+    await wait(`!!${query('.network-candidates button')} && ${query('.network-candidates button')}.textContent.includes('socks5://127.0.0.1:19321')`);
+    assert.equal(await evaluate(`${query(httpMode)}.getAttribute('aria-pressed')`), 'true', 'An alternative must not silently switch modes');
     assert.deepEqual((await network()).settings, idle.settings, 'Discovery alone must leave settings alone');
     await click('.network-candidates button');
     await wait(`${query('#network-address')}.value==='socks5://127.0.0.1:19321' && !${query('[data-action="connect-network"]')}.disabled`);
@@ -424,7 +486,7 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
     })()`);
     assert.ok(geometry.responsiveGrid && geometry.firstRow && geometry.iconsAbove, 'Twelve compact latency tiles sit beside controls on desktop and stack responsively');
     assert.ok(geometry.fullWidthTraffic, 'Traffic spans the complete second row');
-    assert.equal(geometry.phoneFullWidth, windowsNetwork ? null : true, 'Phone setup must span the workspace where available');
+    assert.equal(geometry.phoneFullWidth, initialSource === 'termux' ? true : null, 'Phone setup must span the workspace when Termux is selected');
     const layout = await evaluate<{ overflow: boolean; menuVisible: boolean }>(`(() => {
       const main=document.querySelector('main'), menu=${query('[data-page="network"]')}.getBoundingClientRect();
       return {overflow: document.documentElement.scrollWidth>innerWidth+1 || main.scrollWidth>main.clientWidth+1,
@@ -583,7 +645,7 @@ export async function verifyNetworkUi(window: BrowserWindow, store: Store, outpu
   assert.deepEqual(modelConfig(), before);
   assert.equal(store.getManagedState('network.flowbridge.lease', false), false);
   writeFileSync(join(output, 'network-validation.json'), JSON.stringify({ ok: true, defaultNetworkWorkspace: true,
-    sidebarNetworkBeforeAuth: true, dedicatedNetworkPage: true, sessionPreservedAcrossNavigation: true,
+    sidebarNetworkBeforeAuth: true, dedicatedNetworkPage: true, sessionPreservedAcrossNavigation: true, switchedAndRestoredProxySources: true, automaticSourceDiscovery: true, recheckedChangedUpstream: true,
     globalBypassEditor: true, bypassSavedOfflineAndConnected: true, bypassRetainedAcrossModes: true,
     completedLatencyPreservedAcrossNavigation: true, pendingLatencyCompletesWhileHidden: true, latencyResetsOnModeAndAddressChange: true,
     offlineSpeedFromDraft: true, connectedWithDraft: true, explicitReconnect: true, cleanupRecovery: true, gatewayControlsIndependent: true, twelveWebsiteLatenciesOnly: true, trafficWindows: [1, 5, 15, 60], simulatedNetworkConnectDisconnectAndCancel: true,

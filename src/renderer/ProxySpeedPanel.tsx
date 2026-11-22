@@ -56,9 +56,9 @@ function SiteTile({ site, result, pending, selected, onClick }: {
   </button>;
 }
 
-export function ProxySpeedPanel({ api, address, mode, networkState, prepareAddress, needsRecovery }: {
+export function ProxySpeedPanel({ api, address, mode, networkState, prepareAddress, blocked }: {
   api: ModelDockApi; address: string; mode: NetworkMode; networkState: FlowBridgeSnapshot['state'];
-  prepareAddress?: () => Promise<string>; needsRecovery?: boolean;
+  prepareAddress?: () => Promise<string>; blocked: boolean;
 }) {
   const [sites, setSites] = useState<Partial<Record<NetworkSite, SiteLatency>>>({});
   const [stage, setStage] = useState<Stage>();
@@ -66,7 +66,7 @@ export function ProxySpeedPanel({ api, address, mode, networkState, prepareAddre
   const [details, setDetails] = useState<NetworkSite>();
   const active = useRef(false);
   const generation = useRef(0);
-  const disabled = needsRecovery || networkState === 'connecting' || networkState === 'disconnecting';
+  const disabled = blocked || networkState === 'connecting' || networkState === 'disconnecting';
   const target = parseNetworkEndpoint(address, mode)?.address ?? address;
   const route = disabled ? 'switching' : networkState === 'connected' ? 'session' : 'direct';
   useLayoutEffect(() => {

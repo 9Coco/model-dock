@@ -1,5 +1,6 @@
-import { createNetworkSmokeEngine, verifyNetworkUi } from './network-smoke';
+import { createNetworkSmokeEngine, smokeProxyDiscovery, verifyNetworkUi } from './network-smoke';
 import { hotspotCandidates } from './flowbridge';
+import { linuxLocalProxies } from './network-discovery';
 import { ModelDockRuntime } from './modeldock-runtime';
 import { FlowBridgeEngine } from './flowbridge-engine';
 import { NetworkMini } from './network-mini';
@@ -791,6 +792,7 @@ function registerIpc() {
     gateway: gateway.status(), gatewayExposure: store.gatewayExposure(), logs: store.logs(100), dataDir, version: app.getVersion() }));
   handle('runtimeSnapshot', () => runtime.snapshot());
   handle('networkSnapshot', () => network.snapshot());
+  handle('discoverNetworkUpstream', input => network.discoverUpstream(input));
   handle('saveNetworkSettings', (patch, options) => network.save(patch, options));
   handle('connectNetwork', upstream => network.connect(upstream));
   handle('disconnectNetwork', () => network.disconnect(true));
@@ -831,7 +833,8 @@ function registerIpc() {
     });
   });
   handle('checkNetworkSite', site => network.check(site));
-  handle('networkHotspotCandidates', () => hotspotCandidates());
+  handle('networkHotspotCandidates', () => __MODELDOCK_SMOKE_BUILD__ && process.env.MODELDOCK_SMOKE_NETWORK_ONLY === '1'
+    ? ['192.0.2.1'] : hotspotCandidates());
   handle('networkLocalProxies', () => network.localProxies());
   handle('showNetworkMini', () => networkMini.show());
   handle('openNetworkSite', async (site: NetworkSite) => {
@@ -1255,6 +1258,14 @@ function initializeApplication() {
     runtime = new ModelDockRuntime(gateway, store, {
       platform: process.platform,
       dataDir: join(dataDir, 'network'),
+      discoverLocalProxies: __MODELDOCK_SMOKE_BUILD__
+        ? smokeProxyDiscovery.local
+        : process.platform === 'linux'
+          ? port => linuxLocalProxies(port, () => session.fromPartition('modeldock-system-proxy-discovery', { cache: false }).resolveProxy('https://example.com/'))
+          : undefined,
+      discoverPhoneProxy: __MODELDOCK_SMOKE_BUILD__
+        ? smokeProxyDiscovery.phone
+        : undefined,
       engine: (progress, exit) => {
         if (__MODELDOCK_SMOKE_BUILD__) {
           if (process.env.MODELDOCK_SMOKE_NETWORK_ONLY === '1') return createNetworkSmokeEngine();

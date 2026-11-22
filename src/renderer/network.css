@@ -5,6 +5,11 @@
 .service-workspace .gateway-top h2, .network-workspace .gateway-top h2 { color: var(--ink); }
 .service-workspace .gateway-top p, .network-workspace .gateway-top p { color: var(--muted); line-height: 1.5; }
 .service-network-body { padding: 16px; }
+.network-source { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.network-source label { color: var(--ink); font-size: 12px; font-weight: 600; }
+.network-source select { min-width: 0; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--field); color: var(--ink); font: inherit; font-size: 12px; }
+.network-source select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.network-source-hint { margin: -4px 0 8px; }
 .network-mode { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-soft); padding: 2px; }
 .network-mode button { padding: 5px 12px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: 12px; }
 .network-mode button[aria-pressed="true"] { color: var(--ink); background: var(--surface); box-shadow: 0 0 0 1px var(--line); font-weight: 600; }

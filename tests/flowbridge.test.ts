@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FlowBridgeManager, validateNetworkSettings, type FlowBridgeOptions } from '../src/main/flowbridge';
+import * as discovery from '../src/main/network-discovery';
 import { FlowBridgeEngine, NetworkAuthorizationRequired, type NetworkEngine } from '../src/main/flowbridge-engine';
 import { DEFAULT_FLOWBRIDGE, type FlowBridgeSettings, type NetworkEngineStatus } from '../src/shared/flowbridge-types';
 import { Store } from '../src/main/store';
@@ -10,7 +11,7 @@ const folders: string[] = [];
 const temporary = () => { const path = mkdtempSync(join(tmpdir(), 'modeldock-network-test-')); folders.push(path); return path; };
 afterEach(() => { vi.useRealTimers(); for (const path of folders.splice(0)) rmSync(path, { recursive: true, force: true }); });
 const stopped = (): NetworkEngineStatus => ({ running: false, cleanupConfirmed: true, localPort: null, uploadBytes: 0, downloadBytes: 0, connections: 0, message: '' });
-function fixture(platform = 'linux', discoverCandidates: FlowBridgeOptions['discoverCandidates'] = async () => []) {
+function fixture(platform = 'linux', discoverCandidates: FlowBridgeOptions['discoverCandidates'] | null = async () => [], discoverLocalProxies?: FlowBridgeOptions['discoverLocalProxies']) {
   const values = new Map<string, unknown>(), calls: string[] = [];
   const memory = { getManagedState<T>(k: string, v: T): T { return structuredClone(values.get(k) ?? v) as T; }, setManagedState(k: string, v: unknown) { values.set(k, structuredClone(v)); } };
   let stopFails = false, connectFails = false, failExit: () => void = () => {}, release: (() => void) | undefined;
@@ -28,10 +29,110 @@ function fixture(platform = 'linux', discoverCandidates: FlowBridgeOptions['disc
     }
     return stopped() as T;
   }, async close() { calls.push('close'); } };
-  const manager = new FlowBridgeManager(memory, { platform, dataDir: temporary(), gatewayPort: () => 18181, discoverCandidates, engine: (_progress, exit) => { failExit = exit; return engine; } });
-  return { manager, memory, values, calls, attempts, connections, rejectAddress(address: string) { rejected.add(address); }, failStop(value = true) { stopFails = value; }, failConnect() { connectFails = true; }, crash() { failExit(); }, hold() { release = () => {}; }, release() { release?.(); } };
+  const options = { platform, dataDir: temporary(), gatewayPort: () => 18181, discoverCandidates: discoverCandidates ?? undefined, discoverLocalProxies,
+    engine: (_progress: (message: string) => void, exit: () => void) => { failExit = exit; return engine; } };
+  const manager = new FlowBridgeManager(memory, options);
+  return { manager, options, memory, values, calls, attempts, connections, rejectAddress(address: string) { rejected.add(address); }, failStop(value = true) { stopFails = value; }, failConnect() { connectFails = true; }, crash() { failExit(); }, hold() { release = () => {}; }, release() { release?.(); } };
 }
 describe('FlowBridge integration', () => {
+  it('shares a passive local lookup with startup autoconnect without dropping the authorized connection', async () => {
+    let complete!: (addresses: string[]) => void;
+    const local = vi.fn(() => new Promise<string[]>(resolve => { complete = resolve; }));
+    const f = fixture('win32', null, local);
+    await f.manager.save({ source: 'local', mode: 'http', autoConnect: true });
+    const visible = f.manager.discoverUpstream({ source: 'local', mode: 'http' });
+    const startup = f.manager.autoConnect();
+    complete(['http://127.0.0.1:12345']);
+    await startup;
+    expect(await visible).toEqual({ address: null, alternatives: [] });
+    expect(local).toHaveBeenCalledTimes(1);
+    expect(f.manager.snapshot().state).toBe('connected');
+    expect(f.attempts).toEqual(['http://127.0.0.1:12345']);
+    await f.manager.shutdown();
+  });
+  it('permits switching sources during a shared read-only lookup and discards its stale result', async () => {
+    let complete!: (addresses: string[]) => void;
+    const local = vi.fn(() => new Promise<string[]>(resolve => { complete = resolve; }));
+    const f = fixture('linux', null, local);
+    await f.manager.save({ source: 'local' });
+    const first = f.manager.discoverUpstream({ source: 'local', mode: 'http' });
+    const duplicate = f.manager.discoverUpstream({ source: 'local', mode: 'http' });
+    await f.manager.save({ source: 'termux' });
+    complete(['http://127.0.0.1:7890']);
+    for (const result of await Promise.all([first, duplicate])) expect(result).toEqual({ address: null, alternatives: [] });
+    expect(local).toHaveBeenCalledTimes(1);
+    expect(f.calls).toEqual([]);
+    await f.manager.shutdown();
+  });
+  it.each(['linux', 'win32'])('chooses verified local addresses in the requested mode on %s and filters invalid alternatives', async platform => {
+    const saved = 'http://127.0.0.1:7891', socks = 'socks5://127.0.0.1:1080';
+    const f = fixture(platform, null, async () => ['http://127.0.0.1:7890', socks, saved, 'http://127.0.0.1:18181']);
+    await f.manager.save({ source: 'local', address: saved });
+    expect(await f.manager.discoverUpstream({ source: 'local', mode: 'http' })).toEqual({ address: saved, alternatives: platform === 'linux' ? [] : [socks] });
+    expect(await f.manager.discoverUpstream({ source: 'local', mode: 'global' })).toEqual({ address: platform === 'linux' ? null : socks, alternatives: ['http://127.0.0.1:7890', saved] });
+    expect(f.manager.snapshot().settings.address).toBe(saved);
+    expect(f.calls).toEqual([]);
+    await f.manager.shutdown();
+  });
+  it.each(['win32', 'linux'])('keeps independent Termux and local VPN endpoints after a restart on %s', async platform => {
+    const f = fixture(platform);
+    const phone = { mode: 'global', address: 'socks5://192.0.2.5:38473' } as const;
+    const local = { mode: 'http', address: 'http://127.0.0.1:7890' } as const;
+    await f.manager.save({ source: 'termux', ...phone, autoConnect: true, autoDiscover: false });
+    await f.manager.save({ source: 'local' });
+    expect(f.manager.snapshot().settings).toMatchObject({ source: 'local', address: '', mode: 'http', autoConnect: true, autoDiscover: false });
+    await f.manager.autoConnect();
+    expect(f.calls).toEqual([]);
+    await f.manager.save(local);
+    await f.manager.shutdown();
+    const reopened = new FlowBridgeManager(f.memory, f.options);
+    expect(reopened.snapshot().settings).toMatchObject({ source: 'local', ...local });
+    expect((await reopened.save({ source: 'termux' })).settings).toMatchObject(phone);
+    await reopened.connect();
+    await expect(reopened.save({ source: 'local' })).rejects.toThrow('断开');
+    expect(f.attempts).toEqual([phone.address]);
+    await reopened.disconnect();
+    expect((await reopened.save({ source: 'local' })).settings).toMatchObject(local);
+    await reopened.shutdown();
+  });
+  it.each([
+    ['win32', '192.0.2.8:38473', 'termux'], ['linux', 'http://127.0.0.1:7890', 'local'],
+    ['win32', '', 'local'], ['linux', '', 'termux'],
+  ])('identifies a pre-source profile on %s with address "%s" as %s', (platform, address, source) => {
+    const f = fixture(platform);
+    f.values.set('network.flowbridge.v1', { address, mode: 'http', autoConnect: false });
+    const reopened = new FlowBridgeManager(f.memory, f.options);
+    expect(reopened.snapshot().settings).toMatchObject({ source, autoDiscover: false });
+    expect(f.calls).toEqual([]);
+  });
+  it('opens an editable empty VPN profile if its old port is now the gateway or its saved address is corrupt', async () => {
+    const f = fixture();
+    await f.manager.save({ source: 'local', address: 'http://127.0.0.1:7890' });
+    const phone = { source: 'termux', address: 'http://192.0.2.8:38473' } as const;
+    await f.manager.save(phone);
+    f.options.gatewayPort = () => 7890;
+    expect((await f.manager.save({ source: 'local' })).settings).toMatchObject({ source: 'local', address: '' });
+    expect((await f.manager.save({ source: 'termux' })).settings).toMatchObject(phone);
+    f.values.set('network.flowbridge.profile.local', { address: 'invalid://broken', mode: 'http' });
+    expect((await f.manager.save({ source: 'local' })).settings).toMatchObject({ source: 'local', address: '' });
+    expect(f.calls).toEqual([]);
+    await f.manager.shutdown();
+  });
+  it.each(['linux', 'win32'])('uses only discovery for the saved source on %s', async platform => {
+    const localDiscovery = vi.fn(async () => ['http://127.0.0.1:7890']);
+    const hotspot = vi.spyOn(discovery, 'hotspotCandidates').mockResolvedValue(['192.0.2.5']);
+    try {
+      for (const source of ['local', 'termux'] as const) {
+        const f = fixture(platform, null, localDiscovery);
+        await f.manager.save({ source, autoConnect: true });
+        await f.manager.autoConnect();
+        expect(f.attempts).toEqual([source === 'local' ? 'http://127.0.0.1:7890' : 'http://192.0.2.5:38473']);
+        await f.manager.shutdown();
+      }
+      expect(localDiscovery).toHaveBeenCalledExactlyOnceWith(18181);
+      expect(hotspot).toHaveBeenCalledExactlyOnceWith(platform);
+    } finally { hotspot.mockRestore(); }
+  });
   it('discovers the changed upstream at startup and remembers only the connected endpoint', async () => {
     const found = ['socks5://192.0.2.21:38473', 'socks5://192.0.2.22:38473'];
     const f = fixture('linux', async settings => { expect(settings.mode).toBe('global'); return found; });
@@ -81,7 +182,6 @@ describe('FlowBridge integration', () => {
     expect(discovery).toBe(2);
     expect(f.manager.snapshot()).toMatchObject({ state: 'connected', settings: { address: 'http://192.0.2.22:38473' } });
     await f.manager.shutdown();
-    expect(() => validateNetworkSettings({ address: '', autoConnect: true, autoDiscover: false }, { ...DEFAULT_FLOWBRIDGE }, 'linux', 18181)).toThrow('自动查找');
   });
   it('retains legacy fixed-address autoconnect behavior until the discovery preference is changed', async () => {
     const { values, memory } = fixture();

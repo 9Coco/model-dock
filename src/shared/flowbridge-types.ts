@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 export type NetworkMode = 'http' | 'global';
+export type NetworkSource = 'termux' | 'local';
+export interface NetworkDiscoveryInput { source: NetworkSource; mode: NetworkMode; port?: number }
+export interface NetworkDiscoveryResult { address: string | null; alternatives: string[] }
 export function parseNetworkEndpoint(address: string, mode: NetworkMode) {
   const scheme = mode === 'global' ? 'socks5' : 'http';
   const value = address.includes('://') ? address : scheme + '://' + address;
@@ -11,6 +14,7 @@ export function parseNetworkEndpoint(address: string, mode: NetworkMode) {
   return { host, port, address: `${scheme}://${host}:${port}` };
 }
 export interface FlowBridgeSettings {
+  source: NetworkSource;
   address: string;
   mode: NetworkMode;
   dnsMode: 'fast' | 'compatible';
@@ -21,7 +25,7 @@ export interface FlowBridgeSettings {
 }
 export const MAX_NETWORK_BYPASS_ADDRESSES = 32;
 export const DEFAULT_FLOWBRIDGE: Readonly<FlowBridgeSettings> = Object.freeze({
-  address: '', mode: 'http', dnsMode: 'fast', bypassAddresses: Object.freeze([]),
+  source: 'termux', address: '', mode: 'http', dnsMode: 'fast', bypassAddresses: Object.freeze([]),
   autoConnect: false, autoDiscover: true, showMiniOnStart: false,
 });
 export interface NetworkSample { time: number; uploadRate: number; downloadRate: number; uploadBytes: number; downloadBytes: number }
@@ -58,6 +62,7 @@ export type SiteLatency = { site: NetworkSite } & (
 export interface WebsiteResult { name: string; url: string; status_code: number | null; elapsed_ms: number; ok: boolean; detail: string; reachable: boolean; browser_verification: boolean; attempts: number }
 export interface NetworkCheck { system: WebsiteResult; proxy: WebsiteResult | null }
 export interface FlowBridgeApi {
+  discoverNetworkUpstream(input: NetworkDiscoveryInput): Promise<NetworkDiscoveryResult>;
   measureNetworkSites(address: string, onResult: (result: SiteLatency) => void): Promise<void>;
   networkSnapshot(): Promise<FlowBridgeSnapshot>;
   saveNetworkSettings(patch: Partial<FlowBridgeSettings>, options?: { offlineOnly: boolean }): Promise<FlowBridgeSnapshot>;

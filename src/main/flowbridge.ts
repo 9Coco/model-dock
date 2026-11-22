@@ -2,14 +2,26 @@
 import { isIP } from 'node:net';
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-import { DEFAULT_FLOWBRIDGE, MAX_NETWORK_BYPASS_ADDRESSES, NETWORK_SITES, parseNetworkEndpoint, type FlowBridgeSettings, type FlowBridgeSnapshot, type NetworkEngineStatus, type NetworkSample, type NetworkSite, type NetworkCheck } from '../shared/flowbridge-types';
+import { DEFAULT_FLOWBRIDGE, MAX_NETWORK_BYPASS_ADDRESSES, NETWORK_SITES, parseNetworkEndpoint, type FlowBridgeSettings, type FlowBridgeSnapshot, type NetworkEngineStatus, type NetworkSample, type NetworkSite, type NetworkCheck, type NetworkSource } from '../shared/flowbridge-types';
+import { discoverTermuxEndpoint, hotspotCandidates, type TermuxDiscovery } from './network-discovery';
+import type { NetworkDiscoveryInput, NetworkDiscoveryResult } from '../shared/flowbridge-types';
+export { hotspotCandidates } from './network-discovery';
 import type { SettingsStore } from './settings';
 import { NetworkAuthorizationRequired, NetworkEngineUnavailableError, type NetworkEngine } from './flowbridge-engine';
 const KEY = 'network.flowbridge.v1', LEASE = 'network.flowbridge.lease';
 const idleStatus = (): NetworkEngineStatus => ({ running: false, cleanupConfirmed: true, localPort: null, uploadBytes: 0, downloadBytes: 0, connections: 0, message: '' });
 const plain = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
+const isSource = (source: unknown): source is NetworkSource => source === 'termux' || source === 'local';
+type Upstream = Pick<FlowBridgeSettings, 'address' | 'mode'>;
+const profileKey = (source: NetworkSource) => `network.flowbridge.profile.${source}`;
+function legacySource(saved: Record<string, unknown>, fallback: NetworkSource): NetworkSource {
+  if (typeof saved.address !== 'string' || !saved.address) return fallback;
+  const endpoint = parseNetworkEndpoint(saved.address, saved.mode === 'global' ? 'global' : 'http');
+  if (!endpoint) return fallback;
+  const host = new URL(`http://${endpoint.host}`).hostname;
+  const loopback = host === '[::1]' || /^(?:localhost\.?)$/i.test(host) || isIP(host) === 4 && host.startsWith('127.');
+  return loopback ? 'local' : 'termux';
+}
 function normalizeBypassAddresses(value: unknown): string[] {
   if (!Array.isArray(value) || value.length > MAX_NETWORK_BYPASS_ADDRESSES) {
     throw new Error(`直连白名单最多支持 ${MAX_NETWORK_BYPASS_ADDRESSES} 个 IP 地址。`);
@@ -41,9 +53,9 @@ export function validateNetworkSettings(raw: unknown, previous: FlowBridgeSettin
   if (!plain(raw) || Object.keys(raw).some(key => !Object.hasOwn(DEFAULT_FLOWBRIDGE, key))) throw new Error('网络设置字段无效。');
   const next = { ...previous, ...raw };
   next.bypassAddresses = normalizeBypassAddresses(next.bypassAddresses);
-  if (!['http', 'global'].includes(next.mode) || !['fast', 'compatible'].includes(next.dnsMode) || typeof next.autoConnect !== 'boolean' || typeof next.autoDiscover !== 'boolean' || typeof next.showMiniOnStart !== 'boolean') throw new Error('网络设置选项无效。');
+  if (!isSource(next.source) || !['http', 'global'].includes(next.mode) || !['fast', 'compatible'].includes(next.dnsMode) || typeof next.autoConnect !== 'boolean' || typeof next.autoDiscover !== 'boolean' || typeof next.showMiniOnStart !== 'boolean') throw new Error('网络设置选项无效。');
   if (typeof next.address !== 'string' || next.address.length > 512 || /[\s\x00-\x1f\x7f\\]/.test(next.address)) throw new Error('请填写不含凭据的代理地址和端口。');
-  if (!next.address) { if (next.autoConnect && !next.autoDiscover) throw new Error('自动连接需要代理地址或启动时自动查找。'); return next; }
+  if (!next.address) return next;
   const scheme = next.mode === 'global' ? 'socks5' : 'http';
   let address = next.address;
   if (next.mode !== previous.mode && !Object.hasOwn(raw, 'address')) address = address.replace(/^(?:http|socks5):\/\//, scheme + '://');
@@ -71,6 +83,8 @@ export interface FlowBridgeOptions {
   setHttpRelay?: (port: number | null) => Promise<void>;
   suspendHttpRelay?: () => void;
   now?: () => number;
+  discoverLocalProxies?: (gatewayPort: number) => Promise<string[]>;
+  discoverPhoneProxy?: (input: TermuxDiscovery) => Promise<string | null>;
   discoverCandidates?: (settings: Readonly<FlowBridgeSettings>) => Promise<string[]>;
 }
 export class FlowBridgeManager {
@@ -90,15 +104,22 @@ export class FlowBridgeManager {
   private timer?: ReturnType<typeof setInterval>;
   private polling = false;
   private checking = false;
+  private localDiscovery?: Promise<string[]>;
+  private upstreamDiscovery?: { key: string; result: Promise<NetworkDiscoveryResult> };
   private automaticGeneration = 0;
   private endpointRevision = 0;
   private automaticRun?: Promise<void>;
   private wakeAutomatic?: () => void;
   constructor(private store: SettingsStore, private options: FlowBridgeOptions) {
+    this.settings.source = options.platform === 'win32' ? 'local' : 'termux';
     try {
       const saved = store.getManagedState<unknown>(KEY, {});
       // Older explicit autoconnect settings retain their fixed upstream until discovery is enabled.
-      const patch = plain(saved) && Object.hasOwn(saved, 'autoConnect') && !Object.hasOwn(saved, 'autoDiscover') ? { ...saved, autoDiscover: false } : saved;
+      const patch = plain(saved) ? {
+        ...saved,
+        source: Object.hasOwn(saved, 'source') ? saved.source : legacySource(saved, this.settings.source),
+        ...(Object.hasOwn(saved, 'autoConnect') && !Object.hasOwn(saved, 'autoDiscover') ? { autoDiscover: false } : {}),
+      } : saved;
       this.settings = validateNetworkSettings(patch, this.settings, options.platform, options.gatewayPort());
     }
     catch { this.state = 'error'; this.message = '无法读取网络设置，请重新填写代理地址并连接。'; }
@@ -152,7 +173,17 @@ export class FlowBridgeManager {
     return this.enqueue(async () => {
       try {
         if (options?.offlineOnly && this.active) throw new Error('网络连接状态已变化。请断开并完成恢复后再修改代理地址。');
-        const next = validateNetworkSettings(patch, this.settings, this.options.platform, this.options.gatewayPort());
+        let restoreProfile: Upstream | undefined;
+        if (isSource(patch?.source) && patch.source !== this.settings.source) {
+          if (this.active) throw new Error('请断开并完成网络恢复后再切换代理来源。');
+          const saved = this.store.getManagedState<unknown>(profileKey(patch.source), null);
+          restoreProfile = plain(saved) && typeof saved.address === 'string' && (saved.mode === 'http' || saved.mode === 'global')
+            ? { address: saved.address, mode: saved.mode } : { address: '', mode: 'http' };
+          // The gateway port or platform may have changed since this source was used.
+          try { validateNetworkSettings(restoreProfile, this.settings, this.options.platform, this.options.gatewayPort()); }
+          catch { restoreProfile.address = ''; }
+        }
+        const next = validateNetworkSettings(restoreProfile ? { ...restoreProfile, ...patch } : patch, this.settings, this.options.platform, this.options.gatewayPort());
         const bypassChanged = next.mode === 'global' && (next.bypassAddresses.length !== this.settings.bypassAddresses.length
           || next.bypassAddresses.some((address, index) => address !== this.settings.bypassAddresses[index]));
         const reconnect = this.state === 'connected' && (bypassChanged
@@ -161,8 +192,12 @@ export class FlowBridgeManager {
         if (this.active && this.state !== 'connected') throw new Error('请先点击「恢复网络」，完成后再修改网络设置。');
         if (reconnect) await this.stop();
         // Only new namespaced metadata: never migrate/reset providers or app.settings.
+        if (next.source !== this.settings.source) {
+          const { source, address, mode } = this.settings;
+          this.store.setManagedState(profileKey(source), { address, mode });
+        }
         this.store.setManagedState(KEY, next); this.settings = next;
-        if (Object.hasOwn(patch, 'address') || Object.hasOwn(patch, 'mode')) this.endpointRevision++;
+        if (Object.hasOwn(patch, 'address') || Object.hasOwn(patch, 'mode') || Object.hasOwn(patch, 'source')) this.endpointRevision++;
         if (reconnect) await this.start();
         return this.snapshot();
       } finally { this.busy = false; }
@@ -256,14 +291,51 @@ export class FlowBridgeManager {
     catch { this.message += '（流量历史保存失败）'; }
   }
   async localProxies(): Promise<string[]> {
-    if (this.options.platform !== 'win32' || this.active || this.closing || this.busy || this.checking) {
-      throw new Error('请在 Windows 网络断开后查找本机代理。');
+    if (!['linux', 'win32'].includes(this.options.platform) || this.active || this.closing || this.busy || this.checking) {
+      throw new Error('请在网络断开后查找本机代理。');
     }
-    this.busy = true;
-    return this.enqueue(async () => {
-      try { return await this.getEngine().request<string[]>('localProxies', { gatewayPort: this.options.gatewayPort() }); }
-      finally { this.busy = false; }
-    });
+    if (this.localDiscovery) return this.localDiscovery;
+    const gatewayPort = this.options.gatewayPort();
+    // The Windows helper already processes stdio requests in order. A read-only
+    // lookup must not lock out a user's save/connect, or the startup retry.
+    const request = this.options.discoverLocalProxies?.(gatewayPort) ?? this.getEngine().request<string[]>('localProxies', { gatewayPort });
+    this.localDiscovery = request;
+    try { return await request; }
+    finally { if (this.localDiscovery === request) this.localDiscovery = undefined; }
+  }
+  async discoverUpstream(input: NetworkDiscoveryInput): Promise<NetworkDiscoveryResult> {
+    if (!plain(input) || !isSource(input.source) || !['http', 'global'].includes(input.mode) ||
+        (input.port !== undefined && (!Number.isInteger(input.port) || input.port < 1 || input.port > 65535))) throw new Error('代理查找选项无效。');
+    const empty = { address: null, alternatives: [] };
+    const revision = this.endpointRevision, generation = this.automaticGeneration, { source, address, mode } = this.settings;
+    const available = () => source === input.source && this.settings.source === source && this.endpointRevision === revision &&
+      this.automaticGeneration === generation && !this.active && !this.closing && !this.busy && !this.checking;
+    if (!available() || !['linux', 'win32'].includes(this.options.platform)) return empty;
+    const port = input.port ?? parseNetworkEndpoint(address, mode)?.port ?? 38473;
+    const key = [source, input.mode, port, revision, generation].join('/');
+    if (this.upstreamDiscovery?.key === key) return this.upstreamDiscovery.result;
+    const run = async (): Promise<NetworkDiscoveryResult> => {
+      const found = source === 'termux'
+        ? [await (this.options.discoverPhoneProxy ?? discoverTermuxEndpoint)({ mode: input.mode, port, savedAddress: address })]
+        : await this.localProxies();
+      if (!available() || this.upstreamDiscovery?.result !== result) return empty;
+      const candidates = new Set<string>();
+      for (const value of found) {
+        if (typeof value !== 'string') continue;
+        const candidateMode = value.startsWith('socks5://') ? 'global' : 'http';
+        try {
+          const checked = validateNetworkSettings({ address: value, mode: candidateMode }, this.settings, this.options.platform, this.options.gatewayPort());
+          if (checked.address) candidates.add(checked.address);
+        } catch { /* Exclude invalid ports and unsupported Linux loopback TUN endpoints. */ }
+      }
+      const matching = [...candidates].filter(value => parseNetworkEndpoint(value, input.mode));
+      return { address: matching.includes(address) ? address : matching[0] ?? null,
+        alternatives: [...candidates].filter(value => !parseNetworkEndpoint(value, input.mode)) };
+    };
+    const result = run();
+    this.upstreamDiscovery = { key, result };
+    try { return await result; }
+    finally { if (this.upstreamDiscovery?.result === result) this.upstreamDiscovery = undefined; }
   }
   async check(site: NetworkSite): Promise<NetworkCheck> {
     if (!NETWORK_SITES.includes(site) || this.busy || this.closing || this.checking) throw new Error('网站无效或网络操作仍在进行。');
@@ -282,7 +354,7 @@ export class FlowBridgeManager {
     let found: string[] = [];
     try {
       if (this.options.discoverCandidates) found = await this.options.discoverCandidates({ ...this.settings });
-      else if (this.options.platform === 'win32') found = await this.localProxies();
+      else if (this.settings.source === 'local') found = await this.localProxies();
       else {
         const port = parseNetworkEndpoint(saved, this.settings.mode)?.port ?? 38473;
         const scheme = this.settings.mode === 'global' ? 'socks5' : 'http';
@@ -297,6 +369,7 @@ export class FlowBridgeManager {
   autoConnect(): Promise<void> {
     if (this.automaticRun) return this.automaticRun;
     if (!this.settings.autoConnect || this.active || this.cancel || this.closing) return Promise.resolve();
+    if (!this.settings.autoDiscover && !this.settings.address) return Promise.resolve();
     const generation = ++this.automaticGeneration;
     const run = this.runAutomatic(generation).catch(error => {
       this.state = 'error'; this.message = error instanceof Error ? error.message : '自动连接失败，请手动重试。';
@@ -361,12 +434,4 @@ export class FlowBridgeManager {
     try { await this.disconnect(); await this.engine?.close(); }
     catch (error) { this.closing = false; throw error; }
   }
-}
-export async function hotspotCandidates(platform: string = process.platform): Promise<string[]> {
-  const run = promisify(execFile);
-  if (platform === 'linux') {
-    const { stdout } = await run('/usr/sbin/ip', ['-j', 'route', 'show', 'default'], { timeout: 5000, maxBuffer: 64 * 1024 });
-    return [...new Set((JSON.parse(stdout) as { gateway?: string }[]).map(r => r.gateway).filter((v): v is string => !!v && isIP(v) !== 0))];
-  }
-  return [];
 }
