@@ -6,6 +6,10 @@ ModelDock 是跨平台本地模型管理台：全局维护模型来源与别名�
 
 0.4.0 起包含 FlowBridge 的组合发行版采用 [GPL-3.0-or-later](LICENSE)；原 ModelDock 代码及原创应用标记保留 [MIT 授权](LICENSE-MIT)，第三方图标和依赖保留各自的 Apache-2.0、CC-BY-4.0、MIT 或其他许可，详见 [第三方声明](THIRD_PARTY_NOTICES.md)。欢迎按 [贡献指南](CONTRIBUTING.md) 提交修复；敏感问题请遵循 [安全报告流程](SECURITY.md)。
 
+## 0.4.38 · 修复 Windows 全局流量误报网卡冲突
+
+Windows 可能保留已经消失的 `modeldock-net` 网卡记录。开启「全局流量」时，如果该记录的运行状态为 `NotPresent`、管理状态为停用，且只有一条身份匹配的记录、没有关联路由，ModelDock 现在会继续启动。升级后首次手动连接全局模式时，Windows 可能提示授权更新网络组件。
+
 ## 0.4.37 · 自动探测手机和本机代理
 
 在 Windows 或 Linux 打开「网络接管」，或切换代理来源时，ModelDock 会按所选模式查找可用的上游，并将匹配的地址填入卡片。使用手机热点时检查网关上的 Termux 代理，默认端口为 `38473`；使用本机 VPN 时检查本机代理端口。如果本机只有另一种协议的代理，可点击发现的地址选用。手动填写的地址优先。点击「连接」才会建立网络接管。

@@ -178,6 +178,32 @@ class NetworkSnapshotTests(unittest.TestCase):
             with self.subTest(changed=changed), patch.object(n, '_api', return_value=Tables(interfaces=rows)):
                 self.assertFalse(n.network_state()['reusable_inactive'])
 
+    def test_not_present_adapter_requires_admin_down_known_identity_and_no_routes(self):
+        # Reproduce the native Windows snapshot: the IP Helper row for index
+        # 19 remained after the adapter disappeared from Get-NetAdapter.
+        def snapshot(oper=6, admin=2, *, foreign=False, duplicate=False, prefix=None):
+            row = interface(19, 'modeldock-net', tun_identity=True)
+            row.OperStatus, row.AdminStatus = oper, admin
+            if foreign:
+                row.InterfaceGuid.Data1 ^= 1
+            rows = [row]
+            if duplicate:
+                rows.append(interface(20, 'modeldock-net', up=False, tun_identity=True))
+            api = Tables(interfaces=rows, routes=[route(19, prefix)] if prefix else [])
+            with patch.object(n, '_api', return_value=api):
+                return n.network_state()
+
+        state = snapshot()
+        self.assertTrue(state['exists'])
+        self.assertFalse(state['up'])
+        self.assertEqual(state['routes'], 0)
+        self.assertTrue(state['reusable_inactive'])
+        for case in ({'admin': 0}, {'admin': 1}, {'admin': 3},
+                     {'oper': 1}, {'oper': 3}, {'oper': 4}, {'oper': 5}, {'oper': 7},
+                     {'foreign': True}, {'duplicate': True}, {'prefix': '0.0.0.0/1'}, {'prefix': '::/1'}):
+            with self.subTest(**case):
+                self.assertFalse(snapshot(**case)['reusable_inactive'])
+
     def test_any_remaining_route_prevents_reuse_of_known_down_adapter(self):
         for prefix in ('0.0.0.0/1', '::/1', '172.31.255.0/30', 'fd42:73fb:4827::/126'):
             api = Tables(interfaces=[interface(50, 'modeldock-net', up=False, tun_identity=True)],

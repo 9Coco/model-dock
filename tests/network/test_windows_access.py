@@ -75,7 +75,8 @@ class AccessTests(unittest.TestCase):
         stream = self.pipe.return_value = Mock()
         self.pipe.side_effect = None
         stream.readline.return_value = b'{"result":true}\n'
-        for previous in ('5e6024be86dc8e951162936a9a8de7324bbb1c3231dcfcf1b300c9d10ea4f860',
+        for previous in ('66c7fc9f8cebadbc16b8e51f3d5512b10eda2ca5275cff9f6751118620641d94',
+                         '5e6024be86dc8e951162936a9a8de7324bbb1c3231dcfcf1b300c9d10ea4f860',
                          '988ad9732df5efe0940552d71fd846716db3b6cc9d4a27edb94f0ac0a80121fd'):
             with self.subTest(previous=previous):
                 self.assertIn(previous, access.RECOVERY_PREDECESSORS)

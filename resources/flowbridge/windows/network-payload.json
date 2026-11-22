@@ -46,7 +46,7 @@
   "vendor/sing-box-1.14.4-windows-amd64/wintun.dll": "e5da8447dc2c320edc0fc52fa01885c103de8c118481f683643cacc3220dafce",
   "windows/native.py": "9ce42231e1f7a5f2c2b3958ef73e2795a2c385cbe26f785d6f0115db7e673870",
   "windows/network_pipe.py": "3f5a725f6553473db26779d66c918c9d8111970fdc909fbb3416a363c2774284",
-  "windows/network_snapshot.py": "45fc3489bb8271ccae645b0278873b0df2aadc0e76cd07788c993940e1d0ef28",
+  "windows/network_snapshot.py": "8c52c29f678580417b206cf34f8a443c898a6f00457cf8b9773642fbd5f449d9",
   "windows/network_worker.py": "56301bc50e1f4169904f5bf80bbab47966f1f32f508e525f8b2edc0cf6b7ecea",
   "windows/proxy.py": "b72898a9c2f544a2ae12eacd778d2cbaeebb3b1338f2d059c5e72e8070a4f16a",
   "windows/system_proxy.py": "dd02b7923b66882951ed3af154cf03dbf67fbfe9da7e5ba8ef5f7ba68e70b8f7",

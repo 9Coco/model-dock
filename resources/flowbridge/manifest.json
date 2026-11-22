@@ -131,7 +131,7 @@
       "source": "windows/network_snapshot.py",
       "path": "windows/network_snapshot.py",
       "upstreamSha256": "cc00e118bc4219fd5b5682f34e5c1fd80bbd09ad131a18939689affa9b9ab5ce",
-      "sha256": "45fc3489bb8271ccae645b0278873b0df2aadc0e76cd07788c993940e1d0ef28"
+      "sha256": "8c52c29f678580417b206cf34f8a443c898a6f00457cf8b9773642fbd5f449d9"
     },
     {
       "source": "windows/proxy.py",
@@ -253,7 +253,7 @@
       "source": "windows/test_network_snapshot.py",
       "path": "windows/test_network_snapshot.py",
       "upstreamSha256": "e03c70d208d4646ee1d7b1a6aed07759cbc0c1cc43f6c0c7377a52fde00be38b",
-      "sha256": "1caa0de4560f47826684900b8469020c2ba89ed395c765921a77490158904acb"
+      "sha256": "90d7387d4f8e5ea646c0b7c17892c89535207e5ab4be05e4eec207a656d7e2d3"
     },
     {
       "source": "windows/test_proxy.py",
@@ -372,15 +372,15 @@
     {
       "source": "https://github.com/9Coco/model-dock/blob/a7371a9fc067fa5271d1973f399645dc09659257/resources/flowbridge/windows/network-payload.json",
       "path": "resources/flowbridge/windows/network-payload.json",
-      "sha256": "66c7fc9f8cebadbc16b8e51f3d5512b10eda2ca5275cff9f6751118620641d94",
-      "changes": "Pin the protected worker with the corrected pipe permissions, embedded runtime and core. Pin the extended website diagnostic allowlist and retain recovery compatibility with the previous ModelDock worker. Pin the JetBrains service probe change while allowing the 0.4.19 worker for recovery only. Support fixed destination IP exclusions for global TUN sessions.",
+      "sha256": "4407fdc8e09f7480853e4014f937fa9d09d07e632e2963fceba232db91ba7578",
+      "changes": "Pin the protected worker with the corrected pipe permissions, embedded runtime and core. Pin the extended website diagnostic allowlist and retain recovery compatibility with the previous ModelDock worker. Pin the JetBrains service probe change while allowing the 0.4.19 worker for recovery only. Support fixed destination IP exclusions for global TUN sessions. Pin the Windows snapshot fix for a known administratively down, not-present sing-tun adapter.",
       "upstreamSha256": "0dc57d97ab47c139a54c511953a21b9e34daa41eabef7867bad1a239e2c6a536"
     },
     {
       "source": "https://github.com/9Coco/model-dock/blob/a7371a9fc067fa5271d1973f399645dc09659257/resources/flowbridge/windows/network_access.py",
       "path": "resources/flowbridge/windows/network_access.py",
-      "sha256": "cec2ad09378326972b8bbccaacd608de86ccee96f67927e5221ce4553e650c91",
-      "changes": "Request first-use consent, upgrade old worker ACLs for new connections and report installation stages. Pin the extended website diagnostic allowlist and retain recovery compatibility with the previous ModelDock worker. Pin the JetBrains service probe change while allowing the 0.4.19 worker for recovery only. Support fixed destination IP exclusions for global TUN sessions.",
+      "sha256": "d3da89f93ad90dc276f6b338765aeecdda107efd0651e6140b3bc039958744bf",
+      "changes": "Request first-use consent, upgrade old worker ACLs for new connections and report installation stages. Pin the extended website diagnostic allowlist and retain recovery compatibility with the previous ModelDock worker. Pin the JetBrains service probe change while allowing the 0.4.19 worker for recovery only. Support fixed destination IP exclusions for global TUN sessions. Require the updated Windows snapshot worker for new sessions and retain the preceding worker for recovery.",
       "upstreamSha256": "b1cec3b3711de731c54e20fa83afe81cfdf27e62ac9cad16997a82c212c4f0cd"
     },
     {

@@ -32,6 +32,8 @@ _MAX_ROWS = 1_000_000
 # match, not an authentication primitive. Unknown adapters stay conflicts.
 _TUN_GUID_BYTES = bytes.fromhex('a06b37bf2b0eaf495c0c5c1e40009762')
 _TUN_DESCRIPTION = tuple(map(ord, 'sing-tun Tunnel')) + (0,)
+_IF_OPER_DOWN, _IF_OPER_NOT_PRESENT = 2, 6
+_IF_ADMIN_DOWN = 2
 
 
 class GUID(c.Structure):
@@ -195,10 +197,11 @@ def _interfaces(rows):
         if not row.InterfaceLuid or not row.InterfaceIndex or row.InterfaceLuid in result or row.InterfaceIndex in indices:
             raise OSError('Windows 网卡标识不完整或发生变化，请重试。')
         alias = _alias_text(row)
-        # A reboot can leave this inactive sing-tun row in IP Helper even when
-        # Get-NetAdapter no longer lists it. Do not treat every non-up state as
-        # reusable: unknown, testing and dormant states are not proven idle.
-        reusable = (alias.casefold() == INTERFACE_NAME and row.OperStatus == 2
+        # IP Helper can retain a NotPresent row after the adapter disappears
+        # from Get-NetAdapter. Accept that state only if administratively down.
+        inactive = (row.OperStatus == _IF_OPER_DOWN or
+                    (row.OperStatus == _IF_OPER_NOT_PRESENT and row.AdminStatus == _IF_ADMIN_DOWN))
+        reusable = (alias.casefold() == INTERFACE_NAME and inactive
                     and row.Type == 53 and bytes(row.InterfaceGuid) == _TUN_GUID_BYTES
                     and tuple(row.Description[:len(_TUN_DESCRIPTION)]) == _TUN_DESCRIPTION)
         result[row.InterfaceLuid] = (row.InterfaceIndex, alias, row.OperStatus == 1, reusable)
