@@ -7,9 +7,9 @@ import type { ModelDockApi } from '../src/shared/types';
 const noOp = async () => {};
 function panel(overrides: Partial<Parameters<typeof AirPanel>[0]> = {}) {
   return renderToStaticMarkup(createElement(AirPanel, {
-    api: {} as ModelDockApi, provider: 'openai', description: 'ModelDock · Air · OpenAI', baseUrl: 'http://127.0.0.1:18181/tool/air/v1', modelId: 'reference-model',
+    api: {} as ModelDockApi, description: 'ModelDock · Air · OpenAI', baseUrl: 'http://127.0.0.1:18181/tool/air/v1', modelId: 'reference-model',
     aggregate: true, running: false, disabled: false, starting: false,
-    onCopy: noOp, onProviderChange: noOp, onCopyKey: noOp, onStart: noOp, onPreview: noOp, onExport: noOp, ...overrides,
+    onCopy: noOp, onCopyKey: noOp, onStart: noOp, onPreview: noOp, onExport: noOp, ...overrides,
   }));
 }
 const action = (html: string, name: string) => html.match(new RegExp(`<(?:button|select)[^>]*data-action="${name}"[^>]*>`))?.[0];
@@ -27,21 +27,20 @@ describe('Air BYOK connection panel', () => {
     expect(html).toContain('ModelDock 不会自动写入 Air Accounts');
     expect(html).toContain('JSON 仅供参考，不能直接导入 Air');
     expect(html).toContain('Copilot 默认入口使用独立的 GitHub 授权');
-    for (const name of ['air-provider-type', 'air-copy-description', 'air-copy-url', 'air-copy-key', 'air-copy-model', 'preview-tool-config', 'export-tool-config']) {
+    for (const name of ['air-copy-description', 'air-copy-url', 'air-copy-key', 'air-copy-model', 'preview-tool-config', 'export-tool-config']) {
       expect(action(html, name)).toBeDefined();
       expect(action(html, name)).not.toContain('disabled');
     }
-    for (const name of ['apply-tool-config', 'undo-tool-sync', 'jetbrains-plugin-select', 'jetbrains-completion-model', 'restore-official-tool-config']) {
+    for (const name of ['air-provider-type', 'apply-tool-config', 'undo-tool-sync', 'jetbrains-plugin-select', 'jetbrains-completion-model', 'restore-official-tool-config']) {
       expect(html).not.toContain(name);
     }
   });
-  it('shows the Anthropic account path and exact base URL without requesting credentials during rendering', () => {
-    const html = panel({ provider: 'anthropic', description: 'ModelDock · Air · Anthropic', aggregate: false,
-      baseUrl: 'https://api.deepseek.com/anthropic', modelId: 'deepseek-flash',
+  it('shows the OpenAI account path and exact base URL without requesting credentials during rendering', () => {
+    const html = panel({ description: 'ModelDock · Air · OpenAI', aggregate: false,
+      baseUrl: 'https://api.deepseek.com', modelId: 'deepseek-flash',
       api: { copyConnectionKey: () => { throw new Error('Rendering must not request the key'); } } as unknown as ModelDockApi });
-    expect(html).toContain('设置 → AI → Air → 账户 → 更多供应商 → Anthropic');
-    expect(html).toContain('<option value="anthropic" selected="">Anthropic</option>');
-    expect(html).toContain('https://api.deepseek.com/anthropic</code>');
+    expect(html).toContain('设置 → AI → Air → 账户 → 更多供应商 → OpenAI');
+    expect(html).toContain('https://api.deepseek.com</code>');
     expect(html).toContain('所选供应商的 API Key');
     expect(html).not.toContain('ModelDock 本机连接密钥');
     expect(action(html, 'air-start-gateway')).toBeUndefined();
@@ -56,11 +55,9 @@ describe('Air BYOK connection panel', () => {
     for (const name of ['air-copy-description', 'air-copy-url', 'air-copy-key', 'air-copy-model', 'preview-tool-config', 'export-tool-config']) {
       expect(action(html, name)).toContain('disabled=""');
     }
-    expect(action(html, 'air-provider-type')).toBeDefined();
-    expect(action(html, 'air-provider-type')).not.toContain('disabled');
   });
-  it('prevents provider changes while a selection is being saved or the desktop bridge is unavailable', () => {
-    expect(action(panel({ disabled: true }), 'air-provider-type')).toContain('disabled=""');
-    expect(action(panel({ api: undefined }), 'air-provider-type')).toContain('disabled=""');
+  it('prevents copying credentials while a selection is being saved or the desktop bridge is unavailable', () => {
+    expect(action(panel({ disabled: true }), 'air-copy-key')).toContain('disabled=""');
+    expect(action(panel({ api: undefined }), 'air-copy-key')).toContain('disabled=""');
   });
 });

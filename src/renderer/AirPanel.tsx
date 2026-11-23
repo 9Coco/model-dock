@@ -1,12 +1,11 @@
 import type { ModelDockApi } from '../shared/types';
-import { airProviderLabel, airSettingsPath, type AirProvider } from '../shared/air';
+import { AIR_SETTINGS_PATH } from '../shared/air';
 import { ArrowDownToLine, Copy, FileCode2, KeyRound, Plug2 } from './MaterialIcon';
 import { BusyIcon } from './components';
 import './jetbrains.css';
 
 interface AirPanelProps {
   api?: ModelDockApi;
-  provider: AirProvider;
   description: string;
   baseUrl: string;
   modelId?: string;
@@ -15,21 +14,18 @@ interface AirPanelProps {
   disabled: boolean;
   starting: boolean;
   onCopy: (value: string, message: string) => Promise<void>;
-  onProviderChange: (provider: AirProvider) => Promise<void>;
   onCopyKey: () => Promise<void>;
   onStart: () => Promise<void>;
   onPreview: () => Promise<void> | undefined;
   onExport: () => Promise<void>;
 }
 
-export function AirPanel({ api, provider, description, baseUrl, modelId, aggregate, running, disabled, starting,
-  onCopy, onProviderChange, onCopyKey, onStart, onPreview, onExport }: AirPanelProps) {
+export function AirPanel({ api, description, baseUrl, modelId, aggregate, running, disabled, starting,
+  onCopy, onCopyKey, onStart, onPreview, onExport }: AirPanelProps) {
   const unavailable = !api || disabled || !modelId || !baseUrl;
   return <section className="panel jetbrains-connection" data-air-connection="air" aria-labelledby="air-connection-title">
     <div className="section-heading"><h2 id="air-connection-title">Air Accounts 供应商</h2><span className="badge neutral">在 Air 中保存账号</span></div>
     <p className="jetbrains-scope-note">为 Air 自己的 BYOK 账号准备参数。选择会保存在 ModelDock，填写后请在 Air 的账户设置中测试并保存。</p>
-    <label className="air-provider-picker">Air 供应商类型<select data-action="air-provider-type" value={provider} disabled={!api || disabled}
-      onChange={event => void onProviderChange(event.target.value as AirProvider)}><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option></select></label>
     <dl className="jetbrains-parameters">
       <div className="jetbrains-parameter"><dt>Description（描述）</dt><dd>
         <code>{description}</code>
@@ -53,7 +49,7 @@ export function AirPanel({ api, provider, description, baseUrl, modelId, aggrega
       </dd></div>
     </dl>
     <ol className="jetbrains-air-setup" data-air-manual-setup>
-      <li>打开「{airSettingsPath(provider)}」，选择 {airProviderLabel(provider)} 入口。</li>
+      <li>打开「{AIR_SETTINGS_PATH}」。</li>
       <li>填写 API Key 和 Description，展开「高级选项」填写 Base URL，测试连接后保存。</li>
       <li>在 Air 会话中选择已保存的账号和兼容的 Agent，再选择模型；参考模型 ID 用于核对模型列表。</li>
     </ol>
@@ -66,8 +62,7 @@ export function AirPanel({ api, provider, description, baseUrl, modelId, aggrega
         onClick={() => void onExport()}><ArrowDownToLine size={14} />导出参考参数</button>
     </div>
     <p className="jetbrains-scope-note" data-air-manual-boundary>这里提供可复制的账户参数；ModelDock 不会自动写入 Air Accounts。导出的 JSON 仅供参考，不能直接导入 Air。</p>
-    <p className="jetbrains-scope-note" data-air-provider-scope>兼容服务按其支持的 OpenAI 或 Anthropic 接口选择类型，例如 OpenRouter。Air 的 Copilot 默认入口使用独立的 GitHub 授权，在 Air 中管理。</p>
-    {provider === 'anthropic' && !aggregate && <p className="jetbrains-scope-note">Air 的 Anthropic 入口使用 x-api-key 认证；仅接受 Bearer 认证的来源请使用聚合接口。</p>}
+    <p className="jetbrains-scope-note" data-air-provider-scope>请填写供应商的 OpenAI 兼容接口。Air 的 Copilot 默认入口使用独立的 GitHub 授权，在 Air 中管理。</p>
     {aggregate && <p className="jetbrains-scope-note">使用聚合接口时请保持 ModelDock 本机服务运行。</p>}
   </section>;
 }

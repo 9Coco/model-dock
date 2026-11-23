@@ -25,26 +25,26 @@ function fixture(wireApi: WireApi = 'responses') {
     listModels: () => [model], listBindings: () => bindings, gatewayKey: () => 'SYNTHETIC_GATEWAY_KEY' };
 }
 
-const thinkingConfig = { apiType: 'messages', thinking: true, adaptiveThinking: true,
-  supportsReasoningEffort: ['low', 'high', 'max'], defaultReasoningEffort: 'high', reasoningEffortFormat: 'messages' };
+const thinkingConfig = { apiType: 'responses', thinking: true, statefulResponses: false,
+  supportsReasoningEffort: ['low', 'high', 'max'], defaultReasoningEffort: 'high', reasoningEffortFormat: 'responses' };
 
-describe('VS Code native DeepSeek Messages configuration', () => {
+describe('VS Code native DeepSeek Responses configuration', () => {
   it.each(['https://api.deepseek.com', 'https://api.deepseek.com/', 'https://api.deepseek.com/v1', 'https://api.deepseek.com/v1/',
     'https://api.deepseek.com/anthropic', 'https://api.deepseek.com/anthropic/v1/'])
-    ('uses the official Anthropic endpoint from %s with original thinking levels', base => {
+    ('uses the official OpenAI endpoint from %s with original thinking levels', base => {
       const f = fixture(); f.provider.baseUrl = base;
       const generated = JSON.parse(buildConfig(f, 'vscode', 18181, true).content)[0].models[0];
-      expect(generated).toMatchObject({ ...thinkingConfig, id: 'deepseek-flash', url: 'https://api.deepseek.com/anthropic/v1/messages',
+      expect(generated).toMatchObject({ ...thinkingConfig, id: 'deepseek-flash', url: base.startsWith('https://api.deepseek.com/v1') ? 'https://api.deepseek.com/v1/responses' : 'https://api.deepseek.com/responses',
         toolCalling: true, vision: true, contextWindow: 1048576, maxOutputTokens: 393216,
         requestHeaders: { authorization: 'Bearer SYNTHETIC_DEEPSEEK_KEY' } });
-      for (const obsolete of ['statefulResponses', 'minThinkingBudget', 'maxThinkingBudget']) expect(generated).not.toHaveProperty(obsolete);
+      for (const obsolete of ['adaptiveThinking', 'minThinkingBudget', 'maxThinkingBudget']) expect(generated).not.toHaveProperty(obsolete);
     });
 
   it.each(['deepseek-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp'])
     ('recognizes official API ID %s independently of provider display name and preset', upstreamId => {
       const f = fixture(); f.provider.name = 'My API account'; f.provider.presetId = 'custom'; f.model.upstreamId = upstreamId;
       expect(vsCodeModelConfig(f.model, f.provider.baseUrl, 'SYNTHETIC_KEY', f.provider))
-        .toMatchObject({ ...thinkingConfig, url: 'https://api.deepseek.com/anthropic/v1/messages' });
+        .toMatchObject({ ...thinkingConfig, url: 'https://api.deepseek.com/responses' });
     });
 
   it.each(['responses', 'chat-completions', 'messages'] as const)
@@ -71,7 +71,7 @@ describe('VS Code native DeepSeek Messages configuration', () => {
   it('keeps aggregate calls on the existing tool-scoped gateway without exporting the provider key', () => {
     const f = fixture(); f.bindings[0].mode = 'aggregate';
     const row = JSON.parse(buildConfig(f, 'vscode', 18181, true).content)[0];
-    expect(row.models[0]).toMatchObject({ ...thinkingConfig, id: 'local-flash', url: 'http://127.0.0.1:18181/tool/vscode/v1/messages',
+    expect(row.models[0]).toMatchObject({ ...thinkingConfig, id: 'local-flash', url: 'http://127.0.0.1:18181/tool/vscode/v1/responses',
       requestHeaders: { authorization: 'Bearer SYNTHETIC_GATEWAY_KEY' } });
     expect(JSON.stringify(row)).not.toContain('SYNTHETIC_DEEPSEEK_KEY');
     expect(f.getSecret).not.toHaveBeenCalled();
@@ -81,8 +81,6 @@ describe('VS Code native DeepSeek Messages configuration', () => {
     const f = fixture();
     if (choice === 'thinking flag') f.model.thinking = false; else f.model.defaultReasoningEffort = 'none';
     const row = vsCodeModelConfig(f.model, f.provider.baseUrl, 'SYNTHETIC_KEY', f.provider);
-    // Copilot needs the thinking capability enabled to send explicit effort
-    // none. Its Messages serializer cannot send an explicit disabled switch.
     expect(row).toMatchObject({ apiType: 'responses', thinking: true, statefulResponses: false,
       url: 'https://api.deepseek.com/responses', supportsReasoningEffort: ['none'],
       defaultReasoningEffort: 'none', reasoningEffortFormat: 'responses' });
@@ -132,10 +130,10 @@ describe('VS Code native DeepSeek Messages configuration', () => {
     ('accepts the explicit official Anthropic override %s', claudeBaseUrl => {
       const f = fixture(); f.provider.claudeBaseUrl = claudeBaseUrl;
       expect(vsCodeModelConfig(f.model, f.provider.baseUrl, 'SYNTHETIC_KEY', f.provider))
-        .toMatchObject({ ...thinkingConfig, url: 'https://api.deepseek.com/anthropic/v1/messages' });
+        .toMatchObject({ ...thinkingConfig, url: 'https://api.deepseek.com/responses' });
     });
 
-  it('preserves an explicit nonofficial Anthropic override instead of silently choosing another server', () => {
+  it('uses the original OpenAI base regardless of a Claude-only endpoint override', () => {
     const f = fixture(); f.provider.claudeBaseUrl = 'https://synthetic.example/anthropic';
     expect(vsCodeModelConfig(f.model, f.provider.baseUrl, 'SYNTHETIC_KEY', f.provider))
       .toMatchObject({ apiType: 'responses', url: 'https://api.deepseek.com/responses' });
@@ -155,7 +153,7 @@ describe('VS Code native DeepSeek Messages configuration', () => {
     expect(rows).toHaveLength(2);
     expect(rows[0]).toMatchObject({ name: 'Personal', models: [{ id: 'personal-model' }] });
     expect(rows[1].models[0]).toMatchObject(thinkingConfig);
-    expect(rows[1].models[0]).not.toHaveProperty('statefulResponses');
+    expect(rows[1].models[0]).not.toHaveProperty('adaptiveThinking');
     expect(rows[1].models[0].supportsReasoningEffort).not.toContain('none');
   });
 });

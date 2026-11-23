@@ -1,3 +1,4 @@
+import { openAiBaseUrl } from '../shared/openai-endpoint';
 import { replacePrivateFile } from './private-file';
 import { recoverConfigJournal, transactConfigFiles } from './config-journal';
 import { lstatSync, readFileSync } from 'node:fs';
@@ -106,7 +107,7 @@ function selection(store: JunieConfigStore, revealKey: boolean, port: number): {
     const key = revealKey ? local ? store.gatewayKey() : store.getSecret?.(provider.id)?.apiKey : local ? '__MODELDOCK_LOCAL_KEY__' : '__PROVIDER_API_KEY__';
     if (!key || /[\x00-\x1f\x7f]/.test(key) || key.includes('${')) throw new Error('Junie 所选来源缺少有效的 API Key。');
     const route = model.wireApi === 'responses' ? '/responses' : '/chat/completions';
-    const base = local ? `http://127.0.0.1:${port}/tool/junie/v1` : provider.baseUrl;
+    const base = local ? `http://127.0.0.1:${port}/tool/junie/v1` : openAiBaseUrl(provider.baseUrl);
     return { id, baseUrl: upstreamEndpoint(base, route), apiType: model.wireApi === 'responses' ? 'OpenAIResponses' : 'OpenAICompletion', apiKey: key,
       displayName: model.displayName || model.upstreamId, providerName: provider.name,
       ...(Number.isSafeInteger(model.contextWindow) && model.contextWindow > 0 ? { maxContextLength: model.contextWindow } : {}) };

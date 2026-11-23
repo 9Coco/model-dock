@@ -15,9 +15,10 @@ async function fixture() {
   const provider = store.saveProvider({ name: 'Messages mock', kind: 'openai-compatible', baseUrl: 'https://messages.example.test/anthropic', enabled: true, apiKey: 'synthetic-only' });
   const input = { providerId: provider.id, upstreamId: 'upstream-message', alias: 'local-message', displayName: 'Messages model', wireApi: 'messages' as const, contextWindow: 0, tools: true, vision: false, enabled: true };
   const model = store.saveModel(input);
-  const chat = store.saveModel({ ...input, upstreamId: 'upstream-chat', alias: 'local-chat', wireApi: 'chat-completions' });
+  const chatProvider = store.saveProvider({ name: 'Chat mock', kind: 'openai-compatible', baseUrl: 'https://chat.example.test/v1', enabled: true, apiKey: 'synthetic-chat' });
+  const chat = store.saveModel({ ...input, providerId: chatProvider.id, upstreamId: 'upstream-chat', alias: 'local-chat', wireApi: 'chat-completions' });
   const binding: ToolBinding = { id: 'claude-code', name: 'Claude Code', enabled: true, mode: 'direct', providerIds: [provider.id], modelIds: [], defaultModelId: model.id, note: '' };
-  return { store, dir, provider, model, chat, binding };
+  return { store, dir, provider, model, chatProvider, chat, binding };
 }
 
 describe('Claude Code binding boundaries', () => {
@@ -46,7 +47,7 @@ describe('Claude Code binding boundaries', () => {
     expect(reopened.getProvider(f.provider.id)?.messagesAuth).toBe('api-key');
   });
   it('migrates older internal metadata without changing prior bindings or client settings', async () => {
-    const f = await fixture(); f.store.saveBinding({ ...f.binding, id: 'opencode', defaultModelId: f.chat.id });
+    const f = await fixture(); f.store.saveBinding({ ...f.binding, id: 'opencode', providerIds: [f.chatProvider.id], defaultModelId: f.chat.id });
     const before = f.store.listBindings().filter(b => b.id !== 'claude-code'); f.store.close();
     const SQL = await initSqlJs(); const db = new SQL.Database(readFileSync(join(f.dir, 'modeldock.sqlite')));
     db.run("DELETE FROM bindings WHERE id='claude-code'"); db.run('ALTER TABLE bindings DROP COLUMN claude_disable_telemetry');
@@ -60,15 +61,15 @@ describe('Claude Code binding boundaries', () => {
     const another = f.store.saveProvider({ name: 'Other API', kind: 'openai-compatible', baseUrl: 'https://other.example.test', enabled: true, apiKey: 'synthetic-only' });
     const subscription = f.store.saveProvider({ name: 'Subscription', kind: 'codex', baseUrl: 'https://chatgpt.com/backend-api/codex', enabled: true });
     for (const binding of [{ ...f.binding, providerIds: [f.provider.id, another.id] }, { ...f.binding, providerIds: [subscription.id] }, { ...f.binding, defaultModelId: f.chat.id }, { ...f.binding, modelIds: [f.chat.id] }]) expect(() => f.store.saveBinding(binding)).toThrow();
-    expect(() => f.store.saveBinding({ ...f.binding, id: 'opencode', defaultModelId: f.chat.id, claudeDisableTelemetry: true })).toThrow('隐私选项');
+    expect(() => f.store.saveBinding({ ...f.binding, id: 'opencode', providerIds: [f.chatProvider.id], defaultModelId: f.chat.id, claudeDisableTelemetry: true })).toThrow('隐私选项');
     expect(() => f.store.saveModel({ ...f.model, id: undefined, providerId: subscription.id, alias: 'subscription-messages' })).toThrow('API');
   });
   it('keeps Messages out of every existing OpenAI tool adapter and never routes Claude through the gateway', async () => {
     const f = await fixture();
     for (const tool of ['codex', 'opencode', 'dsh', 'vscode', 'copilot'] as ToolId[]) {
-      expect(resolveBindingModels({ ...f.binding, id: tool, mode: 'auto' }, f.store.listModels(), f.store.listProviders())).toEqual([f.chat]);
+      expect(resolveBindingModels({ ...f.binding, id: tool, mode: 'auto', providerIds: [f.provider.id, f.chatProvider.id] }, f.store.listModels(), f.store.listProviders())).toEqual([f.chat]);
     }
     expect(bindingConnectionPolicy(f.binding, f.store.listModels(), f.store.listProviders())).toEqual({ kind: 'direct', groups: [{ connection: 'direct-api', providerIds: [f.provider.id], modelIds: [f.model.id] }] });
-    expect(bindingConnectionPolicy({ ...f.binding, mode: 'aggregate' }, f.store.listModels(), f.store.listProviders()).groups[0]).toMatchObject({ connection: 'local-managed', modelIds: [f.model.id, f.chat.id] });
+    expect(bindingConnectionPolicy({ ...f.binding, mode: 'aggregate', providerIds: [f.provider.id, f.chatProvider.id] }, f.store.listModels(), f.store.listProviders()).groups[0]).toMatchObject({ connection: 'local-managed', modelIds: [f.model.id, f.chat.id] });
   });
 });

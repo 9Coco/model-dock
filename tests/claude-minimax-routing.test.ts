@@ -65,11 +65,11 @@ describe('Claude MiniMax M3 verified Responses route', () => {
     const f = await fixture('volcengine-token', modelPatch); const reply = await (await f.post(input())).json();
     expect(reply.stop_reason).toBe('end_turn'); expect(f.calls[0].url).toBe('https://ark.cn-beijing.volces.com/api/coding/v1/messages');
   });
-  it('preserves an explicit native override and global Messages endpoint behavior', async () => {
+  it('preserves an explicit native override and scopes Messages to Claude Code', async () => {
     const f = await fixture('volcengine-token', {}, { claudeBaseUrl: 'https://custom.example.test/native' });
     await f.post(input()); expect(f.calls[0].url).toBe('https://custom.example.test/native/v1/messages');
-    const global = await fixture('volcengine-token'); await global.post(input(), '/v1/messages');
-    expect(global.calls[0].url).toBe('https://ark.cn-beijing.volces.com/api/coding/v1/messages');
+    expect((await f.post(input(), '/v1/messages')).status).toBe(404);
+    expect(f.calls).toHaveLength(1);
   });
   it('does not turn direct mode into a local forwarding mode', async () => {
     const f = await fixture('volcengine-token'); const previous = f.store.listBindings().find(b => b.id === 'claude-code')!;

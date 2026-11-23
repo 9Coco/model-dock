@@ -212,23 +212,24 @@ const result = await vm.runInContext(`(async () => {
     }
   }
 
-  // Explicit off uses Responses so the real client can send reasoning.effort
-  // none. A synthetic base response isolates adapter behavior from the separate
-  // Messages-history test above; provider acceptance is not asserted here.
-  const off = Object.assign(new FixtureCustomEndpoint(), {
-    useResponsesApi: true, useMessagesApi: false, supportsReasoningEffort: ['none'],
+  // Use the same stateless Responses adapter that the generated profiles use.
+  const responseEfforts = ['none', 'low', 'high', 'max'];
+  const responses = Object.assign(new FixtureCustomEndpoint(), {
+    useResponsesApi: true, useMessagesApi: false, supportsReasoningEffort: responseEfforts,
     _configurationService: config,
     modelMetadata: { capabilities: { supports: { thinking: true } },
       reasoningEffortFormat: 'responses', statefulResponses: false },
   });
-  const offRequest = { messages: [{ role: 'user', content: 'SYNTHETIC off request' }],
-    modelCapabilities: { reasoningEffort: 'none' } };
-  const offBody = off.createRequestBody(offRequest);
-  assert.equal(offBody.reasoning.effort, 'none');
-  assert.equal(offRequest.ignoreStatefulMarker, true);
-  assert.equal(offBody.input, offRequest.messages);
-  assert(!('store' in offBody));
-  assert(!('truncation' in offBody));
+  for (const effort of responseEfforts) {
+    const request = { messages: [{ role: 'user', content: 'SYNTHETIC request' }],
+      modelCapabilities: { reasoningEffort: effort } };
+    const body = responses.createRequestBody(request);
+    assert.equal(body.reasoning.effort, effort);
+    assert.equal(request.ignoreStatefulMarker, true);
+    assert.equal(body.input, request.messages);
+    assert(!('store' in body));
+    assert(!('truncation' in body));
+  }
 
   const optionProbe = {};
   effortSetter._applyConfiguredModelOptions.call({ modelMetadata: { modelOptions: { thinking: { type: 'disabled' } } } },
@@ -242,7 +243,7 @@ const result = await vm.runInContext(`(async () => {
     adaptiveHistoryAndModelBoundariesVerified: true,
     fullNextUserRequestPreservesSignedThinking: true,
     adaptiveThinkingAndAllEffortsSerialized: true,
-    explicitResponsesNoneAndStatelessRequestSerialized: true,
+    officialResponsesEffortsAndStatelessRequestSerialized: true,
     unknownThinkingModelOptionIgnored: true,
   };
 })()`, context, { timeout: 5000 });
@@ -251,5 +252,5 @@ console.log(JSON.stringify({
   copilotVersion: manifest.version,
   bundleSha256: createHash('sha256').update(source).digest('hex'),
   checks: result,
-  scope: 'Offline extracted installed-client code with VS Code value classes, prompt rendering and unrelated services stubbed. The explicit-off test stubs the base Responses body. No native GUI, network or upstream acceptance test.',
+  scope: 'Offline extracted installed-client code with VS Code value classes, prompt rendering and unrelated services stubbed. The stateless Responses test stubs the base Responses body. No native GUI, network or upstream acceptance test.',
 }, null, 2));

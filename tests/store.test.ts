@@ -9,7 +9,6 @@ import { resolveBindingModels } from '../src/shared/bindings';
 import { restoreToolBinding } from '../src/main/tool-restore-binding';
 import initSqlJs from 'sql.js';
 import type { ProviderInput, ModelInput } from '../src/shared/types';
-import { airProviderFor } from '../src/shared/air';
 
 const folders: string[] = [];
 const stores: Store[] = [];
@@ -152,7 +151,6 @@ describe('Air account settings and compatibility data', () => {
     const source = store.saveProvider({ name: 'DeepSeek Air', kind: 'openai-compatible', presetId: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', enabled: true, apiKey: 'synthetic' });
     const selected = store.saveModel({ ...model(source.id, 'deepseek-flash'), wireApi: 'responses' });
     const air = store.listBindings().find(binding => binding.id === 'air')!;
-    expect(airProviderFor(air)).toBe('openai');
     store.saveBinding({ ...air, enabled: true, mode: 'direct', providerIds: [source.id], modelIds: [], modelSelection: 'all', defaultModelId: selected.id, airProvider: 'anthropic' });
     const captured = store.listBindings().find(binding => binding.id === 'air')!;
     expect(captured.airProvider).toBe('anthropic');

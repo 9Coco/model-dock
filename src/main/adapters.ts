@@ -1,3 +1,4 @@
+import { openAiBaseUrl } from '../shared/openai-endpoint';
 import { readFileSync, existsSync, mkdirSync, writeFileSync, renameSync, copyFileSync, unlinkSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
@@ -6,21 +7,20 @@ import { parse as parseToml, stringify as stringifyToml } from '@iarna/toml';
 import { parse as parseJsonc, modify, applyEdits, createScanner, SyntaxKind, type Edit, type ParseError } from 'jsonc-parser';
 import type { ConfigPreview, Model, Provider, ProviderSecret, ReasoningEffort, ToolBinding, ToolId } from '../shared/types';
 import { traeRelayClientModel } from '../shared/trae-relay-models';
-import { DEEPSEEK_MESSAGES_BASE, isVsCodeDeepSeekModel, vsCodeDeepSeekModel } from '../shared/vscode-deepseek';
+import { isVsCodeDeepSeekModel, vsCodeDeepSeekModel } from '../shared/vscode-deepseek';
 import { bindingConnectionPolicy, resolveBindingModels } from '../shared/bindings';
 import { modelDisplayLabel, modelLocalAlias } from '../shared/model-names';
 import { subscriptionDisplayName } from '../shared/subscription-names';
 import type { CopilotDesktopPlan } from './copilot-desktop';
 import { dshPatchPreview, type DshPlan, type DshProviderProfile } from './dsh-config';
 import { supportsMultipleSources } from '../shared/tool-capabilities';
-import { nativeDirectBaseUrl } from '../shared/single-entry';
-import { AIR_MANUAL_SETUP, airGatewayBaseUrl, airProviderFor, airProviderLabel, airSettingsPath } from '../shared/air';
+import { nativeClaudeBaseUrl } from '../shared/claude';
+import { AIR_MANUAL_SETUP, AIR_SETTINGS_PATH } from '../shared/air';
 import { isOpenCodeTool, openCodeConfigTargets, type OpenCodePathOptions } from './opencode-paths';
 import { replacePrivateFile } from './private-file';
 import { applyClaudeConfig, buildClaudeConfig } from './claude-config';
 import { applyJunieConfig, buildJunieConfig } from './junie-config';
 import { applyCopilotCliConfig, buildCopilotCliConfig } from './copilot-cli-config';
-import { anthropicEndpoint } from './anthropic-endpoint';
 import { isJetBrainsTool } from '../shared/jetbrains';
 import { applyJetBrainsConfig, buildJetBrainsConfig, type JetBrainsConfigOptions } from './jetbrains-config';
 
@@ -106,9 +106,9 @@ function connectionGroups(store: AdapterStore, tool: ToolId, binding: ToolBindin
     if (directApi && (!provider || group.providerIds.length !== 1)) throw new Error('供应商直连配置无效，请重新选择。');
     const id = policy.kind === 'native' ? `modeldock-${encodeURIComponent(group.providerIds[0])}` : 'modeldock';
     const name = policy.kind === 'native' ? `ModelDock · ${provider?.name ?? '订阅来源'}` : 'ModelDock';
-    const base = tool === 'air'
-      ? directApi ? nativeDirectBaseUrl(tool, provider!, allModels.filter(model => group.modelIds.includes(model.id)), airProviderFor(binding)) ?? '' : airGatewayBaseUrl(airProviderFor(binding), port)
-      : directApi ? provider!.baseUrl.replace(/\/+$/, '') : `http://127.0.0.1:${port}/tool/${tool}/v1`;
+    const base = directApi
+      ? tool === 'claude-code' ? nativeClaudeBaseUrl(provider!) ?? provider!.baseUrl : openAiBaseUrl(provider!.baseUrl)
+      : `http://127.0.0.1:${port}/tool/${tool}/v1`;
     if (!base) throw new Error('请先为供应商填写套餐专属地址。');
     const apiKey = directApi && revealKey ? store.getSecret?.(provider!.id)?.apiKey : undefined;
     if (directApi && revealKey && !apiKey) throw new Error('直连供应商尚未填写 API Key。');
@@ -190,14 +190,13 @@ export function vsCodeModelConfig(model: Model, base: string, key: string, provi
   const deepSeekCompatibility = isVsCodeDeepSeekModel(m, provider);
   const reasoningEfforts = m.reasoningEfforts;
   const defaultReasoningEffort = m.defaultReasoningEffort;
-  // An aggregate group keeps its tool-scoped local address. Direct official
-  // sources use the documented Anthropic base, including custom-named sources.
-  const endpointBase = deepSeekCompatibility && base.replace(/\/+$/, '') === provider!.baseUrl.replace(/\/+$/, '')
-    ? m.wireApi === 'messages' ? DEEPSEEK_MESSAGES_BASE : 'https://api.deepseek.com' : base;
+  if (m.wireApi === 'messages') throw new Error('VS Code 仅支持 OpenAI 格式，请选择 Responses 或 Chat Completions 模型。');
+  const endpointBase = openAiBaseUrl(base);
+  if (!endpointBase) throw new Error('请填写供应商的 OpenAI 兼容基址。');
   const budget = clientBudget(m);
   return {
     id: m.alias, name: m.displayName || m.alias, apiType: m.wireApi,
-    url: m.wireApi === 'messages' ? anthropicEndpoint(endpointBase, '/messages') : endpointBase + (m.wireApi === 'responses' ? '/responses' : '/chat/completions'),
+    url: endpointBase + (m.wireApi === 'responses' ? '/responses' : '/chat/completions'),
     toolCalling: m.tools, vision: m.vision,
     // VS Code treats contextWindow as source of truth. With a separately
     // published input cap, omit it so maxInputTokens + output stays consistent.
@@ -207,18 +206,11 @@ export function vsCodeModelConfig(model: Model, base: string, key: string, provi
     // Suppress only Copilot defaults. Explicit sampling requests still reach
     // the adapter and receive its unsupported-control error.
     ...(nativeTraeChat ? { modelOptions: { temperature: null, top_p: null } } : {}),
-    ...(deepSeekCompatibility && m.wireApi === 'responses' ? { statefulResponses: false } : {}),
+    ...(deepSeekCompatibility ? { statefulResponses: false } : {}),
     ...(deepSeekCompatibility || m.thinking !== undefined || reasoningEfforts?.length
       ? { thinking: m.thinking ?? true } : {}),
-    // Without supportsReasoningEffort VS Code shows no Thinking Effort picker.
-    // 修改点：档位由保存的模型设置决定；传参格式随当前接口，防止旧
-    // Responses 格式跟随已切换到 Chat/Messages 的模型继续导出。
+    // The effort field must match the protocol used by the generated profile.
     ...(reasoningEfforts?.length ? { supportsReasoningEffort: [...reasoningEfforts], ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}), reasoningEffortFormat: m.wireApi } : {}),
-    ...(m.wireApi === 'messages' ? {
-      ...(m.adaptiveThinking !== undefined ? { adaptiveThinking: m.adaptiveThinking } : {}),
-      ...(m.adaptiveThinking !== true && m.minThinkingBudget !== undefined && m.minThinkingBudget > 0 && m.minThinkingBudget < budget.output && m.maxThinkingBudget !== undefined && m.maxThinkingBudget > 0
-        ? { minThinkingBudget: m.minThinkingBudget, maxThinkingBudget: Math.min(m.maxThinkingBudget, budget.output - 1) } : {}),
-    } : {}),
   };
 }
 function vscode(store: AdapterStore, groups: ClientGroup[]) {
@@ -322,18 +314,16 @@ export function buildConfig(store: AdapterStore, tool: ToolId, port: number, rev
         : '通过本机入口按模型别名分发到所选供应商，不把 OAuth 凭据写入工具。';
   const defaultModel = models.find(m => m.id === binding.defaultModelId) ?? models[0];
   if (tool === 'air') {
-    const provider = airProviderFor(binding), label = airProviderLabel(provider);
     return {
       filename: 'modeldock-air-connection-guide.json', canApply: false, applyUnavailableReason: AIR_MANUAL_SETUP,
       content: JSON.stringify(first ? {
-        manualSetup: true, provider: label, settingsPath: airSettingsPath(provider), description: `ModelDock · ${first.directApi ? first.singleSource?.name ?? 'Air' : 'Air'} · ${label}`,
+        manualSetup: true, provider: 'OpenAI', settingsPath: AIR_SETTINGS_PATH, description: `ModelDock · ${first.directApi ? first.singleSource?.name ?? 'Air' : 'Air'} · OpenAI`,
         baseUrl: first.base, apiKey: first.key,
-        models: models.map(model => ({ id: model.alias, name: model.displayName || model.alias, wireApi: provider === 'anthropic' ? 'messages' : model.wireApi })),
+        models: models.map(model => ({ id: model.alias, name: model.displayName || model.alias, wireApi: model.wireApi })),
         suggestedModel: defaultModel?.alias,
       } : {}, null, 2),
-      instructions: `在「${airSettingsPath(provider)}」中填写 API Key 和 Description，展开高级选项填写 Base URL，测试连接后保存。`
+      instructions: `在「${AIR_SETTINGS_PATH}」中填写 API Key 和 Description，展开高级选项填写 Base URL，测试连接后保存。`
         + '此 JSON 仅供手动填写参考，不能导入 Air；请在 Air 会话中选择该账户及兼容模型。' + AIR_MANUAL_SETUP
-        + (provider === 'anthropic' && first?.directApi ? 'Air 使用 x-api-key 认证；仅接受 Bearer 的来源请使用聚合接口，网关会按保存的 messagesAuth 发送认证。' : '')
         + (first && !first.directApi ? '使用聚合接口时请保持 ModelDock 本机服务运行。' : ''),
     };
   }
@@ -343,7 +333,7 @@ export function buildConfig(store: AdapterStore, tool: ToolId, port: number, rev
       + (binding.vscodeSyncScope === 'managed' ? '当前范围仅替换 ModelDock 分组，保留其他自定义来源。' : '当前范围仅保留所选自定义供应商：原文件先备份，所有 customendpoint 分组会替换为当前选择；保留其他 vendor 和注释。')
       + '默认仅写入 Code/User/chatLanguageModels.json；其他 profile 需在对应的模型配置文件中手动合并导出内容。同步后重新加载窗口。'
       + (models.some(model => isVsCodeDeepSeekModel(model, modelProvider(store, model)))
-        ? 'DeepSeek 官方模型的思考模式通过原生 Anthropic Messages 接口保留思考内容、签名和工具调用历史，思考档位沿用模型设置；明确关闭思考时使用 Responses 的 None。重新同步并重新加载窗口后，请在新聊天中选择该模型；旧 Responses 聊天缺失的思考历史无法补回。其他工具的模型协议不受影响。' : '')
+        ? 'DeepSeek 官方模型使用无状态 OpenAI Responses，保留已设置的思考档位。Copilot 后台工具续接使用聚合接口修正；重新同步并重新加载窗口后，请在新聊天中选择该模型。' : '')
       + (models.some(model => model.wireApi === 'chat-completions' && modelProvider(store, model)?.nativeAdapter === 'trae')
         ? 'TRAE 原生连接的输出预算与采样使用上游原生默认值；思考仍由上游生成，已配置的推理强度选项保留。请重新同步 VS Code 配置并重新加载窗口以使用此适配。' : '')
       + clientBudgetNotice(models),

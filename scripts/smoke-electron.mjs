@@ -165,7 +165,7 @@ child.on('exit', code => {
     }
     if (env.MODELDOCK_SMOKE_JETBRAINS_PLUGIN_ONLY === '1') {
       const result = JSON.parse(readFileSync(resolve(output, 'jetbrains-plugin-validation.json'), 'utf8'));
-      if (!result.ok || !result.airInDesktop || !result.editorCategoryAbsent || !result.vscodeInDesktop || !result.nativeSettingsUnchanged || !result.manualSaveOnly || !result.openaiAndAnthropic || !result.exactClipboardCopies || !result.previewRedacted) throw new Error('Air BYOK validation failed');
+      if (!result.ok || !result.airInDesktop || !result.editorCategoryAbsent || !result.vscodeInDesktop || !result.nativeSettingsUnchanged || !result.manualSaveOnly || !result.openai || !result.exactClipboardCopies || !result.previewRedacted) throw new Error('Air BYOK validation failed');
       console.log(JSON.stringify({ exitCode: code, bridge: value.bridge, airByok: true, output }));
       process.exit(code || 0);
     }

@@ -108,7 +108,7 @@ describe('loopback gateway', () => {
       const response = await fetch(`${f.url}/${route}`, { method: 'POST', headers: f.headers, body: JSON.stringify({ model: f.model.alias, messages: [{ role: 'user', content: 'OK' }] }) });
       expect(response.status).toBe(400);
     }
-    expect((await fetch(`${f.url}/messages`, { method: 'POST', headers: f.headers, body: '{}' })).status).toBe(400);
+    expect((await fetch(`${f.url}/messages`, { method: 'POST', headers: f.headers, body: '{}' })).status).toBe(404);
     expect(requests).toBe(0);
   });
   it('configures a stopped gateway without listening and starts on its configured port', async () => {

@@ -1,5 +1,11 @@
 # ModelDock 验证记录
 
+## 2026-11-23 / 0.4.39 · VS Code DeepSeek Responses
+
+- 确认 0.4.32 的提交 `21d848e` 将 VS Code 官方 DeepSeek 的配置从 Responses 改为 Messages。本版使用无状态 Responses，保留官方 low、high、max 档位和用户选择的 None。已备份并更正本机 VS Code 的 Flash 和 Pro 条目，保留其他来源和模型选择。
+- 真实 DeepSeek Flash 对照请求中，模拟 Copilot 后台回调缺少思考字段或字段值为空字符串时返回 400。现有 Gateway 只为已配对的 Copilot 本地回调提供单空格占位，其他模型思考与工具结果原样传递。经生产 Gateway 代码发送真实上游合成请求，第一轮流式思考及工具调用、第二轮包含回调的续接均返回 200，两个请求均保持 low 思考。此项使用与 Copilot 相同的回调结构，未操作 VS Code 界面重跑原聊天。
+- 132 个测试文件通过，2,843 项通过、4 项跳过。通过 TypeScript、生产构建、生产入口校验和 Linux amd64 Debian 包校验。隔离 Linux Electron 核对 Air OpenAI 参数、剪贴板、账户文件保护以及深浅两套主题的 980 和 1320 像素布局。未构建或验证新版 Windows 包，未保存真实 Air 账户。
+
 ## 2026-11-11 / 0.4.23 · 全局流量直连白名单
 
 - 全局模式支持 32 个单独的 IPv4 或 IPv6 地址。新旧配置均可读取，空名单沿用旧助手通信格式。无效地址不会中断当前连接。已连接时保存会按既有顺序恢复路由再重连。HTTP 模式会保存但不使用名单。

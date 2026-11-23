@@ -7,7 +7,6 @@ import { parse as parseToml } from '@iarna/toml';
 import { parse as parseYaml } from 'yaml';
 import { buildConfig, buildCopilotDesktopPlan, buildDshPlan, applyConfig, connectionKey, vsCodeModelConfig } from '../src/main/adapters';
 import type { Model, Provider, ToolBinding } from '../src/shared/types';
-import { airAccountBaseUrl, airGatewayBaseUrl, airProviderFor } from '../src/shared/air';
 
 const roots: string[] = [];
 function dshProviders(content: string) { return parseYaml(content).find((row: any) => row.id === 'llm-pi-ai').config.providers; }
@@ -32,7 +31,7 @@ function nativeFixture(ids = ['provider-a', 'provider-b', 'subscription']) {
   };
 }
 describe('tool adapters', () => {
-  it('resyncs official DeepSeek through native signed Messages history in VS Code', () => {
+  it('resyncs official DeepSeek through stateless Responses in VS Code', () => {
     const f = nativeFixture(['provider-a', 'provider-b']);
     f.providers[0].baseUrl = 'https://api.deepseek.com/v1/';
     f.catalog[0] = { ...f.catalog[0], upstreamId: 'deepseek-flash', alias: 'flash-local', thinking: true,
@@ -46,22 +45,22 @@ describe('tool adapters', () => {
       { vendor: 'customendpoint', name: 'ModelDock · API 套餐 A', models: [{ id: 'deepseek-flash', supportsReasoningEffort: ['high'] }] },
       { vendor: 'customendpoint', name: 'Personal', models: [{ id: 'personal-model' }] },
     ]));
-    const compatibility = { apiType: 'messages', thinking: true, adaptiveThinking: true, supportsReasoningEffort: ['low', 'high', 'max'],
-      defaultReasoningEffort: 'high', reasoningEffortFormat: 'messages', toolCalling: true };
+    const compatibility = { apiType: 'responses', thinking: true, statefulResponses: false, supportsReasoningEffort: ['low', 'high', 'max'],
+      defaultReasoningEffort: 'high', reasoningEffortFormat: 'responses', toolCalling: true };
     expect(buildConfig(f, 'vscode', 18181).instructions).toContain('在新聊天中选择该模型');
     applyConfig(f, 'vscode', 18181, root, join(root, 'backups'), root);
     const [personal, official, other] = JSON.parse(readFileSync(target, 'utf8'));
     expect(personal.name).toBe('Personal');
     expect(official.models).toMatchObject(['deepseek-flash', 'deepseek-v4-pro'].map(id => ({ ...compatibility, id,
-      url: 'https://api.deepseek.com/anthropic/v1/messages', requestHeaders: { authorization: 'Bearer SYNTHETIC_KEY_provider-a' } })));
+      url: 'https://api.deepseek.com/v1/responses', requestHeaders: { authorization: 'Bearer SYNTHETIC_KEY_provider-a' } })));
     expect(other.models[0]).toMatchObject({ id: 'deepseek-flash', supportsReasoningEffort: ['high'], defaultReasoningEffort: 'high' });
     expect(other.models[0]).not.toHaveProperty('statefulResponses');
 
     const aggregate = { ...f, listBindings: () => f.listBindings().map(binding => ({ ...binding, mode: 'aggregate' as const })) };
     expect(JSON.parse(buildConfig(aggregate, 'vscode', 18181).content)[0].models.find((model: { id: string }) => model.id === 'flash-local'))
-      .toMatchObject({ ...compatibility, url: 'http://127.0.0.1:18181/tool/vscode/v1/messages' });
+      .toMatchObject({ ...compatibility, url: 'http://127.0.0.1:18181/tool/vscode/v1/responses' });
     expect(vsCodeModelConfig({ ...f.catalog[0], wireApi: 'chat-completions' }, 'https://api.deepseek.com', 'fixture', f.providers[0]))
-      .toMatchObject({ supportsReasoningEffort: ['low', 'high', 'max'], defaultReasoningEffort: 'high', reasoningEffortFormat: 'messages' });
+      .toMatchObject({ supportsReasoningEffort: ['low', 'high', 'max'], defaultReasoningEffort: 'high', reasoningEffortFormat: 'responses' });
     expect(f.catalog[0]).toMatchObject({ reasoningEfforts: ['low', 'high', 'max'], defaultReasoningEffort: 'high' });
   });
 
@@ -78,9 +77,9 @@ describe('tool adapters', () => {
     const before = readFileSync(existing, 'utf8');
     const preview = buildConfig(air, 'air', 18181);
     expect(preview).toMatchObject({ canApply: false, filename: 'modeldock-air-connection-guide.json' });
-    expect(JSON.parse(preview.content)).toMatchObject({ manualSetup: true, provider: airProvider === 'anthropic' ? 'Anthropic' : 'OpenAI',
-      baseUrl: airProvider === 'anthropic' ? 'https://api.deepseek.com/anthropic' : 'https://api.deepseek.com/v1', apiKey: '__PROVIDER_API_KEY__',
-      suggestedModel: 'deepseek-flash', models: [{ id: 'deepseek-flash', wireApi: airProvider === 'anthropic' ? 'messages' : 'responses' }] });
+    expect(JSON.parse(preview.content)).toMatchObject({ manualSetup: true, provider: 'OpenAI',
+      baseUrl: 'https://api.deepseek.com/v1', apiKey: '__PROVIDER_API_KEY__',
+      suggestedModel: 'deepseek-flash', models: [{ id: 'deepseek-flash', wireApi: 'responses' }] });
     expect(f.getSecret).not.toHaveBeenCalled();
     expect(JSON.parse(buildConfig(air, 'air', 18181, true).content).apiKey).toBe('SYNTHETIC_KEY_provider-a');
     expect(connectionKey(air, 'air')).toBe('SYNTHETIC_KEY_provider-a');
@@ -97,9 +96,9 @@ describe('tool adapters', () => {
       providerIds: f.providers.map(provider => provider.id), modelIds: [], modelSelection: 'all', defaultModelId: f.catalog[0].id, note: '' };
     const air = { ...f, listBindings: () => [binding] };
     const preview = JSON.parse(buildConfig(air, 'air', 19234).content);
-    expect(preview.baseUrl).toBe(airGatewayBaseUrl(airProvider, 19234));
+    expect(preview.baseUrl).toBe('http://127.0.0.1:19234/tool/air/v1');
     expect(preview.apiKey).toBe('__MODELDOCK_LOCAL_KEY__');
-    expect(preview.models.map((model: {id: string}) => model.id)).toEqual(f.catalog.filter(model => airProvider === 'anthropic' || model.wireApi !== 'messages').map(model => model.alias));
+    expect(preview.models.map((model: {id: string}) => model.id)).toEqual(f.catalog.filter(model => model.wireApi !== 'messages').map(model => model.alias));
     const exported = buildConfig(air, 'air', 19234, true).content;
     expect(JSON.parse(exported).apiKey).toBe('local-test-secret');
     expect(exported).not.toMatch(/PRIVATE_OAUTH|SYNTHETIC_KEY/);
@@ -108,9 +107,6 @@ describe('tool adapters', () => {
   });
 
   it('keeps legacy Air OpenAI defaults and rejects mixed native accounts before reading any upstream key', () => {
-    expect(airProviderFor()).toBe('openai');
-    expect(airAccountBaseUrl('anthropic', 'https://fixture.test/prefix/v1/')).toBe('https://fixture.test/prefix');
-    expect(airAccountBaseUrl('openai', 'https://fixture.test/prefix/v1/')).toBe('https://fixture.test/prefix/v1');
     const f = nativeFixture();
     const binding: ToolBinding = { id: 'air', name: 'Air', enabled: true, mode: 'auto', providerIds: ['provider-a', 'provider-b'], modelIds: [], defaultModelId: f.catalog[0].id, note: '' };
     const air = { ...f, listBindings: () => [binding] };
@@ -118,7 +114,7 @@ describe('tool adapters', () => {
     expect(f.getSecret).not.toHaveBeenCalled();
   });
 
-  it.each(['chat-completions', 'responses', 'messages'] as const)('exports saved user levels using the current %s format without mutating stale metadata', wireApi => {
+  it.each(['chat-completions', 'responses'] as const)('exports saved user levels using the current %s format without mutating stale metadata', wireApi => {
     const configured: Model = { ...models[0], wireApi, thinking: true, reasoningEfforts: ['minimal', 'medium', 'xhigh'], defaultReasoningEffort: 'medium', reasoningEffortFormat: wireApi === 'responses' ? 'chat-completions' : 'responses' };
     const before = structuredClone(configured);
     const output = vsCodeModelConfig(configured, 'https://synthetic.example/v1', 'SYNTHETIC_ONLY');
@@ -148,7 +144,7 @@ describe('tool adapters', () => {
     const plan = buildCopilotDesktopPlan(configuredStore, 19191);
     expect(plan.providers[0].models[0]).toMatchObject({ contextWindow: 1, maxOutputTokens: 99999 });
   });
-  it('serializes Messages schema fields defensively while preserving the existing client protocol boundaries', () => {
+  it('rejects Messages models and omits Anthropic thinking options from VS Code', () => {
     const catalog: Model[] = [
       { ...models[0], id: 'messages', alias: 'adaptive-model', wireApi: 'messages', maxOutputTokens: 32000, thinking: true, adaptiveThinking: true,
         reasoningEfforts: ['low', 'medium', 'high'], reasoningEffortFormat: 'messages', minThinkingBudget: 1024, maxThinkingBudget: 16000 },
@@ -160,14 +156,12 @@ describe('tool adapters', () => {
       listBindings: () => store.listBindings().map(binding => ({ ...binding, modelIds: catalog.map(model => model.id) })) };
     const integrated = JSON.parse(buildConfig(configuredStore, 'vscode', 19191).content)[0].models;
     expect(integrated.map((row: any) => row.id)).toEqual(['no-picker', 'explicit-false']);
-    const rows = catalog.map(model => vsCodeModelConfig(model, 'http://127.0.0.1:19191/tool/vscode/v1', 'SYNTHETIC_KEY'));
-    expect(rows[0]).toMatchObject({ url: 'http://127.0.0.1:19191/tool/vscode/v1/messages', apiType: 'messages', thinking: true, adaptiveThinking: true,
-      supportsReasoningEffort: ['low', 'medium', 'high'], reasoningEffortFormat: 'messages' });
-    expect(rows[0]).not.toHaveProperty('minThinkingBudget');
-    expect(rows[1]).toMatchObject({ minThinkingBudget: 1024, maxThinkingBudget: 15999, adaptiveThinking: false });
-    expect(rows[2]).toMatchObject({ thinking: true, apiType: 'responses' });
-    for (const key of ['supportsReasoningEffort', 'reasoningEffortFormat', 'adaptiveThinking', 'minThinkingBudget', 'maxThinkingBudget']) expect(rows[2]).not.toHaveProperty(key);
-    expect(rows[3].thinking).toBe(false);
+    for (const model of catalog.slice(0, 2)) {
+      expect(() => vsCodeModelConfig(model, 'http://127.0.0.1:19191/tool/vscode/v1', 'SYNTHETIC_KEY')).toThrow('OpenAI 格式');
+    }
+    expect(integrated[0]).toMatchObject({ thinking: true, apiType: 'responses' });
+    for (const key of ['supportsReasoningEffort', 'reasoningEffortFormat', 'adaptiveThinking', 'minThinkingBudget', 'maxThinkingBudget']) expect(integrated[0]).not.toHaveProperty(key);
+    expect(integrated[1].thinking).toBe(false);
   });
   it('writes OpenCode to the explicit XDG config root and preserves the unused default configuration', () => {
     const root = mkdtempSync(join(tmpdir(), 'modeldock-adapter-xdg-')); roots.push(root);

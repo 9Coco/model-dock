@@ -28,7 +28,6 @@ import { supportsMultipleSources } from '../shared/tool-capabilities';
 import { nativeClaudeBaseUrl } from '../shared/claude';
 import { JETBRAINS_TOOLS } from '../shared/jetbrains';
 import { activeToolIds, isActiveToolId } from '../shared/tool-categories';
-import { airGatewayBaseUrl, airProviderFor, airProviderLabel, isAirAnthropic, type AirProvider } from '../shared/air';
 import { AirPanel } from './AirPanel';
 import { canStartToolSync, ToolAutoSync, type ToolAutoSyncOptions, type ToolAutoSyncState } from './tool-auto-sync';
 import type { ToolSyncUndoStatus } from '../shared/tool-sync-types';
@@ -188,11 +187,11 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
   // 修改点：与主进程共用模型筛选；Claude Code 复用来源现有模型，无需复制成 Messages 模型。
   const providerToolModels = (provider: Provider, tool: ToolId) => resolveBindingModels({ ...bindingFor(tool), enabled: true, mode: bindingFor(tool).mode === 'aggregate' ? 'aggregate' : 'direct', providerIds: [provider.id], modelSelection: 'all', modelIds: [] }, data.models, data.providers).filter(model => tool !== 'codex' || model.wireApi === 'responses');
   const providerUnavailableReason = (provider: Provider, tool: ToolId) => isSingleEntryTool(tool) && bindingFor(tool).mode !== 'aggregate' && provider.kind !== 'openai-compatible' ? '账号订阅请使用聚合接口'
-    : isSingleEntryTool(tool) && bindingFor(tool).mode !== 'aggregate' && !nativeDirectBaseUrl(tool, provider, directModelsForProvider(tool, provider, data.models, bindingFor(tool).airProvider), bindingFor(tool).airProvider) ? '此来源没有兼容的原生接口，请使用聚合接口'
+    : isSingleEntryTool(tool) && bindingFor(tool).mode !== 'aggregate' && !nativeDirectBaseUrl(tool, provider, directModelsForProvider(tool, provider, data.models)) ? '此来源没有兼容的原生接口，请使用聚合接口'
     : !provider.enabled ? '供应商已停用'
     : !provider.hasSecret ? isRelayProvider(provider) ? '请先配置反代密钥' : (provider.kind === 'openai-compatible' || provider.kind === 'opencode-go') ? '请先配置 API Key' : '请先授权账号'
-      : !provider.baseUrl && provider.kind === 'openai-compatible' && !((tool === 'claude-code' || isAirAnthropic(bindingFor(tool))) && nativeClaudeBaseUrl(provider)) ? '请先填写服务地址'
-        : !providerToolModels(provider, tool).length ? tool === 'claude-code' || isAirAnthropic(bindingFor(tool)) ? '请先添加并启用此来源的兼容模型' : tool === 'codex' && data.models.some(model => model.providerId === provider.id && model.enabled) ? 'Codex 需要 Responses 模型' : data.models.some(model => model.providerId === provider.id && model.enabled && model.wireApi === 'messages') ? '此工具暂不支持 Messages 模型' : '请先添加并启用模型' : '';
+      : !provider.baseUrl && provider.kind === 'openai-compatible' && !(tool === 'claude-code' && nativeClaudeBaseUrl(provider)) ? '请先填写服务地址'
+        : !providerToolModels(provider, tool).length ? tool === 'claude-code' ? '请先添加并启用此来源的兼容模型' : tool === 'codex' && data.models.some(model => model.providerId === provider.id && model.enabled) ? 'Codex 需要 Responses 模型' : data.models.some(model => model.providerId === provider.id && model.enabled && model.wireApi === 'messages') ? '此工具暂不支持 Messages 模型' : '请先添加并启用模型' : '';
   const toolSignature = (binding: ToolBinding) => JSON.stringify({ binding: Object.fromEntries(Object.entries(binding).sort(([left], [right]) => left.localeCompare(right))), models: toolModels(binding), providers: data.providers.filter(provider => sourceIdsFor(binding).includes(provider.id)), port: data.gateway.port });
   const toolOperationPending = (id: ToolId, editingProviders = false) => [...pendingActions.current].some(key => {
     if (editingProviders && id === 'copilot' && key === 'apply-tool-copilot') return false;
@@ -497,16 +496,6 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
       await persistInlineBinding(tool, { ...draft, enabled: models.length > 0, defaultModelId: models.some(model => model.id === current.defaultModelId) ? current.defaultModelId : models[0]?.id ?? '' });
     });
   };
-  const saveAirProvider = async (airProvider: AirProvider) => {
-    if (toolOperationPending('air')) return;
-    await run('tool-binding-air', async () => {
-      const current = bindingFor('air');
-      const next = { ...current, airProvider, enabled: true };
-      const models = toolModels(next);
-      await persistInlineBinding('air', { ...next, enabled: models.length > 0,
-        defaultModelId: models.some(model => model.id === current.defaultModelId) ? current.defaultModelId : '' });
-    });
-  };
   const saveAggregateModels = async (tool: ToolId, modelIds: string[]) => {
     if (toolOperationPending(tool)) return;
     await run(`tool-binding-${tool}`, async () => {
@@ -727,7 +716,7 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
   const availableToolProviderIds = data.providers.filter(provider => !providerUnavailableReason(provider, selectedTool)).map(provider => provider.id);
   const toolProviders = data.providers.filter(provider => `${provider.name} ${subscriptionDisplayName(provider)} ${provider.baseUrl}`.toLowerCase().includes(search.toLowerCase()));
   const currentDirectProvider = !currentAggregate ? data.providers.find(provider => provider.id === currentSourceIds[0]) : undefined;
-  const currentTargetUrl = currentAggregate ? currentAir ? airGatewayBaseUrl(airProviderFor(currentBinding), data.gateway.port) : `http://127.0.0.1:${data.gateway.port}/tool/${selectedTool}${selectedTool === 'claude-code' ? '' : '/v1'}` : currentDirectProvider ? nativeDirectBaseUrl(selectedTool, currentDirectProvider, currentModels, currentBinding.airProvider) ?? '' : '';
+  const currentTargetUrl = currentAggregate ? `http://127.0.0.1:${data.gateway.port}/tool/${selectedTool}${selectedTool === 'claude-code' ? '' : '/v1'}` : currentDirectProvider ? nativeDirectBaseUrl(selectedTool, currentDirectProvider, currentModels) ?? '' : '';
   const detailTitle = page === 'tools' ? `${toolInfo[selectedTool].name} ${currentSingleEntry ? '接入配置' : '供应商'}` : page === 'providers' ? selectedProvider ? subscriptionDisplayName(selectedProvider) : (sourceCategory === 'api' ? 'API 供应商' : '订阅供应商') : pageMeta[page].label;
   const draftPreset = providerDraft ? presetById(providerDraft.presetId) : undefined;
   const duplicateProviderGroups = useMemo(() => {
@@ -984,9 +973,9 @@ export default function App({ initialSettings }: { initialSettings?: SettingsSna
             {currentRestored && <p className="tool-inline-delivery" role="status" data-tool-official-restored>{selectedTool === 'opencode-desktop' ? '已清理 ModelDock 配置：' : selectedTool === 'junie' || selectedTool === 'copilot-cli' ? '已恢复同步前设置：' : '已恢复官方模型入口：'}<code>{toolRestoreLocations[selectedTool]}</code></p>}
             {currentDelivery && <p className="tool-inline-delivery" role="status">{currentCleared ? selectedTool === 'dsh' ? currentOnlySelected ? '已清理 DSH 显示来源：' : '已恢复 DSH 原来源：' : currentOnlySelected ? '已清理自定义来源：' : '已清理 ModelDock 来源：' : currentDelivery.kind === 'applied' ? selectedTool === 'copilot' ? 'Copilot 模型注册表：' : '已写入：' : currentDelivery.kind === 'undone' ? '已撤销上次同步：' : '已导出：'}<code>{currentDelivery.location}</code></p>}
           </div>
-          {currentAir && <AirPanel api={bridge} provider={airProviderFor(currentBinding)} description={`ModelDock · ${currentAggregate ? 'Air' : currentDirectProvider?.name ?? 'Air'} · ${airProviderLabel(airProviderFor(currentBinding))}`} baseUrl={currentTargetUrl} modelId={currentDefault && (currentAggregate ? currentDefault.alias : currentDefault.upstreamId)}
+          {currentAir && <AirPanel api={bridge} description={`ModelDock · ${currentAggregate ? 'Air' : currentDirectProvider?.name ?? 'Air'} · OpenAI`} baseUrl={currentTargetUrl} modelId={currentDefault && (currentAggregate ? currentDefault.alias : currentDefault.upstreamId)}
             aggregate={currentAggregate} running={data.gateway.running} disabled={currentToolBusy || !!busy['copy-air-key']} starting={!!busy.gateway}
-            onCopy={copy} onProviderChange={saveAirProvider} onCopyKey={() => run('copy-air-key', async () => { await bridge!.copyConnectionKey('air'); notify('Air 连接密钥已复制。'); })}
+            onCopy={copy} onCopyKey={() => run('copy-air-key', async () => { await bridge!.copyConnectionKey('air'); notify('Air 连接密钥已复制。'); })}
             onStart={startGateway} onPreview={() => showPreview('air')} onExport={() => exportTool('air')} />}
           {!currentSingleEntry && toolProviderSelection}
           </div>

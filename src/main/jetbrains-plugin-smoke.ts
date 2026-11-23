@@ -37,10 +37,6 @@ export async function verifyJetBrainsPluginSwitch(window: BrowserWindow, store: 
     const query = `document.querySelector(${JSON.stringify(selector)})`;
     await waitFor(`!!${query} && !${query}.disabled`, selector); await evaluate(`${query}.click()`);
   }
-  async function selectType(type: 'openai' | 'anthropic'): Promise<void> {
-    await evaluate(`(()=>{const s=document.querySelector('[data-action="air-provider-type"]');Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(s,${JSON.stringify(type)});s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
-    await waitFor(`(async()=>{const b=(await window.modelDock.snapshot()).bindings.find(b=>b.id==='air');return b.airProvider===${JSON.stringify(type)}&&!document.querySelector('[data-action="air-provider-type"]').disabled;})()`, `${type} saved`);
-  }
   async function copy(selector: string, expected: string): Promise<void> {
     await click(selector); const end = Date.now() + 5000;
     while (await clipboard.readText() !== expected && Date.now() < end) await pause(25);
@@ -48,7 +44,7 @@ export async function verifyJetBrainsPluginSwitch(window: BrowserWindow, store: 
   }
   const size = window.getSize();
   const appearance = await evaluate<{ theme?: string; colorScheme: string }>('({theme:document.documentElement.dataset.theme,colorScheme:document.documentElement.style.colorScheme})');
-  const savedClipboard = await Promise.all((await clipboard.read()).map(async item => new ClipboardItem(Object.fromEntries(await Promise.all(item.types.map(async type => [type, await item.getType(type)]))))));
+  const savedClipboard = await Promise.all((await clipboard.read()).filter(item => item.types.length > 0).map(async item => new ClipboardItem(Object.fromEntries(await Promise.all(item.types.map(async type => [type, await item.getType(type)]))))));
   const layouts: unknown[] = [];
   try {
     await click('[aria-label="刷新本机配置"]'); await click('[data-tool-category="desktop"]'); await click('.sidebar [data-tool-id="air"]');
@@ -61,38 +57,35 @@ export async function verifyJetBrainsPluginSwitch(window: BrowserWindow, store: 
     const direct = await preview(); assert.equal(direct.canApply, false);
     assert.ok(direct.content.includes('deepseek-flash') && !direct.content.includes('SYNTHETIC_AIR_BYOK_KEY'));
     await copy('[data-action="air-copy-key"]', 'SYNTHETIC_AIR_BYOK_KEY'); await copy('[data-action="air-copy-model"]', 'deepseek-flash');
-    await selectType('anthropic'); const anthropic = await preview();
-    assert.ok(anthropic.content.includes('https://api.deepseek.com/anthropic') && !anthropic.content.includes('/anthropic/v1'));
-    await copy('[data-action="air-copy-url"]', 'https://api.deepseek.com/anthropic');
+    assert.equal(await evaluate<boolean>(`!!document.querySelector('[data-action="air-provider-type"]')`), false);
+    await copy('[data-action="air-copy-url"]', 'https://api.deepseek.com');
     await click('[data-action="tool-use-aggregate"]');
     await waitFor(`(async()=>{const b=(await window.modelDock.snapshot()).bindings.find(b=>b.id==='air');return b.mode==='aggregate'&&!document.querySelector('[data-action="tool-use-aggregate"]').disabled;})()`, 'Aggregate saved');
     const source = `article[data-provider-id="${provider.id}"] input[data-action="select-tool-provider"]`;
     if (!await evaluate<boolean>(`document.querySelector(${JSON.stringify(source)})?.checked`)) await click(source);
-    await waitFor(`(async()=>{const b=(await window.modelDock.snapshot()).bindings.find(b=>b.id==='air');return b.providerIds.includes(${JSON.stringify(provider.id)})&&b.enabled&&!document.querySelector('[data-action="air-provider-type"]').disabled;})()`, 'Aggregate source');
+    await waitFor(`(async()=>{const b=(await window.modelDock.snapshot()).bindings.find(b=>b.id==='air');return b.providerIds.includes(${JSON.stringify(provider.id)})&&b.enabled;})()`, 'Aggregate source');
     const aggregate = await preview(), port = (await evaluate<Snapshot>('window.modelDock.snapshot()')).gateway.port;
-    assert.ok(aggregate.content.includes('/tool/air') && !aggregate.content.includes('/tool/air/v1'));
-    await copy('[data-action="air-copy-url"]', `http://127.0.0.1:${port}/tool/air`); await copy('[data-action="air-copy-key"]', store.gatewayKey());
+    assert.ok(aggregate.content.includes('/tool/air/v1'));
+    await copy('[data-action="air-copy-url"]', `http://127.0.0.1:${port}/tool/air/v1`); await copy('[data-action="air-copy-key"]', store.gatewayKey());
     for (const operation of ['applyConfig("air")', 'undoToolSync("air")', 'restoreOfficialConfig("air")']) {
       const error = await evaluate<string | null>(`window.modelDock.${operation}.then(()=>null,e=>String(e))`); assert.ok(error?.includes('Air'));
     }
     assert.equal(await evaluate<number>(`document.querySelectorAll('[data-action="apply-tool-config"],[data-action="undo-tool-sync"],[data-action="restore-official-tool-config"]').length`), 0);
     assert.equal(await evaluate<string>(`document.querySelector('[data-tool-application-status]')?.dataset.toolApplicationState`), 'manual');
     assert.equal(await evaluate<boolean>(`document.body.innerText.includes('SYNTHETIC_AIR_BYOK_KEY')`), false);
-    for (const type of ['openai', 'anthropic'] as const) {
-      await selectType(type);
-      for (const theme of ['light', 'dark']) for (const [width, height] of [[1320, 880], [980, 680]]) {
-        window.setSize(width, height);
-        await evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)};document.documentElement.style.colorScheme=${JSON.stringify(theme)};document.querySelector('.main-content').scrollTop=0;document.querySelectorAll('.toast-stack [aria-label="关闭提示"]').forEach(b=>b.click())`); await pause(120);
-        assert.equal(await evaluate<boolean>(`document.documentElement.scrollWidth>innerWidth||document.querySelector('.main-content').scrollWidth>document.querySelector('.main-content').clientWidth+1`), false);
-        const screenshot = `air-byok-${type}-${theme}-${width}.png`; writeFileSync(join(outputDir, screenshot), await captureUi()); layouts.push({ type, theme, width, height, screenshot });
-      }
+    for (const theme of ['light', 'dark']) for (const [width, height] of [[1320, 880], [980, 680]]) {
+      window.setSize(width, height);
+      await evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)};document.documentElement.style.colorScheme=${JSON.stringify(theme)};document.querySelector('.main-content').scrollTop=0;document.querySelectorAll('.toast-stack [aria-label="关闭提示"]').forEach(b=>b.click())`); await pause(120);
+      assert.equal(await evaluate<boolean>(`document.documentElement.scrollWidth>innerWidth||document.querySelector('.main-content').scrollWidth>document.querySelector('.main-content').clientWidth+1`), false);
+      const screenshot = `air-byok-openai-${theme}-${width}.png`; writeFileSync(join(outputDir, screenshot), await captureUi()); layouts.push({ type: 'openai', theme, width, height, screenshot });
     }
     for (const [file, contents] of originalFiles) assert.equal(readFileSync(file, 'utf8'), contents);
     assert.deepEqual(store.listBindings().filter(b => b.id !== 'air'), beforeBindings);
     assert.deepEqual({ providers: store.listProviders(), models: store.listModels() }, original);
-    writeFileSync(join(outputDir, 'jetbrains-plugin-validation.json'), JSON.stringify({ ok: true, airInDesktop: true, editorCategoryAbsent: true, vscodeInDesktop: true, manualSaveOnly: true, openaiAndAnthropic: true, exactClipboardCopies: true, previewRedacted: true, nativeSettingsUnchanged: true, otherToolBindingsUnchanged: true, liveAirAccountSaved: false, liveProviderInferenceTested: false, layouts }, null, 2));
+    writeFileSync(join(outputDir, 'jetbrains-plugin-validation.json'), JSON.stringify({ ok: true, airInDesktop: true, editorCategoryAbsent: true, vscodeInDesktop: true, manualSaveOnly: true, openai: true, exactClipboardCopies: true, previewRedacted: true, nativeSettingsUnchanged: true, otherToolBindingsUnchanged: true, liveAirAccountSaved: false, liveProviderInferenceTested: false, layouts }, null, 2));
   } finally {
-    await clipboard.write(savedClipboard); window.setSize(size[0], size[1]);
+    if (savedClipboard.length) await clipboard.write(savedClipboard); else clipboard.clear();
+    window.setSize(size[0], size[1]);
     await evaluate(`(()=>{const o=${JSON.stringify(appearance)};if(o.theme===undefined)delete document.documentElement.dataset.theme;else document.documentElement.dataset.theme=o.theme;document.documentElement.style.colorScheme=o.colorScheme;})()`);
   }
 }

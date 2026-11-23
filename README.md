@@ -6,6 +6,10 @@ ModelDock 是跨平台本地模型管理台：全局维护模型来源与别名�
 
 0.4.0 起包含 FlowBridge 的组合发行版采用 [GPL-3.0-or-later](LICENSE)；原 ModelDock 代码及原创应用标记保留 [MIT 授权](LICENSE-MIT)，第三方图标和依赖保留各自的 Apache-2.0、CC-BY-4.0、MIT 或其他许可，详见 [第三方声明](THIRD_PARTY_NOTICES.md)。欢迎按 [贡献指南](CONTRIBUTING.md) 提交修复；敏感问题请遵循 [安全报告流程](SECURITY.md)。
 
+## 0.4.39 · 修复 VS Code 的 DeepSeek 接入
+
+VS Code 使用 DeepSeek 官方 OpenAI Responses 接口和无状态历史，保留低、高、最大值三档思考。Copilot 自动读取后台命令或代理结果时，使用聚合接口补齐 DeepSeek 所需的回调字段。Air 的 ModelDock 接入改为 OpenAI，Claude Code 继续使用 Messages。
+
 ## 0.4.38 · 修复 Windows 全局流量误报网卡冲突
 
 Windows 可能保留已经消失的 `modeldock-net` 网卡记录。开启「全局流量」时，如果该记录的运行状态为 `NotPresent`、管理状态为停用，且只有一条身份匹配的记录、没有关联路由，ModelDock 现在会继续启动。升级后首次手动连接全局模式时，Windows 可能提示授权更新网络组件。
@@ -21,7 +25,7 @@ Windows 可能保留已经消失的 `modeldock-net` 网卡记录。开启「全�
 ## 0.4.35 · Air 原生 BYOK 账户接入
 
 - Air 回到「桌面 App」分类，与 VS Code 同类；工具导航仍只有 TUI 和桌面 App，共 10 个入口。
-- Air 页针对「设置 → AI → Air → 账户」准备 OpenAI / Anthropic 账户参数：可复制描述、Base URL、Key、参考模型，预览脱敏，导出的是填写参考。直连使用供应商原生地址、真实模型 ID 和 API Key；聚合使用既有本机 Gateway 和本地 Key。
+- Air 页针对「设置 → AI → Air → 账户」准备 OpenAI 或 Anthropic 账户参数：可复制描述、Base URL、Key、参考模型，预览脱敏，导出的是填写参考。直连使用供应商原生地址、真实模型 ID 和 API Key；聚合使用既有本机 Gateway 和本地 Key。
 - 按 Air 原生请求规则分别生成 URL：OpenAI 聚合填 `/tool/air/v1`，Anthropic 聚合填 `/tool/air`，避免重复 `/v1`。Anthropic 聚合复用主进程 Messages 转换、流式处理与取消链路；模型范围和协议按 Air 账户类型隔离。
 - Air 自身支持多个账户，本页一次准备一个账户；原生直连选择一家 API 来源，聚合可选择多个来源。既有 Air 选择与独立连接模式草稿继续保留。
 - 完整账户仍需在 Air 原生界面保存到 PasswordSafe；ModelDock 不生成不完整 XML 账户，不把参考 JSON 描述为可导入配置，也不声称已替 Agent 完成授权或推理验证。详见 [Air BYOK 实现依据](docs/air-byok-integration.md)。
@@ -345,7 +349,7 @@ WebStorm、IntelliJ IDEA、Rider、PyCharm 的接入参数页分别提供「AI A
 
 ## 配置 Air 自己的 BYOK 账户
 
-在「桌面 App → Air」选择 OpenAI 或 Anthropic 账户类型，再选择直连供应商或开启聚合并选择模型来源。复制页面给出的参数，在 IDE 的「设置 → AI → Air → 账户 → 更多供应商」选择对应类型：API Key 填主字段，描述用于辨认账户，Base URL 在高级选项中填写。测试连接并保存后，在支持相应协议的 Agent 会话里选择该账户和模型。Air 支持多个账户，可重复上述步骤逐个添加；本页一次准备一个账户。
+在「桌面 App → Air」选择 OpenAI 账户类型，再选择直连供应商或开启聚合并选择模型来源。复制页面给出的参数，在 IDE 的「设置 → AI → Air → 账户 → 更多供应商」选择对应类型：API Key 填主字段，描述用于辨认账户，Base URL 在高级选项中填写。测试连接并保存后，在支持相应协议的 Agent 会话里选择该账户和模型。Air 支持多个账户，可重复上述步骤逐个添加；本页一次准备一个账户。
 
 直连使用原生 API Key 和模型 ID。聚合时保持 ModelDock 服务运行，OpenAI 的 Base URL 为 `http://127.0.0.1:18181/tool/air/v1`，Anthropic 为 `http://127.0.0.1:18181/tool/air`（端口以界面为准）；DeepSeek 官方 Anthropic 直连为 `https://api.deepseek.com/anthropic`。模型选择约束 ModelDock 聚合目录，参考模型不等于已写入 Air 的默认模型。Air 的连接测试读取模型目录，仍需在实际 Agent 中发送消息验证推理。
 
@@ -599,9 +603,10 @@ API 来源按名称、类型和规范化地址防重复：添加预设时复用�
 - DSH 旧 DeepSeek 会话仍可能引用 `deepseek-official` / `deepseek-account`。独占模式选择官方 DeepSeek API 来源时，ModelDock 会安装无凭据的受管同模型兼容插件，让这些旧引用调用所选来源中的同一上游模型；聊天日志、模型选择及原请求对象不改写。相似显示名、其他套餐、不同模型或无法确定的重复来源不自动映射。兼容路由没有可配置目录和模型枚举，模型设置页与新会话选择器仍只展示所选来源。插件源、配置及凭据一同纳入加密备份与失败恢复；关闭独占或清空选择会撤销插件，静态无凭据代码文件留在本地作为非活动文件。未包含旧模型时，请在 DSH 切换模型或新建会话。
 - Copilot app 接入使用桌面应用的本机原生供应商接口，按 1.1.26 的协议实现，不把 CLI `providers.json` 或 SDK 会话参数当成桌面配置。预览只是原生同步计划参考，需要应用运行才能同步；版本接口变化会明确报错。Windows 隔离原生实例已核对。Linux 原生连接支持系统管理员安装的 /usr/bin/github：校验 root 文件和目录、UID、进程启动时间、执行文件身份及回环监听 socket，信任来源是本机系统安装，不是 GitHub 厂商签名；用户可写 AppImage 暂不支持。OpenCode 使用各模型的 npm SDK 配置选择 Chat/Responses 协议，保存时合并 JSON/JSONC。
 - VS Code 接入目标是 Copilot Chat 的 Custom Endpoint，默认写入用户配置 `Code/User/chatLanguageModels.json`。默认范围会替换该文件中的全部 `customendpoint` 分组；关闭「仅保留所选供应商」后只更新 ModelDock 分组。应用不会自动识别其他 profile；使用其他 profile 时请预览 / 导出后手工合并到对应位置。同步只是注册模型来源，实际聊天模型须在 VS Code 选择器中选择；此接入不能据此宣称所有编辑器 AI 功能都被替换。
-- DeepSeek 官方 API 在 VS Code 使用原生 Anthropic Messages 接口（`https://api.deepseek.com/anthropic/v1/messages`），通过 adaptive thinking 保留连续对话及工具调用中的思考内容和签名，沿用 `low/high/max` 档位；不再默认关闭思考。只适配已核实的官方地址与模型，保存的模型协议及其他工具保持不变；聚合模式复用 `/tool/vscode/v1/messages` 和现有主进程 Gateway。显式关闭思考的模型使用官方 Responses 的 `none`，这是用户选择的关闭状态。升级后需重新同步、重新加载 VS Code，并新建聊天；旧 Responses 会话已丢失的思考历史无法补回。参考 [DeepSeek Anthropic 兼容说明](https://api-docs.deepseek.com/guides/anthropic_api/) 与 [Messages API](https://api-docs.deepseek.com/api/create-message/)。
+- VS Code 的 DeepSeek 官方模型通过 OpenAI Responses 无状态接入，保留官方 low / high / max 档位及已保存的默认值，也支持用户明确选择的 None。连接 DeepSeek 官方 API 时使用 `https://api.deepseek.com/responses` 或 `/v1/responses`，每次续接发送完整历史。Copilot 后台命令和后台代理完成通知经聚合入口时，ModelDock 只为客户端生成、没有模型思考的回调补齐协议字段。同步后重新加载 VS Code，并在新会话选择模型。[DeepSeek Responses 文档](https://api-docs.deepseek.com/guides/responses_api/)
+- ModelDock 为 Air Accounts 提供 OpenAI 接入参数。旧 Anthropic 账户可在 Air 的 Accounts 中另行配置新的 OpenAI 账户。Claude Code 使用 Anthropic Messages。
 
-开发验证：`node scripts/verify-vscode-deepseek-client.mjs --extension-dir <Copilot扩展目录>` 可针对已核查的 Copilot Chat 0.75.0 提取实际客户端函数，验证流式思考/签名、跨用户轮次历史和档位序列化。脚本仅使用合成数据，不读取密钥或聊天配置；客户端版本或提取标记变化会停止验证。此离线检查不能代替真实 VS Code 界面及供应商调用验收。
+开发验证：`node scripts/verify-vscode-deepseek-client.mjs --extension-dir <Copilot扩展目录>` 可检查 Copilot Chat 0.75.0 的无状态 Responses 请求与思考档位序列化。离线检查不读取密钥或会话。
 - 模型列表、上下文和工具/视觉声明不会授予上游权限；错误会明确返回，日志不记录请求正文与密钥。
 
 ### 适配与导入维护记录

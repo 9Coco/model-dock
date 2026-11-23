@@ -1,3 +1,4 @@
+import { openAiBaseUrl } from '../shared/openai-endpoint';
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
 import type { Socket } from 'node:net';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
@@ -15,7 +16,6 @@ import type { DiagnosticContext, DiagnosticEvent, DiagnosticLevel } from '../sha
 import { describeError } from './diagnostic-log';
 import { normalizeUpstreamReasoning } from './upstream-compat';
 import { AnthropicBridgeError, parseAnthropicRequest, toAnthropicResponse, createAnthropicStream, collectAnthropicStream, anthropicMessageToSse } from './anthropic-bridge';
-import { isAirAnthropic } from '../shared/air';
 import { ChatResponsesBridgeError, parseChatResponsesRequest, responsesToChat, createResponsesChatStream, collectResponsesChatStream, chatResponseToSse } from './chat-responses-bridge';
 import { ResponsesChatBridgeError } from './responses-chat-bridge';
 import { TraeApiError } from './trae-api';
@@ -28,7 +28,8 @@ import { NativeMessagesError, prepareNativeMessagesRequest, toNativeMessagesResp
 import { normalizeNativeMessagesError } from './native-messages-errors';
 import { nativeJetBrainsCompletion } from '../shared/jetbrains-completion';
 import { JetBrainsCompletionError, parseJetBrainsCompletionRequest, normalizeJetBrainsCompletionResponse, createJetBrainsCompletionStream, jetBrainsCompletionToSse } from './jetbrains-completion';
-import { isVsCodeDeepSeekModel, vsCodeDeepSeekModel, vsCodeDeepSeekProvider } from '../shared/vscode-deepseek';
+import { isVsCodeDeepSeekModel, vsCodeDeepSeekModel } from '../shared/vscode-deepseek';
+import { prepareVsCodeDeepSeekResponses, vsCodeDeepSeekReasoningEvent } from './vscode-deepseek-responses';
 
 export interface PreparedRequest { url: string; headers: Record<string, string>; body: Json }
 export interface GatewayOptions {
@@ -101,16 +102,19 @@ function readBody(request: IncomingMessage, response: ServerResponse): Promise<J
   });
 }
 
-function mappedSse(frame: string, alias: string): string {
-  const data = sseData(frame);
-  if (!isObject(data) || !(typeof data.model === 'string' || isObject(data.response) && typeof data.response.model === 'string')) return `${frame}\n\n`;
-  const other = frame.split(/\r\n|\n|\r/).filter(line => !line.startsWith('data:'));
+function mappedSse(frame: string, alias: string, mapEvent?: (data: Json) => Json): string {
+  const original = sseData(frame);
+  if (!isObject(original)) return `${frame}\n\n`;
+  const data = mapEvent?.(original) ?? original;
+  if (original === data && !(typeof data.model === 'string' || isObject(data.response) && typeof data.response.model === 'string')) return `${frame}\n\n`;
+  const other = frame.split(/\r\n|\n|\r/).filter(line => !line.startsWith('data:'))
+    .map(line => data.type !== original.type && line.startsWith('event:') ? `event: ${data.type}` : line);
   return [...other, `data: ${JSON.stringify(aliasResponse(data, alias))}`, '', ''].join('\n');
 }
 
-function validatedSse(protocol: 'responses' | 'chat-completions', alias: string, observe: (value: unknown) => void): TransformStream<Uint8Array, Uint8Array> {
+function validatedSse(protocol: 'responses' | 'chat-completions', alias: string, observe: (value: unknown) => void, mapEvent?: (data: Json) => Json): TransformStream<Uint8Array, Uint8Array> {
   const frames = new SseFrames(), completion = new SseCompletion(protocol), encoder = new TextEncoder();
-  const emit = (frame: string, output: TransformStreamDefaultController<Uint8Array>) => output.enqueue(encoder.encode(mappedSse(frame, alias)));
+  const emit = (frame: string, output: TransformStreamDefaultController<Uint8Array>) => output.enqueue(encoder.encode(mappedSse(frame, alias, mapEvent)));
   const accept = (frame: string, output: TransformStreamDefaultController<Uint8Array>) => {
     observe(sseData(frame));
     for (const ready of completion.add(frame)) emit(ready, output);
@@ -312,23 +316,11 @@ export class Gateway {
   cancelProvider(providerId: string): void {
     for (const [controller, id] of this.controllerProviders) if (id === providerId) controller.abort(new GatewayError(499, '账号连接已更新或移除，请重新发起请求。'));
   }
-  private authenticated(request: IncomingMessage, endpoint: string): boolean {
-    const authorization = request.headers.authorization;
-    const bearer = /^Bearer (.+)$/i.exec(authorization ?? '')?.[1];
-    const expected = Buffer.from(this.store.gatewayKey());
-    const matches = (key: string | undefined): boolean => {
-      if (!key) return false;
-      const actual = Buffer.from(key);
-      return actual.length === expected.length && timingSafeEqual(actual, expected);
-    };
-    if (matches(bearer)) return true;
-    // Air's native Anthropic account probes /models with x-api-key. Restrict
-    // that alternative credential form to the explicitly configured Air scope.
-    if (!/^\/tool\/air\/v1\/(?:models|messages)$/.test(endpoint)) return false;
-    const binding = this.store.listBindings().find(item => item.id === 'air');
-    const apiKey = request.headers['x-api-key'];
-    return Boolean(binding?.enabled && binding.mode === 'aggregate' && isAirAnthropic(binding)
-      && typeof apiKey === 'string' && matches(apiKey));
+  private authenticated(request: IncomingMessage): boolean {
+    const bearer = /^Bearer (.+)$/i.exec(request.headers.authorization ?? '')?.[1];
+    if (!bearer) return false;
+    const actual = Buffer.from(bearer), expected = Buffer.from(this.store.gatewayKey());
+    return actual.length === expected.length && timingSafeEqual(actual, expected);
   }
   private route(path: string): { endpoint: string; tool?: ToolId } {
     if (path.startsWith('/tool/')) {
@@ -342,12 +334,11 @@ export class Gateway {
     const provider = this.store.getProvider(model.providerId);
     if (model.wireApi === 'messages' && !nativeMessages && !isTraeRelayProvider(provider) && !provider?.nativeAdapter || !model.enabled || !provider?.enabled || !provider.hasSecret || provider.authStatus !== 'ready' || !provider.baseUrl.trim()) return false;
     if (provider.nativeAdapter) return true;
-    try { validateUpstreamUrl(nativeMessages && provider.kind === 'openai-compatible' ? nativeClaudeBaseUrl(provider) ?? provider.baseUrl : provider.baseUrl, this.state.port); return true; } catch { return false; }
+    try { validateUpstreamUrl(nativeMessages && provider.kind === 'openai-compatible' ? nativeClaudeBaseUrl(provider) ?? provider.baseUrl : openAiBaseUrl(provider.baseUrl), this.state.port); return true; } catch { return false; }
   }
   private allowedModels(tool?: ToolId): Model[] {
     const binding = tool ? this.store.listBindings().find(item => item.id === tool) : undefined;
-    const models = this.store.listModels().filter(model => this.available(model, tool === 'claude-code' || isAirAnthropic(binding)
-      || tool === 'vscode' && isVsCodeDeepSeekModel(model, this.store.getProvider(model.providerId))));
+    const models = this.store.listModels().filter(model => this.available(tool === 'vscode' ? vsCodeDeepSeekModel(model, this.store.getProvider(model.providerId)) : model, tool === 'claude-code'));
     if (!tool) {
       const exposure = this.store.gatewayExposure();
       return models.filter(model => !exposure.excludedProviderIds.includes(model.providerId) && !exposure.excludedModelIds.includes(model.id));
@@ -412,11 +403,10 @@ export class Gateway {
       // Unknown paths and query parameters can contain secrets; only known route names are retained.
       const knownRoute = endpoint.replace(/^\/tool\/(?:codex|opencode-desktop|opencode|dsh|vscode|copilot-cli|copilot|claude-code|junie|air|webstorm|intellij-idea|rider|pycharm)(?=\/)/, '');
       if (['/v1/models', '/v1/chat/completions', '/v1/responses', '/v1/messages', '/v1/completions'].includes(knownRoute)) diagnosticEndpoint = knownRoute;
-      if (!this.authenticated(request, endpoint)) throw new GatewayError(401, '需要有效的 ModelDock API Key。');
+      if (!this.authenticated(request)) throw new GatewayError(401, '需要有效的 ModelDock API Key。');
       const route = this.route(endpoint);
       tool = route.tool;
       const binding = route.tool ? this.store.listBindings().find(item => item.id === route.tool) : undefined;
-      const airAnthropic = isAirAnthropic(binding);
       // 修改点：单入口工具关闭聚合后，旧本地地址也不能隐式继续充当单家协议桥。
       if (route.tool && isSingleEntryTool(route.tool)) {
         if (binding?.enabled && binding.mode !== 'aggregate') throw new GatewayError(403, '此工具使用供应商直连，请使用供应商地址；本机入口仅在使用聚合接口时开放。');
@@ -425,15 +415,14 @@ export class Gateway {
         const data = this.allowedModels(route.tool).map(model => {
           const provider = this.store.getProvider(model.providerId)!;
           const clientModel = route.tool === 'vscode' ? vsCodeDeepSeekModel(model, provider) : model;
-          return { id: model.alias, object: 'model', created: 0, owned_by: provider.name, display_name: modelDisplayLabel(model, provider), context_window: model.contextWindow, wire_api: airAnthropic ? 'messages' : clientModel.wireApi, capabilities: { tools: model.tools, vision: model.vision }, ...(airAnthropic ? { type: 'model', created_at: '1970-01-01T00:00:00Z' } : {}) };
+          return { id: model.alias, object: 'model', created: 0, owned_by: provider.name, display_name: modelDisplayLabel(model, provider), context_window: model.contextWindow, wire_api: clientModel.wireApi, capabilities: { tools: model.tools, vision: model.vision } };
         });
-        jsonResponse(response, 200, { object: 'list', data, ...(airAnthropic ? { has_more: false, first_id: data[0]?.id ?? null, last_id: data.at(-1)?.id ?? null } : {}) }); return;
+        jsonResponse(response, 200, { object: 'list', data }); return;
       }
       const completion = route.endpoint === '/v1/completions';
       if (request.method !== 'POST' || !['/v1/chat/completions', '/v1/responses', '/v1/messages', '/v1/completions'].includes(route.endpoint)
         || completion && !isJetBrainsTool(route.tool)) throw new GatewayError(404, '接口不存在。');
-      if (anthropic && route.tool && route.tool !== 'claude-code' && route.tool !== 'vscode' && !airAnthropic
-        || (route.tool === 'claude-code' || airAnthropic) && !anthropic) throw new GatewayError(404, '此工具不使用该协议入口。');
+      if (anthropic !== (route.tool === 'claude-code')) throw new GatewayError(404, '此工具不使用该协议入口。');
       const body = await readBody(request, response);
       if (body.stream !== undefined && typeof body.stream !== 'boolean') throw new GatewayError(400, 'stream 必须是布尔值。');
       if (route.tool && !binding?.enabled) throw new GatewayError(403, '此工具尚未启用。');
@@ -445,14 +434,9 @@ export class Gateway {
       const saved = this.store.listModels().find(item => item.alias === requested);
       if (!saved || !saved.enabled) throw new GatewayError(404, '模型别名不存在或未启用。');
       const provider = this.store.getProvider(saved.providerId);
-      // Use signed Messages for thinking, or native Responses when the user
-      // explicitly disabled it. Saved protocols and other tools stay intact.
-      const vsCodeModel = route.tool === 'vscode' && isVsCodeDeepSeekModel(saved, provider) ? vsCodeDeepSeekModel(saved, provider) : undefined;
-      const vsCodeDeepSeek = anthropic && vsCodeModel?.wireApi === 'messages'
-        || route.endpoint === '/v1/responses' && vsCodeModel?.wireApi === 'responses';
-      if (anthropic && route.tool === 'vscode' && (!vsCodeDeepSeek || vsCodeModel?.wireApi !== 'messages')) throw new GatewayError(404, '此模型不使用该协议入口。');
+      const vsCodeDeepSeek = route.tool === 'vscode' && isVsCodeDeepSeekModel(saved, provider);
       const expectedWire = route.endpoint === '/v1/responses' ? 'responses' : 'chat-completions';
-      const model = vsCodeDeepSeek && vsCodeModel ? vsCodeModel : completion ? saved : traeRelayWireModel(saved, provider, anthropic ? 'messages' : expectedWire);
+      const model = vsCodeDeepSeek ? vsCodeDeepSeekModel(saved, provider) : completion ? saved : traeRelayWireModel(saved, provider, anthropic ? 'messages' : expectedWire);
       if (!route.tool) {
         const exposure = this.store.gatewayExposure();
         if (exposure.excludedProviderIds.includes(model.providerId) || exposure.excludedModelIds.includes(model.id)) throw new GatewayError(403, '此模型未加入本地聚合接口。');
@@ -465,9 +449,9 @@ export class Gateway {
       if (!anthropic && !chatResponses && !completion && model.wireApi !== expectedWire) throw new GatewayError(400, '该模型使用不同协议，请选择对应的接口；本版本不进行跨协议转换。');
       const nativeCompletion = completion && provider ? nativeJetBrainsCompletion(model, provider) : undefined;
       if (completion && !nativeCompletion) throw new GatewayError(400, '此模型尚未确认原生 FIM 补全能力；请为 AI 补全选择兼容模型，不使用聊天协议代替。');
-      const responsesBridge = anthropic && (route.tool === 'claude-code' || airAnthropic) && provider && preferClaudeResponsesBridge(provider, model);
+      const responsesBridge = anthropic && route.tool === 'claude-code' && provider && preferClaudeResponsesBridge(provider, model);
       const nativeMessages = anthropic && !responsesBridge && provider?.kind === 'openai-compatible'
-        && (vsCodeDeepSeek || model.wireApi === 'messages' || Boolean(nativeClaudeBaseUrl(provider)));
+        && (model.wireApi === 'messages' || Boolean(nativeClaudeBaseUrl(provider)));
       if (provider && provider.kind !== 'openai-compatible' && ('previous_response_id' in body || 'conversation' in body)) {
         throw new GatewayError(400, '订阅来源不支持服务端会话续接；请移除 previous_response_id / conversation，并在 input 中发送完整会话历史。');
       }
@@ -481,8 +465,10 @@ export class Gateway {
       // 修改点：Claude Messages 在本机转换成来源原生协议，订阅凭据继续由主进程续期。
       const upstreamBody = completion ? parseJetBrainsCompletionRequest(body, model.upstreamId, nativeCompletion?.maxOutputTokens) : nativeMessages ? { ...body, model: model.upstreamId } : anthropic ? { ...parseAnthropicRequest(body, model.wireApi), model: model.upstreamId } : chatResponses ? { ...parseChatResponsesRequest(jetBrainsResponsesHistory(body)), model: model.upstreamId } : { ...body, model: model.upstreamId };
       const upstreamPath = completion ? '/v1/completions' : nativeMessages ? '/v1/messages' : chatResponses ? '/v1/responses' : anthropic ? model.wireApi === 'responses' ? '/v1/responses' : '/v1/chat/completions' : route.endpoint;
-      const upstreamProvider = vsCodeDeepSeek ? vsCodeDeepSeekProvider(provider) : provider;
-      await this.forward(request, response, upstreamProvider, model, upstreamPath, normalizeUpstreamReasoning(upstreamProvider, upstreamPath, upstreamBody), observe, anthropic || chatResponses ? { stream: body.stream === true, kind: nativeMessages ? 'native-messages' : chatResponses ? 'chat-responses' : 'anthropic' } : undefined, route.tool, nativeCompletion?.baseUrl);
+      const outgoing = vsCodeDeepSeek ? prepareVsCodeDeepSeekResponses(upstreamBody, model.defaultReasoningEffort) : upstreamBody;
+      const baseUrl = nativeMessages ? provider.baseUrl : openAiBaseUrl(provider.baseUrl);
+      const upstreamProvider = baseUrl !== provider.baseUrl ? { ...provider, baseUrl } : provider;
+      await this.forward(request, response, upstreamProvider, model, upstreamPath, normalizeUpstreamReasoning(upstreamProvider, upstreamPath, outgoing), observe, anthropic || chatResponses ? { stream: body.stream === true, kind: nativeMessages ? 'native-messages' : chatResponses ? 'chat-responses' : 'anthropic' } : undefined, route.tool, nativeCompletion?.baseUrl);
       logStatus = upstreamFailed ? upstreamFailureStatus ?? 502 : response.statusCode;
     } catch (error) {
       diagnosticError = describeError(error);
@@ -680,7 +666,7 @@ export class Gateway {
         }
         if (sse) {
           if (!upstream.body) throw new GatewayError(502, '上游流式响应为空。');
-          reader = upstream.body.pipeThrough(validatedSse(model.wireApi === 'responses' ? 'responses' : 'chat-completions', model.alias, observe), { signal: controller.signal }).getReader();
+          reader = upstream.body.pipeThrough(validatedSse(model.wireApi === 'responses' ? 'responses' : 'chat-completions', model.alias, observe, tool === 'vscode' && path === '/v1/responses' && isVsCodeDeepSeekModel(model, provider) ? vsCodeDeepSeekReasoningEvent : undefined), { signal: controller.signal }).getReader();
           await sendEventStream(reader, response, upstream.status, controller.signal);
         } else {
           let value: unknown;

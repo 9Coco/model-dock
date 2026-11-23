@@ -1,3 +1,4 @@
+import { openAiBaseUrl } from '../shared/openai-endpoint';
 import { replacePrivateFile } from './private-file';
 import { recoverConfigJournal, transactConfigFiles } from './config-journal';
 import { lstatSync, readFileSync } from 'node:fs';
@@ -99,7 +100,7 @@ function selection(store: CopilotCliConfigStore, revealKey: boolean, port: numbe
   const connections = models.filter((model, index) => models.findIndex(other => name(other) === name(model)) === index).map(model => {
     const key = revealKey ? local(model) ? store.gatewayKey() : store.getSecret?.(model.providerId)?.apiKey : local(model) ? '__MODELDOCK_LOCAL_KEY__' : '__PROVIDER_API_KEY__';
     if (!key || /[\x00-\x1f\x7f]/.test(key)) throw new Error('Copilot CLI 所选来源缺少有效的 API Key。');
-    const baseUrl = local(model) ? `http://127.0.0.1:${port}/tool/copilot-cli/v1` : source(model).baseUrl.replace(/\/+$/, '');
+    const baseUrl = local(model) ? `http://127.0.0.1:${port}/tool/copilot-cli/v1` : openAiBaseUrl(source(model).baseUrl);
     return { name: name(model), type: 'openai', baseUrl, wireApi: model.wireApi === 'responses' ? 'responses' : 'completions', apiKey: key };
   });
   const configuredModels = models.map(model => {
