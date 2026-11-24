@@ -72,6 +72,7 @@ import { restoreToolBinding } from './tool-restore-binding';
 import { importOpenCodeGo } from './opencode-go-import';
 import { measureSiteLatency } from './proxy-speed-test';
 import { ApplicationNetworkSession } from './network-proxy';
+import { discoverVsCodeProxy, recoverVsCodeConfig, vsCodeProxyInstructions, type VsCodeProxyPlan } from './vscode-config';
 import { inspectAuthNetwork } from './network-diagnostic';
 import { createSystemNetworkFetch } from './system-network';
 import { resolveRuntimeConfig } from './runtime-mode';
@@ -79,7 +80,7 @@ import { bindingConnectionPolicy } from '../shared/bindings';
 import { writeClipboardText } from './clipboard-text';
 import { localGatewayKey, providerApiKey } from './connection-keys';
 import { createVault } from './vault';
-import { buildConfig, buildCopilotDesktopPlan, buildDshPlan, applyConfig, connectionKey } from './adapters';
+import { buildConfig, buildCopilotDesktopPlan, buildDshPlan, applyConfig, connectionKey, vsCodeRemoteEndpoints } from './adapters';
 import { isActiveToolId } from '../shared/tool-categories';
 import { AIR_MANUAL_SETUP } from '../shared/air';
 import { applyDshConfig } from './dsh-config';
@@ -629,6 +630,10 @@ function registerIpc() {
   const toolConfigPending = new Set<ToolId>();
   const beforeToolSelections = new Map<ToolId, ToolBinding>();
   const featureHome = __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home') : app.getPath('home');
+  const vsCodeAppData = __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-appdata') : app.getPath('appData');
+  const vsCodeProxyPlan = (): Promise<VsCodeProxyPlan> => __MODELDOCK_SMOKE_BUILD__ ? Promise.resolve({ eligible: false })
+    : discoverVsCodeProxy(vsCodeAppData, vsCodeRemoteEndpoints(store, gateway.status().port), gateway.status().port, process.env,
+      url => session.fromPartition('modeldock-vscode-system-proxy-discovery', { cache: false }).resolveProxy(url));
   const junieHome = __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.junie') : process.env.JUNIE_HOME;
   const copilotCliHome = __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.copilot-cli') : process.env.COPILOT_HOME;
   const copilotCliProvidersConfig = __MODELDOCK_SMOKE_BUILD__ ? join(copilotCliHome!, 'providers.json') : process.env.COPILOT_PROVIDERS_CONFIG;
@@ -705,6 +710,10 @@ function registerIpc() {
       const status = await runtime.startGateway();
       if (!status.running) throw new Error('本地入口未能启动，尚未写入工具配置。');
     }
+    // The existing tool write lock also blocks binding/provider edits while
+    // async system-proxy discovery uses this exact model selection.
+    if (id === 'vscode') recoverVsCodeConfig(store, vsCodeAppData);
+    const vscodeProxy = id === 'vscode' ? await vsCodeProxyPlan() : undefined;
     let operation: () => string | Promise<string>;
     if (id === 'copilot') {
       const target = copilotTarget();
@@ -729,6 +738,7 @@ function registerIpc() {
       claudeConfigDir: __MODELDOCK_SMOKE_BUILD__ ? join(featureHome!, '.claude') : process.env.CLAUDE_CONFIG_DIR,
       junieHome,
       copilotCliHome, copilotCliProvidersConfig,
+      vscodeProxy,
     });
     }
     // Global deletion has its own recovery transaction; its removed references cannot be reintroduced by a tool undo.
@@ -1001,7 +1011,12 @@ function registerIpc() {
   handle('revealProviderKey', (id: unknown) => providerApiKey(store, id));
   handle('revealGatewayKey', () => localGatewayKey(store));
   handle('copyConnectionKey', (tool: ToolId) => writeClipboardText(connectionKey(store, toolId(tool)), text => clipboard.writeText(text)));
-  handle('previewConfig', (tool: ToolId) => buildConfig(store, toolId(tool), gateway.status().port, false, __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home') : app.getPath('home'), { ...openCodeOptions, junieHome, copilotCliHome, copilotCliProvidersConfig }));
+  handle('previewConfig', async (tool: ToolId) => {
+    const id = toolId(tool), preview = buildConfig(store, id, gateway.status().port, false, featureHome, { ...openCodeOptions, junieHome, copilotCliHome, copilotCliProvidersConfig });
+    if (id === 'vscode') preview.instructions += vsCodeProxyInstructions(store, vsCodeAppData, await vsCodeProxyPlan())
+      + '导出的 JSON 只包含模型；附加代理设置在应用或同步时合并，可随上次同步撤销或还原官方配置。';
+    return preview;
+  });
   handle('exportConfig', async (tool: ToolId) => {
     const config = buildConfig(store, toolId(tool), gateway.status().port, true, __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home') : app.getPath('home'), { ...openCodeOptions, junieHome, copilotCliHome, copilotCliProvidersConfig });
     const result = await dialog.showSaveDialog(window!, { defaultPath: config.filename });

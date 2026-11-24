@@ -15,6 +15,7 @@ import { restoreCopilotCliOfficialConfig } from './copilot-cli-config';
 import { isJetBrainsTool } from '../shared/jetbrains';
 import { restoreJetBrainsConfig, type JetBrainsConfigOptions } from './jetbrains-config';
 import { replacePrivateFile } from './private-file';
+import { applyVsCodeFiles, recoverVsCodeConfig } from './vscode-config';
 
 export interface ToolRestoreStore extends DshConfigStore {}
 export interface ToolRestoreOptions extends OpenCodePathOptions {
@@ -85,6 +86,7 @@ export async function restoreOfficialConfig(store: ToolRestoreStore, tool: ToolI
   if (tool === 'copilot') return applyCopilotDesktop(store, { providers: [] }, options.copilotHome ?? join(homeDirectory, '.copilot'), { ...options.copilotOptions, syncScope: 'selected' });
   if (tool === 'dsh') return restoreDshOfficialConfig(store, options.dshHome ?? join(homeDirectory, '.dsh'), options.dshOptions);
   if (!['codex', 'opencode', 'opencode-desktop', 'vscode'].includes(tool)) throw new Error('不支持的工具，未还原配置。');
+  if (tool === 'vscode') recoverVsCodeConfig(store, appData);
   const target = tool === 'codex' ? join(options.codexHome ?? join(homeDirectory, '.codex'), 'config.toml')
     : isOpenCodeTool(tool) ? openCodeConfigTargets(tool, homeDirectory, options).target
       : join(appData, 'Code', 'User', 'chatLanguageModels.json');
@@ -148,6 +150,7 @@ export async function restoreOfficialConfig(store: ToolRestoreStore, tool: ToolI
     parseJson(output, isOpenCodeTool(tool) ? 'OpenCode' : 'VS Code');
     changes.push({ path: target, original, content: output });
   }
+  if (tool === 'vscode') return applyVsCodeFiles(store, appData, original, changes[0]?.content ?? original, { release: true, beforeCommit: options.beforeCommit });
   const changed = changes.filter(change => change.original !== change.content);
   if (!changed.length && (!state || state.original === null)) return target;
   safeDirectory(backups);

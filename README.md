@@ -508,7 +508,7 @@ API 原生直连不依赖本地网关。预览隐藏 API Key；支持自动同�
 
 - Codex：回到官方 OpenAI / ChatGPT 模型入口，清除自定义模型选择、目录和官方地址覆盖，移除 ModelDock 供应商及受管目录；其他未启用的供应商定义保留。目标遵循 `CODEX_HOME`，默认为 `~/.codex`。更改后需要重启 Codex CLI / 桌面服务。官方默认供应商与 Responses 配置依据 [OpenAI Docs](https://learn.chatgpt.com/docs/config-file/config-reference)。
 - OpenCode：清理自定义供应商、默认模型和供应商启停过滤，保留授权文件与其他配置。
-- VS Code：清理默认模型配置文件的所有 `customendpoint` 来源，保留其他 vendor 和 JSONC 注释；之后重新加载窗口。
+- VS Code：清理默认模型配置文件的所有 `customendpoint` 来源，恢复仍由 ModelDock 托管的代理字段，保留用户后续手改、其他 vendor 和 JSONC 注释；之后重新加载窗口。
 - DSH：清理 home 中的自定义模型覆盖与 ModelDock 凭据引用，恢复内置模型适配器，保留账号凭据和其他插件。
 - Copilot app：通过运行中的原生接口清理自定义来源，保留 GitHub 内置模型和账号；原配置及相关凭据先保存到加密备份。
 
@@ -521,6 +521,10 @@ VS Code 工具页的「仅保留所选供应商」默认开启。同步会先备
 关闭该选项后，只替换或清理 ModelDock 分组，保留文件中现有的其他自定义来源。这适合仍需在 VS Code 单独管理其他 API 的情况。关闭只改变后续同步范围，不会自动恢复已清除的分组；需要时可从写入前备份恢复所需来源。切换选项会立即保存并同步，但不改变已保存的模型过滤和接入模式。
 
 新建 VS Code 绑定和缺少范围字段的旧数据使用 `vscodeSyncScope: "selected"`；显式关闭后保存为 `"managed"`。迁移只登记本机默认值，启动和切换导航不会自动写入 VS Code 文件。需要应用新范围时，修改勾选或点击「重新同步」。此范围只作用于默认目标文件，不删除 ModelDock 的全局供应商或模型；其他 profile 仍需手工合并。
+
+同步远程 API 直连模型时，ModelDock 会检查 VS Code 的代理兼容问题：部分版本在只有 `NO_PROXY` / `http.noProxy` 绕过列表、没有明确 HTTP 代理地址时，会意外覆盖系统代理并直连。若所有所选直连地址使用同一个本机 HTTP(S) 系统代理，且 VS Code 没有用户自定代理或明确关闭代理支持，ModelDock 会同时在 `Code/User/settings.json` 补充 `http.proxy`。地址来自当前系统代理，不固定为某个软件的端口；不会修改绕过列表、证书校验或系统环境变量。预览会说明是否补充代理以及它影响整个 VS Code。
+
+模型文件、代理设置和恢复记录一起提交；部分写入失败会回滚。撤销同步同时恢复两份文件，旧版仅有模型文件的撤销记录仍可使用。切换到纯本机入口、取消直连模型或还原官方配置时，仅恢复仍属于 ModelDock 的代理字段；用户后来手改的代理保持不变。系统返回 DIRECT、SOCKS、多个备用代理或不同来源采用不同代理时，不会强行固化为一个代理地址，也不会因此阻止正常模型同步。启动、导航和预览不写入这些设置。
 
 ## Copilot app 原生同步
 

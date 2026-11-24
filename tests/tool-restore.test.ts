@@ -82,7 +82,13 @@ describe('official tool model-source restoration', () => {
     const output = readFileSync(target, 'utf8'); expect(parseJsonc(output)).toEqual([official]);
     for (const comment of ['native account comment', 'foreign custom comment', 'managed comment']) expect(output).toContain(comment);
     expect(readFileSync(settings, 'utf8')).toBe('{"mcp":"keep","editor.fontSize":16}');
-    expect(readFileSync(join(f.backups, readdirSync(f.backups)[0]), 'utf8')).toBe(original);
+    expect(f.store.createManagedBackup).toHaveBeenCalledWith('vscode-config', expect.objectContaining({
+      files: [
+        { path: target, before: original, after: output },
+        { path: settings, before: '{"mcp":"keep","editor.fontSize":16}', after: '{"mcp":"keep","editor.fontSize":16}' },
+      ],
+    }));
+    expect(existsSync(f.backups)).toBe(false); // No new plaintext backup of API credentials.
   });
   it.each(['codex', 'opencode', 'vscode'] as const)('refuses invalid %s config before backups, journal changes or file mutation', async tool => {
     const f = fixture(); const target = tool === 'codex' ? join(f.root, '.codex', 'config.toml') : tool === 'opencode' ? join(f.root, '.config', 'opencode', 'opencode.json') : join(f.root, 'Code', 'User', 'chatLanguageModels.json');

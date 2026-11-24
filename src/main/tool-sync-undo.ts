@@ -13,6 +13,7 @@ import { copilotCliConfigTargets, copilotCliHistoryKey, recoverCopilotCliConfig,
 import { isOpenCodeTool, openCodeConfigTargets, type OpenCodePathOptions } from './opencode-paths';
 import { DSH_LEGACY_SCRIPT } from './dsh-runtime';
 import { copilotSyncUndoKey, copilotSyncUndoStatus, undoCopilotDesktop, type CopilotSyncOptions } from './copilot-sync';
+import { recoverVsCodeConfig, vsCodeConfigTargets, vsCodeHistoryKey } from './vscode-config';
 
 /** All contents and ownership snapshots remain in the encrypted main-process
  * managed store. Only status()'s safe metadata is suitable for an IPC response. */
@@ -119,8 +120,8 @@ export class ToolSyncUndoManager {
     }
     if (isOpenCodeTool(tool)) return { ...openCodeConfigTargets(tool, home, this.options), stateKeys: [] };
     if (tool === 'vscode') {
-      const target = join(this.options.appData, 'Code', 'User', 'chatLanguageModels.json');
-      return { target, paths: [target], stateKeys: [] };
+      const { modelsPath, settingsPath } = vsCodeConfigTargets(this.options.appData);
+      return { target: modelsPath, paths: [modelsPath, settingsPath], stateKeys: [vsCodeHistoryKey(modelsPath)] };
     }
     if (tool === 'dsh') {
       const target = resolve(this.options.dshHome ?? join(home, '.dsh'));
@@ -143,6 +144,14 @@ export class ToolSyncUndoManager {
     }
     if (value.kind !== 'files') fail('invalid');
     const targets = this.targets(tool);
+    // Pre-proxy checkpoints own only the model file. Never manufacture a
+    // historical settings snapshot from today's unrelated user settings.
+    if (tool === 'vscode' && Array.isArray(value.beforeFiles) && value.beforeFiles.length === 1
+      && Array.isArray(value.appliedFiles) && value.appliedFiles.length === 1
+      && Array.isArray(value.beforeStates) && value.beforeStates.length === 0
+      && Array.isArray(value.appliedStates) && value.appliedStates.length === 0) {
+      targets.paths = [targets.target]; targets.stateKeys = [];
+    }
     // The selection can have changed since the last sync. Validate historical
     // Junie paths by the exact managed filename namespace, not today's models.
     if (tool === 'junie' && Array.isArray(value.beforeFiles)) {
@@ -215,6 +224,7 @@ export class ToolSyncUndoManager {
       if (tool === 'claude-code') recoverClaudeConfig(this.store, home, { claudeConfigDir: this.options.claudeConfigDir });
       if (tool === 'junie') recoverJunieConfig(this.store, home, { junieHome: this.options.junieHome });
       if (tool === 'copilot-cli') recoverCopilotCliConfig(this.store, home, { copilotHome: this.options.copilotCliHome, providersConfig: this.options.copilotCliProvidersConfig });
+      if (tool === 'vscode') recoverVsCodeConfig(this.store, this.options.appData);
       const targets = this.targets(tool), beforeFiles = targets.paths.map(read), beforeStates = this.states(targets.stateKeys);
       try { this.store.createManagedBackup('tool-sync-undo', { version: 1, tool, beforeBinding: before, beforeFiles, beforeStates }); }
       catch { fail('storage'); }
