@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, w
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { parse as parseJsonc } from 'jsonc-parser';
-import { applyVsCodeFiles, discoverVsCodeProxy, recoverVsCodeConfig, vsCodeConfigTargets, vsCodeHistoryKey, vsCodeProxyInstructions, type VsCodeHistoryStore } from '../src/main/vscode-config';
+import { applyVsCodeFiles, applyVsCodeProxyOnly, discoverVsCodeProxy, recoverVsCodeConfig, vsCodeConfigTargets, vsCodeHistoryKey, vsCodeProxyInstructions, type VsCodeHistoryStore } from '../src/main/vscode-config';
 
 // File ACL behavior has its own native tests. Keep these transaction/ownership
 // cases independent of Windows ACL subprocess timing.
@@ -34,7 +34,7 @@ function fixture(original?: string) {
 const urls = ['https://api.example.test/v1/responses'];
 const env = { NO_PROXY: 'localhost,127.0.0.1,::1' };
 
-describe('VS Code no-proxy-only system proxy discovery', () => {
+describe('VS Code opt-in system proxy discovery', () => {
   it('uses all exact inference URLs and accepts one consistent dynamic loopback proxy', async () => {
     const f = fixture(), resolve = vi.fn(async (_url: string) => 'PROXY 127.0.0.1:19876');
     const targets = [...urls, 'https://api.example.test/v1/chat/completions'];
@@ -49,7 +49,7 @@ describe('VS Code no-proxy-only system proxy discovery', () => {
   });
   it.each(['http_proxy', 'HTTP_PROXY', 'https_proxy', 'HTTPS_PROXY'])('leaves configured %s networking alone', async name => {
     const f = fixture(), resolve = vi.fn();
-    expect(await discoverVsCodeProxy(f.appData, urls, 18181, { ...env, [name]: 'http://127.0.0.1:19000' }, resolve)).toEqual({ eligible: false });
+    expect(await discoverVsCodeProxy(f.appData, urls, 18181, { ...env, [name]: 'http://127.0.0.1:19000' }, resolve)).toEqual({ eligible: false, reason: 'environment-proxy' });
     expect(resolve).not.toHaveBeenCalled();
   });
   it('matches upstream environment precedence before trimming the chosen value', async () => {
@@ -57,9 +57,11 @@ describe('VS Code no-proxy-only system proxy discovery', () => {
     expect(await discoverVsCodeProxy(f.appData, urls, 18181, { ...env, https_proxy: ' ', HTTP_PROXY: 'http://127.0.0.1:19000' },
       async () => 'PROXY 127.0.0.1:19876')).toEqual(f.proxy);
   });
-  it.each([undefined, '{"http.proxySupport":"off"}'])('does not add a workaround without its trigger or when explicitly disabled', async original => {
-    const f = fixture(original), resolve = vi.fn();
-    expect(await discoverVsCodeProxy(f.appData, urls, 18181, original ? env : {}, resolve)).toEqual({ eligible: false });
+  it('discovers the proxy without a bypass list and respects an explicitly disabled proxy', async () => {
+    const f = fixture(), resolve = vi.fn(async () => 'PROXY 127.0.0.1:19876');
+    expect(await discoverVsCodeProxy(f.appData, urls, 18181, {}, resolve)).toEqual(f.proxy);
+    f.write(f.settingsPath, '{"http.proxySupport":"off"}'); resolve.mockClear();
+    expect(await discoverVsCodeProxy(f.appData, urls, 18181, {}, resolve)).toEqual({ eligible: false, reason: 'proxy-support-off' });
     expect(resolve).not.toHaveBeenCalled();
   });
   it.each(['DIRECT', 'PROXY 127.0.0.1:19876; DIRECT', 'PROXY 127.0.0.1:19876; PROXY 127.0.0.1:19877', 'SOCKS5 127.0.0.1:1080',
@@ -79,7 +81,7 @@ describe('VS Code no-proxy-only system proxy discovery', () => {
     expect(await task).toEqual({ eligible: true }); expect(f.read(f.settingsPath)).toBeNull();
   });
   it('rejects duplicate or invalid proxy fields without changing settings', async () => {
-    for (const original of ['{"http.proxy":"","http.proxy":"other"}', '{"http.noProxy":false}', '[1,2]']) {
+    for (const original of ['{"http.proxy":"","http.proxy":"other"}', '{"http.proxySupport":false}', '[1,2]']) {
       const f = fixture(original);
       await expect(discoverVsCodeProxy(f.appData, urls, 18181, env, async () => '')).rejects.toThrow('VS Code');
       expect(f.read(f.settingsPath)).toBe(original);
@@ -88,6 +90,30 @@ describe('VS Code no-proxy-only system proxy discovery', () => {
 });
 
 describe('VS Code proxy field ownership and shared file transaction', () => {
+  it('keeps model-only sync independent of editor settings when the switch is off', () => {
+    const f = fixture();
+    mkdirSync(f.settingsPath, { recursive: true }); // Any attempt to read settings as a file would throw.
+    expect(vsCodeProxyInstructions(f.store, f.appData)).toContain('关闭');
+    applyVsCodeFiles(f.store, f.appData, null, '[]', { release: true });
+    expect(f.read(f.modelsPath)).toBe('[]');
+    expect(f.store.createManagedBackup).not.toHaveBeenCalled();
+  });
+  it('only touches editor settings for switch changes and clears a user override on an explicit off/on cycle', () => {
+    const f = fixture();
+    mkdirSync(f.modelsPath, { recursive: true });
+    applyVsCodeProxyOnly(f.store, f.appData, f.proxy);
+    expect(parseJsonc(f.read(f.settingsPath)!)['http.proxy']).toBe(f.proxy.proxyUrl);
+    f.write(f.settingsPath, '{"editor.fontSize":18}');
+    applyVsCodeProxyOnly(f.store, f.appData, f.proxy);
+    expect(f.store.getManagedState(f.key, null)).toMatchObject({ proxyOverride: true });
+    applyVsCodeProxyOnly(f.store, f.appData);
+    expect(f.store.getManagedState(f.key, null)).toBeNull();
+    expect(f.read(f.settingsPath)).toBe('{"editor.fontSize":18}');
+    applyVsCodeProxyOnly(f.store, f.appData, f.proxy);
+    expect(parseJsonc(f.read(f.settingsPath)!)['http.proxy']).toBe(f.proxy.proxyUrl);
+    applyVsCodeProxyOnly(f.store, f.appData);
+    expect(parseJsonc(f.read(f.settingsPath)!)).toEqual({ 'editor.fontSize': 18 });
+  });
   it('preserves existing user proxy, explicit off, TLS and bypass settings', () => {
     for (const original of ['{"http.proxy":"http://user-proxy.test:8080","http.proxyStrictSSL":false}', '{"http.proxySupport":"off","http.noProxy":["localhost"]}']) {
       const f = fixture(original); f.apply(); expect(f.read(f.settingsPath)).toBe(original);

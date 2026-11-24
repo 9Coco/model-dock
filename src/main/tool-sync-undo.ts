@@ -13,7 +13,7 @@ import { copilotCliConfigTargets, copilotCliHistoryKey, recoverCopilotCliConfig,
 import { isOpenCodeTool, openCodeConfigTargets, type OpenCodePathOptions } from './opencode-paths';
 import { DSH_LEGACY_SCRIPT } from './dsh-runtime';
 import { copilotSyncUndoKey, copilotSyncUndoStatus, undoCopilotDesktop, type CopilotSyncOptions } from './copilot-sync';
-import { recoverVsCodeConfig, vsCodeConfigTargets, vsCodeHistoryKey } from './vscode-config';
+import { hasVsCodeManagedProxy, readVsCodeProxyValue, recoverVsCodeConfig, setVsCodeProxyValue, validateVsCodeHistory, vsCodeConfigTargets, vsCodeHistoryKey } from './vscode-config';
 
 /** All contents and ownership snapshots remain in the encrypted main-process
  * managed store. Only status()'s safe metadata is suitable for an IPC response. */
@@ -45,13 +45,15 @@ interface FileRecord {
   beforeBinding: ToolBinding; appliedBinding: ToolBinding;
   beforeFiles: SnapshotFile[]; appliedFiles: SnapshotFile[];
   beforeStates: SnapshotState[]; appliedStates: SnapshotState[];
+  vscodeProxySync?: true;
+  vsCodeProxyOnly?: true;
 }
 interface CopilotRecord {
   version: 1; kind: 'copilot'; tool: 'copilot'; syncedAt: number;
   beforeBinding: ToolBinding; appliedBinding: ToolBinding; nativeCheckpointId: string;
 }
 type UndoRecord = FileRecord | CopilotRecord;
-const bindingFields = ['enabled', 'mode', 'providerIds', 'modelIds', 'modelSelection', 'defaultModelId', 'connectionChoices', 'vscodeSyncScope', 'copilotSyncScope', 'dshSyncScope', 'claudeDisableTelemetry'] as const;
+const bindingFields = ['enabled', 'mode', 'providerIds', 'modelIds', 'modelSelection', 'defaultModelId', 'connectionChoices', 'vscodeSyncScope', 'vscodeProxyEnabled', 'copilotSyncScope', 'dshSyncScope', 'claudeDisableTelemetry'] as const;
 const maximumFileSize = 2 * 1024 * 1024, maximumRecordSize = 8 * 1024 * 1024;
 const errors = {
   busy: '此工具配置正在更新，请稍后再撤销。',
@@ -65,9 +67,12 @@ const errors = {
 function fail(kind: keyof typeof errors): never { throw new Error(errors[kind]); }
 function clone<T>(value: T): T { return structuredClone(value); }
 function json<T>(value: T): T { return JSON.parse(JSON.stringify(value)) as T; }
-function selection(binding: ToolBinding): unknown { return json(Object.fromEntries(bindingFields.map(field => [field, binding[field]]))); }
+function selectionField(binding: ToolBinding, field: typeof bindingFields[number]) {
+  return binding.id === 'vscode' && field === 'vscodeProxyEnabled' ? binding.vscodeProxyEnabled === true : binding[field];
+}
+function selection(binding: ToolBinding): unknown { return json(Object.fromEntries(bindingFields.map(field => [field, selectionField(binding, field)]))); }
 function mergeSelection(current: ToolBinding, saved: ToolBinding): ToolBinding {
-  return { ...current, ...Object.fromEntries(bindingFields.map(field => [field, clone(saved[field])])) };
+  return { ...current, ...Object.fromEntries(bindingFields.map(field => [field, clone(selectionField(saved, field))])) };
 }
 function safeDirectory(path: string): void {
   for (let current = resolve(path); ; current = dirname(current)) {
@@ -90,6 +95,43 @@ function replaceFile(path: string, content: string | null, _mode: number): void 
   replacePrivateFile(path, content);
 }
 export function toolSyncUndoKey(tool: ToolId): string { return `tool-sync-undo:${tool}`; }
+
+/** File rollback uses full snapshots. Rebase just the owned proxy field onto
+ * the current JSONC first so both the forward write and its rollback retain edits. */
+function rebaseVsCodeUndo(saved: FileRecord): FileRecord {
+  if (!saved.vscodeProxySync) return saved;
+  const restoringEnabled = saved.beforeBinding.vscodeProxyEnabled === true;
+  if (saved.beforeFiles.length !== 2) {
+    // Turning off must also release ownership left by a pre-switch version.
+    return restoringEnabled ? saved : { ...saved, beforeStates: saved.beforeStates.map(state => ({ ...state, value: null })) };
+  }
+  const [models, settings] = saved.beforeFiles, appliedSettings = saved.appliedFiles[1];
+  const previous = validateVsCodeHistory(saved.beforeStates[0].value, models.path, settings.path);
+  const next = validateVsCodeHistory(saved.appliedStates[0].value, models.path, settings.path);
+  const before = readVsCodeProxyValue(settings.content), applied = readVsCodeProxyValue(appliedSettings.content);
+  const current = read(settings.path);
+  let actual: ReturnType<typeof readVsCodeProxyValue> | undefined;
+  try { actual = readVsCodeProxyValue(current.content); }
+  catch { /* An invalid later edit also belongs to the user. Keep the file verbatim. */ }
+  let ownership = restoringEnabled ? previous : null;
+  let output = current.content;
+  // Acquisition/rotation and release both carry the exact values the adapter owned.
+  const ownedBefore = previous?.proxy?.applied ?? next?.proxy?.before;
+  const ownedAfter = next?.proxy?.applied ?? previous?.proxy?.before;
+  if (isDeepStrictEqual(before, ownedBefore) && isDeepStrictEqual(applied, ownedAfter)) {
+    if (isDeepStrictEqual(actual, applied)) {
+      // A legacy owner may have been released while the switch was already off.
+      const desired = !restoringEnabled && previous?.proxy ? previous.proxy.before : before;
+      const exactPrevious = isDeepStrictEqual(desired, before) && current.content === appliedSettings.content
+        && setVsCodeProxyValue(settings.content, applied, appliedSettings.content === null) === appliedSettings.content;
+      output = exactPrevious ? settings.content : setVsCodeProxyValue(current.content, desired, settings.content === null);
+    } else if (restoringEnabled) {
+      ownership = { version: 1, modelsPath: models.path, settingsPath: settings.path, proxyOverride: true };
+    }
+  }
+  return { ...saved, beforeFiles: [models, { ...current, content: output }], appliedFiles: [saved.appliedFiles[0], current],
+    beforeStates: [{ key: saved.beforeStates[0].key, value: ownership }] };
+}
 
 /** Creates checkpoints only when run() is explicitly invoked. Construction,
  * status lookup and application startup never replay or create file writes. */
@@ -120,8 +162,8 @@ export class ToolSyncUndoManager {
     }
     if (isOpenCodeTool(tool)) return { ...openCodeConfigTargets(tool, home, this.options), stateKeys: [] };
     if (tool === 'vscode') {
-      const { modelsPath, settingsPath } = vsCodeConfigTargets(this.options.appData);
-      return { target: modelsPath, paths: [modelsPath, settingsPath], stateKeys: [vsCodeHistoryKey(modelsPath)] };
+      const target = join(this.options.appData, 'Code', 'User', 'chatLanguageModels.json');
+      return { target, paths: [target], stateKeys: [] };
     }
     if (tool === 'dsh') {
       const target = resolve(this.options.dshHome ?? join(home, '.dsh'));
@@ -144,13 +186,12 @@ export class ToolSyncUndoManager {
     }
     if (value.kind !== 'files') fail('invalid');
     const targets = this.targets(tool);
-    // Pre-proxy checkpoints own only the model file. Never manufacture a
-    // historical settings snapshot from today's unrelated user settings.
-    if (tool === 'vscode' && Array.isArray(value.beforeFiles) && value.beforeFiles.length === 1
-      && Array.isArray(value.appliedFiles) && value.appliedFiles.length === 1
-      && Array.isArray(value.beforeStates) && value.beforeStates.length === 0
-      && Array.isArray(value.appliedStates) && value.appliedStates.length === 0) {
-      targets.paths = [targets.target]; targets.stateKeys = [];
+    const twoVsCodeFiles = tool === 'vscode' && Array.isArray(value.beforeFiles) && value.beforeFiles.length === 2;
+    const legacyVsCode = twoVsCodeFiles && value.vscodeProxySync === undefined;
+    if (value.vscodeProxySync !== undefined && (tool !== 'vscode' || value.vscodeProxySync !== true)) fail('invalid');
+    if (twoVsCodeFiles) targets.paths.push(vsCodeConfigTargets(this.options.appData).settingsPath);
+    if (twoVsCodeFiles || value.vscodeProxySync && value.beforeStates?.length) {
+      targets.stateKeys.push(vsCodeHistoryKey(targets.target));
     }
     // The selection can have changed since the last sync. Validate historical
     // Junie paths by the exact managed filename namespace, not today's models.
@@ -159,15 +200,22 @@ export class ToolSyncUndoManager {
       if (extra.some(path => typeof path !== 'string' || !isJunieManagedProfilePath(path, base[1])) || new Set(extra).size !== extra.length) fail('invalid');
       targets.paths = [...base, ...extra];
     }
-    const validFiles = (files: SnapshotFile[]) => Array.isArray(files) && files.length === targets.paths.length && files.every((file, index) => file.path === targets.paths[index]
+    const validFiles = (files: SnapshotFile[]) => Array.isArray(files) && files.length === targets.paths.length && files.every((file, index) => file?.path === targets.paths[index]
       && (file.content === null || typeof file.content === 'string' && Buffer.byteLength(file.content, 'utf8') <= maximumFileSize) && Number.isInteger(file.mode) && file.mode >= 0 && file.mode <= 0o777);
-    const validStates = (states: SnapshotState[]) => Array.isArray(states) && states.length === targets.stateKeys.length && states.every((state, index) => state.key === targets.stateKeys[index]);
+    const validStates = (states: SnapshotState[]) => Array.isArray(states) && states.length === targets.stateKeys.length && states.every((state, index) => state?.key === targets.stateKeys[index]);
     if (!validFiles(value.beforeFiles) || !validFiles(value.appliedFiles) || !validStates(value.beforeStates) || !validStates(value.appliedStates)) fail('invalid');
+    if (value.vsCodeProxyOnly !== undefined && (value.vsCodeProxyOnly !== true || !value.vscodeProxySync
+      || value.beforeFiles[0].content !== null || value.appliedFiles[0].content !== null)) fail('invalid');
+    if (legacyVsCode) return { ...value, beforeFiles: [value.beforeFiles[0]], appliedFiles: [value.appliedFiles[0]], beforeStates: [], appliedStates: [] };
+    if (value.vscodeProxySync) for (const state of [...value.beforeStates, ...value.appliedStates]) {
+      validateVsCodeHistory(state.value, targets.target, vsCodeConfigTargets(this.options.appData).settingsPath);
+    }
     return value;
   }
   private assertApplied(saved: UndoRecord): void {
     if (!isDeepStrictEqual(selection(this.binding(saved.tool)), selection(saved.appliedBinding))) fail('changed');
-    if (saved.kind === 'files' && (saved.appliedFiles.some(file => !matches(file))
+    if (saved.kind === 'files' && (saved.appliedFiles.some((file, index) =>
+      !(saved.vscodeProxySync && index === 1 || saved.vsCodeProxyOnly && index === 0) && !matches(file))
       || !isDeepStrictEqual(this.states(saved.appliedStates.map(state => state.key)), saved.appliedStates))) fail('changed');
     if (saved.kind === 'copilot' && copilotSyncUndoStatus(this.store, this.copilotHome()).id !== saved.nativeCheckpointId) fail('changed');
   }
@@ -185,7 +233,9 @@ export class ToolSyncUndoManager {
     this.store.setManagedState(toolSyncUndoKey(tool), null);
     if (tool === 'copilot') this.store.setManagedState(copilotSyncUndoKey(this.copilotHome()), null);
   }
-  async run<T>(tool: ToolId, beforeBinding: ToolBinding | undefined, operation: () => T | Promise<T>, requestedBinding?: ToolBinding): Promise<T> {
+  async run<T>(tool: ToolId, beforeBinding: ToolBinding | undefined, operation: () => T | Promise<T>, requestedBinding?: ToolBinding,
+    options: { vsCodeProxyOnly?: boolean } = {}): Promise<T> {
+    if (options.vsCodeProxyOnly && tool !== 'vscode') fail('invalid');
     if (isJetBrainsTool(tool)) return await operation();
     if (this.active.has(tool)) fail('busy');
     this.active.add(tool);
@@ -224,8 +274,19 @@ export class ToolSyncUndoManager {
       if (tool === 'claude-code') recoverClaudeConfig(this.store, home, { claudeConfigDir: this.options.claudeConfigDir });
       if (tool === 'junie') recoverJunieConfig(this.store, home, { junieHome: this.options.junieHome });
       if (tool === 'copilot-cli') recoverCopilotCliConfig(this.store, home, { copilotHome: this.options.copilotCliHome, providersConfig: this.options.copilotCliProvidersConfig });
-      if (tool === 'vscode') recoverVsCodeConfig(this.store, this.options.appData);
-      const targets = this.targets(tool), beforeFiles = targets.paths.map(read), beforeStates = this.states(targets.stateKeys);
+      const targets = this.targets(tool);
+      if (tool === 'vscode') {
+        recoverVsCodeConfig(this.store, this.options.appData);
+        const key = vsCodeHistoryKey(targets.target);
+        if (appliedBinding.vscodeProxyEnabled || this.store.getManagedState(key, null) !== null) targets.stateKeys.push(key);
+        if (appliedBinding.vscodeProxyEnabled || hasVsCodeManagedProxy(this.store, this.options.appData)) {
+          targets.paths.push(vsCodeConfigTargets(this.options.appData).settingsPath);
+        }
+      }
+      // The dedicated switch operation never opens the model file. Reserve its
+      // usual record slot with null on both sides; credentials never enter this backup.
+      const snapshot = (path: string) => options.vsCodeProxyOnly && path === targets.target ? { path, content: null, mode: 0o600 } : read(path);
+      const beforeFiles = targets.paths.map(snapshot), beforeStates = this.states(targets.stateKeys);
       try { this.store.createManagedBackup('tool-sync-undo', { version: 1, tool, beforeBinding: before, beforeFiles, beforeStates }); }
       catch { fail('storage'); }
       const requested = operation();
@@ -233,11 +294,17 @@ export class ToolSyncUndoManager {
       // turn instead of yielding before taking the last-applied checkpoint.
       const result = requested instanceof Promise ? await requested : requested;
       const saved: FileRecord = { version: 1, kind: 'files', tool, syncedAt: Date.now(), beforeBinding: before, appliedBinding,
-        beforeFiles, appliedFiles: targets.paths.map(read), beforeStates, appliedStates: this.states(targets.stateKeys) };
+        beforeFiles, appliedFiles: targets.paths.map(snapshot), beforeStates, appliedStates: this.states(targets.stateKeys),
+        ...(tool === 'vscode' && (targets.stateKeys.length || options.vsCodeProxyOnly) ? { vscodeProxySync: true } : {}),
+        ...(options.vsCodeProxyOnly ? { vsCodeProxyOnly: true } : {}) };
+      if (saved.vscodeProxySync && beforeFiles.length === 2 && beforeFiles[1].content === saved.appliedFiles[1].content) {
+        saved.beforeFiles = [beforeFiles[0]]; saved.appliedFiles = [saved.appliedFiles[0]];
+      }
       // A repeated explicit sync with no actual file, state or selection change
       // keeps the previous useful checkpoint instead of consuming it with a no-op.
-      if (beforeFiles.every((file, index) => file.content === saved.appliedFiles[index].content)
-        && isDeepStrictEqual(beforeStates, saved.appliedStates)) return result;
+      if (saved.beforeFiles.every((file, index) => file.content === saved.appliedFiles[index].content)
+        && isDeepStrictEqual(beforeStates, saved.appliedStates)
+        && !(tool === 'vscode' && (before.vscodeProxyEnabled === true) !== (appliedBinding.vscodeProxyEnabled === true))) return result;
       try {
         if (Buffer.byteLength(JSON.stringify(saved), 'utf8') > maximumRecordSize) fail('storage');
         this.store.setManagedState(toolSyncUndoKey(tool), saved);
@@ -249,8 +316,9 @@ export class ToolSyncUndoManager {
       return result;
     } finally { this.active.delete(tool); }
   }
-  private restoreFiles(saved: FileRecord, consume: boolean): void {
-    this.assertApplied(saved);
+  private restoreFiles(checkpoint: FileRecord, consume: boolean): void {
+    this.assertApplied(checkpoint);
+    const saved = rebaseVsCodeUndo(checkpoint);
     const writtenFiles: number[] = [], writtenStates: number[] = [];
     const writer = this.options.replaceFile ?? (saved.tool === 'junie' ? replaceJunieConfigFile : saved.tool === 'copilot-cli' ? replaceCopilotCliConfigFile : replaceFile);
     let bindingAttempted = false;
@@ -259,7 +327,7 @@ export class ToolSyncUndoManager {
         if (!matches(saved.appliedFiles[index])) fail('changed');
         writtenFiles.push(index); writer(before.path, before.content, before.mode);
       }
-      if (saved.beforeFiles.some(file => !matches(file))) fail('changed');
+      if (saved.beforeFiles.some((file, index) => !(saved.vsCodeProxyOnly && index === 0) && !matches(file))) fail('changed');
       for (const [index, before] of saved.beforeStates.entries()) {
         if (!isDeepStrictEqual(this.store.getManagedState(before.key, null), saved.appliedStates[index].value)) fail('changed');
         writtenStates.push(index); this.store.setManagedState(before.key, before.value);
@@ -285,7 +353,7 @@ export class ToolSyncUndoManager {
           if (!matches(saved.beforeFiles[index])) fail('changed');
           writer(applied.path, applied.content, applied.mode);
         }
-        if (consume && this.store.getManagedState(toolSyncUndoKey(saved.tool), null) === null) this.store.setManagedState(toolSyncUndoKey(saved.tool), saved);
+        if (consume && this.store.getManagedState(toolSyncUndoKey(saved.tool), null) === null) this.store.setManagedState(toolSyncUndoKey(saved.tool), checkpoint);
       } catch { fail('recovery'); }
       throw error;
     }
@@ -309,7 +377,7 @@ export class ToolSyncUndoManager {
       });
       try { this.restoreFiles(saved, true); }
       catch (error) { if ((error as Error).message === errors.recovery) throw error; fail('rollback'); }
-      return this.targets(tool).target;
+      return saved.vsCodeProxyOnly ? vsCodeConfigTargets(this.options.appData).settingsPath : this.targets(tool).target;
     } finally { this.active.delete(tool); }
   }
 }

@@ -13,6 +13,7 @@ function dshProviders(content: string) { return parseYaml(content).find((row: an
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 const models: Model[] = [{ id: 'model-one', providerId: 'provider-one', upstreamId: 'upstream-model', alias: 'dock-model', displayName: '测试模型', wireApi: 'responses', contextWindow: 64000, tools: true, vision: false, enabled: true }];
 const store = {
+  createManagedBackup: vi.fn((_kind: string, _value: unknown) => 'fixture.enc'),
   listModels: () => models,
   listBindings: () => ['vscode', 'codex', 'copilot', 'dsh', 'opencode'].map(id => ({ id, name: id, enabled: true, modelIds: ['model-one'], defaultModelId: 'model-one', note: '', ...(id === 'vscode' ? { vscodeSyncScope: 'managed' } : {}) } as ToolBinding)),
   gatewayKey: () => 'local-test-secret',
@@ -326,7 +327,22 @@ describe('tool adapters', () => {
     const values = parseJsonc(text);
     expect(values.map((v: {name: string}) => v.name)).toEqual(['Other', 'ModelDock']);
     expect(values[1].models[0].toolCalling).toBe(true);
-    expect(readdirSync(join(root, 'backups')).length).toBeGreaterThan(0);
+    expect(store.createManagedBackup).toHaveBeenCalledWith('vscode-models', expect.objectContaining({ path: target }));
+    expect(existsSync(join(dirname(target), 'settings.json'))).toBe(false);
+  });
+  it('keeps the VS Code model file intact when the secure backup fails or another program saves during backup', () => {
+    const root = mkdtempSync(join(tmpdir(), 'modeldock-vscode-backup-')); roots.push(root);
+    const target = join(root, 'Code', 'User', 'chatLanguageModels.json');
+    const original = '[{"vendor":"customendpoint","apiKey":"SYNTHETIC_PRIVATE_KEY","models":[]}]';
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, original);
+    const sync = (createManagedBackup: () => string) => applyConfig({ ...store, createManagedBackup }, 'vscode', 19191, root, join(root, 'backups'), root);
+    expect(() => sync(() => { throw new Error('backup unavailable'); })).toThrow('backup unavailable');
+    expect(readFileSync(target, 'utf8')).toBe(original);
+    const external = '// externally changed\n[]';
+    expect(() => sync(() => { writeFileSync(target, external); return 'fixture.enc'; })).toThrow('其他程序修改');
+    expect(readFileSync(target, 'utf8')).toBe(external);
+    expect(existsSync(join(root, 'backups'))).toBe(false);
   });
   it('merges Codex settings without changing auth and MCP values', () => {
     const root = mkdtempSync(join(tmpdir(), 'modeldock-adapter-')); roots.push(root);
@@ -506,6 +522,9 @@ describe('tool adapters', () => {
     const foreign = { name: 'ModelDock', vendor: 'openai', apiKey: 'SYNTHETIC_FOREIGN', models: [] };
     const original = '[\n// keep unmanaged comment\n' + JSON.stringify(foreign) + ',\n' + JSON.stringify({ name: 'Other', vendor: 'customendpoint', models: [] }) + ',\n' + JSON.stringify({ name: 'ModelDock', vendor: 'customendpoint', models: [{ id: 'stale' }] }) + '\n]';
     writeFileSync(target, original);
+    const settings = join(dirname(target), 'settings.json');
+    const userSettings = '// custom settings\r\n{\r\n  "http.proxy": "http://localhost:3128", "extension.custom": true,\r\n}\r\n';
+    writeFileSync(settings, userSettings);
     const native = nativeFixture();
     applyConfig(native, 'vscode', 19191, root, join(root, 'backups'), root);
     applyConfig(native, 'vscode', 19191, root, join(root, 'backups'), root);
@@ -513,9 +532,11 @@ describe('tool adapters', () => {
     expect(configuredText).toContain('keep unmanaged comment'); expect(configured[0]).toEqual(foreign); expect(configured).toHaveLength(5);
     expect(configured.filter((row: any) => row.name.startsWith('ModelDock · '))).toHaveLength(3);
     expect(configuredText).not.toContain('PRIVATE_OAUTH');
-    expect(readdirSync(join(root, 'backups')).map(file => readFileSync(join(root, 'backups', file), 'utf8'))).toContain(original);
+    expect(store.createManagedBackup).toHaveBeenCalledWith('vscode-models', { version: 1, path: target, content: original });
+    expect(existsSync(join(root, 'backups'))).toBe(false);
     applyConfig(nativeFixture([]), 'vscode', 19191, root, join(root, 'backups'), root);
     expect(parseJsonc(readFileSync(target, 'utf8'))).toEqual([foreign, { name: 'Other', vendor: 'customendpoint', models: [] }]);
+    expect(readFileSync(settings)).toEqual(Buffer.from(userSettings));
   });
   it.each(['selected', undefined] as const)('synchronizes only the selected VS Code custom sources for scope %s with full original backup and preserves other vendors/comments', scope => {
     const root = mkdtempSync(join(tmpdir(), 'modeldock-adapter-')); roots.push(root);
@@ -531,7 +552,8 @@ describe('tool adapters', () => {
     expect(values).toHaveLength(2); expect(values[0]).toEqual(foreign);
     expect(values[1]).toMatchObject({ vendor: 'customendpoint', name: 'ModelDock · API 套餐 B', models: [{ id: 'shared-upstream', url: 'https://api-b.test/coding/v3/responses' }] });
     expect(text).toContain('// old custom model note stays');
-    expect(readdirSync(join(root, 'backups')).map(file => readFileSync(join(root, 'backups', file), 'utf8'))).toContain(original);
+    expect(store.createManagedBackup).toHaveBeenCalledWith('vscode-models', { version: 1, path: target, content: original });
+    expect(existsSync(join(root, 'backups'))).toBe(false);
     const empty = { ...configured, listBindings: () => nativeFixture([]).listBindings().map(binding => binding.id === 'vscode' ? { ...binding, vscodeSyncScope: scope } : binding) };
     applyConfig(empty, 'vscode', 19191, root, join(root, 'backups'), root);
     expect(parseJsonc(readFileSync(target, 'utf8'))).toEqual([foreign]); expect(readFileSync(target, 'utf8')).toContain('// old custom model note stays');

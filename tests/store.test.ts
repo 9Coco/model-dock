@@ -631,6 +631,24 @@ describe('real SQLite storage', () => {
     expect(reopened.listBindings().find(binding => binding.id === 'vscode')?.vscodeSyncScope).toBe('selected');
   });
 
+  it('keeps the VS Code system proxy opt-in local to that tool and preserves the choice across saves and restarts', async () => {
+    const { store, dir, codec } = await setup();
+    const vscode = store.listBindings().find(binding => binding.id === 'vscode')!;
+    expect(vscode.vscodeProxyEnabled).toBe(false);
+    const otherTool = store.listBindings().find(binding => binding.id === 'copilot')!;
+    expect(otherTool.vscodeProxyEnabled).toBeUndefined();
+    expect(() => store.saveBinding({ ...otherTool, vscodeProxyEnabled: true })).toThrow('代理开关无效');
+    expect(() => store.saveBinding({ ...vscode, vscodeProxyEnabled: 'yes' as any })).toThrow('代理开关无效');
+    store.saveBinding({ ...vscode, vscodeProxyEnabled: true });
+    const { vscodeProxyEnabled: _flag, ...legacy } = vscode;
+    store.saveBinding(legacy);
+    store.close();
+    const reopened = await Store.create(dir, codec); stores.push(reopened);
+    expect(reopened.listBindings().find(binding => binding.id === 'vscode')).toEqual({ ...vscode, vscodeProxyEnabled: true });
+    reopened.restoreBindingSelection(legacy);
+    expect(reopened.listBindings().find(binding => binding.id === 'vscode')?.vscodeProxyEnabled).toBe(false);
+  });
+
   it('migrates a missing VS Code scope once without writing external client files, changing secrets or resetting later opt-out', async () => {
     const { store, dir, codec } = await setup();
     const source = store.saveProvider({ name: 'Codex', kind: 'codex', baseUrl: 'https://chatgpt.com/backend-api/codex', enabled: true });
@@ -639,11 +657,13 @@ describe('real SQLite storage', () => {
     const SQL = await initSqlJs({ locateFile: file => join(process.cwd(), 'node_modules/sql.js/dist', file) });
     const oldDb = new SQL.Database(readFileSync(join(dir, 'modeldock.sqlite')));
     oldDb.run('ALTER TABLE bindings DROP COLUMN vscode_sync_scope');
+    oldDb.run('ALTER TABLE bindings DROP COLUMN vscode_proxy_enabled');
     writeFileSync(join(dir, 'modeldock.sqlite'), oldDb.export()); oldDb.close();
     const clientDir = join(dir, 'Code', 'User'); mkdirSync(clientDir, { recursive: true });
     const clientFile = join(clientDir, 'chatLanguageModels.json'), clientText = '[{"name":"Old package","vendor":"customendpoint","models":[]}]'; writeFileSync(clientFile, clientText);
     const migrated = await Store.create(dir, codec); stores.push(migrated);
     expect(migrated.listBindings().find(binding => binding.id === 'vscode')?.vscodeSyncScope).toBe('selected');
+    expect(migrated.listBindings().find(binding => binding.id === 'vscode')?.vscodeProxyEnabled).toBe(false);
     expect(migrated.getSecret(source.id)).toEqual(secret); expect(migrated.listProviders()).toEqual(oldSources);
     expect(migrated.listBindings().map(({ vscodeSyncScope: _scope, ...binding }) => binding)).toEqual(oldBindings.map(({ vscodeSyncScope: _scope, ...binding }) => binding));
     expect(readFileSync(clientFile, 'utf8')).toBe(clientText);

@@ -218,6 +218,11 @@ child.on('exit', code => {
       console.log(JSON.stringify({exitCode:code,bridge:value.bridge,tools:result.tools.length,layouts:result.layouts.length,mockRequests:aggregateRequests.length,output}));
       process.exit(code||0);
     }
+    if (env.MODELDOCK_SMOKE_VSCODE_PROXY_ONLY === '1') {
+      const result = JSON.parse(readFileSync(resolve(output, 'vscode-proxy-toggle.json'), 'utf8'));
+      assert.ok(result.systemProxyApplied && result.proxyRemoved && result.originalModelsPreserved);
+      console.log(JSON.stringify({ exitCode: code, ...result, output })); return;
+    }
     if (env.MODELDOCK_SMOKE_TOOL_SYNC_ONLY === '1') {
       const result = JSON.parse(readFileSync(resolve(output, 'tool-auto-sync-validation.json'), 'utf8'));
       if (!result.ok) throw new Error('Debounced tool synchronization or undo failed');

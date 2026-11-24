@@ -12,7 +12,7 @@ const stages = new Set(['device-code', 'device-poll', 'token-exchange', 'account
 const events: Partial<Record<keyof ModelDockApi, DiagnosticEvent>> = {
   saveProvider: 'provider.save', deleteProvider: 'provider.delete', testProvider: 'connection.result', discoverModels: 'models.discovery',
   beginLogin: 'account.login', beginCopilotLogin: 'account.login', importCopilotClientAccount: 'account.login', importRelayClientAccount: 'account.login', logoutAccount: 'account.logout', copilotLogoutAccount: 'account.logout',
-  refreshAccountUsage: 'account.refresh', previewConfig: 'config.preview', applyConfig: 'config.apply', restoreOfficialConfig: 'config.restore',
+  refreshAccountUsage: 'account.refresh', previewConfig: 'config.preview', applyConfig: 'config.apply', syncVsCodeConfig: 'config.apply', restoreOfficialConfig: 'config.restore',
   undoToolSync: 'config.restore',
   mcpSave: 'mcp.operation', mcpDelete: 'mcp.operation', mcpSetTool: 'mcp.operation', mcpImport: 'mcp.operation', mcpApply: 'mcp.operation',
   skillsImportLocal: 'skills.operation', skillsImportRepository: 'skills.operation', skillsDeploy: 'skills.operation', skillsAdopt: 'skills.operation', skillsDelete: 'skills.operation',
@@ -24,6 +24,7 @@ export function ignoresDiagnosticOperation(name: string): boolean { return ignor
 export function isQuietDiagnosticOperation(name: string): boolean { return quiet.has(name); }
 export function diagnosticOperationContext(name: keyof ModelDockApi, args: readonly unknown[]): DiagnosticContext {
   const context: DiagnosticContext = { operation: name as DiagnosticOperation };
+  if (name === 'syncVsCodeConfig') context.toolId = 'vscode';
   if (providerIdOperations.has(name)) context.providerId = id(args[0]);
   if (toolIdOperations.has(name) && typeof args[0] === 'string' && tools.has(args[0])) context.toolId = args[0] as DiagnosticContext['toolId'];
   if (name === 'testProvider') context.modelId = id(object(args[1]).modelId);

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -6,6 +7,8 @@ import { parse as parseJsonc } from 'jsonc-parser';
 import { applyConfig, codexHistoryKey } from '../src/main/adapters';
 import { applyClaudeConfig, claudeHistoryKey } from '../src/main/claude-config';
 import { applyDshConfig, type DshPlan } from '../src/main/dsh-config';
+import { privatePathIdentity } from '../src/main/private-file';
+import { applyVsCodeProxyOnly, vsCodeConfigTargets, vsCodeHistoryKey } from '../src/main/vscode-config';
 import { ToolSyncUndoManager, toolSyncUndoKey, type ToolSyncUndoStore } from '../src/main/tool-sync-undo';
 import type { Model, Provider, ToolBinding, ToolId } from '../src/shared/types';
 
@@ -62,6 +65,80 @@ describe('explicit single-step tool synchronization undo', () => {
     const reopened = new ToolSyncUndoManager(f.store, { appData: join(f.root, 'appdata'), homeDirectory: f.root });
     expect(reopened.status('vscode').available).toBe(true); expect(vi.mocked(f.store.setManagedState)).toHaveBeenCalledTimes(writes);
     await reopened.undo('vscode'); expect(existsSync(target)).toBe(false); expect(existsSync(dirname(target))).toBe(true);
+  });
+  it('validates a two-file VS Code checkpoint and restores only its model file and binding', async () => {
+    const f = fixture('vscode');
+    const models = join(f.root, 'appdata', 'Code', 'User', 'chatLanguageModels.json');
+    const settings = join(dirname(models), 'settings.json');
+    const undoKey = toolSyncUndoKey('vscode');
+    const historyKey = `tool-config:vscode:${createHash('sha256').update(privatePathIdentity(models)).digest('hex')}`;
+    const snapshot = (path: string, content: string) => ({ path, content, mode: 0o600 });
+    const record = {
+      version: 1, kind: 'files', tool: 'vscode', syncedAt: 1, beforeBinding: f.oldBinding, appliedBinding: f.activate(),
+      beforeFiles: [snapshot(models, '[]'), snapshot(settings, '{"http.proxy":"http://127.0.0.1:8080"}')],
+      appliedFiles: [snapshot(models, '[{}]'), snapshot(settings, '{}')],
+      beforeStates: [{ key: historyKey, value: null }], appliedStates: [{ key: historyKey, value: {} }],
+    };
+    const userSettings = '{"editor.fontSize":17}';
+    f.write(models, '[{}]'); f.write(settings, userSettings);
+    f.states.set(undoKey, { ...record, appliedFiles: [record.appliedFiles[0], snapshot(models, '{}')] });
+    await expect(f.manager.undo('vscode')).rejects.toThrow('无效');
+    f.states.set(undoKey, { ...record, beforeStates: [{ key: 'foreign', value: null }] });
+    await expect(f.manager.undo('vscode')).rejects.toThrow('无效');
+    f.states.set(undoKey, record);
+    f.setBinding({ ...record.appliedBinding, vscodeProxyEnabled: false }); // Absent in this historical record.
+    f.write(models, '[{"user":"edit"}]');
+    await expect(f.manager.undo('vscode')).rejects.toThrow('其他操作修改');
+    f.write(models, '[{}]');
+    expect(f.manager.status('vscode').available).toBe(true);
+    await f.manager.undo('vscode');
+    expect(readFileSync(models, 'utf8')).toBe('[]');
+    expect(readFileSync(settings, 'utf8')).toBe(userSettings);
+    expect(f.store.setManagedState).toHaveBeenCalledTimes(1);
+    expect(f.store.setManagedState).toHaveBeenCalledWith(undoKey, null);
+    expect(f.store.listBindings()[0]).toMatchObject(f.oldBinding);
+  });
+  it.each(['unchanged', 'manual-proxy'] as const)('undoes an opt-in switch while preserving later model and editor edits (%s)', async edit => {
+    const f = fixture('vscode'), appData = join(f.root, 'appdata');
+    const { modelsPath, settingsPath } = vsCodeConfigTargets(appData);
+    const enabled = { ...f.oldBinding, vscodeProxyEnabled: true };
+    const plan = { eligible: true, proxyUrl: 'http://127.0.0.1:8080' };
+    f.write(modelsPath, 'this model file is being edited');
+    f.setBinding(enabled);
+    await f.manager.run('vscode', f.oldBinding, () => applyVsCodeProxyOnly(f.store, appData, plan), enabled, { vsCodeProxyOnly: true });
+    const key = toolSyncUndoKey('vscode');
+    const saved = f.store.getManagedState<any>(key, null);
+    expect(saved.vsCodeProxyOnly).toBe(true);
+    expect(JSON.stringify(saved)).not.toContain('this model file is being edited');
+    const proxy = edit === 'manual-proxy' ? 'http://custom.test:8099' : plan.proxyUrl;
+    f.write(settingsPath, '{\n// new user note\n"editor.fontSize":18,"http.proxy":' + JSON.stringify(proxy) + '}');
+    f.write(modelsPath, 'externally saved models');
+    f.states.set(key, { ...saved, beforeFiles: [{ ...saved.beforeFiles[0], content: 'invalid' }, saved.beforeFiles[1]] });
+    expect(f.manager.status('vscode').available).toBe(false);
+    f.states.set(key, saved);
+    expect(f.manager.status('vscode').available).toBe(true);
+    expect(await f.manager.undo('vscode')).toBe(settingsPath);
+    expect(f.store.listBindings()[0].vscodeProxyEnabled).toBe(false);
+    const text = readFileSync(settingsPath, 'utf8');
+    expect(text).toContain('// new user note');
+    expect(parseJsonc(text)).toEqual({ 'editor.fontSize': 18, ...(edit === 'manual-proxy' ? { 'http.proxy': proxy } : {}) });
+    expect(f.store.getManagedState(vsCodeHistoryKey(modelsPath), null)).toBeNull();
+    expect(readFileSync(modelsPath, 'utf8')).toBe('externally saved models');
+  });
+  it('undoes disabling an owned proxy and restores the switch without modifying new user preferences', async () => {
+    const f = fixture('vscode'), appData = join(f.root, 'appdata');
+    const { modelsPath, settingsPath } = vsCodeConfigTargets(appData);
+    const enabled = { ...f.oldBinding, vscodeProxyEnabled: true };
+    const plan = { eligible: true, proxyUrl: 'http://127.0.0.1:8080' };
+    f.setBinding(enabled);
+    applyVsCodeProxyOnly(f.store, appData, plan);
+    f.setBinding(f.oldBinding);
+    await f.manager.run('vscode', enabled, () => applyVsCodeProxyOnly(f.store, appData), f.oldBinding, { vsCodeProxyOnly: true });
+    f.write(settingsPath, '{"editor.fontSize":20}');
+    await f.manager.undo('vscode');
+    expect(f.store.listBindings()[0].vscodeProxyEnabled).toBe(true);
+    expect(parseJsonc(readFileSync(settingsPath, 'utf8'))).toEqual({ 'editor.fontSize': 20, 'http.proxy': plan.proxyUrl });
+    expect(f.store.getManagedState(vsCodeHistoryKey(modelsPath), null)).not.toBeNull();
   });
   it.each(['file', 'catalog', 'binding', 'ownership'] as const)('rejects external %s edits before changing any part of a Codex checkpoint', async changed => {
     const f = fixture(), target = join(f.root, '.codex', 'config.toml'), catalog = join(dirname(target), 'modeldock-models.json');

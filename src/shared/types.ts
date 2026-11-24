@@ -159,6 +159,8 @@ export interface ToolBinding {
   note: string;
   /** VS Code custom endpoints only; other vendors are always preserved. */
   vscodeSyncScope?: 'managed' | 'selected';
+  /** Opt in to writing a local HTTP(S) system proxy for VS Code direct API connections. */
+  vscodeProxyEnabled?: boolean;
   /** Copilot desktop custom sources only; GitHub accounts are never removed. */
   copilotSyncScope?: 'managed' | 'selected';
   /** DSH model sources only; platform account authorization is preserved. */
@@ -274,6 +276,7 @@ export interface ModelDockApi extends FlowBridgeApi {
   previewConfig(tool: ToolId): Promise<ConfigPreview>;
   exportConfig(tool: ToolId): Promise<string | null>;
   applyConfig(tool: ToolId): Promise<string>;
+  syncVsCodeConfig(): Promise<{ location: string; proxyStatus: string; proxyOnly: boolean }>;
   toolSyncUndoStatus(tool: ToolId): Promise<import('./tool-sync-types').ToolSyncUndoStatus>;
   undoToolSync(tool: ToolId): Promise<string>;
   restoreOfficialConfig(tool: ToolId): Promise<string>;

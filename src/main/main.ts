@@ -64,6 +64,7 @@ import { CopilotDesktopClient } from './copilot-desktop';
 import { applyCopilotDesktop } from './copilot-sync';
 import { ToolSyncUndoManager } from './tool-sync-undo';
 import { verifyToolAutoSync } from './tool-auto-sync-smoke';
+import { verifyVsCodeProxyToggle } from './vscode-proxy-smoke';
 import { removeProviderAndSync } from './provider-removal';
 import { restoreOfficialConfig } from './tool-restore';
 import { verifyClaudeConfiguration } from './claude-config-smoke';
@@ -72,7 +73,7 @@ import { restoreToolBinding } from './tool-restore-binding';
 import { importOpenCodeGo } from './opencode-go-import';
 import { measureSiteLatency } from './proxy-speed-test';
 import { ApplicationNetworkSession } from './network-proxy';
-import { discoverVsCodeProxy, recoverVsCodeConfig, vsCodeProxyInstructions, type VsCodeProxyPlan } from './vscode-config';
+import { applyVsCodeProxyOnly, discoverVsCodeProxy, recoverVsCodeConfig, vsCodeProxyInstructions, type VsCodeProxyPlan } from './vscode-config';
 import { inspectAuthNetwork } from './network-diagnostic';
 import { createSystemNetworkFetch } from './system-network';
 import { resolveRuntimeConfig } from './runtime-mode';
@@ -305,6 +306,8 @@ async function createWindow(forceShow = false) {
           // Icon validation above uses navigation only and never applies tool configuration.
         } else if (process.env.MODELDOCK_SMOKE_AGGREGATE_ONLY === '1') {
           await verifyAggregateModes(window!, store, outputDir, captureUi);
+        } else if (process.env.MODELDOCK_SMOKE_VSCODE_PROXY_ONLY === '1') {
+          await verifyVsCodeProxyToggle(window!, store, outputDir, captureUi);
         } else if (process.env.MODELDOCK_SMOKE_TOOL_SYNC_ONLY === '1') {
           await verifyToolAutoSync(window!, store, outputDir, captureUi);
         } else if (process.env.MODELDOCK_SMOKE_CLAUDE_ONLY === '1') {
@@ -629,11 +632,17 @@ function registerIpc() {
   let toolRestorePending = false;
   const toolConfigPending = new Set<ToolId>();
   const beforeToolSelections = new Map<ToolId, ToolBinding>();
+  let pendingVsCodeProxyOnly = false;
   const featureHome = __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home') : app.getPath('home');
   const vsCodeAppData = __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-appdata') : app.getPath('appData');
-  const vsCodeProxyPlan = (): Promise<VsCodeProxyPlan> => __MODELDOCK_SMOKE_BUILD__ ? Promise.resolve({ eligible: false })
-    : discoverVsCodeProxy(vsCodeAppData, vsCodeRemoteEndpoints(store, gateway.status().port), gateway.status().port, process.env,
-      url => session.fromPartition('modeldock-vscode-system-proxy-discovery', { cache: false }).resolveProxy(url));
+  function vsCodeProxyPlan(binding?: ToolBinding): Promise<VsCodeProxyPlan> | undefined {
+    if (binding?.vscodeProxyEnabled !== true) return;
+    const port = gateway.status().port;
+    return discoverVsCodeProxy(vsCodeAppData, vsCodeRemoteEndpoints(store, port), port,
+      __MODELDOCK_SMOKE_BUILD__ ? {} : process.env,
+      __MODELDOCK_SMOKE_BUILD__ ? async () => 'PROXY 127.0.0.1:19451'
+        : url => session.fromPartition('modeldock-vscode-system-proxy-discovery', { cache: false }).resolveProxy(url));
+  }
   const junieHome = __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.junie') : process.env.JUNIE_HOME;
   const copilotCliHome = __MODELDOCK_SMOKE_BUILD__ ? join(featureHome, '.copilot-cli') : process.env.COPILOT_HOME;
   const copilotCliProvidersConfig = __MODELDOCK_SMOKE_BUILD__ ? join(copilotCliHome!, 'providers.json') : process.env.COPILOT_PROVIDERS_CONFIG;
@@ -696,16 +705,19 @@ function registerIpc() {
     const savingDuringCopilotSync = editingBinding === 'copilot' && toolConfigPending.size === 1 && toolConfigPending.has('copilot');
     if (toolConfigPending.size && !savingDuringCopilotSync) throw new Error('工具配置正在同步，请稍后修改配置。');
   };
-  async function synchronizeTool(id: ToolId): Promise<string> {
+  async function synchronizeTool(id: ToolId, describeProxy?: (message: string, proxyOnly: boolean) => void): Promise<string> {
     toolId(id);
     if (id === 'air') throw new Error(AIR_MANUAL_SETUP);
     if (toolRestorePending || toolConfigPending.has(id)) throw new Error('此工具配置正在更新，请稍后再试。');
     toolConfigPending.add(id);
     try {
     const binding = store.listBindings().find(item => item.id === id);
-    const preview = buildConfig(store, id, gateway.status().port, true, __MODELDOCK_SMOKE_BUILD__ ? join(dataDir, 'feature-home') : app.getPath('home'), { ...openCodeOptions, junieHome, copilotCliHome, copilotCliProvidersConfig });
-    if (!preview.canApply) throw new Error(preview.applyUnavailableReason ?? '此工具使用导出配置入口。');
-    const usesGateway = binding && bindingConnectionPolicy(binding, store.listModels(), store.listProviders()).groups.some(group => group.connection === 'local-managed' && group.modelIds.length > 0);
+    const proxyOnly = id === 'vscode' && !providerRemovalPending && beforeToolSelections.has(id) && pendingVsCodeProxyOnly;
+    if (!proxyOnly) {
+      const preview = buildConfig(store, id, gateway.status().port, true, featureHome, { ...openCodeOptions, junieHome, copilotCliHome, copilotCliProvidersConfig });
+      if (!preview.canApply) throw new Error(preview.applyUnavailableReason ?? '此工具使用导出配置入口。');
+    }
+    const usesGateway = !proxyOnly && binding && bindingConnectionPolicy(binding, store.listModels(), store.listProviders()).groups.some(group => group.connection === 'local-managed' && group.modelIds.length > 0);
     if (usesGateway && !gateway.status().running) {
       const status = await runtime.startGateway();
       if (!status.running) throw new Error('本地入口未能启动，尚未写入工具配置。');
@@ -713,9 +725,12 @@ function registerIpc() {
     // The existing tool write lock also blocks binding/provider edits while
     // async system-proxy discovery uses this exact model selection.
     if (id === 'vscode') recoverVsCodeConfig(store, vsCodeAppData);
-    const vscodeProxy = id === 'vscode' ? await vsCodeProxyPlan() : undefined;
+    const vscodeProxy = id === 'vscode' ? await vsCodeProxyPlan(binding) : undefined;
+    if (id === 'vscode' && describeProxy) describeProxy(vsCodeProxyInstructions(store, vsCodeAppData, vscodeProxy), proxyOnly);
     let operation: () => string | Promise<string>;
-    if (id === 'copilot') {
+    if (proxyOnly) {
+      operation = () => applyVsCodeProxyOnly(store, vsCodeAppData, vscodeProxy);
+    } else if (id === 'copilot') {
       const target = copilotTarget();
       operation = () => applyCopilotDesktop(store, buildCopilotDesktopPlan(store, gateway.status().port, true, binding), target.home, { openClient: target.openClient, syncScope: binding?.copilotSyncScope ?? 'selected', recordUndo: !providerRemovalPending });
     } else if (id === 'dsh') {
@@ -742,7 +757,8 @@ function registerIpc() {
     });
     }
     // Global deletion has its own recovery transaction; its removed references cannot be reintroduced by a tool undo.
-    const result = providerRemovalPending ? await operation() : await undoManager.run(id, beforeToolSelections.get(id), operation, binding);
+    const result = providerRemovalPending ? await operation()
+      : await undoManager.run(id, beforeToolSelections.get(id), operation, binding, { vsCodeProxyOnly: proxyOnly });
     if (providerRemovalPending) undoManager.clear(id);
     // A newer Copilot choice may already be saved. Its undo baseline is the selection just applied.
     if (id === 'copilot' && binding && !isDeepStrictEqual(binding, store.listBindings().find(item => item.id === id))) beforeToolSelections.set(id, binding);
@@ -936,6 +952,12 @@ function registerIpc() {
     const id = toolId(binding.id), before = store.listBindings().find(value => value.id === id);
     assertEditable(id);
     store.saveBinding({ ...binding, id });
+    if (id === 'vscode' && before) {
+      const after = store.listBindings().find(value => value.id === id)!;
+      const onlyProxy = isDeepStrictEqual({ ...before, vscodeProxyEnabled: after.vscodeProxyEnabled }, after);
+      // A queued model edit still needs a full sync. Rapid switch-only edits never rewrite the model file.
+      pendingVsCodeProxyOnly = onlyProxy && (!beforeToolSelections.has(id) || pendingVsCodeProxyOnly);
+    }
     if (id !== 'air' && before && !beforeToolSelections.has(id)) beforeToolSelections.set(id, structuredClone(before));
   });
   handle('toolSyncUndoStatus', (value: ToolId) => {
@@ -957,7 +979,7 @@ function registerIpc() {
     } catch (error) {
       if (restoredDraft && current) {
         const latest = store.listBindings().find(binding => binding.id === id);
-        const fields = ['enabled', 'mode', 'providerIds', 'modelIds', 'modelSelection', 'defaultModelId', 'connectionChoices', 'vscodeSyncScope', 'copilotSyncScope', 'dshSyncScope', 'claudeDisableTelemetry'] as const;
+        const fields = ['enabled', 'mode', 'providerIds', 'modelIds', 'modelSelection', 'defaultModelId', 'connectionChoices', 'vscodeSyncScope', 'vscodeProxyEnabled', 'copilotSyncScope', 'dshSyncScope', 'claudeDisableTelemetry'] as const;
         const selection = (binding: ToolBinding) => Object.fromEntries(fields.map(field => [field, binding[field]]));
         if (latest && draftBefore && isDeepStrictEqual(selection(latest), selection(draftBefore))) store.restoreBindingSelection(current);
       }
@@ -1013,8 +1035,10 @@ function registerIpc() {
   handle('copyConnectionKey', (tool: ToolId) => writeClipboardText(connectionKey(store, toolId(tool)), text => clipboard.writeText(text)));
   handle('previewConfig', async (tool: ToolId) => {
     const id = toolId(tool), preview = buildConfig(store, id, gateway.status().port, false, featureHome, { ...openCodeOptions, junieHome, copilotCliHome, copilotCliProvidersConfig });
-    if (id === 'vscode') preview.instructions += vsCodeProxyInstructions(store, vsCodeAppData, await vsCodeProxyPlan())
-      + '导出的 JSON 只包含模型；附加代理设置在应用或同步时合并，可随上次同步撤销或还原官方配置。';
+    if (id === 'vscode') {
+      const binding = store.listBindings().find(item => item.id === id);
+      preview.instructions += vsCodeProxyInstructions(store, vsCodeAppData, await vsCodeProxyPlan(binding));
+    }
     return preview;
   });
   handle('exportConfig', async (tool: ToolId) => {
@@ -1024,6 +1048,12 @@ function registerIpc() {
     replacePrivateFile(result.filePath, config.content); return result.filePath;
   });
   handle('applyConfig', async (tool: ToolId) => { assertEditable(); return synchronizeTool(toolId(tool)); });
+  handle('syncVsCodeConfig', async () => {
+    assertEditable();
+    let proxyStatus = '', proxyOnly = false;
+    const location = await synchronizeTool('vscode', (message, only) => { proxyStatus = message; proxyOnly = only; });
+    return { location, proxyStatus, proxyOnly };
+  });
   handle('restoreOfficialConfig', async (value: ToolId) => {
     assertEditable();
     const id = toolId(value);

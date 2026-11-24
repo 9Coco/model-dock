@@ -26,6 +26,7 @@ import { applyCopilotCliConfig, buildCopilotCliConfig } from './copilot-cli-conf
 import { isJetBrainsTool } from '../shared/jetbrains';
 import { applyJetBrainsConfig, buildJetBrainsConfig, type JetBrainsConfigOptions } from './jetbrains-config';
 import { applyVsCodeFiles, recoverVsCodeConfig, isRemoteVsCodeUrl, type VsCodeHistoryStore, type VsCodeProxyPlan } from './vscode-config';
+import { writeVsCodeModelFile } from './vscode-model-file';
 
 const PLACEHOLDER = '__MODELDOCK_LOCAL_KEY__';
 // These are client request budgets, not inferred upstream model specifications.
@@ -99,7 +100,7 @@ interface ClientGroup { id: string; name: string; base: string; key: string; mod
 /** Uses the same connection policy as model serialization, without reading credentials. */
 export function vsCodeRemoteEndpoints(store: AdapterStore, port: number): string[] {
   const binding = store.listBindings().find(item => item.id === 'vscode');
-  return binding ? connectionGroups(store, 'vscode', binding, port, false).filter(group => group.directApi)
+  return binding?.enabled && binding.vscodeProxyEnabled === true ? connectionGroups(store, 'vscode', binding, port, false).filter(group => group.directApi)
     .flatMap(group => group.models.map(model => vsCodeModelConfig(model, group.base, group.key, modelProvider(store, model)).url)).filter(isRemoteVsCodeUrl) : [];
 }
 function connectionGroups(store: AdapterStore, tool: ToolId, binding: ToolBinding, port: number, revealKey: boolean): ClientGroup[] {
@@ -299,7 +300,7 @@ export function buildConfig(store: AdapterStore, tool: ToolId, port: number, rev
     filename: 'modeldock-vscode.json', content: JSON.stringify(vscode(store, groups), null, 2), canApply: true,
     instructions: connection + '使用 VS Code Copilot Chat 的 Custom Endpoint schema；凭据随每个模型的 requestHeaders 写入（apiKey 明文字段会被 VS Code 当作秘密存储引用忽略）。'
       + (binding.vscodeSyncScope === 'managed' ? '当前范围仅替换 ModelDock 分组，保留其他自定义来源。' : '当前范围仅保留所选自定义供应商：原文件先备份，所有 customendpoint 分组会替换为当前选择；保留其他 vendor 和注释。')
-      + '模型写入 Code/User/chatLanguageModels.json；仅绕过列表导致系统代理失效时，同步会补充 settings.json 的 http.proxy，保留用户已有代理；其他 profile 需在对应的模型配置文件中手动合并导出内容。同步后重新加载窗口。'
+      + '模型写入 Code/User/chatLanguageModels.json，其他 profile 需在对应的模型配置文件中手动合并导出内容。同步后重新加载窗口。'
       + (models.some(model => isVsCodeDeepSeekModel(model, modelProvider(store, model)))
         ? 'DeepSeek 官方模型使用无状态 OpenAI Responses，保留已设置的思考档位。Copilot 后台工具续接使用聚合接口修正；重新同步并重新加载窗口后，请在新聊天中选择该模型。' : '')
       + (models.some(model => model.wireApi === 'chat-completions' && modelProvider(store, model)?.nativeAdapter === 'trae')
@@ -365,9 +366,10 @@ export function applyConfig(store: AdapterStore, tool: ToolId, port: number, app
   if (tool === 'copilot-cli') return applyCopilotCliConfig(store, backups, homeDirectory, { copilotHome: options.copilotCliHome, providersConfig: options.copilotCliProvidersConfig, port });
   if (tool === 'copilot') throw new Error('Copilot 桌面配置需要通过运行中的原生接口同步。');
   if (tool === 'dsh') throw new Error('DSH 配置需要通过原生插件与凭据同步入口应用。');
+  const vscodeProxyEnabled = tool === 'vscode' && store.listBindings().find(binding => binding.id === 'vscode')?.vscodeProxyEnabled === true;
   const vscodeHistory = tool === 'vscode' && store.getManagedState && store.setManagedState && store.createManagedBackup ? store as VsCodeHistoryStore : undefined;
   if (vscodeHistory) recoverVsCodeConfig(vscodeHistory, appData);
-  else if (tool === 'vscode' && options.vscodeProxy?.proxyUrl) throw new Error('VS Code 代理同步需要安全的配置恢复记录存储。');
+  else if (vscodeProxyEnabled) throw new Error('VS Code 代理同步需要安全的配置恢复记录存储。');
   const config = buildConfig(store, tool, port, true, homeDirectory, options);
   if (!config.canApply) throw new Error(isOpenCodeTool(tool) ? config.instructions : '此工具暂支持预览和导出，请通过其配置入口合并。');
   // 修改点：同步、还原、MCP/Skills 使用同一 XDG 配置根，避免写入未被 OpenCode 读取的默认目录。
@@ -468,7 +470,11 @@ export function applyConfig(store: AdapterStore, tool: ToolId, port: number, app
     parseJsonc(output, errors, { allowTrailingComma: true });
     if (errors.length) throw new Error('配置合并未生成有效的 JSONC，未修改原文件。');
   }
-  if (vscodeHistory) return applyVsCodeFiles(vscodeHistory, appData, original, output, { proxy: vsCodeRemoteEndpoints(store, port).length ? options.vscodeProxy : undefined });
+  if (vscodeHistory) return applyVsCodeFiles(vscodeHistory, appData, original, output, {
+    proxy: vscodeProxyEnabled && vsCodeRemoteEndpoints(store, port).length ? options.vscodeProxy : undefined,
+    release: !vscodeProxyEnabled,
+  });
+  if (tool === 'vscode') return writeVsCodeModelFile(store, target, original, output);
   if (isOpenCodeTool(tool)) {
     if (original === output) return target;
     const unchanged = () => original === null ? !existsSync(target) : existsSync(target) && readFileSync(target, 'utf8') === original;

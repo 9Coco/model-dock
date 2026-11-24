@@ -63,6 +63,7 @@ const api: ModelDockApi = {
   copyProviderKey: id => call('copyProviderKey', id), revealProviderKey: id => call('revealProviderKey', id), revealGatewayKey: () => call('revealGatewayKey'),
   copyConnectionKey: tool => call('copyConnectionKey', tool),
   previewConfig: tool => call('previewConfig', tool), exportConfig: tool => call('exportConfig', tool),
+  syncVsCodeConfig: () => call('syncVsCodeConfig'),
   applyConfig: tool => call('applyConfig', tool), restoreOfficialConfig: tool => call('restoreOfficialConfig', tool),
   toolSyncUndoStatus: tool => call('toolSyncUndoStatus', tool), undoToolSync: tool => call('undoToolSync', tool),
   beginLogin: id => call('beginLogin', id),

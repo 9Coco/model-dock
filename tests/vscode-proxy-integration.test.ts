@@ -34,7 +34,7 @@ async function fixture() {
   const model = store.saveModel({ providerId: source.id, upstreamId: 'native-model', alias: 'vscode-local-model', displayName: 'VS Code fixture', wireApi: 'responses', contextWindow: 64000, tools: true, vision: false, enabled: true });
   const other = store.saveModel({ ...model, id: undefined, upstreamId: 'native-other', alias: 'vscode-other-model' });
   const before = store.listBindings().find(binding => binding.id === 'vscode')!;
-  store.saveBinding({ ...before, enabled: true, mode: 'direct', providerIds: [source.id], modelIds: [model.id], modelSelection: 'selected', defaultModelId: model.id });
+  store.saveBinding({ ...before, enabled: true, vscodeProxyEnabled: true, mode: 'direct', providerIds: [source.id], modelIds: [model.id], modelSelection: 'selected', defaultModelId: model.id });
   const appData = join(home, 'appdata'), backups = join(home, 'backups'), targets = vsCodeConfigTargets(appData);
   const historyKey = vsCodeHistoryKey(targets.modelsPath);
   const manager = new ToolSyncUndoManager(store, { appData, homeDirectory: home });
@@ -96,17 +96,30 @@ describe('VS Code proxy synchronization through public tool entry points', () =>
     expect(f.binding()).toEqual(f.before); expect(f.checkpoint()).toBeNull();
   }, 30000);
 
-  it('refuses a dual-file undo after an unrelated external settings edit, preserving the checkpoint', async () => {
+  it('undoes its proxy field after an unrelated editor save without reverting the user edit', async () => {
     const f = await fixture();
     write(f.targets.modelsPath, originalModels); write(f.targets.settingsPath, originalSettings);
     await f.manager.run('vscode', f.before, () => f.apply());
-    const models = f.readModels(), binding = f.binding(), ownership = f.history(), checkpoint = f.checkpoint();
     const userSettings = f.readSettings().replace('Dark Modern', 'Light Modern');
     write(f.targets.settingsPath, userSettings);
-    expect(f.manager.status('vscode').available).toBe(false);
-    await expect(f.manager.undo('vscode')).rejects.toThrow('其他操作修改');
-    expect(f.readModels()).toBe(models); expect(f.readSettings()).toBe(userSettings);
-    expect(f.binding()).toEqual(binding); expect(f.history()).toEqual(ownership); expect(f.checkpoint()).toEqual(checkpoint);
+    expect(f.manager.status('vscode').available).toBe(true);
+    await f.manager.undo('vscode');
+    expect(f.readModels()).toBe(originalModels);
+    expect(parseJsonc(f.readSettings())).toEqual({ ...parseJsonc(originalSettings), 'workbench.colorTheme': 'Light Modern' });
+    expect(f.binding()).toEqual(f.before); expect(f.history()).toBeNull(); expect(f.checkpoint()).toBeNull();
+  }, 30000);
+
+  it('ignores even a stale eligible plan once opted out and releases its old value once', async () => {
+    const f = await fixture();
+    expect(f.before.vscodeProxyEnabled).not.toBe(true);
+    write(f.targets.settingsPath, originalSettings); f.apply();
+    f.store.saveBinding({ ...f.binding(), vscodeProxyEnabled: false });
+    f.apply(proxy);
+    expect(parseJsonc(f.readSettings())).toEqual(parseJsonc(originalSettings));
+    expect(f.history()).toBeNull();
+    write(f.targets.settingsPath, '{draft');
+    f.apply(proxy); await f.restore();
+    expect(f.readSettings()).toBe('{draft');
   }, 30000);
 
   it.each(['remove', 'aggregate'] as const)('restores an owned proxy when switching to %s, even with a stale eligible plan', async action => {

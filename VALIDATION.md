@@ -1,14 +1,10 @@
 # ModelDock 验证记录
 
-## 2026-11-24 / 未发布工作树 · VS Code 系统代理兼容
+## 2026-11-24 / 0.4.40 · VS Code 代理开关
 
-- 定位 VS Code 1.147.0 / Electron 43.8.9 在仅有 `NO_PROXY`、没有显式 HTTP(S) 代理地址时向 Electron 写入空 `proxyRules`，覆盖系统代理为 DIRECT。官方同一代码点的 PR [#296029](https://github.com/microsoft/vscode/pull/296029) 已关闭且未合并；截至本日未找到针对该根因的已接受修复或明确发布计划，当前 main 仍保留原逻辑。
-- 同步远程直连模型时按实际推理 URL 解析独立 Electron 系统 session 的代理，仅补充一致、单一、本机 HTTP(S) 的 `http.proxy`。保留已有用户代理、明确关闭代理支持、TLS 和绕过设置；按 VS Code 的环境变量优先级处理，不把其忽略的 ALL_PROXY 误当有效代理。多代理 fallback、DIRECT/SOCKS、异构 PAC 和网关自身端口不固化。
-- 模型文件、settings 与 ownership 使用同一加密 journal。覆盖部分提交回滚、中断恢复、两文件撤销、旧单文件 checkpoint、官方还原、JSONC 注释保留；用户清空、删除或改写代理后，连续同步不会再次接管。预览、启动和导航不写客户端设置。
-- Windows 完整回归：133 个文件通过、1 个文件跳过；2,840 项通过、49 项跳过、0 失败。新增单测 29 项、独立公开入口集成测试 13 项全部通过。TypeScript、生产构建和生产入口校验通过；构建仍有既有的前端 bundle 大于 500 kB 提示。
-- Windows 隔离 Electron 44.5.1 实测系统代理发现、只读预览、正式 applyConfig 和双文件 undo：实际检测到本机系统代理，合成 AppData 中写入正确，原始 settings 文本与文件存在状态可恢复。测试使用合成来源/凭据，没有通过该 smoke 发起真实推理，没有写真实用户资料。
-- 另对本机 VS Code 用户 settings 做最小代理修正后，原生 Agents 窗口的真实 `gpt-6.2-sol` 请求于 12:47 返回 `VSC_PROXY_OK`，扩展日志记录 success、7,453 ms，并观察到 Code 连接本机代理端口。未重启 VS Code，设置即时生效。此项证明本机代理修正后的真实模型调用；不等同于用新版 ModelDock UI 对真实用户资料完成自动同步验收。
-- 本轮仅更新源码、测试和生产构建；未打包/替换正在运行的 `D:\modelDock` 0.4.38，也未发布上游 issue、PR 或评论。
+- Windows 完整测试在两个并发进程下通过 2,848 项，跳过 49 项。专项测试覆盖首次安装与升级默认关闭、重启保持、用户手动修改、旧撤销记录以及故障回滚。
+- 隔离的 Electron 桌面验收从 VS Code 页面勾选和取消开关，使用固定的本机代理解析结果，检查了真实设置文件的写入及撤回。原有第三方模型文件逐字节保留。
+- 另一次独立 Electron 验证使用当前 Windows 系统代理解析器、测试模型和隔离的 VS Code 配置，验证本机代理发现、只读预览、同步和撤销。两次验收均未发起真实模型推理，也未改动用户的 VS Code 设置。
 
 ## 2026-11-23 / 0.4.39 · VS Code DeepSeek Responses
 

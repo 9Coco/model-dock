@@ -21,7 +21,7 @@ function fixture(wireApi: WireApi = 'responses') {
     providerIds: [provider.id], modelIds: [model.id], modelSelection: 'selected', defaultModelId: model.id, note: '',
     ...(id === 'vscode' ? { vscodeSyncScope: 'managed' } : {}) } as ToolBinding));
   const getSecret = vi.fn(() => ({ apiKey: 'SYNTHETIC_DEEPSEEK_KEY' }));
-  return { provider, model, bindings, getSecret, listProviders: () => [provider], getProvider: () => provider,
+  return { provider, model, bindings, getSecret, createManagedBackup: () => 'fixture.enc', listProviders: () => [provider], getProvider: () => provider,
     listModels: () => [model], listBindings: () => bindings, gatewayKey: () => 'SYNTHETIC_GATEWAY_KEY' };
 }
 

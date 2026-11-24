@@ -38,5 +38,8 @@ describe('diagnostic operation classification excludes all credential and body f
   it('never incorporates unvalidated object identifiers or upstream configuration', () => {
     expect(diagnosticOperationContext('saveProvider', [{ id: secret, name: secret, baseUrl: `https://${secret}.example.test`, apiKey: secret }])).toEqual({ operation: 'saveProvider', providerId: undefined });
     expect(diagnosticOperationResult('applyConfig', ['opencode'], { filename: secret, content: secret }, 4)).toMatchObject({ event: 'config.apply', context: { toolId: 'opencode', outcome: 'success' } });
+    const synced = diagnosticOperationResult('syncVsCodeConfig', [], { location: secret, proxyStatus: secret, proxyOnly: true }, 4);
+    expect(synced).toMatchObject({ event: 'config.apply', context: { operation: 'syncVsCodeConfig', toolId: 'vscode', outcome: 'success' } });
+    expect(JSON.stringify(synced)).not.toContain(secret);
   });
 });
