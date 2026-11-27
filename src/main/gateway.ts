@@ -29,7 +29,7 @@ import { normalizeNativeMessagesError } from './native-messages-errors';
 import { nativeJetBrainsCompletion } from '../shared/jetbrains-completion';
 import { JetBrainsCompletionError, parseJetBrainsCompletionRequest, normalizeJetBrainsCompletionResponse, createJetBrainsCompletionStream, jetBrainsCompletionToSse } from './jetbrains-completion';
 import { isVsCodeDeepSeekModel, vsCodeDeepSeekModel } from '../shared/vscode-deepseek';
-import { prepareVsCodeDeepSeekResponses, vsCodeDeepSeekReasoningEvent } from './vscode-deepseek-responses';
+import { prepareVsCodeDeepSeekChat, prepareVsCodeDeepSeekResponses, vsCodeDeepSeekReasoningEvent } from './vscode-deepseek';
 
 export interface PreparedRequest { url: string; headers: Record<string, string>; body: Json }
 export interface GatewayOptions {
@@ -436,7 +436,9 @@ export class Gateway {
       const provider = this.store.getProvider(saved.providerId);
       const vsCodeDeepSeek = route.tool === 'vscode' && isVsCodeDeepSeekModel(saved, provider);
       const expectedWire = route.endpoint === '/v1/responses' ? 'responses' : 'chat-completions';
-      const model = vsCodeDeepSeek ? vsCodeDeepSeekModel(saved, provider) : completion ? saved : traeRelayWireModel(saved, provider, anthropic ? 'messages' : expectedWire);
+      // Older VS Code model files still call the native Responses endpoint until resynchronized.
+      const model: Model = vsCodeDeepSeek ? { ...vsCodeDeepSeekModel(saved, provider), wireApi: expectedWire }
+        : completion ? saved : traeRelayWireModel(saved, provider, anthropic ? 'messages' : expectedWire);
       if (!route.tool) {
         const exposure = this.store.gatewayExposure();
         if (exposure.excludedProviderIds.includes(model.providerId) || exposure.excludedModelIds.includes(model.id)) throw new GatewayError(403, '此模型未加入本地聚合接口。');
@@ -465,7 +467,9 @@ export class Gateway {
       // 修改点：Claude Messages 在本机转换成来源原生协议，订阅凭据继续由主进程续期。
       const upstreamBody = completion ? parseJetBrainsCompletionRequest(body, model.upstreamId, nativeCompletion?.maxOutputTokens) : nativeMessages ? { ...body, model: model.upstreamId } : anthropic ? { ...parseAnthropicRequest(body, model.wireApi), model: model.upstreamId } : chatResponses ? { ...parseChatResponsesRequest(jetBrainsResponsesHistory(body)), model: model.upstreamId } : { ...body, model: model.upstreamId };
       const upstreamPath = completion ? '/v1/completions' : nativeMessages ? '/v1/messages' : chatResponses ? '/v1/responses' : anthropic ? model.wireApi === 'responses' ? '/v1/responses' : '/v1/chat/completions' : route.endpoint;
-      const outgoing = vsCodeDeepSeek ? prepareVsCodeDeepSeekResponses(upstreamBody, model.defaultReasoningEffort) : upstreamBody;
+      const outgoing = !vsCodeDeepSeek ? upstreamBody : expectedWire === 'responses'
+        ? prepareVsCodeDeepSeekResponses(upstreamBody, model.defaultReasoningEffort)
+        : prepareVsCodeDeepSeekChat(upstreamBody, model.defaultReasoningEffort);
       const baseUrl = nativeMessages ? provider.baseUrl : openAiBaseUrl(provider.baseUrl);
       const upstreamProvider = baseUrl !== provider.baseUrl ? { ...provider, baseUrl } : provider;
       await this.forward(request, response, upstreamProvider, model, upstreamPath, normalizeUpstreamReasoning(upstreamProvider, upstreamPath, outgoing), observe, anthropic || chatResponses ? { stream: body.stream === true, kind: nativeMessages ? 'native-messages' : chatResponses ? 'chat-responses' : 'anthropic' } : undefined, route.tool, nativeCompletion?.baseUrl);

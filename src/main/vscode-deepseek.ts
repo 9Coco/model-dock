@@ -5,6 +5,27 @@ import { isObject, type Json } from './gateway-sse';
 const callbackNames = new Set(['read_bash', 'read_powershell', 'read_agent']);
 const localCallId = /^(?:call_)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+export function prepareVsCodeDeepSeekChat(body: Json, defaultEffort: string | undefined): Json {
+  const disabled = defaultEffort === 'none';
+  const effort = disabled ? 'none' : body.reasoning_effort ?? defaultEffort;
+  const result: Json = { ...body, reasoning_effort: effort };
+  // The explicit thinking switch takes precedence over reasoning_effort at DeepSeek.
+  if (disabled && isObject(body.thinking)) result.thinking = { ...body.thinking, type: 'disabled' };
+  const thinking = isObject(result.thinking) ? result.thinking.type === 'enabled' : effort !== 'none';
+  if (!thinking || !Array.isArray(body.messages)) return result;
+  const results = new Set(body.messages.filter(message => isObject(message) && message.role === 'tool').map(message => message.tool_call_id));
+  result.messages = body.messages.map(message => {
+    if (!isObject(message) || message.role !== 'assistant' || message.reasoning_content != null && message.reasoning_content !== ''
+      || !Array.isArray(message.tool_calls) || !message.tool_calls.length) return message;
+    const localCallbacks = message.tool_calls.every(call => isObject(call) && call.type === 'function'
+      && isObject(call.function) && callbackNames.has(String(call.function.name))
+      && typeof call.id === 'string' && localCallId.test(call.id) && results.has(call.id));
+    // A synthetic callback has no model-authored reasoning to replay.
+    return localCallbacks ? { ...message, reasoning_content: ' ' } : message;
+  });
+  return result;
+}
+
 export function prepareVsCodeDeepSeekResponses(body: Json, defaultEffort: string | undefined): Json {
   const reasoning = isObject(body.reasoning) ? body.reasoning : {};
   const effort = defaultEffort === 'none' ? 'none' : reasoning.effort ?? defaultEffort;

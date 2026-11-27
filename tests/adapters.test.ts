@@ -32,7 +32,7 @@ function nativeFixture(ids = ['provider-a', 'provider-b', 'subscription']) {
   };
 }
 describe('tool adapters', () => {
-  it('resyncs official DeepSeek through stateless Responses in VS Code', () => {
+  it('resyncs official DeepSeek through Chat Completions in VS Code', () => {
     const f = nativeFixture(['provider-a', 'provider-b']);
     f.providers[0].baseUrl = 'https://api.deepseek.com/v1/';
     f.catalog[0] = { ...f.catalog[0], upstreamId: 'deepseek-flash', alias: 'flash-local', thinking: true,
@@ -46,22 +46,22 @@ describe('tool adapters', () => {
       { vendor: 'customendpoint', name: 'ModelDock · API 套餐 A', models: [{ id: 'deepseek-flash', supportsReasoningEffort: ['high'] }] },
       { vendor: 'customendpoint', name: 'Personal', models: [{ id: 'personal-model' }] },
     ]));
-    const compatibility = { apiType: 'responses', thinking: true, statefulResponses: false, supportsReasoningEffort: ['low', 'high', 'max'],
-      defaultReasoningEffort: 'high', reasoningEffortFormat: 'responses', toolCalling: true };
+    const compatibility = { apiType: 'chat-completions', thinking: true, supportsReasoningEffort: ['low', 'high', 'max'],
+      defaultReasoningEffort: 'high', reasoningEffortFormat: 'chat-completions', toolCalling: true };
     expect(buildConfig(f, 'vscode', 18181).instructions).toContain('在新聊天中选择该模型');
     applyConfig(f, 'vscode', 18181, root, join(root, 'backups'), root);
     const [personal, official, other] = JSON.parse(readFileSync(target, 'utf8'));
     expect(personal.name).toBe('Personal');
     expect(official.models).toMatchObject(['deepseek-flash', 'deepseek-v4-pro'].map(id => ({ ...compatibility, id,
-      url: 'https://api.deepseek.com/v1/responses', requestHeaders: { authorization: 'Bearer SYNTHETIC_KEY_provider-a' } })));
-    expect(other.models[0]).toMatchObject({ id: 'deepseek-flash', supportsReasoningEffort: ['high'], defaultReasoningEffort: 'high' });
+      url: 'https://api.deepseek.com/v1/chat/completions', requestHeaders: { authorization: 'Bearer SYNTHETIC_KEY_provider-a' } })));
+    expect(other.models[0]).toMatchObject({ id: 'deepseek-flash', apiType: 'responses', supportsReasoningEffort: ['high'], defaultReasoningEffort: 'high' });
     expect(other.models[0]).not.toHaveProperty('statefulResponses');
 
     const aggregate = { ...f, listBindings: () => f.listBindings().map(binding => ({ ...binding, mode: 'aggregate' as const })) };
     expect(JSON.parse(buildConfig(aggregate, 'vscode', 18181).content)[0].models.find((model: { id: string }) => model.id === 'flash-local'))
-      .toMatchObject({ ...compatibility, url: 'http://127.0.0.1:18181/tool/vscode/v1/responses' });
+      .toMatchObject({ ...compatibility, url: 'http://127.0.0.1:18181/tool/vscode/v1/chat/completions' });
     expect(vsCodeModelConfig({ ...f.catalog[0], wireApi: 'chat-completions' }, 'https://api.deepseek.com', 'fixture', f.providers[0]))
-      .toMatchObject({ supportsReasoningEffort: ['low', 'high', 'max'], defaultReasoningEffort: 'high', reasoningEffortFormat: 'responses' });
+      .toMatchObject({ supportsReasoningEffort: ['low', 'high', 'max'], defaultReasoningEffort: 'high', reasoningEffortFormat: 'chat-completions' });
     expect(f.catalog[0]).toMatchObject({ reasoningEfforts: ['low', 'high', 'max'], defaultReasoningEffort: 'high' });
   });
 

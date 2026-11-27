@@ -25,26 +25,26 @@ function fixture(wireApi: WireApi = 'responses') {
     listModels: () => [model], listBindings: () => bindings, gatewayKey: () => 'SYNTHETIC_GATEWAY_KEY' };
 }
 
-const thinkingConfig = { apiType: 'responses', thinking: true, statefulResponses: false,
-  supportsReasoningEffort: ['low', 'high', 'max'], defaultReasoningEffort: 'high', reasoningEffortFormat: 'responses' };
+const thinkingConfig = { apiType: 'chat-completions', thinking: true,
+  supportsReasoningEffort: ['low', 'high', 'max'], defaultReasoningEffort: 'high', reasoningEffortFormat: 'chat-completions' };
 
-describe('VS Code native DeepSeek Responses configuration', () => {
+describe('VS Code DeepSeek Chat Completions configuration', () => {
   it.each(['https://api.deepseek.com', 'https://api.deepseek.com/', 'https://api.deepseek.com/v1', 'https://api.deepseek.com/v1/',
     'https://api.deepseek.com/anthropic', 'https://api.deepseek.com/anthropic/v1/'])
     ('uses the official OpenAI endpoint from %s with original thinking levels', base => {
       const f = fixture(); f.provider.baseUrl = base;
       const generated = JSON.parse(buildConfig(f, 'vscode', 18181, true).content)[0].models[0];
-      expect(generated).toMatchObject({ ...thinkingConfig, id: 'deepseek-flash', url: base.startsWith('https://api.deepseek.com/v1') ? 'https://api.deepseek.com/v1/responses' : 'https://api.deepseek.com/responses',
+      expect(generated).toMatchObject({ ...thinkingConfig, id: 'deepseek-flash', url: base.startsWith('https://api.deepseek.com/v1') ? 'https://api.deepseek.com/v1/chat/completions' : 'https://api.deepseek.com/chat/completions',
         toolCalling: true, vision: true, contextWindow: 1048576, maxOutputTokens: 393216,
         requestHeaders: { authorization: 'Bearer SYNTHETIC_DEEPSEEK_KEY' } });
-      for (const obsolete of ['adaptiveThinking', 'minThinkingBudget', 'maxThinkingBudget']) expect(generated).not.toHaveProperty(obsolete);
+      for (const obsolete of ['statefulResponses', 'adaptiveThinking', 'minThinkingBudget', 'maxThinkingBudget']) expect(generated).not.toHaveProperty(obsolete);
     });
 
   it.each(['deepseek-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp'])
     ('recognizes official API ID %s independently of provider display name and preset', upstreamId => {
       const f = fixture(); f.provider.name = 'My API account'; f.provider.presetId = 'custom'; f.model.upstreamId = upstreamId;
       expect(vsCodeModelConfig(f.model, f.provider.baseUrl, 'SYNTHETIC_KEY', f.provider))
-        .toMatchObject({ ...thinkingConfig, url: 'https://api.deepseek.com/responses' });
+        .toMatchObject({ ...thinkingConfig, url: 'https://api.deepseek.com/chat/completions' });
     });
 
   it.each(['responses', 'chat-completions', 'messages'] as const)
@@ -71,7 +71,7 @@ describe('VS Code native DeepSeek Responses configuration', () => {
   it('keeps aggregate calls on the existing tool-scoped gateway without exporting the provider key', () => {
     const f = fixture(); f.bindings[0].mode = 'aggregate';
     const row = JSON.parse(buildConfig(f, 'vscode', 18181, true).content)[0];
-    expect(row.models[0]).toMatchObject({ ...thinkingConfig, id: 'local-flash', url: 'http://127.0.0.1:18181/tool/vscode/v1/responses',
+    expect(row.models[0]).toMatchObject({ ...thinkingConfig, id: 'local-flash', url: 'http://127.0.0.1:18181/tool/vscode/v1/chat/completions',
       requestHeaders: { authorization: 'Bearer SYNTHETIC_GATEWAY_KEY' } });
     expect(JSON.stringify(row)).not.toContain('SYNTHETIC_DEEPSEEK_KEY');
     expect(f.getSecret).not.toHaveBeenCalled();
@@ -81,9 +81,9 @@ describe('VS Code native DeepSeek Responses configuration', () => {
     const f = fixture();
     if (choice === 'thinking flag') f.model.thinking = false; else f.model.defaultReasoningEffort = 'none';
     const row = vsCodeModelConfig(f.model, f.provider.baseUrl, 'SYNTHETIC_KEY', f.provider);
-    expect(row).toMatchObject({ apiType: 'responses', thinking: true, statefulResponses: false,
-      url: 'https://api.deepseek.com/responses', supportsReasoningEffort: ['none'],
-      defaultReasoningEffort: 'none', reasoningEffortFormat: 'responses' });
+    expect(row).toMatchObject({ apiType: 'chat-completions', thinking: true,
+      url: 'https://api.deepseek.com/chat/completions', supportsReasoningEffort: ['none'],
+      defaultReasoningEffort: 'none', reasoningEffortFormat: 'chat-completions' });
     expect(row).not.toHaveProperty('adaptiveThinking');
     expect(row).not.toHaveProperty('modelOptions');
   });
@@ -130,30 +130,35 @@ describe('VS Code native DeepSeek Responses configuration', () => {
     ('accepts the explicit official Anthropic override %s', claudeBaseUrl => {
       const f = fixture(); f.provider.claudeBaseUrl = claudeBaseUrl;
       expect(vsCodeModelConfig(f.model, f.provider.baseUrl, 'SYNTHETIC_KEY', f.provider))
-        .toMatchObject({ ...thinkingConfig, url: 'https://api.deepseek.com/responses' });
+        .toMatchObject({ ...thinkingConfig, url: 'https://api.deepseek.com/chat/completions' });
     });
 
   it('uses the original OpenAI base regardless of a Claude-only endpoint override', () => {
     const f = fixture(); f.provider.claudeBaseUrl = 'https://synthetic.example/anthropic';
     expect(vsCodeModelConfig(f.model, f.provider.baseUrl, 'SYNTHETIC_KEY', f.provider))
-      .toMatchObject({ apiType: 'responses', url: 'https://api.deepseek.com/responses' });
+      .toMatchObject({ apiType: 'chat-completions', url: 'https://api.deepseek.com/chat/completions' });
   });
 
-  it('resyncs an old None-only entry while preserving unrelated providers and JSONC comments', () => {
+  it.each([
+    { apiType: 'responses', url: 'https://api.deepseek.com/responses', statefulResponses: false },
+    { apiType: 'messages', url: 'https://api.deepseek.com/anthropic/v1/messages', adaptiveThinking: true, minThinkingBudget: 1024, maxThinkingBudget: 12000 },
+  ])('resyncs an old $apiType entry while preserving unrelated providers and JSONC comments', previous => {
     const f = fixture(); const root = mkdtempSync(join(tmpdir(), 'modeldock-vscode-deepseek-config-')); roots.push(root);
     const target = join(root, 'Code', 'User', 'chatLanguageModels.json'); mkdirSync(dirname(target), { recursive: true });
+    const oldModel = { ...previous, id: 'deepseek-flash', thinking: true, supportsReasoningEffort: ['none'],
+      defaultReasoningEffort: 'none', reasoningEffortFormat: previous.apiType };
     writeFileSync(target, `[
       // keep this user's comment
       {"vendor":"customendpoint","name":"Personal","models":[{"id":"personal-model"}]},
-      {"vendor":"customendpoint","name":"ModelDock · DeepSeek","models":[{"id":"deepseek-flash","apiType":"responses","thinking":true,"supportsReasoningEffort":["none"],"defaultReasoningEffort":"none","statefulResponses":false}]},
+      {"vendor":"customendpoint","name":"ModelDock · DeepSeek","models":[${JSON.stringify(oldModel)}]},
     ]`);
     applyConfig(f, 'vscode', 18181, root, join(root, 'backups'), root);
     const text = readFileSync(target, 'utf8'), rows = parseJsonc(text);
     expect(text).toContain("keep this user's comment");
     expect(rows).toHaveLength(2);
     expect(rows[0]).toMatchObject({ name: 'Personal', models: [{ id: 'personal-model' }] });
-    expect(rows[1].models[0]).toMatchObject(thinkingConfig);
-    expect(rows[1].models[0]).not.toHaveProperty('adaptiveThinking');
-    expect(rows[1].models[0].supportsReasoningEffort).not.toContain('none');
+    const [updated] = rows[1].models;
+    expect(updated).toMatchObject({ ...thinkingConfig, url: 'https://api.deepseek.com/chat/completions' });
+    for (const key of ['statefulResponses', 'adaptiveThinking', 'minThinkingBudget', 'maxThinkingBudget']) expect(updated).not.toHaveProperty(key);
   });
 });

@@ -156,7 +156,6 @@ function isOfficialDeepSeekBase(base: string): boolean {
 export function vsCodeModelConfig(model: Model, base: string, key: string, provider?: Provider) {
   const m = vsCodeDeepSeekModel(traeRelayClientModel('vscode', model, provider), provider);
   const nativeTraeChat = provider?.nativeAdapter === 'trae' && m.wireApi === 'chat-completions';
-  const deepSeekCompatibility = isVsCodeDeepSeekModel(m, provider);
   const reasoningEfforts = m.reasoningEfforts;
   const defaultReasoningEffort = m.defaultReasoningEffort;
   if (m.wireApi === 'messages') throw new Error('VS Code 仅支持 OpenAI 格式，请选择 Responses 或 Chat Completions 模型。');
@@ -175,8 +174,7 @@ export function vsCodeModelConfig(model: Model, base: string, key: string, provi
     // Suppress only Copilot defaults. Explicit sampling requests still reach
     // the adapter and receive its unsupported-control error.
     ...(nativeTraeChat ? { modelOptions: { temperature: null, top_p: null } } : {}),
-    ...(deepSeekCompatibility ? { statefulResponses: false } : {}),
-    ...(deepSeekCompatibility || m.thinking !== undefined || reasoningEfforts?.length
+    ...(m.thinking !== undefined || reasoningEfforts?.length
       ? { thinking: m.thinking ?? true } : {}),
     // The effort field must match the protocol used by the generated profile.
     ...(reasoningEfforts?.length ? { supportsReasoningEffort: [...reasoningEfforts], ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}), reasoningEffortFormat: m.wireApi } : {}),
@@ -302,7 +300,7 @@ export function buildConfig(store: AdapterStore, tool: ToolId, port: number, rev
       + (binding.vscodeSyncScope === 'managed' ? '当前范围仅替换 ModelDock 分组，保留其他自定义来源。' : '当前范围仅保留所选自定义供应商：原文件先备份，所有 customendpoint 分组会替换为当前选择；保留其他 vendor 和注释。')
       + '模型写入 Code/User/chatLanguageModels.json，其他 profile 需在对应的模型配置文件中手动合并导出内容。同步后重新加载窗口。'
       + (models.some(model => isVsCodeDeepSeekModel(model, modelProvider(store, model)))
-        ? 'DeepSeek 官方模型使用无状态 OpenAI Responses，保留已设置的思考档位。Copilot 后台工具续接使用聚合接口修正；重新同步并重新加载窗口后，请在新聊天中选择该模型。' : '')
+        ? 'DeepSeek 官方模型使用 OpenAI Chat Completions，保留已设置的思考档位。重新同步并重新加载窗口后，请在新聊天中选择该模型。' : '')
       + (models.some(model => model.wireApi === 'chat-completions' && modelProvider(store, model)?.nativeAdapter === 'trae')
         ? 'TRAE 原生连接的输出预算与采样使用上游原生默认值；思考仍由上游生成，已配置的推理强度选项保留。请重新同步 VS Code 配置并重新加载窗口以使用此适配。' : '')
       + clientBudgetNotice(models),

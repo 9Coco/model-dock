@@ -6,6 +6,10 @@ ModelDock 是跨平台本地模型管理台：全局维护模型来源与别名�
 
 0.4.0 起包含 FlowBridge 的组合发行版采用 [GPL-3.0-or-later](LICENSE)；原 ModelDock 代码及原创应用标记保留 [MIT 授权](LICENSE-MIT)，第三方图标和依赖保留各自的 Apache-2.0、CC-BY-4.0、MIT 或其他许可，详见 [第三方声明](THIRD_PARTY_NOTICES.md)。欢迎按 [贡献指南](CONTRIBUTING.md) 提交修复；敏感问题请遵循 [安全报告流程](SECURITY.md)。
 
+## 0.4.41 · VS Code 的 DeepSeek 使用 Chat Completions
+
+在「工具 → 桌面 App → VS Code」点击「重新同步」，即可将 ModelDock 管理的 DeepSeek Flash 和 Pro 切换到 Chat Completions。直连使用 DeepSeek 官方接口，聚合模式使用本机 `/tool/vscode/v1/chat/completions`。模型来源和代理开关沿用现有选择。
+
 ## 0.4.40 · VS Code 系统代理开关
 
 打开「工具 → 桌面 App → VS Code」，可勾选「为 VS Code 使用系统代理」。新安装和从旧版升级后默认关闭。开启后，如果所选远程直连模型共用同一个本机 HTTP(S) 系统代理，ModelDock 会为 VS Code 设置 `http.proxy`。关闭会撤回仍由 ModelDock 管理的值，保留用户后来手动修改的设置。单独切换开关只同步代理，已有模型列表保留。
@@ -607,10 +611,10 @@ API 来源按名称、类型和规范化地址防重复：添加预设时复用�
 - DSH 旧 DeepSeek 会话仍可能引用 `deepseek-official` / `deepseek-account`。独占模式选择官方 DeepSeek API 来源时，ModelDock 会安装无凭据的受管同模型兼容插件，让这些旧引用调用所选来源中的同一上游模型；聊天日志、模型选择及原请求对象不改写。相似显示名、其他套餐、不同模型或无法确定的重复来源不自动映射。兼容路由没有可配置目录和模型枚举，模型设置页与新会话选择器仍只展示所选来源。插件源、配置及凭据一同纳入加密备份与失败恢复；关闭独占或清空选择会撤销插件，静态无凭据代码文件留在本地作为非活动文件。未包含旧模型时，请在 DSH 切换模型或新建会话。
 - Copilot app 接入使用桌面应用的本机原生供应商接口，按 1.1.26 的协议实现，不把 CLI `providers.json` 或 SDK 会话参数当成桌面配置。预览只是原生同步计划参考，需要应用运行才能同步；版本接口变化会明确报错。Windows 隔离原生实例已核对。Linux 原生连接支持系统管理员安装的 /usr/bin/github：校验 root 文件和目录、UID、进程启动时间、执行文件身份及回环监听 socket，信任来源是本机系统安装，不是 GitHub 厂商签名；用户可写 AppImage 暂不支持。OpenCode 使用各模型的 npm SDK 配置选择 Chat/Responses 协议，保存时合并 JSON/JSONC。
 - VS Code 接入目标是 Copilot Chat 的 Custom Endpoint，默认写入用户配置 `Code/User/chatLanguageModels.json`。默认范围会替换该文件中的全部 `customendpoint` 分组；关闭「仅保留所选供应商」后只更新 ModelDock 分组。应用不会自动识别其他 profile；使用其他 profile 时请预览 / 导出后手工合并到对应位置。同步只是注册模型来源，实际聊天模型须在 VS Code 选择器中选择；此接入不能据此宣称所有编辑器 AI 功能都被替换。
-- VS Code 的 DeepSeek 官方模型通过 OpenAI Responses 无状态接入，保留官方 low / high / max 档位及已保存的默认值，也支持用户明确选择的 None。连接 DeepSeek 官方 API 时使用 `https://api.deepseek.com/responses` 或 `/v1/responses`，每次续接发送完整历史。Copilot 后台命令和后台代理完成通知经聚合入口时，ModelDock 只为客户端生成、没有模型思考的回调补齐协议字段。同步后重新加载 VS Code，并在新会话选择模型。[DeepSeek Responses 文档](https://api-docs.deepseek.com/guides/responses_api/)
+- VS Code 的 DeepSeek 官方模型使用 `apiType: "chat-completions"`。直连请求发往 `https://api.deepseek.com/chat/completions`，已有 `/v1` 基址会保留该前缀。思考档位使用 Chat Completions 的 `reasoning_effort` 字段。同步后重新加载 VS Code 窗口，在新会话中选择模型。[DeepSeek Chat Completions 文档](https://api-docs.deepseek.com/api/create-chat-completion/)
 - ModelDock 为 Air Accounts 提供 OpenAI 接入参数。旧 Anthropic 账户可在 Air 的 Accounts 中另行配置新的 OpenAI 账户。Claude Code 使用 Anthropic Messages。
 
-开发验证：`node scripts/verify-vscode-deepseek-client.mjs --extension-dir <Copilot扩展目录>` 可检查 Copilot Chat 0.75.0 的无状态 Responses 请求与思考档位序列化。离线检查不读取密钥或会话。
+开发验证可运行 `node scripts/verify-vscode-deepseek-client.mjs --extension-dir <Copilot扩展目录>`，离线检查 Copilot Chat 对 Chat Completions 请求、思考档位和工具调用历史的序列化。
 - 模型列表、上下文和工具/视觉声明不会授予上游权限；错误会明确返回，日志不记录请求正文与密钥。
 
 ### 适配与导入维护记录

@@ -19,7 +19,7 @@ export function vsCodeDeepSeekModel(model: Model, provider: Provider | undefined
   const supported = efforts?.length ? efforts : officialEfforts;
   const preferred = model.defaultReasoningEffort && supported.includes(model.defaultReasoningEffort)
     ? model.defaultReasoningEffort : supported.includes('high') ? 'high' : supported[0];
-  return { ...model, wireApi: 'responses', thinking: true,
+  return { ...model, wireApi: 'chat-completions', thinking: true,
     reasoningEfforts: disabled ? ['none'] : [...supported],
-    defaultReasoningEffort: disabled ? 'none' : preferred, reasoningEffortFormat: 'responses' };
+    defaultReasoningEffort: disabled ? 'none' : preferred, reasoningEffortFormat: 'chat-completions' };
 }

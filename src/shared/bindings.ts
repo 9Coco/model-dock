@@ -25,7 +25,7 @@ export function resolveBindingModels(binding: ToolBinding, models: Model[], prov
   const providerIds = binding.providerIds;
   const claude = binding.id === 'claude-code';
   const singleSource = binding.mode === 'direct' && !supportsMultipleSources(binding.id) || claude && binding.mode !== 'aggregate';
-  // VS Code can project a saved official DeepSeek Messages model to Responses.
+  // VS Code can project a saved official DeepSeek Messages model to Chat Completions.
   const claudeIds = claude && providers ? new Set(providers.filter(provider => provider.enabled).flatMap(provider => binding.mode === 'aggregate'
     ? models.filter(model => model.providerId === provider.id && model.enabled)
     : claudeModelsForProvider(provider, models)).map(model => model.id)) : undefined;

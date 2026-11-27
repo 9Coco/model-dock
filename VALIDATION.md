@@ -1,5 +1,12 @@
 # ModelDock 验证记录
 
+## 2026-11-26 / 0.4.41 · VS Code 的 DeepSeek Chat Completions
+
+- Windows 完整测试通过 2,853 项，跳过 49 项。TypeScript、生产构建和 Windows x64 目录包的完整性校验通过。
+- 配置回归覆盖从已保存的 Messages、Responses 和 Chat Completions 模型生成直连及聚合条目，并验证重新同步会替换受管条目中的旧协议字段。
+- 网关使用模拟上游核对 Chat 请求地址、思考档位、流式增量和工具续接。旧 VS Code 聚合配置仍可请求原 Responses 路径。
+- 在 Windows 本机的 Copilot Chat 0.76.0 安装包中提取并离线执行请求构造和历史序列化函数，确认 `reasoning_effort` 位于顶层，同模型当前任务中已保留的思考内容可随工具历史回传。这次检查使用合成消息，未调用真实 DeepSeek API。
+
 ## 2026-11-24 / 0.4.40 · VS Code 代理开关
 
 - Windows 完整测试在两个并发进程下通过 2,848 项，跳过 49 项。专项测试覆盖首次安装与升级默认关闭、重启保持、用户手动修改、旧撤销记录以及故障回滚。
